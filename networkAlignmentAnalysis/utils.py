@@ -649,18 +649,16 @@ def load_checkpoints(nets, optimizers, device, path):
     TODO: device handling for passing between gpu/cpu
     """
 
-    prev_checkpoints = list(path.glob('checkpoint_*'))
-    latest_checkpoint = natsorted(prev_checkpoints)[-1] if prev_checkpoints else path / 'checkpoint.tar'
-    print(f'loading from latest checkpoint: {latest_checkpoint}')\
-
+    prev_checkpoints = list(path.glob("checkpoint_*"))
+    latest_checkpoint = natsorted(prev_checkpoints)[-1] if prev_checkpoints else path / "checkpoint.tar"
+    print(f"loading from latest checkpoint: {latest_checkpoint}")
     if device == "cpu":
         checkpoint = torch.load(latest_checkpoint, map_location=device)
-    elif device == 'cuda':
+    elif device == "cuda":
         checkpoint = torch.load(latest_checkpoint)
     elif isinstance(device, int):
-        map_location = {'cuda:0': f'cuda:{device}'}
+        map_location = {"cuda:0": f"cuda:{device}"}
         checkpoint = torch.load(latest_checkpoint, map_location=map_location)
-
 
     net_ids = natsorted([key for key in checkpoint if key.startswith("model_state_dict")])
     opt_ids = natsorted([key for key in checkpoint if key.startswith("optimizer_state_dict")])
@@ -719,13 +717,12 @@ def compress_directory(output_path, directory_path=None):
 
 
 def get_alignment_dims(nets, dataset, num_epochs, use_train=True):
-
     """
     Calcute expected dimensions of alignment across a network after a full pass (training or
     testing).
     """
 
-    #TODO: generalize this better to include conv layers
+    # TODO: generalize this better to include conv layers
     dataloader = dataset.train_loader if use_train else dataset.test_loader
 
     dims = []
@@ -743,7 +740,7 @@ def get_list_dims(list_of_lists, preserve_arrays=True):
     Determine the dimensions of a nested list of arbitrary depth. Returns a tuple representing the
     dimensions of the nested list
     """
-    
+
     if isinstance(list_of_lists, torch.Tensor) or isinstance(list_of_lists, np.ndarray):
         # Convert array shape to a tuple and return.
         if preserve_arrays:
@@ -761,26 +758,25 @@ def get_list_dims(list_of_lists, preserve_arrays=True):
     else:
         # Base case: reached an item that is neither a list nor an array.
         return ()
-    
+
 
 def get_nested_depth(list_of_lists, current_depth=0, target_type=torch.Tensor):
-
     """
     Find depth of nested structure up to target_type of array (either torch.Tensor or np.ndarray).
     """
-    assert(target_type != list)  # cannot work for type list
+    assert target_type != list  # cannot work for type list
     if isinstance(list_of_lists, target_type):
         return current_depth
     elif isinstance(list_of_lists, list):
         for item in list_of_lists:
-            depth = get_nested_depth(item, current_depth+1)
+            depth = get_nested_depth(item, current_depth + 1)
         if depth != -1:
             return depth
-        
+
     return -1  # no target_type found
 
 
-def construct_zeros_obj(list_of_lists, device='cpu', show_dims=False):
+def construct_zeros_obj(list_of_lists, device="cpu", show_dims=False):
     """
     Construct an object of zeros that matches the dimensions of the given nested list or array.
     Returns a new object with the same structure as the input, filled with zeros.
@@ -813,7 +809,6 @@ def replicate_dimension(input, target_dim, n_reps, current_dim=0):
 
 
 def gather_by_layer(local_metric, grp_metric):
-
     """
     Gather metrics calculated from distributed processes onto main process.
     local_metric should be a list of tensors, which will be identically sized across processes.
@@ -840,7 +835,7 @@ def gather_list_of_lists(local_metric, grp_metric, device=None, move_to_gpu=Fals
     elif isinstance(local_metric, list):
         for l_, g_ in zip(local_metric, grp_metric):
             gather_list_of_lists(l_, g_, device=device, move_to_gpu=move_to_gpu)
-        
+
 
 def gather_metrics(local_metric, grp_metric):
     """
@@ -852,10 +847,9 @@ def gather_metrics(local_metric, grp_metric):
 
 
 def permute_distributed_metric(grp_metric):
-
     """
     Placeholder for function to permute grp_metric along cat_dim using world size to maintain
-    correct order of metric according to effective minibatches across processes. 
+    correct order of metric according to effective minibatches across processes.
     """
 
     n_processes = dist.get_world_size()

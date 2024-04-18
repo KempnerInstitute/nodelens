@@ -29,9 +29,7 @@ class Experiment(ABC):
         self.register_timestamp()  # Register timestamp of experiment
         self.run = self.configure_wandb()  # Create a wandb run object (or None depending on args.use_wandb)
         self.device = self.args.device
-        self.loader_parameters = {
-            'batch_size': self.args.batch_size
-        }
+        self.loader_parameters = {"batch_size": self.args.batch_size}
         self.setup_ddp()  # Configure experiment for distributed training if appropriate
         self.configure_logging()
 
@@ -83,11 +81,11 @@ class Experiment(ABC):
         """
         # Make full path to experiment directory
         exp_path = self.basepath / self.get_exp_path()
-        
+
         if int(os.environ.get("WORLD_SIZE", 1)) > 1:
-            if dist.get_rank()!=0:
+            if dist.get_rank() != 0:
                 return exp_path
-        
+
         # Make experiment directory if it doesn't yet exist
         if create and not exp_path.exists():
             exp_path.mkdir(parents=True)
@@ -113,7 +111,7 @@ class Experiment(ABC):
         """Method for returning path to file"""
         # get experiment directory
         if int(os.environ.get("WORLD_SIZE", 1)) > 1:
-            if (dist.get_rank()==0):
+            if dist.get_rank() == 0:
                 create = False
         exp_path = self.get_dir(create=create)
 
@@ -124,7 +122,7 @@ class Experiment(ABC):
         """create a wandb run file and set environment parameters appropriately"""
         if self.args.use_wandb:
             wandb.login()
-            
+
             run = wandb.init(
                 project=self.get_basename(),
                 name=os.environ.get("SLURM_JOB_ID", ""),
@@ -229,7 +227,7 @@ class Experiment(ABC):
         )
         parser.add_argument(
             "--log",
-            default='info',
+            default="info",
             type=str,
             help="set logging level",
         )
@@ -271,19 +269,20 @@ class Experiment(ABC):
 
     def configure_logging(self):
 
-        levels = {'debug': logging.DEBUG, 'info': logging.INFO, 'warning': logging.WARNING, 'error': logging.ERROR, 'critical': logging.CRITICAL}
-        logging_level = levels.get(self.args.log, 'info')
-        filename = os.environ.get("SLURM_JOB_ID", 'local_run') + '.log'
-        logging.basicConfig(filename= files.homedir_path() / 'logs' / filename,
-                    format = '%(asctime)s:  %(levelname)-10s  %(name)-12s   %(message)s', 
-                    level=logging_level)
+        levels = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR, "critical": logging.CRITICAL}
+        logging_level = levels.get(self.args.log, "info")
+        filename = os.environ.get("SLURM_JOB_ID", "local_run") + ".log"
+        logs_dir = files.homedir_path() / "logs"
+        if not logs_dir.exists():
+            logs_dir.mkdir()
+        logging.basicConfig(filename=logs_dir / filename, format="%(asctime)s:  %(levelname)-10s  %(name)-12s   %(message)s", level=logging_level)
         self.main_logger = logging.getLogger()
 
         self.main_logger.info(f'MASTER_ADDR = {os.environ.get("MASTER_ADDR")}')
         self.main_logger.info(f'MASTER_PORT = {os.environ.get("MASTER_PORT")}')
         self.main_logger.info(f'SLURM_NTASKS = {os.environ.get("SLURM_NTASKS")}')
         self.main_logger.info(f'SLURM_NGPUS = {os.environ.get("SLURM_GPUS_ON_NODE")}')
-    
+
     def _update_args(self, prms):
         """Method for updating arguments from saved parameter dictionary"""
         # First check if saved parameters contain unknown keys
@@ -397,13 +396,14 @@ class Experiment(ABC):
             loader_parameters=self.loader_parameters,
             device=self.device,
         )
-    
+
     def setup_ddp(self, verbose=True):
 
         world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.distributed = world_size > 1
         if not self.distributed:
-            if verbose: print('Not using distributed training')
+            if verbose:
+                print("Not using distributed training")
             return None
         rank = int(os.environ["SLURM_PROCID"])  # absolute rank across all nodes * gpus_per_node
         gpus_per_node = int(os.environ["SLURM_GPUS_ON_NODE"])
@@ -411,14 +411,13 @@ class Experiment(ABC):
 
         if verbose:
             print(
-                f"Hello from rank {rank} of {world_size} on {gethostname()} where there are"
-                f" {gpus_per_node} allocated GPUs per node.",
+                f"Hello from rank {rank} of {world_size} on {gethostname()} where there are" f" {gpus_per_node} allocated GPUs per node.",
                 flush=True,
             )
 
         # Update num_workers for dataloader if using distributed training.
-        self.loader_parameters['num_workers'] = int(os.environ["SLURM_CPUS_PER_TASK"])
-        self.loader_parameters['distributed'] = self.distributed
+        self.loader_parameters["num_workers"] = int(os.environ["SLURM_CPUS_PER_TASK"])
+        self.loader_parameters["distributed"] = self.distributed
 
         # Initialize the process group
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -443,8 +442,8 @@ class Experiment(ABC):
             save_path = str(self.get_path(name))
             if self.distributed and by_rank:
                 rank = dist.get_rank()
-                save_path = f'{save_path}_{rank}'
-                name = f'{name}_{rank}'
+                save_path = f"{save_path}_{rank}"
+                name = f"{name}_{rank}"
                 dist.barrier()
             plt.savefig(save_path)
         if self.run is not None:
