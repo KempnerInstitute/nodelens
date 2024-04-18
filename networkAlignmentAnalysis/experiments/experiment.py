@@ -272,6 +272,7 @@ class Experiment(ABC):
         levels = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR, "critical": logging.CRITICAL}
         logging_level = levels.get(self.args.log, "info")
         filename = os.environ.get("SLURM_JOB_ID", "local_run") + ".log"
+        # make logs directory if it doesn't exist, because logging.basicConfig can't on its own
         logs_dir = files.homedir_path() / "logs"
         if not logs_dir.exists():
             logs_dir.mkdir()
