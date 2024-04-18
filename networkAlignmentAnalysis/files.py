@@ -8,21 +8,22 @@ PATH_REGISTRY = {
     "cberon": Path("/n/holylabs/LABS/bsabatini_lab/Users/cberon/alignment/"),
     "corwin": Path("/Users/corwin/Building"),
     "atlandau": Path("/n/home05/atlandau/machine_learning"),
-    "landauland": Path("/Users/landauland/Documents/ML-Datasets"),
+    "landauland": Path("/Users/landauland/Documents/MachineLearning/ML-Datasets"),
 }
 
 HOMEDIR_REGISTRY = {
     "cberon": Path("/n/home00/cberon/"),
+    "landauland": Path("/Users/landauland/Documents/MachineLearning/ML-Experiments"),
 }
 
 
 def get_hostname():
-    
+
     hostname = socket.gethostname()
     if hostname.lower().startswith("celia"):
         hostname = "Celia"
     hostname = hostname if hostname in PATH_REGISTRY else get_username()
-    
+
     return hostname
 
 
@@ -33,7 +34,7 @@ def get_username():
 def local_path():
     """method for defining the local root path for datasets and results"""
     hostname = get_hostname()
-    
+
     if hostname not in PATH_REGISTRY:
         raise ValueError(f"hostname ({hostname}) is not registered in the path registry")
     # return path
