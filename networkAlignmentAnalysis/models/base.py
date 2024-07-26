@@ -611,13 +611,9 @@ class AlignmentNetwork(nn.Module, ABC):
         inputs = self._preprocess_inputs(inputs, compress_convolutional=True)
 
         # measure eigenfeatures
-        return self._measure_layer_eigenfeatures(
-            inputs, weights, centered=centered, with_updates=with_updates
-        )           
+        return self._measure_layer_eigenfeatures(inputs, weights, centered=centered, with_updates=with_updates)
 
-    def measure_class_eigenfeatures(
-        self, inputs, labels, eigenvectors, rms=False, with_updates=True, num_samples_per_class=torch.inf
-    ):
+    def measure_class_eigenfeatures(self, inputs, labels, eigenvectors, rms=False, with_updates=True, num_samples_per_class=torch.inf):
         """
         propagate an entire dataset through the network and measure the contribution
         of each eigenvector to each element of the class

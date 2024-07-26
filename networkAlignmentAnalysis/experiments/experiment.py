@@ -268,7 +268,6 @@ class Experiment(ABC):
         return self.get_dir() / "checkpoint.tar"
 
     def configure_logging(self):
-
         levels = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR, "critical": logging.CRITICAL}
         logging_level = levels.get(self.args.log, "info")
         filename = os.environ.get("SLURM_JOB_ID", "local_run") + ".log"
