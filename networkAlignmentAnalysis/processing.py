@@ -5,11 +5,20 @@ import torch.distributed as dist
 from tqdm import tqdm
 import logging
 from . import train
-from .utils import (construct_zeros_obj, fgsm_attack, gather_list_of_lists,
-                    get_list_dims, get_nested_depth, load_checkpoints,
-                    replicate_dimension, test_nets, transpose_list)
+from .utils import (
+    construct_zeros_obj,
+    fgsm_attack,
+    gather_list_of_lists,
+    get_list_dims,
+    get_nested_depth,
+    load_checkpoints,
+    replicate_dimension,
+    test_nets,
+    transpose_list,
+)
 
 logger = logging.getLogger(__name__)
+
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     """train and test networks"""
@@ -19,6 +28,7 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
         num_epochs=exp.args.epochs,
         alignment=not (exp.args.no_alignment),
         delta_weights=exp.args.delta_weights,
+        compare_expected=exp.args.compare_expected,
         frequency=exp.args.frequency,
         run=exp.run,
     )
@@ -26,11 +36,9 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     # update with special parameters
     parameters.update(**special_parameters)
 
-    if exp.args.use_prev & any(list(exp.get_dir(create=False).glob('checkpoint*'))):
-        nets, optimizers, results = load_checkpoints(
-            nets, optimizers, exp.device, exp.get_dir(create=False)
-        )
-        parameters = results.pop('prms')
+    if exp.args.use_prev & any(list(exp.get_dir(create=False).glob("checkpoint*"))):
+        nets, optimizers, results = load_checkpoints(nets, optimizers, exp.device, exp.get_dir(create=False))
+        parameters = results.pop("prms")
         # if exp.distributed:
         #     nets = exp.wrap_ddp(nets)
         for net in nets:
@@ -64,14 +72,10 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
     """
     # do targeted dropout experiment
     print("performing targeted dropout...")
-    logger.info(f'rank {dist.get_rank()} starting dropout')
-    dropout_parameters = dict(
-        num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set
-    )
-    dropout_results = train.progressive_dropout(
-        nets, dataset, alignment=alignment, **dropout_parameters
-    )
-    logger.info(f'rank {dist.get_rank()} finished dropout')
+    logger.info(f"rank {dist.get_rank()} starting dropout")
+    dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
+    dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
+    logger.info(f"rank {dist.get_rank()} finished dropout")
 
     return dropout_results, dropout_parameters
 
@@ -87,13 +91,10 @@ def min_samples_per_class(labels):
 def measure_eigenfeatures(exp, nets, dataset, train_set=False):
     # measure eigenfeatures
     print("measuring eigenfeatures...")
-    logger.info(f'rank {dist.get_rank()} measuring eigenfeatures')
-    results = {'beta': [],
-               'eigvals': [],
-               'eigvecs': [],
-               'class_betas': []}
+    logger.info(f"rank {dist.get_rank()} measuring eigenfeatures")
+    results = {"beta": [], "eigvals": [], "eigvecs": [], "class_betas": []}
     for net in tqdm(nets):
-        logger.info(f'rank {dist.get_rank()} starting loop over nets')
+        logger.info(f"rank {dist.get_rank()} starting loop over nets")
         # get inputs to each layer from whole dataloader
         inputs, labels = net.module._process_collect_activity(
             dataset,
@@ -101,48 +102,44 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
             with_updates=False,
             use_training_mode=False,
         )
-        
+
         if dataset.distributed:
             min_per_class = torch.tensor(min_samples_per_class(labels), device=dataset.device)
-            logger.info(f'{dist.get_rank()} sample limit = {min_per_class}')
+            logger.info(f"{dist.get_rank()} sample limit = {min_per_class}")
             dist.all_reduce(min_per_class, op=dist.ReduceOp.MIN)
             # min_per_class = min_per_class.cpu()
-            logger.info(f'{dist.get_rank()} sample limit = {min_per_class}')
+            logger.info(f"{dist.get_rank()} sample limit = {min_per_class}")
 
-        logger.info(f'rank {dist.get_rank()} collected activity')
+        logger.info(f"rank {dist.get_rank()} collected activity")
         beta, eigvals, eigvecs = net.module.measure_eigenfeatures(inputs, with_updates=False)
-        logger.info(f'rank {dist.get_rank()} measured eigenfeatures')
+        logger.info(f"rank {dist.get_rank()} measured eigenfeatures")
         beta_by_class = net.module.measure_class_eigenfeatures(
             inputs, labels, eigvecs, rms=False, with_updates=False, num_samples_per_class=min_per_class
         )
-        logger.info(f'rank {dist.get_rank()} measured class eigenfeatures')
-        results['beta'].append(beta)
-        results['eigvals'].append(eigvals)
-        results['eigvecs'].append(eigvecs)
-        results['class_betas'].append(beta_by_class)
+        logger.info(f"rank {dist.get_rank()} measured class eigenfeatures")
+        results["beta"].append(beta)
+        results["eigvals"].append(eigvals)
+        results["eigvecs"].append(eigvecs)
+        results["class_betas"].append(beta_by_class)
 
     if dataset.distributed:
-        logger.info(f'rank {dist.get_rank()} waiting on barrier')
+        logger.info(f"rank {dist.get_rank()} waiting on barrier")
         dist.barrier()
         for key, metric in results.items():
             depth = get_nested_depth(metric)
-            agg_metric = replicate_dimension(construct_zeros_obj(metric, device=dataset.device),
-                                             target_dim=depth,
-                                             n_reps=dist.get_world_size())
+            agg_metric = replicate_dimension(construct_zeros_obj(metric, device=dataset.device), target_dim=depth, n_reps=dist.get_world_size())
 
-            logger.info(f'{key}\n{get_list_dims(agg_metric)}')
-            logger.info(f'rank {dist.get_rank()} pre gather for {key}')
+            logger.info(f"{key}\n{get_list_dims(agg_metric)}")
+            logger.info(f"rank {dist.get_rank()} pre gather for {key}")
             gather_list_of_lists(metric, agg_metric, device=dataset.device, move_to_gpu=True)
-            logger.info(f'rank {dist.get_rank()} post gather for {key}')
+            logger.info(f"rank {dist.get_rank()} post gather for {key}")
             # Consider: Transpose agg_metric to put process back on outer dimension for easy allocation.
             # Currently: (nets, layer x proc)
             results[key] = agg_metric
 
-    results['class_names'] = getattr(
-        dataset.train_loader if train_set else dataset.test_loader, "dataset"
-    ).classes
+    results["class_names"] = getattr(dataset.train_loader if train_set else dataset.test_loader, "dataset").classes
 
-    print(dist.get_rank(), results['class_names'])  # need to confirm always the same, even as dataset grows
+    print(dist.get_rank(), results["class_names"])  # need to confirm always the same, even as dataset grows
 
     return results
 
@@ -264,4 +261,4 @@ def measure_alignment_distribution(nets, dataset, **parameters):
     # do training loop
     parameters = dict(
         train_set=True,
-   )
+    )

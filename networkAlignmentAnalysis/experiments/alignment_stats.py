@@ -59,10 +59,7 @@ class AlignmentStatistics(Experiment):
         if self.distributed:
             nets = self.wrap_ddp(nets)
 
-        optimizers = [
-            optim(net.parameters(), lr=self.args.default_lr, weight_decay=self.args.default_wd)
-            for net in nets
-        ]
+        optimizers = [optim(net.parameters(), lr=self.args.default_lr, weight_decay=self.args.default_wd) for net in nets]
 
         prms = {
             "vals": [self.args.network],  # require iterable for identifying how many types of networks there are (just one type...)
