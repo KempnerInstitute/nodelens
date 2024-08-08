@@ -103,6 +103,8 @@ def train(nets, optimizers, dataset, **parameters):
 
         # compare true alignment distribution to expected distribution (according to Fiete alignment definition)
         if compare_expected:
+            # TODO: Make the number of bins proportional to the dimensionality of the network for precise measurement
+            # where the expected values of alignment are distributed.
             calign_bins = torch.linspace(0, 1, 301)
             results["compare_alignment_bins"] = calign_bins
             results["compare_alignment_expected"] = []
