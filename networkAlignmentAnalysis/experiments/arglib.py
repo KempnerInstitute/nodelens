@@ -41,6 +41,12 @@ def add_alignment_analysis_parameters(parser):
         help="if used, will measure delta-weights during training",
     )
     parser.add_argument(
+        "--compare-expected",
+        default=False,
+        action="store_true",
+        help="if used, will compare expected alignment to actual alignment",
+    )
+    parser.add_argument(
         "--frequency",
         default=1,
         type=int,

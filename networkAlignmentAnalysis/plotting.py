@@ -22,6 +22,22 @@ def plot_train_results(exp, train_results, test_results, prms):
     if plot_alignment:
         alignment = torch.stack([torch.mean(align, dim=2) for align in train_results["alignment"]])
 
+    # Need to plot distributions over time -- can't easily show two types of networks with these plots :/
+    # (hence the requirement that len(labels) == 1)
+    plot_comparison = len(labels) == 1 and all([k in train_results for k in ["compare_alignment_expected", "compare_alignment_observed"]])
+    if plot_comparison:
+        plot_delta_comparison = "compare_delta_alignment_observed" in train_results
+        alignment_expected = torch.stack([torch.mean(cae, dim=0) for cae in train_results["compare_alignment_expected"]])
+        alignment_observed = torch.stack([torch.mean(cao, dim=0) for cao in train_results["compare_alignment_observed"]])
+        max_bin_e = [torch.where(torch.any(cc > 0, dim=0))[0][-1] for cc in alignment_expected]
+        max_bin_o = [torch.where(torch.any(cc > 0, dim=0))[0][-1] for cc in alignment_observed]
+        if plot_delta_comparison:
+            delta_align_observed = torch.stack([torch.nanmean(cad, dim=0) for cad in train_results["compare_delta_alignment_observed"]])
+            max_bin_a = [torch.where(torch.any(cc > 0, dim=0))[0][-1] for cc in delta_align_observed]
+            max_bin = [max(mb) for mb in zip(max_bin_e, max_bin_o, max_bin_a)]
+        else:
+            max_bin = [max(mb) for mb in zip(max_bin_e, max_bin_o)]
+
     cmap = mpl.colormaps["tab10"]
 
     train_loss_mean, train_loss_se = compute_stats_by_type(train_results["loss"], num_types=num_types, dim=1, method="se")
@@ -115,6 +131,33 @@ def plot_train_results(exp, train_results, test_results, prms):
         ax[0].legend(loc="lower right")
 
         exp.plot_ready("train_alignment_by_layer")
+
+    # Make Alignment Comparison Figure
+    if plot_comparison:
+        bins = train_results["compare_alignment_bins"]
+        extents = [[0, bins[mb], alignment_expected[0].shape[0] - 1, 0] for mb in max_bin]
+        num_layers = alignment_expected.size(0)
+        num_rows = 3 if plot_delta_comparison else 2
+        fig, ax = plt.subplots(num_rows, num_layers, figsize=(num_layers * figdim, num_rows * figdim), layout="constrained", sharex=True)
+
+        for layer in range(num_layers):
+            ax[0, layer].imshow(alignment_expected[layer][:, : max_bin[layer] + 1].cpu().numpy(), extent=extents[layer], aspect="auto")
+            ax[1, layer].imshow(alignment_observed[layer][:, : max_bin[layer] + 1].cpu().numpy(), extent=extents[layer], aspect="auto")
+            ax[0, layer].set_title(f"Layer {layer} - Expected")
+            ax[1, layer].set_title(f"Layer {layer} - Observed")
+            if plot_delta_comparison:
+                ax[2, layer].imshow(delta_align_observed[layer][:, : max_bin[layer] + 1].cpu().numpy(), extent=extents[layer], aspect="auto")
+                ax[2, layer].set_xlabel("Alignment Value")
+                ax[2, layer].set_title(f"Layer {layer} - Delta Observed")
+            else:
+                ax[1, layer].set_xlabel("Alignment Value")
+
+        ax[0, 0].set_ylabel("Training-Time")
+        ax[1, 0].set_ylabel("Training-Time")
+        if plot_delta_comparison:
+            ax[2, 0].set_ylabel("Training-Time")
+
+        exp.plot_ready("alignment_comparison")
 
 
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
