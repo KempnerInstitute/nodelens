@@ -3,6 +3,7 @@
 slurm-*.out
 *.pt
 *.mat
+.DS_Store
 
 # cluster jobs
 jobs/
