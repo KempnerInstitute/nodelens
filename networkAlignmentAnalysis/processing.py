@@ -72,10 +72,11 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
     """
     # do targeted dropout experiment
     print("performing targeted dropout...")
-    logger.info(f"rank {dist.get_rank()} starting dropout")
+    rank = f"rank {dist.get_rank()}" if dataset.distributed else ""
+    logger.info(f"{rank}starting dropout")
     dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
     dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
-    logger.info(f"rank {dist.get_rank()} finished dropout")
+    logger.info(f"{rank}finished dropout")
 
     return dropout_results, dropout_parameters
 
@@ -91,10 +92,11 @@ def min_samples_per_class(labels):
 def measure_eigenfeatures(exp, nets, dataset, train_set=False):
     # measure eigenfeatures
     print("measuring eigenfeatures...")
-    logger.info(f"rank {dist.get_rank()} measuring eigenfeatures")
+    rank = f"rank {dist.get_rank()}" if dataset.distributed else ""
+    logger.info(f"{rank}measuring eigenfeatures")
     results = {"beta": [], "eigvals": [], "eigvecs": [], "class_betas": []}
     for net in tqdm(nets):
-        logger.info(f"rank {dist.get_rank()} starting loop over nets")
+        logger.info(f"{rank}starting loop over nets")
         # get inputs to each layer from whole dataloader
         inputs, labels = net.module._process_collect_activity(
             dataset,
@@ -110,13 +112,13 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
             # min_per_class = min_per_class.cpu()
             logger.info(f"{dist.get_rank()} sample limit = {min_per_class}")
 
-        logger.info(f"rank {dist.get_rank()} collected activity")
+        logger.info(f"{rank}collected activity")
         beta, eigvals, eigvecs = net.module.measure_eigenfeatures(inputs, with_updates=False)
-        logger.info(f"rank {dist.get_rank()} measured eigenfeatures")
+        logger.info(f"{rank}measured eigenfeatures")
         beta_by_class = net.module.measure_class_eigenfeatures(
             inputs, labels, eigvecs, rms=False, with_updates=False, num_samples_per_class=min_per_class
         )
-        logger.info(f"rank {dist.get_rank()} measured class eigenfeatures")
+        logger.info(f"{rank}measured class eigenfeatures")
         results["beta"].append(beta)
         results["eigvals"].append(eigvals)
         results["eigvecs"].append(eigvecs)
@@ -139,7 +141,7 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
 
     results["class_names"] = getattr(dataset.train_loader if train_set else dataset.test_loader, "dataset").classes
 
-    print(dist.get_rank(), results["class_names"])  # need to confirm always the same, even as dataset grows
+    print(f"{rank}", results["class_names"])  # need to confirm always the same, even as dataset grows
 
     return results
 
