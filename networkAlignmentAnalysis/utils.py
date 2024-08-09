@@ -226,7 +226,7 @@ def smart_pca(input, centered=True, use_rank=True, correction=True):
     else:
         # if more samples than dimensions, it's more efficient to run eigh
         bcov = batch_cov(input, centered=centered, correction=correction)
-        w, v = eigendecomposition(bcov, use_rank=use_rank)
+        w, v = named_transpose([eigendecomposition(C, use_rank=use_rank) for C in bcov])
 
     # return to stacked tensor across batch dimension
     w = torch.stack(w)
