@@ -138,7 +138,7 @@ def plot_train_results(exp, train_results, test_results, prms):
         extents = [[0, bins[mb], alignment_expected[0].shape[0] - 1, 0] for mb in max_bin]
         num_layers = alignment_expected.size(0)
         num_rows = 3 if plot_delta_comparison else 2
-        fig, ax = plt.subplots(num_rows, num_layers, figsize=(num_layers * figdim, num_rows * figdim), layout="constrained", sharex=True)
+        fig, ax = plt.subplots(num_rows, num_layers, figsize=(num_layers * figdim, num_rows * figdim), layout="constrained", sharex="col")
 
         for layer in range(num_layers):
             ax[0, layer].imshow(alignment_expected[layer][:, : max_bin[layer] + 1].cpu().numpy(), extent=extents[layer], aspect="auto")

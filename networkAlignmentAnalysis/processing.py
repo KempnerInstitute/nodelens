@@ -28,6 +28,7 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
         num_epochs=exp.args.epochs,
         alignment=not (exp.args.no_alignment),
         delta_weights=exp.args.delta_weights,
+        delta_alignment=exp.args.delta_alignment,
         compare_expected=exp.args.compare_expected,
         frequency=exp.args.frequency,
         run=exp.run,
