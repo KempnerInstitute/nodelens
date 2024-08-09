@@ -446,8 +446,10 @@ class Experiment(ABC):
                 name = f"{name}_{rank}"
                 dist.barrier()
             plt.savefig(save_path)
+            print(f"Saved a {save_path} plot locally.")
         if self.run is not None:
             self.run.log({name: wandb.Image(plt)})
+            print(f"Sent a {save_path} plot to wandb.")
         # show the plot now if not doing showall
         if not self.args.showall:
             plt.show()

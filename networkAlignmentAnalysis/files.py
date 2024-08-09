@@ -14,6 +14,7 @@ PATH_REGISTRY = {
 HOMEDIR_REGISTRY = {
     "cberon": Path("/n/home00/cberon/"),
     "landauland": Path("/Users/landauland/Documents/MachineLearning/ML-Experiments"),
+    "atlandau": Path("/n/home05/atlandau/machine_learning"),
 }
 
 
