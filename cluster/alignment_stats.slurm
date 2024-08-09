@@ -31,10 +31,8 @@ conda activate networkAlignmentAnalysis
 # record the start time
 start_time=$(date +%s)
 
-export CUDA_LAUNCH_BLOCKING=1
-
 # this is the command that initiates the processes
-python experiment.py alignment_stats --network MLP --dataset MNIST --compare-expected --delta-weights --use_wandb --epochs 100 --frequency 10 >> $logfile
+python experiment.py alignment_stats --network MLP --dataset MNIST --compare-expected --delta-alignment --use_wandb --epochs 50 --frequency 10 >> $logfile
 
 # record the end time
 end_time=$(date +%s)

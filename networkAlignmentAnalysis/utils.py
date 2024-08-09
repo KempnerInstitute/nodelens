@@ -225,8 +225,15 @@ def smart_pca(input, centered=True, use_rank=True, correction=True):
 
     else:
         # if more samples than dimensions, it's more efficient to run eigh
-        bcov = batch_cov(input, centered=centered, correction=correction)
-        w, v = named_transpose([eigendecomposition(C, use_rank=use_rank) for C in bcov])
+        try:
+            bcov = batch_cov(input, centered=centered, correction=correction)
+            w, v = named_transpose([eigendecomposition(C, use_rank=use_rank) for C in bcov])
+        except RuntimeError as e:
+            print(f"Error in SVD: {e}")
+            print(f"Matrix stats: shape={bcov.shape}, dtype={bcov.dtype}")
+            print(f"Min: {bcov.min().item()}, Max: {bcov.max().item()}, Mean: {bcov.mean().item()}")
+            torch.save(bcov, "problematic_bcov.pt")
+            raise
 
     # return to stacked tensor across batch dimension
     w = torch.stack(w)
