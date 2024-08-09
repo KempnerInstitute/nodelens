@@ -105,8 +105,8 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
             use_training_mode=False,
         )
 
+        min_per_class = torch.tensor(min_samples_per_class(labels), device=dataset.device)
         if dataset.distributed:
-            min_per_class = torch.tensor(min_samples_per_class(labels), device=dataset.device)
             logger.info(f"{dist.get_rank()} sample limit = {min_per_class}")
             dist.all_reduce(min_per_class, op=dist.ReduceOp.MIN)
             # min_per_class = min_per_class.cpu()
