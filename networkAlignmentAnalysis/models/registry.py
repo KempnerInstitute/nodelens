@@ -1,12 +1,18 @@
 from . import models
 
 MODEL_REGISTRY = {
+    "MLP_Sanger": models.MLP_Sanger,
     "MLP": models.MLP,
     "CNN2P2": models.CNN2P2,
     "AlexNet": models.AlexNet,
 }
 
 DATASET_ARGUMENTS = {
+    "MLP_Sanger": {
+        "MNIST": dict(input_dim=784, output_dim=10),
+        "CIFAR10": dict(input_dim=3072, output_dim=10),
+        "CIFAR100": dict(input_dim=3072, output_dim=100),
+    },    
     "MLP": {
         "MNIST": dict(input_dim=784, output_dim=10),
         "CIFAR10": dict(input_dim=3072, output_dim=10),

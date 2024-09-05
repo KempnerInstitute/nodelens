@@ -9,6 +9,7 @@ PATH_REGISTRY = {
     "corwin": Path("/Users/corwin/Building"),
     "atlandau": Path("/n/home05/atlandau/machine_learning"),
     "landauland": Path("/Users/landauland/Documents/ML-Datasets"),
+    "hsafaai": Path("/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets"),
 }
 
 

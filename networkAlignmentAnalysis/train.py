@@ -1,6 +1,8 @@
 from copy import copy, deepcopy
 from tqdm import tqdm
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from networkAlignmentAnalysis.utils import (
     transpose_list,
     condense_values,
@@ -11,6 +13,221 @@ from networkAlignmentAnalysis.utils import (
     expected_alignment_distribution,
 )
 
+def sanger_update(hidden_layer, inputs, hidden_outputs, learning_rate):
+    epsilon = 1e-8  # Small epsilon to avoid division by zero
+    updated_weights = hidden_layer.weight.clone()  # Clone weights to avoid in-place operations
+
+    with torch.no_grad():
+        for i in range(hidden_layer.weight.size(0)):
+            y_i = hidden_outputs[:, i].unsqueeze(1)  # Output of the i-th neuron (shape: [batch_size, 1])
+            w_i = updated_weights[i].unsqueeze(0)  # Use cloned weights (shape: [1, input_dim])
+
+            # Calculate the cumulative projection of inputs onto the learned components up to and including the current neuron
+            if i > 0:
+                projection = (inputs @ hidden_layer.weight[:i].T) @ hidden_layer.weight[:i]
+                delta_w = learning_rate * ((inputs - projection).T @ y_i).T  # Ensure delta_w has the correct shape
+            else:
+                delta_w = learning_rate * ((inputs).T @ y_i).T  # Ensure delta_w has the correct shape
+
+            # Update rule based on Sanger's learning rule
+            updated_weights[i] += delta_w.squeeze(0)
+
+            # Normalize the weights after update
+            #updated_weights[i] = updated_weights[i] / (torch.norm(updated_weights[i]) + epsilon)
+        # Normalize the weights after updating all neurons
+        
+        #for i in range(hidden_layer.weight.size(0)):
+            updated_weights[i] = updated_weights[i] / (torch.norm(updated_weights[i]) + epsilon)
+
+    # Assign updated weights back to hidden layer
+    hidden_layer.weight.data = updated_weights
+    return hidden_layer
+
+ 
+
+def compute_rayleigh_quotient(inputs, weights):
+    """
+    Compute the mean Rayleigh quotient for the given inputs and weights.
+    
+    Parameters:
+    - inputs: Tensor of input data with shape [batch_size, input_dim].
+    - weights: Tensor of weights with shape [num_neurons, input_dim].
+    
+    Returns:
+    - mean_rayleigh_quotient: The mean Rayleigh quotient over all neurons.
+    """
+    # Normalize inputs to have zero mean and unit variance
+    inputs_normalized = (inputs - inputs.mean(dim=0)) / (inputs.std(dim=0) + 1e-8)
+    
+    # Calculate the covariance matrix
+    covariance_matrix = inputs_normalized.T @ inputs_normalized
+    
+    rayleigh_quotients = []
+    for i in range(weights.size(0)):
+        weight_i = weights[i].view(-1, 1)  # Weight vector of the i-th neuron (shape: [input_dim, 1])
+        weight_i /= (torch.norm(weight_i) + 1e-8)  # Normalize the weights
+        
+        # Numerator: w_i^T * X^T * X * w_i
+        numerator = (weight_i.T @ covariance_matrix @ weight_i).squeeze()  # Shape: [1, 1] -> Scalar after squeeze
+        
+        # Denominator: w_i^T * w_i
+        denominator = (weight_i.T @ weight_i).squeeze()  # Scalar
+        
+        # Compute Rayleigh quotient for this weight vector
+        rayleigh_quotient = numerator / (denominator + 1e-8)  # Add epsilon to avoid division by zero
+        
+        rayleigh_quotients.append(rayleigh_quotient.item())
+
+    # Return the mean Rayleigh quotient
+    mean_rayleigh_quotient = torch.mean(torch.tensor(rayleigh_quotients))
+    return mean_rayleigh_quotient
+
+
+import torch
+from tqdm import tqdm
+
+def train_sanger(net, dataset, DEVICE, num_epochs=50, learning_rate=0.01, **parameters):
+    """
+    Train the network using Sanger's learning rule for all layers.
+
+    Parameters:
+    - net: The neural network model.
+    - dataset: The dataset object with train_loader.
+    - DEVICE: The device to run the model on.
+    - num_epochs: Number of epochs for training.
+    - learning_rate: Learning rate for Sanger's learning rule.
+    - parameters: Additional parameters like 'verbose' and 'frequency'.
+    
+    Returns:
+    - results: Dictionary containing loss, accuracy, and Rayleigh quotients.
+    """
+    # Initialize variables
+    net.to(DEVICE)
+    net.train()
+    verbose = parameters.get("verbose", True)
+    measure_frequency = parameters.get("frequency", 1)
+    results = parameters.get("results", {})
+    num_steps = len(dataset.train_loader) * num_epochs
+
+    # Initialize results dictionary if not provided
+    if not results:
+        results = {
+            "loss": torch.zeros((num_steps, 1)),
+            "accuracy": torch.zeros((num_steps, 1)),
+            "rayleigh_quotients": [[] for _ in net.get_layers()]  # Initialize for each layer
+        }
+
+    # Training loop
+    for epoch in range(num_epochs):
+        epoch_loop = tqdm(dataset.train_loader, desc=f'Training Epoch {epoch+1}/{num_epochs}') if verbose else dataset.train_loader
+
+        for idx, batch in enumerate(epoch_loop):
+            cidx = epoch * len(dataset.train_loader) + idx
+            images, labels = dataset.unwrap_batch(batch)
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+
+            # Flatten images to use as input
+            inputs = images.view(images.size(0), -1)
+
+            # Get layers from MLP
+            layers = net.get_layers()
+
+            # Forward pass and Sanger update for each layer
+            for layer_idx, layer in enumerate(layers):
+                outputs = layer(inputs)
+                sanger_update(layer, inputs, outputs, learning_rate)
+
+                # Compute and store mean Rayleigh quotient for this layer only at specified frequency
+                if (epoch * len(epoch_loop) + idx) % measure_frequency == 0:
+                    rayleigh_quotient = compute_rayleigh_quotient(inputs, layer.weight.data)
+                    results["rayleigh_quotients"][layer_idx].append(rayleigh_quotient)
+
+                inputs = outputs  # Update input to next layer's input
+
+            # Calculate loss and accuracy
+            loss = dataset.measure_loss(outputs, labels)
+            accuracy = dataset.measure_accuracy(outputs, labels)
+            results["loss"][cidx] = loss.item()
+            results["accuracy"][cidx] = accuracy.cpu()
+
+        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%')
+
+    return results
+
+# def train_sanger(net, dataset, DEVICE, num_epochs=50, learning_rate=0.1, **parameters):
+#     """
+#     Train the network using Sanger's learning rule for all layers.
+#     """
+#     # Initialize variables
+#     net.to(DEVICE)
+#     net.train()
+#     verbose = parameters.get("verbose", True)
+#     measure_alignment = parameters.get("alignment", True)
+#     measure_delta_weights = parameters.get("delta_weights", False)
+#     measure_delta_alignment = parameters.get("delta_alignment", False)
+#     measure_frequency = parameters.get("frequency", 1)
+#     results = parameters.get("results", {})
+#     num_steps = len(dataset.train_loader) * num_epochs
+
+#     # Initialize results dictionary if not provided
+#     if not results:
+#         results = {
+#             "loss": torch.zeros((num_steps, 1)),
+#             "accuracy": torch.zeros((num_steps, 1)),
+#         }
+
+#         if measure_alignment:
+#             results["alignment"] = []
+#         if measure_delta_weights:
+#             results["delta_weights"] = []
+#             results["init_weights"] = [net.get_alignment_weights()]
+#         if measure_delta_alignment:
+#             if not "init_weights" in results:
+#                 results["init_weights"] = [net.get_alignment_weights()]
+#             results["delta_alignment"] = []
+
+#     # Training loop
+#     for epoch in range(num_epochs):
+#         epoch_loop = tqdm(dataset.train_loader, desc=f'Training Epoch {epoch+1}/{num_epochs}') if verbose else dataset.train_loader
+
+#         for idx, batch in enumerate(epoch_loop):
+#             cidx = epoch * len(dataset.train_loader) + idx
+#             images, labels = dataset.unwrap_batch(batch)
+#             images, labels = images.to(DEVICE), labels.to(DEVICE)
+
+#             # Flatten images to use as input
+#             inputs = images.view(images.size(0), -1)
+
+#             # Get layers from MLP including the last layer
+#             layers = net.get_layers()
+
+#             # Forward pass and Sanger update for each layer
+#             for layer in layers:
+#                 outputs = layer(inputs)
+#                 sanger_update(layer, inputs, outputs, learning_rate)
+#                 inputs = outputs  # Update input to next layer's input
+
+#             # Calculate loss and accuracy using the output of the last layer
+#             loss = dataset.measure_loss(outputs, labels)
+#             accuracy = dataset.measure_accuracy(outputs, labels)
+#             results["loss"][cidx] = loss.item()
+#             results["accuracy"][cidx] = accuracy.cpu()
+
+#             # Optional analysis during training
+#             if idx % measure_frequency == 0:
+#                 if measure_alignment:
+#                     results["alignment"].append(net.measure_alignment(images, precomputed=True, method="alignment"))
+#                 if measure_delta_weights or measure_delta_alignment:
+#                     c_delta_weights = net.compare_weights(results["init_weights"][0])
+#                     if measure_delta_weights:
+#                         results["delta_weights"].append(c_delta_weights)
+#                     if measure_delta_alignment:
+#                         c_delta_alignment = net.measure_alignment_weights(images, c_delta_weights, precomputed=True, method="alignment")
+#                         results["delta_alignment"].append(c_delta_alignment)
+
+#         print(f'Epoch {epoch+1}/{num_epochs}, Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%')
+
+#     return results
 
 @train_nets
 def train(nets, optimizers, dataset, **parameters):
@@ -572,3 +789,4 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     }
 
     return results
+

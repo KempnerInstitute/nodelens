@@ -3,8 +3,105 @@ from torchvision.models import alexnet as torch_alexnet
 
 from .base import AlignmentNetwork
 from .layers import default_metaprms_conv2d, default_metaprms_ignore, default_metaprms_linear
+import torch
+class MLP_Sanger(nn.Module):
+    def __init__(self, input_dim=784, hidden_widths=[100, 100, 50], output_dim=10, dropout=0.0):
+        super().__init__()
+        # Define input layer
+        self.layerInput = nn.Sequential(
+            nn.Linear(input_dim, hidden_widths[0]),
+            nn.ReLU()
+        )
+        # Define hidden layers
+        self.layerHidden = nn.ModuleList()
+        for i in range(len(hidden_widths) - 1):
+            self.layerHidden.append(
+                nn.Sequential(
+                    nn.Linear(hidden_widths[i], hidden_widths[i + 1]),
+                    nn.ReLU()
+                )
+            )
+        # Define output layer
+        self.layerOutput = nn.Sequential(
+            nn.Linear(hidden_widths[-1], output_dim)
+        )
+        # Initialize additional features for alignment and delta weights
+        self.initialize_additional_features()
 
+    def initialize_additional_features(self):
+        """Initialize additional features needed for alignment, delta weights, etc."""
+        self.alignment_weights = [p.data.clone() for p in self.parameters()]
+    
+    def forward(self, x):
+        x = self.layerInput(x)
+        for hidden_layer in self.layerHidden:
+            x = hidden_layer(x)
+        x = self.layerOutput(x)
+        return x
 
+    def get_layers(self):
+        """Method to get all layers in order for Sanger update"""
+        layers = [self.layerInput[0]]
+        for hidden in self.layerHidden:
+            layers.append(hidden[0])
+        layers.append(self.layerOutput[0])
+        return layers
+
+    def get_transform_parameters(self, dataset):
+        """MLP specific transformations for each dataset"""
+        params = {
+            "MNIST": {
+                "flatten": True,
+                "resize": None,
+            },
+            "CIFAR10": {
+                "flatten": True,
+                "resize": None,
+            },
+            "CIFAR100": {
+                "flatten": True,
+                "resize": None,
+            },
+            "ImageNet": {
+                "flatten": True,
+            },
+        }
+        if dataset not in params:
+            raise ValueError(f"Dataset ({dataset}) is not in params dictionary: {[k for k in params]}")
+        return params[dataset]
+
+    def measure_alignment(self, inputs, precomputed=False, method="alignment"):
+        """Stub method to mimic alignment measurement"""
+        return torch.tensor([0.0])  # Dummy return value
+
+    def compare_weights(self, init_weights):
+        """Compare current weights with initial weights"""
+        delta_weights = [w - iw for w, iw in zip(self.parameters(), init_weights)]
+        return delta_weights
+    
+    def get_alignment_weights(self):
+        """Get current alignment weights"""
+        return [p.data.clone() for p in self.parameters()]
+
+    def measure_alignment_weights(self, inputs, weights, precomputed=False, method="alignment"):
+        """Measure alignment of the current weights"""
+        return torch.tensor([0.0])  # Dummy return value
+
+    def get_layer_inputs(self, x, precomputed=False):
+        """Method to get the inputs to each layer"""
+        inputs_to_layers = []
+        x = self.layerInput(x)
+        inputs_to_layers.append(x)
+        for hidden_layer in self.layerHidden:
+            x = hidden_layer(x)
+            inputs_to_layers.append(x)
+        return inputs_to_layers
+
+    def _preprocess_inputs(self, inputs_to_layers):
+        """Method to preprocess inputs for each layer, as required by your code"""
+        # Example: Standardizing the inputs (you can customize this as needed)
+        processed_inputs = [(inputs - inputs.mean(dim=0)) / (inputs.std(dim=0) + 1e-5) for inputs in inputs_to_layers]
+        return processed_inputs
 class MLP(AlignmentNetwork):
     """
     3 hidden layer fully-connected relu network for MNIST including dropouts after input layer
