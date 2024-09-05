@@ -173,13 +173,33 @@ class AlignmentNetwork(nn.Module, ABC):
         assert isinstance(ignore_flag, bool), "ignore_flag setting must be a bool"
         self.ignore_flag = ignore_flag
 
-    def forward(self, x, store_hidden=False):
-        """standard forward pass of all layers with option of storing hidden activations (and output)"""
-        self.hidden = []  # always reset so as to not keep a previous forward pass accidentally
-        for layer in self.layers:
-            x = layer(x)  # pass through next layer
+    # def forward(self, x, store_hidden=False):
+    #     """standard forward pass of all layers with option of storing hidden activations (and output)"""
+    #     self.hidden = []  # always reset so as to not keep a previous forward pass accidentally
+    #     for layer in self.layers:
+    #         x = layer(x)  # pass through next layer
+    #         if store_hidden:
+    #             self.hidden.append(x)
+    #     return x
+
+    def forward(self, x, store_hidden=False, ablate_layer=None, ablate_node=None):
+        """Standard forward pass with optional node ablation."""
+        self.hidden = []  # Always reset so as not to keep a previous forward pass accidentally
+        for idx, layer in enumerate(self.layers):
+            x = layer(x)  # Pass through next layer
+            
+            # Ablation logic
+            if ablate_layer is not None and ablate_node is not None:
+                if idx == ablate_layer:
+                    # Check if layer is Linear or Conv2d and perform node ablation
+                    if isinstance(layer, nn.Linear):
+                        x[:, ablate_node] = 0
+                    elif isinstance(layer, nn.Conv2d):
+                        x[:, ablate_node, :, :] = 0
+            
             if store_hidden:
                 self.hidden.append(x)
+                
         return x
 
     def get_dropout(self):

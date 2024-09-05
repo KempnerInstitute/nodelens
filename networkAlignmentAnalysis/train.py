@@ -154,6 +154,7 @@ def train_sanger(net, dataset, DEVICE, num_epochs=50, learning_rate=0.01, **para
 
     return results
 
+
 # generalized Hebbian regularization
 @train_nets
 def train_GH_regularized(nets, optimizers, dataset, **parameters):
