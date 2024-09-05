@@ -15,11 +15,11 @@ REQUIRED_PROPERTIES = ["dataset_path", "dataset_constructor", "loss_function"]
 
 def default_loader_parameters(
     distributed,
-    batch_size=1024,
-    num_workers=2,
+    batch_size=512,#1024,
+    num_workers=0,#2,
     shuffle=True,
     pin_memory=True,
-    persistent_workers=True,
+    persistent_workers=False,#True,
 ):
     """
     contains the default dataloader parameters with the option of updating them

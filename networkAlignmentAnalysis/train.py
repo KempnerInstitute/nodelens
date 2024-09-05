@@ -154,80 +154,223 @@ def train_sanger(net, dataset, DEVICE, num_epochs=50, learning_rate=0.01, **para
 
     return results
 
-# def train_sanger(net, dataset, DEVICE, num_epochs=50, learning_rate=0.1, **parameters):
-#     """
-#     Train the network using Sanger's learning rule for all layers.
-#     """
-#     # Initialize variables
-#     net.to(DEVICE)
-#     net.train()
-#     verbose = parameters.get("verbose", True)
-#     measure_alignment = parameters.get("alignment", True)
-#     measure_delta_weights = parameters.get("delta_weights", False)
-#     measure_delta_alignment = parameters.get("delta_alignment", False)
-#     measure_frequency = parameters.get("frequency", 1)
-#     results = parameters.get("results", {})
-#     num_steps = len(dataset.train_loader) * num_epochs
+# generalized Hebbian regularization
+@train_nets
+def train_GH_regularized(nets, optimizers, dataset, **parameters):
+    """Method for training network on supervised learning problem"""
 
-#     # Initialize results dictionary if not provided
-#     if not results:
-#         results = {
-#             "loss": torch.zeros((num_steps, 1)),
-#             "accuracy": torch.zeros((num_steps, 1)),
-#         }
+    # Add regularization parameter
+    lambda_reg = parameters.get("lambda_reg", 0.0)  # Regularization strength
 
-#         if measure_alignment:
-#             results["alignment"] = []
-#         if measure_delta_weights:
-#             results["delta_weights"] = []
-#             results["init_weights"] = [net.get_alignment_weights()]
-#         if measure_delta_alignment:
-#             if not "init_weights" in results:
-#                 results["init_weights"] = [net.get_alignment_weights()]
-#             results["delta_alignment"] = []
+    # Input argument checks
+    if not (isinstance(nets, list)):
+        nets = [nets]
+    if not (isinstance(optimizers, list)):
+        optimizers = [optimizers]
+    assert len(nets) == len(optimizers), "nets and optimizers need to be equal length lists"
 
-#     # Training loop
-#     for epoch in range(num_epochs):
-#         epoch_loop = tqdm(dataset.train_loader, desc=f'Training Epoch {epoch+1}/{num_epochs}') if verbose else dataset.train_loader
+    # Check if we should print progress bars
+    verbose = parameters.get("verbose", True)
 
-#         for idx, batch in enumerate(epoch_loop):
-#             cidx = epoch * len(dataset.train_loader) + idx
-#             images, labels = dataset.unwrap_batch(batch)
-#             images, labels = images.to(DEVICE), labels.to(DEVICE)
+    # Preallocate variables and define metaparameters
+    num_nets = len(nets)
+    use_train = parameters.get("train_set", True)
+    dataloader = dataset.train_loader if use_train else dataset.test_loader
+    num_steps = len(dataset.train_loader) * parameters["num_epochs"]
 
-#             # Flatten images to use as input
-#             inputs = images.view(images.size(0), -1)
+    # --- Optional W&B logging ---
+    run = parameters.get("run")
 
-#             # Get layers from MLP including the last layer
-#             layers = net.get_layers()
+    # --- Optional analyses ---
+    measure_alignment = parameters.get("alignment", True)
+    measure_delta_weights = parameters.get("delta_weights", False)
+    measure_delta_alignment = parameters.get("delta_alignment", False)
+    measure_frequency = parameters.get("frequency", 1)
+    compare_expected = parameters.get("compare_expected", False)
 
-#             # Forward pass and Sanger update for each layer
-#             for layer in layers:
-#                 outputs = layer(inputs)
-#                 sanger_update(layer, inputs, outputs, learning_rate)
-#                 inputs = outputs  # Update input to next layer's input
+    # --- Optional training method: manual shaping with eigenvectors ---
+    manual_shape = parameters.get("manual_shape", False)
+    manual_frequency = parameters.get("manual_frequency", -1)
+    manual_transforms = parameters.get("manual_transforms", None)
+    manual_layers = parameters.get("manual_layers", None)
 
-#             # Calculate loss and accuracy using the output of the last layer
-#             loss = dataset.measure_loss(outputs, labels)
-#             accuracy = dataset.measure_accuracy(outputs, labels)
-#             results["loss"][cidx] = loss.item()
-#             results["accuracy"][cidx] = accuracy.cpu()
+    # --- Create results dictionary if not provided and handle checkpoint info ---
+    results = parameters.get("results", False)
+    num_complete = parameters.get("num_complete", 0)
+    save_ckpt, freq_ckpt, path_ckpt, dev = parameters.get("save_checkpoints", (False, 1, "", ""))
+    if not results:
+        # Initialize dictionary for storing performance across epochs
+        results = {
+            "loss": torch.zeros((num_steps, num_nets)),
+            "accuracy": torch.zeros((num_steps, num_nets)),
+        }
 
-#             # Optional analysis during training
-#             if idx % measure_frequency == 0:
-#                 if measure_alignment:
-#                     results["alignment"].append(net.measure_alignment(images, precomputed=True, method="alignment"))
-#                 if measure_delta_weights or measure_delta_alignment:
-#                     c_delta_weights = net.compare_weights(results["init_weights"][0])
-#                     if measure_delta_weights:
-#                         results["delta_weights"].append(c_delta_weights)
-#                     if measure_delta_alignment:
-#                         c_delta_alignment = net.measure_alignment_weights(images, c_delta_weights, precomputed=True, method="alignment")
-#                         results["delta_alignment"].append(c_delta_alignment)
+        # Measure alignment throughout training
+        if measure_alignment:
+            results["alignment"] = []
 
-#         print(f'Epoch {epoch+1}/{num_epochs}, Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%')
+        # Measure weight norm throughout training
+        if measure_delta_weights:
+            results["delta_weights"] = []
+            results["init_weights"] = [net.get_alignment_weights() for net in nets]
 
-#     return results
+        # Measure alignment of weight updates throughout training
+        if measure_delta_alignment:
+            if not "init_weights" in results:
+                results["init_weights"] = [net.get_alignment_weights() for net in nets]
+            results["delta_alignment"] = []
+
+        # Compare true alignment distribution to expected distribution (according to Fiete alignment definition)
+        if compare_expected:
+            calign_bins = torch.linspace(0, 1, 301)
+            results["compare_alignment_bins"] = calign_bins
+            results["compare_alignment_expected"] = []
+            results["compare_alignment_observed"] = []
+            if measure_delta_alignment:
+                results["compare_delta_alignment_observed"] = []
+
+    # If loaded from checkpoint but running more epochs than initialized for.
+    elif results["loss"].shape[0] < num_steps:
+        add_steps = num_steps - results["loss"].shape[0]
+        assert (add_steps / (parameters["num_epochs"] - num_complete)) == len(
+            dataset.train_loader
+        ), "Number of new steps needs to multiple of epochs and num minibatches"
+        results["loss"] = torch.vstack((results["loss"], torch.zeros((add_steps, num_nets))))
+        results["accuracy"] = torch.vstack((results["accuracy"], torch.zeros((add_steps, num_nets))))
+
+    if num_complete > 0:
+        print("Resuming training from checkpoint on epoch", num_complete)
+
+    # --- Training loop ---
+    epoch_loop = range(num_complete, parameters["num_epochs"])
+    if verbose:
+        epoch_loop = tqdm(epoch_loop, desc="Training epoch")
+
+    for epoch in epoch_loop:
+
+        # Create batch loop with optional progress updates
+        batch_loop = dataloader
+        if verbose:
+            batch_loop = tqdm(batch_loop, desc="Minibatch", leave=False)
+
+        for idx, batch in enumerate(batch_loop):
+            cidx = epoch * len(dataloader) + idx
+            images, labels = dataset.unwrap_batch(batch)
+
+            # Zero the gradients
+            for opt in optimizers:
+                opt.zero_grad()
+
+            # Perform forward pass
+            outputs = [net(images, store_hidden=True) for net in nets]
+
+            # Compute Sanger-inspired regularization term
+            sanger_reg_term = 0
+            for net in nets:
+                for i, layer in enumerate(net.layers):
+                    if hasattr(layer, 'weight'):
+                        weights = layer.weight
+                        activations = net.hidden[i].detach()  # Use stored hidden activations
+                        proj_inputs = torch.matmul(weights, activations.T)
+
+                        layer_reg_term = 0
+                        for i in range(weights.size(0)):
+                            layer_reg_term += torch.mean(proj_inputs[i] ** 2)
+                            for j in range(i):
+                                layer_reg_term -= torch.mean((weights[i] @ weights[j]) * (proj_inputs[j] ** 2))
+
+                        sanger_reg_term += layer_reg_term
+            
+            # Apply regularization coefficient
+            sanger_reg_term *= lambda_reg
+            
+            # Perform backward pass & optimization
+            loss = [dataset.measure_loss(output, labels) + sanger_reg_term for output in outputs]
+            for l, opt in zip(loss, optimizers):
+                l.backward()
+                opt.step()
+
+            results["loss"][cidx] = torch.tensor([l.item() for l in loss])
+            results["accuracy"][cidx] = torch.tensor([dataset.measure_accuracy(output, labels).cpu() for output in outputs])
+
+            if idx % measure_frequency == 0:
+                if measure_alignment:
+                    # Measure alignment if requested
+                    results["alignment"].append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
+
+                if measure_delta_weights or measure_delta_alignment:
+                    c_delta_weights = [net.compare_weights(init_weight) for net, init_weight in zip(nets, results["init_weights"])]
+                    if measure_delta_weights:
+                        # Save change in weights if requested
+                        results["delta_weights"].append(c_delta_weights)
+                    if measure_delta_alignment:
+                        # Save delta weight alignment if requested
+                        c_delta_alignment = [
+                            net.measure_alignment_weights(images, weights, precomputed=True, method="alignment")
+                            for net, weights in zip(nets, c_delta_weights)
+                        ]
+                        results["delta_alignment"].append(c_delta_alignment)
+
+                if compare_expected:
+                    # Measure distribution of alignment, compare with expected given "Alignment" from Fiete definition
+                    if measure_alignment:
+                        c_alignment = results["alignment"][-1]
+                    else:
+                        c_alignment = [net.measure_alignment(images, precomputed=True, method="alignment") for net in nets]
+                    c_inputs = [net.get_layer_inputs(images, precomputed=True) for net in nets]
+                    c_inputs = [net._preprocess_inputs(cin) for net, cin in zip(nets, c_inputs)]
+                    c_evals = [[smart_pca(c.T)[0] for c in cin] for cin in c_inputs]
+                    c_dist = [[expected_alignment_distribution(ev, valid_rotation=False, bins=calign_bins)[0] for ev in c_eval] for c_eval in c_evals]
+                    t_dist = [[torch.histogram(align.cpu(), bins=calign_bins, density=True)[0] for align in c_align] for c_align in c_alignment]
+                    results["compare_alignment_expected"].append(c_dist)
+                    results["compare_alignment_observed"].append(t_dist)
+                    if measure_delta_alignment:
+                        d_alignment = results["delta_alignment"][-1]
+                        d_dist = [[torch.histogram(dalign.cpu(), bins=calign_bins, density=True)[0] for dalign in d_align] for d_align in d_alignment]
+                        results["compare_delta_alignment_observed"].append(d_dist)
+
+            if run is not None:
+                run.log(
+                    {f"losses/loss-{ii}": l.item() for ii, l in enumerate(loss)}
+                    | {f"accuracies/accuracy-{ii}": dataset.measure_accuracy(output, labels) for ii, output in enumerate(outputs)}
+                    | {"batch": cidx}
+                )
+
+        if manual_shape:
+            # Only do it at the end of #=manual_frequency epochs (but not last)
+            if ((epoch + 1) % manual_frequency == 0) and (epoch < parameters["num_epochs"] - 1):
+                for net, transform in tqdm(zip(nets, manual_transforms), desc="manual shaping", leave=False):
+                    inputs, _ = net._process_collect_activity(dataset, train_set=False, with_updates=False, use_training_mode=False)
+                    _, eigenvalues, eigenvectors = net.measure_eigenfeatures(inputs, with_updates=False)
+                    idx_to_layer_lookup = {layer: idx for idx, layer in enumerate(net.get_alignment_layer_indices())}
+                    eigenvalues = [eigenvalues[idx_to_layer_lookup[ml]] for ml in manual_layers]
+                    eigenvectors = [eigenvectors[idx_to_layer_lookup[ml]] for ml in manual_layers]
+                    net.shape_eigenfeatures(manual_layers, eigenvalues, eigenvectors, transform)
+
+        if save_ckpt & (epoch % freq_ckpt == 0):
+            save_checkpoint(
+                nets,
+                optimizers,
+                results | {"prms": parameters, "epoch": epoch, "device": dev},
+                path_ckpt,
+            )
+
+    # Condense optional analyses
+    for k in [
+        "alignment",
+        "delta_weights",
+        "delta_alignment",
+        "avgcorr",
+        "fullcorr",
+        "compare_alignment_expected",
+        "compare_alignment_observed",
+        "compare_delta_alignment_observed",
+    ]:
+        if k not in results.keys():
+            continue
+        results[k] = condense_values(transpose_list(results[k]))
+
+    return results
 
 @train_nets
 def train(nets, optimizers, dataset, **parameters):
@@ -426,7 +569,6 @@ def train(nets, optimizers, dataset, **parameters):
         results[k] = condense_values(transpose_list(results[k]))
 
     return results
-
 
 @torch.no_grad()
 @test_nets
