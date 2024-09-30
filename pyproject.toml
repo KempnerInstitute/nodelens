@@ -14,11 +14,12 @@ requires-python = ">=3.8"
 license = { file = "LICENSE" }
 dependencies = [
     "numpy",
-    "torch>=2.1,<2.4",
+    "torch>=2.1,<2.5",
 ]
 
 [tool.setuptools]
-packages = ["src"]
+package-dir = { "" = "src" } 
+packages = ["alignment"]  
 
 
 [project.optional-dependencies]
