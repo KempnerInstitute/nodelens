@@ -1,2 +1,74 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alignment"
+version = "0.1.0"
+description = "A package for performing alignment analysis on different models."
+authors = [
+    { name = "Research and Engineering at Kempner Institute", email = "kempner-research-engineering@g.harvard.edu" },
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+dependencies = [
+    "numpy",
+    "torch>=2.1,<2.4",
+]
+
+[tool.setuptools]
+packages = ["src"]
+
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy>=1.0,<1.4",
+    "black>=23.1,<24.0",
+    "isort>=5.12,<5.13",
+    "pytest",
+    "pytest-sphinx",
+    "twine>=1.11.0",
+    "setuptools",
+    "wheel",
+    "build",
+]
+train = [
+    "wandb",
+    "beaker-gantry",
+    "click",
+    "torchmetrics",
+    "smashed[remote]>=0.21.1",
+    "safetensors",
+    "datasets",
+    "scikit-learn",
+    "msgspec>=0.14.0",
+]
+all = [
+    "alignment[dev,train]",
+]
+
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+    "sphinxcontrib-napoleon",
+    "myst-parser",
+    "nbsphinx",
+    "recommonmark",
+    "sphinx-copybutton",
+    "sphinxcontrib-bibtex",
+
+]
+
+
+[project.urls]
+Homepage = "https://github.com/KempnerInstitute/alignment"
+Repository = "https://github.com/KempnerInstitute/alignment"
+
+[tool.setuptools.dynamic]
+version = { attr = "alignment.version.VERSION" }
+
+
 [tool.black]
 line-length = 150
