@@ -2,7 +2,9 @@ from torch import nn
 from torchvision.models import alexnet as torch_alexnet
 
 from alignment.models.base import AlignmentNetwork
-from alignment.models.layers import default_metaprms_conv2d, default_metaprms_ignore, default_metaprms_linear
+from alignment.models.layers import (default_metaprms_conv2d, 
+                                     default_metaprms_ignore, 
+                                     default_metaprms_linear)
 
 
 class MLP(AlignmentNetwork):
