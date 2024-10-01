@@ -28,6 +28,14 @@ your terminal to figure out the right CUDA version to use, and install them
 using the instructions on the pytorch 
 [website](https://pytorch.org/get-started/locally/).
 
+## Installation
+
+After creating and activating the environment, you can install the package.
+
+```
+pip install -e .
+```
+
 There's no unit test, but to check if the install was successful, run the 
 following script while in the environment and in the top directory:
 ```
