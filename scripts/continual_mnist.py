@@ -19,12 +19,12 @@ import sys
 mainPath = os.path.dirname(os.path.abspath(__file__)) + "/../.."
 sys.path.append(mainPath)
 
-from networkAlignmentAnalysis.models.registry import get_model
-from networkAlignmentAnalysis.datasets import get_dataset
-from networkAlignmentAnalysis.experiments.registry import get_experiment
-from networkAlignmentAnalysis import utils
-from networkAlignmentAnalysis import files
-from networkAlignmentAnalysis import train
+from alignment.models.registry import get_model
+from alignment.datasets import get_dataset
+from alignment.experiments.registry import get_experiment
+from alignment import utils
+from alignment import files
+from alignment import train
 
 
 def permute(batch, batch_dim=True, shuffle_idx=None):
