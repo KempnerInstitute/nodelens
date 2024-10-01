@@ -6,9 +6,11 @@
 
 ### Changed
 
-- sparsenet --> _archive (sparsenet will be archived)
-- docs --> doc (docs will host the documentation)
-- networAlignmentAnalysis --> _archive (networkAlignmentAnalysis will be archived, all modules copied in the src folder.)
+- Move workspace.ipynb notebooks/
+- Move testbook.ipynb --> notebooks/
+- Move sparsenet --> _archive (sparsenet will be archived)
+- Move docs --> doc (docs will host the documentation)
+- Move networAlignmentAnalysis --> _archive (networkAlignmentAnalysis will be archived, all modules copied in the src folder.)
 
 
 ### Removed
