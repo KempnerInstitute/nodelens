@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from networkAlignmentAnalysis import files
+from alignment import files
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
