@@ -1,6 +1,6 @@
 import time
 import torch
-from networkAlignmentAnalysis import utils
+from alignment import utils
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
