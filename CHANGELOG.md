@@ -6,6 +6,7 @@
 
 ### Changed
 
+- Move timetetsts --> scripts
 - Move workspace.ipynb notebooks/
 - Move testbook.ipynb --> notebooks/
 - Move sparsenet --> _archive (sparsenet will be archived)
