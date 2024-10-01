@@ -1,6 +1,8 @@
 from copy import copy, deepcopy
-from tqdm import tqdm
+
 import torch
+from tqdm import tqdm
+
 from alignment.utils import (
     transpose_list,
     condense_values,

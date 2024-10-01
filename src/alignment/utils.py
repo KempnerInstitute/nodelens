@@ -1,17 +1,17 @@
-from warnings import warn
-import zipfile
 import os
+import math
+import zipfile
 from typing import List
+from warnings import warn
 from contextlib import contextmanager
 from functools import wraps
-import math
 from natsort import natsorted
+from gitignore_parser import parse_gitignore
+
+import torch
 import numpy as np
 from scipy.linalg import null_space
 from sklearn.decomposition import IncrementalPCA
-import torch
-from gitignore_parser import parse_gitignore
-
 
 # -------------- context managers & decorators --------------
 @contextmanager
