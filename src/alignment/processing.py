@@ -204,3 +204,6 @@ def measure_alignment_distribution(nets, dataset, **parameters):
     parameters = dict(
         train_set=True,
     )
+
+
+def measure_information(nets, dataset, **paramet)
