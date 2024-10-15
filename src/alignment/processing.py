@@ -206,4 +206,3 @@ def measure_alignment_distribution(nets, dataset, **parameters):
     )
 
 
-def measure_information(nets, dataset, **paramet)
