@@ -676,7 +676,7 @@ def compress_directory(output_path, directory_path=None):
     if directory_path is None:
         # relative to utils -- this is the main repo path
         directory_path = os.path.dirname(os.path.abspath(__file__)) + "/../.."
-        print(directory_path)
+        
     # Parse .gitignore file
     gitignore_path = os.path.join(directory_path, ".gitignore")
     matches = parse_gitignore(gitignore_path)
