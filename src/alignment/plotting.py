@@ -232,31 +232,31 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
     exp.plot_ready("prog_dropout_" + extra_name + "_accuracy")
 
+
+
     num_layers = dropout_results["progdrop_loss_high"].size(2)
     dropout_fraction = dropout_results["dropout_fraction"]
+    fraction_dropped_nodes = dropout_results["fraction_dropped_nodes"]
+    print(fraction_dropped_nodes)
 
-    # Plot Fraction of Dropped Nodes per Layer
     print("Plotting fraction of dropped nodes per layer...")
 
-    for idx, label in enumerate(labels):
-        fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(8, 6))
 
-        # Plot a line for each dropout fraction
-        for drop_idx, fraction in enumerate(dropout_fraction):
-            # Use 'dropped_nodes_fraction' instead of 'num_dropped_nodes'
-            dropped_nodes_fraction = [dropout_results["dropped_nodes_fraction"][layer][drop_idx].item() for layer in range(num_layers)]
-        
-            ax.plot(range(num_layers), dropped_nodes_fraction, label=f"Dropout fraction: {fraction:.2f}", marker='o', linestyle='-', alpha=0.7)
+    # Plot a curve for each dropout fraction
+    for drop_idx, fraction in enumerate(dropout_fraction):
+        dropped_nodes_fraction = fraction_dropped_nodes[:, drop_idx]  # Fraction of dropped nodes per layer
+        ax.plot(dropped_nodes_fraction, label=f"Dropout fraction: {fraction:.2f}", marker='o', linestyle='-', alpha=0.7)
 
-        # Set plot titles and labels
-        ax.set_title(f"Dropped Fraction per Layer for {label}")
-        ax.set_xlabel("Layer Index")
-        ax.set_ylabel("Fraction of Dropped Nodes")
-        ax.set_xticks(range(num_layers))
-        ax.legend(loc="best")
+    # Set plot titles and labels
+    ax.set_title("Fraction of Dropped Nodes per Layer")
+    ax.set_xlabel("Layer Index")
+    ax.set_ylabel("Fraction of Dropped Nodes")
+    ax.set_xticks(range(num_layers))
+    ax.legend(loc="best")
 
-        # Show or save the plot
-        exp.plot_ready(f"fraction_dropped_nodes_{label}")
+    # Show or save the plot
+    exp.plot_ready("fraction_dropped_nodes_per_layer")
  
 
 def plot_eigenfeatures(exp, results, prms):
