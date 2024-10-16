@@ -103,10 +103,10 @@ class AlignmentStatisticsInfo(Experiment):
         #     )
         
         # measure eigenfeatures
-        eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
+        #eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
 
         # do targeted dropout experiment
-        evec_dropout_results, evec_dropout_parameters = processing.eigenvector_dropout(self, nets, dataset, eigen_results, train_set=False)
+        #evec_dropout_results, evec_dropout_parameters = processing.eigenvector_dropout(self, nets, dataset, eigen_results, train_set=False)
 
         # make full results dictionary
         results = dict(
@@ -115,9 +115,9 @@ class AlignmentStatisticsInfo(Experiment):
             test_results=test_results,
             dropout_results=dropout_results,
             dropout_parameters=dropout_parameters,
-            eigen_results=eigen_results,
-            evec_dropout_results=evec_dropout_results,
-            evec_dropout_parameters=evec_dropout_parameters,
+        #    eigen_results=eigen_results,
+        #    evec_dropout_results=evec_dropout_results,
+        #    evec_dropout_parameters=evec_dropout_parameters,
         )
 
         # return results and trained networks
@@ -135,11 +135,11 @@ class AlignmentStatisticsInfo(Experiment):
             results["prms"],
             dropout_type="nodes",
         )
-        plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
-        plotting.plot_dropout_results(
-            self,
-            results["evec_dropout_results"],
-            results["evec_dropout_parameters"],
-            results["prms"],
-            dropout_type="eigenvectors",
-        )
+        #plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
+        #plotting.plot_dropout_results(
+        #    self,
+        #    results["evec_dropout_results"],
+        #    results["evec_dropout_parameters"],
+        #    results["prms"],
+        #    dropout_type="eigenvectors",
+        #)
