@@ -1,9 +1,11 @@
 from argparse import ArgumentParser
+from alignment.experiments.alignment_info_stats import AlignmentStatisticsInfo
 from alignment.experiments.alignment_stats import AlignmentStatistics
 from alignment.experiments.alignment_comparison import AlignmentComparison
 from alignment.experiments.adversarial_shaping import AdversarialShaping
 
 EXPERIMENT_REGISTRY = {
+    "alignment_info_stats": AlignmentStatisticsInfo,
     "alignment_stats": AlignmentStatistics,
     "alignment_comparison": AlignmentComparison,
     "adversarial_shaping": AdversarialShaping,
