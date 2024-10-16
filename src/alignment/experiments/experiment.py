@@ -14,6 +14,7 @@ from alignment import files
 from alignment.datasets import get_dataset
 from alignment.utils import compress_directory
 
+#python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use-wandbH
 
 class Experiment(ABC):
     def __init__(self, args=None) -> None:
@@ -153,6 +154,12 @@ class Experiment(ABC):
             default=False,
             action="store_true",
             help="prevents saving of results or plots",
+        )
+        parser.add_argument(
+            "--use-wandb",
+            default=False,
+            action="store_true",
+            help="enable W&B logging and tracking",
         )
         parser.add_argument(
             "--justplot",
