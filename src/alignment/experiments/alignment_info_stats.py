@@ -5,6 +5,7 @@ from alignment import processing
 from alignment import plotting
 from alignment.experiments.experiment import Experiment
 
+#python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use-wandb --dropout_by_layer --epochs 5
 
 class AlignmentStatisticsInfo(Experiment):
     def get_basename(self):
@@ -22,6 +23,10 @@ class AlignmentStatisticsInfo(Experiment):
         parser = arglib.add_dropout_experiment_details(parser)
         parser = arglib.add_network_metaparameters(parser)
         parser = arglib.add_alignment_analysis_parameters(parser)
+        
+        # Add argument for controlling dropout by layer
+        parser.add_argument('--dropout_by_layer', default=False, action='store_true', help="Perform dropout experiment by layer")
+    
         return parser
 
     def create_networks(self):
@@ -88,6 +93,15 @@ class AlignmentStatisticsInfo(Experiment):
             self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
         )
 
+
+        # # layer by layer dropout
+        # dropout_results = {}
+        # dropout_parameters = {}
+        # for layer_idx in range(len(nets[0].layers)):  # Assuming nets[0].layers holds the network layers
+        #     dropout_results[layer_idx], dropout_parameters[layer_idx] = processing.progressive_dropout_experiment(
+        #         self, nets, dataset, alignment=alignment, train_set=False, layer_idx=layer_idx
+        #     )
+        
         # measure eigenfeatures
         eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
 

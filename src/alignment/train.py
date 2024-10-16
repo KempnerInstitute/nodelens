@@ -278,26 +278,30 @@ def test(nets, dataset, **parameters):
 
     return results
 
-
-@torch.no_grad()
 def get_dropout_indices(idx_alignment, fraction):
     """
-    convenience method for getting a fraction of dropout indices from each layer
-
+    Convenience method for getting a fraction of dropout indices from each layer.
+    
     idx_alignment should be a list of the indices of alignment (sorted from lowest to highest)
-    where len(idx_alignment)=num_layers_per_network and each element is a tensor such that
+    where len(idx_alignment)=num_layers and each element is a tensor such that
     idx_alignment[0].shape=(num_nodes_per_layer, num_networks)
 
-    returns a fraction of indices to drop of highest, lowest, and random alignment
+    Returns a fraction of indices to drop of highest, lowest, and random alignment.
+    Additionally returns the fraction of nodes dropped per layer.
     """
     num_nets = idx_alignment[0].size(0)
-    num_nodes = [idx.size(1) for idx in idx_alignment]
+    num_nodes = [idx.size(1) for idx in idx_alignment]  # number of nodes per layer
     num_drop = [int(nodes * fraction) for nodes in num_nodes]
+    
+    # Get indices for high, low, and random alignment dropouts
     idx_high = [idx[:, -drop:] for idx, drop in zip(idx_alignment, num_drop)]
     idx_low = [idx[:, :drop] for idx, drop in zip(idx_alignment, num_drop)]
     idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) for nodes, drop in zip(num_nodes, num_drop)]
-    return idx_high, idx_low, idx_rand
+    
+    # Compute fraction of nodes dropped per layer
+    dropped_nodes_fraction = [drop / nodes for drop, nodes in zip(num_drop, num_nodes)]
 
+    return idx_high, idx_low, idx_rand, dropped_nodes_fraction
 
 @torch.no_grad()
 @test_nets
@@ -364,6 +368,13 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     progdrop_acc_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_acc_rand = torch.zeros((num_nets, num_drops, num_layers))
 
+
+    # Initialize `total_dropped_nodes` to store fraction per layer
+    total_dropped_nodes = {layer: torch.zeros(num_drops) for layer in range(num_layers)}
+
+    # Track total fraction of dropped nodes across all layers
+    total_dropped_fraction_all_layers = torch.zeros(num_drops)
+    
     # to keep track of how many values have been added
     num_batches = 0
 
@@ -378,8 +389,11 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 
         # get dropout indices for this fraction of dropouts
         for dropidx, fraction in enumerate(drop_fraction):
-            idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, fraction)
+            idx_high, idx_low, idx_rand, dropped_nodes_fraction = get_dropout_indices(idx_alignment, fraction)
 
+            # Convert dropped_nodes_fraction to a tensor
+            dropped_nodes_fraction = torch.tensor(dropped_nodes_fraction)
+            
             # do drop out for each layer (or across all depending on parameters)
             for layer in range(num_layers):
                 if by_layer:
@@ -417,6 +431,17 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                 progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
                 progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)
 
+                total_dropped_nodes[layer][dropidx] += dropped_nodes_fraction[layer]
+
+            # Compute the total dropped fraction across all layers
+            total_dropped_fraction_all_layers[dropidx] += dropped_nodes_fraction.sum() / num_layers
+
+    # Average the dropped nodes across batches
+    for layer in range(num_layers):
+        total_dropped_nodes[layer] /= num_batches
+
+    total_dropped_fraction_all_layers /= num_batches
+
     results = {
         "progdrop_loss_high": progdrop_loss_high / num_batches,
         "progdrop_loss_low": progdrop_loss_low / num_batches,
@@ -427,6 +452,8 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         "dropout_fraction": drop_fraction,
         "by_layer": by_layer,
         "idx_dropout_layers": idx_dropout_layers,
+        "dropped_nodes_fraction": total_dropped_nodes,
+        "total_dropped_fraction_all_layers": total_dropped_fraction_all_layers,
     }
 
     return results
@@ -493,6 +520,13 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     progdrop_acc_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_acc_rand = torch.zeros((num_nets, num_drops, num_layers))
 
+
+    # Initialize `total_dropped_nodes` to store fraction per layer
+    total_dropped_nodes = {layer: torch.zeros(num_drops) for layer in range(num_layers)}
+
+    # Track total fraction of dropped nodes across all layers
+    total_dropped_fraction_all_layers = torch.zeros(num_drops)
+    
     # to keep track of how many values have been added
     num_batches = 0
 
@@ -507,7 +541,11 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
 
         # get dropout indices for this fraction of dropouts
         for dropidx, fraction in enumerate(drop_fraction):
-            idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
+            #idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
+            idx_high, idx_low, idx_rand, dropped_nodes_fraction = get_dropout_indices(idx_eigenvalue, fraction)
+
+            # Convert dropped_nodes_fraction to a tensor
+            dropped_nodes_fraction = torch.tensor(dropped_nodes_fraction)
 
             # do drop out for each layer (or across all depending on parameters)
             for layer in range(num_layers):
@@ -560,6 +598,17 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
                 progdrop_acc_high[:, dropidx, layer] += torch.tensor(acc_high)
                 progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
                 progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)
+                
+                total_dropped_nodes[layer][dropidx] += dropped_nodes_fraction[layer]
+
+            # Compute the total dropped fraction across all layers
+            total_dropped_fraction_all_layers[dropidx] += dropped_nodes_fraction.sum() / num_layers
+
+    # Average the dropped nodes across batches
+    for layer in range(num_layers):
+        total_dropped_nodes[layer] /= num_batches
+
+    total_dropped_fraction_all_layers /= num_batches
 
     results = {
         "progdrop_loss_high": progdrop_loss_high / num_batches,
@@ -571,6 +620,8 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         "dropout_fraction": drop_fraction,
         "by_layer": by_layer,
         "idx_dropout_layers": idx_dropout_layers,
+        "dropped_nodes_fraction": total_dropped_nodes,
+        "total_dropped_fraction_all_layers": total_dropped_fraction_all_layers,
     }
 
     return results

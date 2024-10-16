@@ -14,8 +14,6 @@ from alignment import files
 from alignment.datasets import get_dataset
 from alignment.utils import compress_directory
 
-#python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use-wandbH
-
 class Experiment(ABC):
     def __init__(self, args=None) -> None:
         """Experiment constructor"""
@@ -193,7 +191,7 @@ class Experiment(ABC):
         )
 
         # add meta arguments
-        self.meta_args += ["nosave", "justplot", "save_networks", "showprms", "showall", "device"]
+        self.meta_args += ["nosave", "justplot", "save_networks", "showprms", "showall", "device", "use-wandb"]
 
         # common parameters that shouldn't be updated when loading old experiment
         parser.add_argument(
