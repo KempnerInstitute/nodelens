@@ -117,6 +117,15 @@ def retrain_network_with_dropout_stats(exp, nets, optimizers, dataset, original_
     """
     # Train the network using the regular training process
     print("Retraining the pruned network...")
+    for net in nets:
+        net.train()
+
+    # Reset optimizers, assuming we need new ones for the pruned network
+    optimizers = [torch.optim.SGD(net.parameters(), lr=0.001) for net in nets]
+
+    # Train the networks after dropout
+    retrain_results, retrain_test_results = train_networks(exp, nets, optimizers, dataset)
+
     train_results, test_results = train_networks(exp, nets, optimizers, dataset)
 
     # Initialize retraining results dictionary with same structure as original dropout results
