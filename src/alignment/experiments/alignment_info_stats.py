@@ -69,72 +69,121 @@ class AlignmentStatisticsInfo(Experiment):
             "weight_decay": self.args.default_wd,
         }
         return nets, optimizers, prms
-
+    
     def main(self):
         """
-        main experiment loop
-
-        create networks (this is where the specific experiment is determined)
-        train and test networks
-        do supplementary analyses
+        Main experiment loop
         """
-
-        # create networks
+        # Step 1: Train the full network
         nets, optimizers, prms = self.create_networks()
-
-        # load dataset
         dataset = self.prepare_dataset(nets[0])
-
-        # train networks
+        
+        print("Training the full network...")
         train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
 
-        # do targeted dropout experiment
-        dropout_results, dropout_parameters = processing.progressive_dropout_experiment(
+        # Step 2: Dropout across all layers based on alignment and retrain
+        print("Performing full-layer dropout experiment...")
+        dropout_results_pre, dropout_parameters_pre = processing.progressive_dropout_experiment(
             self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
         )
 
-
-        # # layer by layer dropout
-        # dropout_results = {}
-        # dropout_parameters = {}
-        # for layer_idx in range(len(nets[0].layers)):  # Assuming nets[0].layers holds the network layers
-        #     dropout_results[layer_idx], dropout_parameters[layer_idx] = processing.progressive_dropout_experiment(
-        #         self, nets, dataset, alignment=alignment, train_set=False, layer_idx=layer_idx
-        #     )
-        
-        # measure eigenfeatures
-        #eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
-
-        # do targeted dropout experiment
-        #evec_dropout_results, evec_dropout_parameters = processing.eigenvector_dropout(self, nets, dataset, eigen_results, train_set=False)
-
-        # make full results dictionary
-        results = dict(
-            prms=prms,
-            train_results=train_results,
-            test_results=test_results,
-            dropout_results=dropout_results,
-            dropout_parameters=dropout_parameters,
-        #    eigen_results=eigen_results,
-        #    evec_dropout_results=evec_dropout_results,
-        #    evec_dropout_parameters=evec_dropout_parameters,
+        # Retrain the pruned network
+        print("Retraining the pruned network after full-layer dropout...")
+        retrain_results, retrain_test_results = processing.retrain_network_with_dropout_stats(
+            self, nets, optimizers, dataset, dropout_results_pre
         )
 
-        # return results and trained networks
+        print('1    :',retrain_results.keys())
+
+        # Step 3: Sequential dropout experiment (drop nodes layer by layer based on alignment)
+        print("Performing sequential dropout experiment...")
+        sequential_dropout_results_pre, sequential_dropout_parameters_pre = processing.sequential_dropout_experiment(
+            self, nets, dataset
+        )
+        
+        # Retrain the network after sequential dropout
+        print("Retraining the pruned network after sequential dropout...")
+        sequential_retrain_results, sequential_retrain_test_results = processing.retrain_network_with_dropout_stats(
+            self, nets, optimizers, dataset, sequential_dropout_results_pre
+        )
+
+        print('2    :',sequential_retrain_results.keys())
+        
+        # Step 4: Store all the results
+        results = dict(
+            prms=prms,
+            initial_train_results=train_results,
+            initial_test_results=test_results,
+            
+            # Full-layer dropout results (pre and post retrain)
+            full_dropout_results_pre=dropout_results_pre,
+            full_dropout_parameters_pre=dropout_parameters_pre,
+            full_dropout_retrain_results=retrain_results,
+            full_dropout_retrain_test_results=retrain_test_results,
+            
+            # Sequential-layer dropout results (pre and post retrain)
+            sequential_dropout_results_pre=sequential_dropout_results_pre,
+            sequential_dropout_parameters_pre=sequential_dropout_parameters_pre,
+            sequential_retrain_results=sequential_retrain_results,
+            sequential_retrain_test_results=sequential_retrain_test_results
+        )
+
         return results, nets
 
     def plot(self, results):
         """
-        main plotting loop
+        Main plotting loop
         """
-        plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
+        print("Plotting training and dropout results...")
+
+        # Plot initial training results
+        plotting.plot_train_results(self, results["initial_train_results"], results["initial_test_results"], results["prms"])
+
+        # Plot for full-layer dropout (pre- and post-retrain)
+        print("Plotting full-layer dropout results (pre- and post-retraining)...")
         plotting.plot_dropout_results(
             self,
-            results["dropout_results"],
-            results["dropout_parameters"],
+            results["full_dropout_results_pre"],
+            results["full_dropout_parameters_pre"],
             results["prms"],
-            dropout_type="nodes",
+            dropout_type="nodes_pre_retrain_full"
         )
+        plotting.plot_dropout_results(
+            self,
+            results["full_dropout_retrain_results"],
+            results["full_dropout_parameters_pre"],
+            results["prms"],
+            dropout_type="nodes_post_retrain_full"
+        )
+
+        # Plot for sequential-layer dropout (pre- and post-retrain)
+        print("Plotting sequential-layer dropout results (pre- and post-retraining)...")
+        plotting.plot_dropout_results(
+            self,
+            results["sequential_dropout_results_pre"],
+            results["sequential_dropout_parameters_pre"],
+            results["prms"],
+            dropout_type="nodes_pre_retrain_sequential"
+        )
+        plotting.plot_dropout_results(
+            self,
+            results["sequential_retrain_results"],
+            results["sequential_dropout_parameters_pre"],
+            results["prms"],
+            dropout_type="nodes_post_retrain_sequential"
+        )   
+    # def plot(self, results):
+    #     """
+    #     main plotting loop
+    #     """
+    #     plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
+    #     plotting.plot_dropout_results(
+    #         self,
+    #         results["dropout_results"],
+    #         results["dropout_parameters"],
+    #         results["prms"],
+    #         dropout_type="nodes",
+    #     )
         #plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
         #plotting.plot_dropout_results(
         #    self,
@@ -143,3 +192,4 @@ class AlignmentStatisticsInfo(Experiment):
         #    results["prms"],
         #    dropout_type="eigenvectors",
         #)
+
