@@ -400,6 +400,185 @@ def expected_alignment_distribution(eigenvalues, relative=True, valid_rotation=T
     return counts, bins, centers
 
 
+def compute_kurtosis_inplace(input):
+    """
+    Compute kurtosis for each input feature (dimension) using in-place operations.
+    """
+    mean = input.mean(dim=0)
+    variance = input.var(dim=0)
+    fourth_moment = (input - mean).pow_(4).mean(dim=0)
+
+    # Kurtosis formula: E[(X - μ)^4] / (E[(X - μ)^2])^2 - 3    
+    kurtosis = fourth_moment / variance.pow(2) - 3
+    return kurtosis
+
+def compute_kurtosis_low_rank(input, rank_approx=50):
+    """
+    Compute kurtosis after reducing the dimensionality using PCA to the specified rank approximation.
+    """
+    from sklearn.decomposition import PCA
+    
+    pca = PCA(n_components=rank_approx)
+    input_reduced = torch.Tensor(pca.fit_transform(input.cpu().numpy())).to(input.device)
+    
+    return compute_kurtosis_inplace(input_reduced)
+
+def compute_redundancy(weight, cc):
+    """
+    Compute redundancy matrix based on pairwise mutual information overlap between nodes.
+    
+    args:
+    ----
+        weight: (num_out, num_in) torch tensor
+            - represents weights of the layer
+        cc: (num_in, num_in) torch tensor
+            - covariance matrix of the input
+    
+    returns:
+    -------
+        redundancy_matrix: torch tensor
+            - Pairwise redundancy matrix, where redundancy_matrix[i, j] is the redundancy between node i and node j.
+    """
+    num_out = weight.shape[0]
+    redundancy_matrix = torch.zeros((num_out, num_out))
+    
+    for i in range(num_out):
+        for j in range(i + 1, num_out):
+            redundancy_matrix[i, j] = 2 * torch.dot(weight[i], torch.matmul(cc, weight[j])) / torch.trace(cc)
+    
+    return redundancy_matrix
+
+def alignment_rank(input, weight, method="alignment", relative=True, rank_approx=50):
+    """
+    Compute first-order information term using low-rank approximation of the covariance matrix.
+    """
+    # Compute covariance matrix of input
+    input_centered = input - input.mean(dim=0, keepdim=True)
+    cov_matrix = torch.matmul(input_centered.T, input_centered) / (input.shape[0] - 1)
+    
+    # Perform SVD for low-rank approximation
+    U, S, _ = torch.svd(cov_matrix)
+    U_k = U[:, :rank_approx]  # Top k eigenvectors
+    S_k = S[:rank_approx]  # Corresponding eigenvalues
+    
+    # Low-rank approximation of covariance matrix
+    low_rank_cov = torch.matmul(U_k, torch.diag(S_k)).matmul(U_k.T)
+    
+    # Compute Rayleigh quotient using the low-rank covariance
+    rq_approx = torch.sum(torch.matmul(weight, low_rank_cov) * weight, dim=1) / torch.sum(weight * weight, dim=1)
+    
+    return rq_approx
+
+def alignment_highorder(input, weight, method="alignment", relative=True):
+    """
+    Measure alignment (proportion variance explained) between **input** and **weight**
+    and compute single-node information, redundancy, and total information for the layer.
+    
+    args:
+    ----
+        input: (batch, neurons) torch tensor
+            - represents input activity being fed into network weight layer
+        weight: (num_out, num_in) torch tensor
+            - represents weights multiplied by input layer
+        method: string, default='alignment'
+            - which method to use to measure structure in **input**
+            - if 'alignment', uses covariance matrix of **input**
+            - if 'similarity', uses correlation matrix of **input**
+        relative: bool, default=True,
+            - if True, will measure relative RQ (divide by sum of eigenvalues)
+    
+    returns:
+    -------
+        alignment: (num_out, ) torch tensor
+            - proportion of variance explained by projection of **input** onto each **weight** vector
+        single_node_info: torch tensor
+            - Information carried by each node (mutual information for single nodes)
+        redundancy_matrix: torch tensor
+            - Pairwise redundancy (mutual information overlap between pairs of nodes)
+        total_info: float
+            - Total information of the layer, accounting for redundancy
+    """
+    
+    # Step 1: Compute covariance of input
+    if method == "alignment":
+        cc = torch.cov(input.T)  # Covariance matrix of input
+    elif method == "similarity":
+        cc = torch.corrcoef(input.T)  # Correlation matrix of input
+    else:
+        raise ValueError(f"Method {method} not recognized. Use 'alignment' or 'similarity'.")
+
+    # Step 2: Compute Rayleigh Quotient (RQ) for each node
+    rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
+
+    # Step 3: Compute Single-Node Information for each node (with kurtosis correction)
+    single_node_info = rq / torch.trace(cc)  # First term (proportional to RQ)
+
+    # Compute kurtosis-based correction term
+    kurtosis = compute_kurtosis(input)  # Kurtosis is computed for each input feature
+    
+    # Ensure the kurtosis shape aligns with the number of input features, not the number of nodes
+    # This aligns the kurtosis term with the input features (columns of weight)
+    kurtosis_correction = 0.5 * torch.norm(weight, p=2, dim=1) * kurtosis[:weight.shape[1]].mean()  
+
+    single_node_info += kurtosis_correction
+
+    # Step 4: Continue with redundancy and total information as before
+    redundancy_matrix = compute_redundancy(weight, cc)
+    adjusted_single_node_info = single_node_info.clone()
+    
+    # Adjust single node info by subtracting redundancy terms
+    num_out = weight.shape[0]
+    for i in range(num_out):
+        for j in range(i + 1, num_out):
+            if single_node_info[i] < single_node_info[j]:
+                adjusted_single_node_info[i] -= redundancy_matrix[i, j]
+            else:
+                adjusted_single_node_info[j] -= redundancy_matrix[i, j]
+
+    total_info = torch.sum(adjusted_single_node_info)
+
+    return single_node_info, adjusted_single_node_info, redundancy_matrix, total_info
+
+def plot_information_results(single_node_info, adjusted_single_node_info, redundancy_matrix, total_info):
+    """
+    Plot single-node information, adjusted single-node information, redundancy matrix, and total information for the layer.
+
+    args:
+    ----
+        single_node_info: torch tensor
+            - Information carried by each node
+        adjusted_single_node_info: torch tensor
+            - Adjusted information for each node after subtracting redundancy
+        redundancy_matrix: torch tensor
+            - Pairwise redundancy between nodes
+        total_info: float
+            - Total information of the layer
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    # Plot single-node information
+    plt.figure(figsize=(8, 6))
+    plt.bar(range(len(single_node_info)), single_node_info.cpu().detach().numpy(), alpha=0.6, label="Original Info")
+    plt.bar(range(len(adjusted_single_node_info)), adjusted_single_node_info.cpu().detach().numpy(), alpha=0.6, label="Adjusted Info")
+    plt.xlabel('Node Index')
+    plt.ylabel('Single Node Information (MI)')
+    plt.title('Single-Node Information for Each Node (Original vs Adjusted)')
+    plt.legend()
+    plt.show()
+    
+    # Plot redundancy matrix
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(redundancy_matrix.cpu().detach().numpy(), annot=True, cmap="YlGnBu")
+    plt.title('Redundancy Matrix (Pairwise Redundancy between Nodes)')
+    plt.show()
+
+    # Display total information
+    print(f"Total Information for the Layer: {total_info.item():.4f}")
+
+
+
+
 def get_maximum_strides(h_input, w_input, layer):
     h_max = int(np.floor((h_input + 2 * layer.padding[0] - layer.dilation[0] * (layer.kernel_size[0] - 1) - 1) / layer.stride[0] + 1))
     w_max = int(np.floor((w_input + 2 * layer.padding[1] - layer.dilation[1] * (layer.kernel_size[1] - 1) - 1) / layer.stride[1] + 1))

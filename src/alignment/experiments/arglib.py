@@ -91,7 +91,7 @@ def add_dropout_experiment_details(parser):
     parser.add_argument(
         "--num-drops",
         type=int,
-        default=9,
+        default=29,
         help="number of dropout fractions for progressive dropout",
     )
     parser.add_argument(
