@@ -129,9 +129,11 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     num_exp = len(names)
     dropout_fraction = dropout_results["dropout_fraction"]
     by_layer = dropout_results["by_layer"]
-    extra_name = "by_layer" if by_layer else "all_layers"
+    #extra_name = "by_layer" if by_layer else "all_layers"
+    #extra_name += dropout_type
+    extra_name = "sequential_" if by_layer else "all_layers_"
     extra_name += dropout_type
-
+    
     # Get statistics across each network type for progressive dropout experiment
     print("measuring statistics on dropout analysis...")
     loss_mean_high, loss_se_high = compute_stats_by_type(dropout_results["progdrop_loss_high"], num_types=num_types, dim=0, method="se")
@@ -234,26 +236,26 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
 
 
-    num_layers = dropout_results["progdrop_loss_high"].size(2)
-    dropout_fraction = dropout_results["dropout_fraction"]
-    fraction_dropped_nodes = dropout_results["fraction_dropped_nodes"]
-    print(fraction_dropped_nodes)
+    # num_layers = dropout_results["progdrop_loss_high"].size(2)
+    # dropout_fraction = dropout_results["dropout_fraction"]
+    # fraction_dropped_nodes = dropout_results["fraction_dropped_nodes"]
+    # print(fraction_dropped_nodes)
 
-    print("Plotting fraction of dropped nodes per layer...")
+    # print("Plotting fraction of dropped nodes per layer...")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # fig, ax = plt.subplots(figsize=(8, 6))
 
-    # Plot a curve for each dropout fraction
-    for drop_idx, fraction in enumerate(dropout_fraction):
-        dropped_nodes_fraction = fraction_dropped_nodes[:, drop_idx]  # Fraction of dropped nodes per layer
-        ax.plot(dropped_nodes_fraction, label=f"Dropout fraction: {fraction:.2f}", marker='o', linestyle='-', alpha=0.7)
+    # # Plot a curve for each dropout fraction
+    # for drop_idx, fraction in enumerate(dropout_fraction):
+    #     dropped_nodes_fraction = fraction_dropped_nodes[:, drop_idx]  # Fraction of dropped nodes per layer
+    #     ax.plot(dropped_nodes_fraction, label=f"Dropout fraction: {fraction:.2f}", marker='o', linestyle='-', alpha=0.7)
 
-    # Set plot titles and labels
-    ax.set_title("Fraction of Dropped Nodes per Layer")
-    ax.set_xlabel("Layer Index")
-    ax.set_ylabel("Fraction of Dropped Nodes")
-    ax.set_xticks(range(num_layers))
-    ax.legend(loc="best")
+    # # Set plot titles and labels
+    # ax.set_title("Fraction of Dropped Nodes per Layer")
+    # ax.set_xlabel("Layer Index")
+    # ax.set_ylabel("Fraction of Dropped Nodes")
+    # ax.set_xticks(range(num_layers))
+    # ax.legend(loc="best")
 
     # Show or save the plot
     exp.plot_ready("fraction_dropped_nodes_per_layer")

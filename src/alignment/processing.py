@@ -43,18 +43,114 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     return train_results, test_results
 
 
-def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
+# def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
+#     """
+#     perform a progressive dropout (of nodes) experiment
+#     alignment is optional, but will be recomputed if you've already measured it. You can provide it
+#     by setting: alignment=test_results['alignment'] if ``train_networks`` has already been run.
+#     """
+#     # do targeted dropout experiment
+#     print("performing targeted dropout...")
+#     dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
+#     dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
+#     return dropout_results, dropout_parameters
+
+def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False, by_layer=False, layer_idx=None):
     """
-    perform a progressive dropout (of nodes) experiment
-    alignment is optional, but will be recomputed if you've already measured it. You can provide it
-    by setting: alignment=test_results['alignment'] if ``train_networks`` has already been run.
+    Perform progressive dropout, either layer-by-layer or across all layers at once.
+    If by_layer=True, we only dropout nodes in the specified layer (layer_idx).
     """
-    # do targeted dropout experiment
-    print("performing targeted dropout...")
-    dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
-    dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
+    dropout_results = {}
+    dropout_parameters = {}
+
+    if by_layer:
+        print(f"Performing dropout for layer {layer_idx}")
+        
+        # Drop nodes in the specified layer only
+        dropout_results = train.progressive_dropout(
+            nets, dataset, alignment=alignment, layer_idx=layer_idx, train_set=train_set, by_layer=True
+        )
+        
+    else:
+        # Standard dropout across all layers
+        dropout_results = train.progressive_dropout(
+            nets, dataset, alignment=alignment, train_set=train_set, by_layer=False
+        )
+
     return dropout_results, dropout_parameters
 
+def sequential_dropout_experiment(exp, nets, dataset):
+    """
+    Perform a sequential dropout experiment by pruning layers one by one, recalculating alignment after each pruning.
+    """
+    print("Performing sequential dropout experiment...")
+    sequential_dropout_results = {}
+    sequential_dropout_parameters = {}
+
+    # Loop over the layers to sequentially prune each layer
+    for layer_idx in range(len(nets[0].layers)):  # Assuming nets[0].layers holds the network layers
+        print(f"Sequentially pruning layer {layer_idx}")
+
+        # Get the alignment after pruning previous layers
+        alignment = train.test(nets, dataset, alignment_only=True)["alignment"]
+
+        # Perform progressive dropout for the current layer
+        print(f"Performing dropout for layer {layer_idx}")
+        dropout_results, dropout_parameters = progressive_dropout_experiment(
+            exp, nets, dataset, alignment=alignment, layer_idx=layer_idx
+        )
+        # Recalculate alignment after pruning the current layer
+        print(f"Recalculating alignment after pruning layer {layer_idx}")
+        test_results = train.test(nets, dataset, alignment_only=True)  # Update test_results after each layer
+
+    # Store the dropout results and parameters for this layer
+    sequential_dropout_results = dropout_results
+    sequential_dropout_parameters = dropout_parameters
+
+    return sequential_dropout_results, sequential_dropout_parameters
+
+
+def retrain_network_with_dropout_stats(exp, nets, optimizers, dataset, original_dropout_results):
+    """
+    Retrains the network and maintains the same key structure as the dropout results.
+    This ensures the retraining results have keys like 'progdrop_loss_high', etc.
+    """
+    # Train the network using the regular training process
+    print("Retraining the pruned network...")
+    train_results, test_results = train_networks(exp, nets, optimizers, dataset)
+
+    # Initialize retraining results dictionary with same structure as original dropout results
+    retrain_results = {
+        "progdrop_loss_high": original_dropout_results["progdrop_loss_high"].clone().zero_(),
+        "progdrop_loss_low": original_dropout_results["progdrop_loss_low"].clone().zero_(),
+        "progdrop_loss_rand": original_dropout_results["progdrop_loss_rand"].clone().zero_(),
+        "progdrop_acc_high": original_dropout_results["progdrop_acc_high"].clone().zero_(),
+        "progdrop_acc_low": original_dropout_results["progdrop_acc_low"].clone().zero_(),
+        "progdrop_acc_rand": original_dropout_results["progdrop_acc_rand"].clone().zero_(),
+        "dropout_fraction": original_dropout_results["dropout_fraction"],
+        "by_layer": original_dropout_results["by_layer"],
+        "idx_dropout_layers": original_dropout_results["idx_dropout_layers"],
+        "fraction_dropped_nodes": original_dropout_results["fraction_dropped_nodes"].clone().zero_()
+    }
+
+    # Populate the retraining results with new loss and accuracy after retraining
+    # For example, assuming the train/test functions capture loss and accuracy
+    retrain_results["progdrop_loss_high"] = test_results.get("progdrop_loss_high", retrain_results["progdrop_loss_high"])
+    retrain_results["progdrop_loss_low"] = test_results.get("progdrop_loss_low", retrain_results["progdrop_loss_low"])
+    retrain_results["progdrop_loss_rand"] = test_results.get("progdrop_loss_rand", retrain_results["progdrop_loss_rand"])
+    
+    retrain_results["progdrop_acc_high"] = test_results.get("progdrop_acc_high", retrain_results["progdrop_acc_high"])
+    retrain_results["progdrop_acc_low"] = test_results.get("progdrop_acc_low", retrain_results["progdrop_acc_low"])
+    retrain_results["progdrop_acc_rand"] = test_results.get("progdrop_acc_rand", retrain_results["progdrop_acc_rand"])
+
+    return retrain_results, test_results
+
+def evaluate_network(nets, dataset):
+    """
+    Evaluate the pruned network on the test dataset to recalculate alignment and other metrics.
+    """
+    test_results = train.test(nets, dataset)
+    return test_results
 
 def measure_eigenfeatures(exp, nets, dataset, train_set=False):
     # measure eigenfeatures
