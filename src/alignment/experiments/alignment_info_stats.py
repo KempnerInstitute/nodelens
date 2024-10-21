@@ -94,10 +94,10 @@ class AlignmentStatisticsInfo(Experiment):
         # )
 
         # Step 3: Sequential dropout experiment (drop nodes layer by layer based on alignment)
-        print("Performing sequential dropout experiment...")
-        sequential_dropout_results_pre, sequential_dropout_parameters_pre = processing.sequential_dropout_experiment(
-            self, nets, dataset
-        )
+        # print("Performing sequential dropout experiment...")
+        # sequential_dropout_results_pre, sequential_dropout_parameters_pre = processing.sequential_dropout_experiment(
+        #     self, nets, dataset
+        # )
         
         # Retrain the network after sequential dropout
         # print("Retraining the pruned network after sequential dropout...")
@@ -118,8 +118,8 @@ class AlignmentStatisticsInfo(Experiment):
             #full_dropout_retrain_test_results=retrain_test_results,
             
             # Sequential-layer dropout results (pre and post retrain)
-            sequential_dropout_results_pre=sequential_dropout_results_pre,
-            sequential_dropout_parameters_pre=sequential_dropout_parameters_pre,
+            #sequential_dropout_results_pre=sequential_dropout_results_pre,
+            #sequential_dropout_parameters_pre=sequential_dropout_parameters_pre,
             #sequential_retrain_results=sequential_retrain_results,
             #sequential_retrain_test_results=sequential_retrain_test_results
         )
@@ -153,14 +153,14 @@ class AlignmentStatisticsInfo(Experiment):
         # )
 
         # Plot for sequential-layer dropout (pre- and post-retrain)
-        print("Plotting sequential-layer dropout results (pre- and post-retraining)...")
-        plotting.plot_dropout_results(
-            self,
-            results["sequential_dropout_results_pre"],
-            results["sequential_dropout_parameters_pre"],
-            results["prms"],
-            dropout_type="nodes_pre_retrain_sequential"
-        )
+        # print("Plotting sequential-layer dropout results (pre- and post-retraining)...")
+        # plotting.plot_dropout_results(
+        #     self,
+        #     results["sequential_dropout_results_pre"],
+        #     results["sequential_dropout_parameters_pre"],
+        #     results["prms"],
+        #     dropout_type="nodes_pre_retrain_sequential"
+        # )
         # plotting.plot_dropout_results(
         #     self,
         #     results["sequential_retrain_results"],

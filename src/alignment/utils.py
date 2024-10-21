@@ -12,6 +12,7 @@ import torch
 import numpy as np
 from scipy.linalg import null_space
 from sklearn.decomposition import IncrementalPCA
+from sklearn.decomposition import PCA
 
 # -------------- context managers & decorators --------------
 @contextmanager
@@ -324,7 +325,7 @@ def fast_rank(input):
 
 
 # ------------------ alignment functions ----------------------
-def alignment(input, weight, method="alignment", relative=True):
+def alignment_old(input, weight, method="alignment", relative=True):
     """
     measure alignment (proportion variance explained) between **input** and **weight**
 
@@ -399,6 +400,23 @@ def expected_alignment_distribution(eigenvalues, relative=True, valid_rotation=T
     centers = edge2center(bins)
     return counts, bins, centers
 
+def compute_skewness_inplace(input):
+    """
+    Compute skewness for each input feature (dimension) using in-place operations.
+    """
+    mean = input.mean(dim=0)
+    variance = input.var(dim=0)
+
+    # Add epsilon to variance to avoid division by zero
+    epsilon = 1e-6
+    variance = variance + epsilon
+
+    third_moment = (input - mean).pow(3).mean(dim=0)
+
+    # Skewness formula: E[(X - μ)^3] / (E[(X - μ)^2])^(3/2)
+    skewness = third_moment / variance.pow(1.5)
+    
+    return skewness
 
 def compute_kurtosis_inplace(input):
     """
@@ -408,45 +426,49 @@ def compute_kurtosis_inplace(input):
     variance = input.var(dim=0)
     fourth_moment = (input - mean).pow_(4).mean(dim=0)
 
-    # Kurtosis formula: E[(X - μ)^4] / (E[(X - μ)^2])^2 - 3    
+    # Kurtosis formula: E[(X - μ)^4] / (E[(X - μ)^2])^2 - 3
     kurtosis = fourth_moment / variance.pow(2) - 3
     return kurtosis
+
+def compute_skewness_low_rank(input, rank_approx=50):
+    """
+    Compute skewness after reducing the dimensionality using PCA to the specified rank approximation.
+    """
+    
+    pca = PCA(n_components=rank_approx)
+    input_reduced = torch.Tensor(pca.fit_transform(input.cpu().numpy())).to(input.device)
+    
+    return compute_skewness_inplace(input_reduced)
 
 def compute_kurtosis_low_rank(input, rank_approx=50):
     """
     Compute kurtosis after reducing the dimensionality using PCA to the specified rank approximation.
     """
-    from sklearn.decomposition import PCA
     
     pca = PCA(n_components=rank_approx)
     input_reduced = torch.Tensor(pca.fit_transform(input.cpu().numpy())).to(input.device)
     
     return compute_kurtosis_inplace(input_reduced)
 
-def compute_redundancy(weight, cc):
+def compute_redundancy(weights, input_covariance):
     """
-    Compute redundancy matrix based on pairwise mutual information overlap between nodes.
+    Compute the redundancy matrix for all pairs of nodes using matrix multiplication.
     
-    args:
-    ----
-        weight: (num_out, num_in) torch tensor
-            - represents weights of the layer
-        cc: (num_in, num_in) torch tensor
-            - covariance matrix of the input
+    Args:
+        weights: (n, d) torch tensor, where n is the number of nodes and d is the input dimension.
+        input_covariance: (d, d) torch tensor, the covariance matrix of the input data.
     
-    returns:
-    -------
-        redundancy_matrix: torch tensor
-            - Pairwise redundancy matrix, where redundancy_matrix[i, j] is the redundancy between node i and node j.
+    Returns:
+        redundancy_matrix: (n, n) torch tensor, redundancy between each pair of nodes (diagonal excluded).
     """
-    num_out = weight.shape[0]
-    redundancy_matrix = torch.zeros((num_out, num_out))
+    # Compute the redundancy matrix: R = W Σ_X W^T
+    redundancy_matrix = torch.matmul(weights, torch.matmul(input_covariance, weights.T))
     
-    for i in range(num_out):
-        for j in range(i + 1, num_out):
-            redundancy_matrix[i, j] = 2 * torch.dot(weight[i], torch.matmul(cc, weight[j])) / torch.trace(cc)
+    # Zero out the diagonal elements (self-information)
+    redundancy_matrix.fill_diagonal_(0)
     
     return redundancy_matrix
+
 
 def alignment_rank(input, weight, method="alignment", relative=True, rank_approx=50):
     """
@@ -469,7 +491,7 @@ def alignment_rank(input, weight, method="alignment", relative=True, rank_approx
     
     return rq_approx
 
-def alignment_highorder(input, weight, method="alignment", relative=True):
+def alignment(input, weight, method="alignment", relative=True):
     """
     Measure alignment (proportion variance explained) between **input** and **weight**
     and compute single-node information, redundancy, and total information for the layer.
@@ -511,33 +533,64 @@ def alignment_highorder(input, weight, method="alignment", relative=True):
     rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
 
     # Step 3: Compute Single-Node Information for each node (with kurtosis correction)
-    single_node_info = rq / torch.trace(cc)  # First term (proportional to RQ)
+    single_node_infof = rq / torch.trace(cc)  # First term (proportional to RQ)
+    
+    # Compute third-order term: Skewness correction
+    skewness = compute_skewness_inplace(input)
+    
+    # Ensure the skewness shape matches the input dimensionality
+    if skewness.shape[0] == input.shape[1]:  # If skewness is (d,), reshape it
+        skewness = skewness.view(1, -1)  # Reshape skewness to (1, d) for broadcasting
+    
+    # Apply the skewness correction term
+    skewness_correction = torch.abs(torch.sum(weight * skewness, dim=1))
 
     # Compute kurtosis-based correction term
-    kurtosis = compute_kurtosis(input)  # Kurtosis is computed for each input feature
-    
-    # Ensure the kurtosis shape aligns with the number of input features, not the number of nodes
-    # This aligns the kurtosis term with the input features (columns of weight)
+    kurtosis = compute_kurtosis_low_rank(input)  # Kurtosis is computed for each input feature
+
+        # Expand kurtosis tensor to match weight shape
+    # if kurtosis.dim() == 1:
+    #     kurtosis = kurtosis.unsqueeze(0)  # Add a dimension to match the weight tensor shape
+
     kurtosis_correction = 0.5 * torch.norm(weight, p=2, dim=1) * kurtosis[:weight.shape[1]].mean()  
 
-    single_node_info += kurtosis_correction
+    #single_node_info -= skewness_correction/10000
+    single_node_info = kurtosis_correction
 
     # Step 4: Continue with redundancy and total information as before
     redundancy_matrix = compute_redundancy(weight, cc)
-    adjusted_single_node_info = single_node_info.clone()
+    adjusted_single_node_info = adjust_information_with_redundancy(single_node_info, redundancy_matrix)#single_node_info.clone()
     
-    # Adjust single node info by subtracting redundancy terms
-    num_out = weight.shape[0]
-    for i in range(num_out):
-        for j in range(i + 1, num_out):
-            if single_node_info[i] < single_node_info[j]:
-                adjusted_single_node_info[i] -= redundancy_matrix[i, j]
-            else:
-                adjusted_single_node_info[j] -= redundancy_matrix[i, j]
-
     total_info = torch.sum(adjusted_single_node_info)
 
-    return single_node_info, adjusted_single_node_info, redundancy_matrix, total_info
+    return single_node_info#, adjusted_single_node_info, redundancy_matrix, total_info
+
+def adjust_information_with_redundancy(single_node_info, redundancy_matrix):
+    """
+    Adjust single-node information by subtracting redundancy for each pair of nodes.
+    
+    Args:
+        single_node_info: (n, ) torch tensor, the single-node information for each node.
+        redundancy_matrix: (n, n) torch tensor, the redundancy between each pair of nodes.
+        
+    Returns:
+        adjusted_info: (n, ) torch tensor, adjusted single-node information.
+    """
+    n = single_node_info.size(0)
+
+    # Compute pairwise differences between single-node information
+    info_diffs = single_node_info.view(n, 1) - single_node_info.view(1, n)
+
+    # Create a mask where the single-node information is smaller for each pair
+    mask = (info_diffs < 0).float()
+
+    # Subtract redundancy from the node with smaller information
+    redundancy_adjustment = torch.sum(mask * redundancy_matrix, dim=1)
+
+    # Adjust the single-node information
+    adjusted_info = single_node_info - 0 * redundancy_adjustment
+
+    return adjusted_info
 
 def plot_information_results(single_node_info, adjusted_single_node_info, redundancy_matrix, total_info):
     """
@@ -575,9 +628,6 @@ def plot_information_results(single_node_info, adjusted_single_node_info, redund
 
     # Display total information
     print(f"Total Information for the Layer: {total_info.item():.4f}")
-
-
-
 
 def get_maximum_strides(h_input, w_input, layer):
     h_max = int(np.floor((h_input + 2 * layer.padding[0] - layer.dilation[0] * (layer.kernel_size[0] - 1) - 1) / layer.stride[0] + 1))
