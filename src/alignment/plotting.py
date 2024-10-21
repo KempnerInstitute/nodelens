@@ -126,14 +126,13 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
     num_layers = dropout_results["progdrop_loss_high"].size(2)
     names = ["From high", "From low", "Random"]
+    names_diff = ["high-low"]
     num_exp = len(names)
     dropout_fraction = dropout_results["dropout_fraction"]
     by_layer = dropout_results["by_layer"]
-    #extra_name = "by_layer" if by_layer else "all_layers"
-    #extra_name += dropout_type
-    extra_name = "sequential_" if by_layer else "all_layers_"
+    extra_name = "by_layer" if by_layer else "all_layers"
     extra_name += dropout_type
-    
+
     # Get statistics across each network type for progressive dropout experiment
     print("measuring statistics on dropout analysis...")
     loss_mean_high, loss_se_high = compute_stats_by_type(dropout_results["progdrop_loss_high"], num_types=num_types, dim=0, method="se")
@@ -143,6 +142,8 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     acc_mean_high, acc_se_high = compute_stats_by_type(dropout_results["progdrop_acc_high"], num_types=num_types, dim=0, method="se")
     acc_mean_low, acc_se_low = compute_stats_by_type(dropout_results["progdrop_acc_low"], num_types=num_types, dim=0, method="se")
     acc_mean_rand, acc_se_rand = compute_stats_by_type(dropout_results["progdrop_acc_rand"], num_types=num_types, dim=0, method="se")
+
+    acc_mean_diff, acc_se_diff = compute_stats_by_type(dropout_results["progdrop_acc_low"]-dropout_results["progdrop_acc_high"], num_types=num_types, dim=0, method="se")
 
     # Contract into lists for looping through to plot
     loss_mean = [loss_mean_high, loss_mean_low, loss_mean_rand]
@@ -233,33 +234,57 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
                 ax[layer, idx].legend(loc="best")
 
     exp.plot_ready("prog_dropout_" + extra_name + "_accuracy")
+    
+    # Plot Difference in Accuracy (High - Low)
+    fig, ax = plt.subplots(
+        num_layers,
+        num_types,
+        figsize=(num_types * figdim, num_layers * figdim),
+        sharex=True,
+        sharey=True,
+        layout="constrained",
+    )
+    ax = np.reshape(ax, (num_layers, num_types))
 
+    for idx, label in enumerate(labels):
+        for layer in range(num_layers):
+            for iexp, name in enumerate(names_diff):
+                # Debugging: print shapes
+                #print(f"acc_mean_diff[iexp].shape: {acc_mean_diff[iexp].shape}, dropout_fraction.shape: {dropout_fraction.shape}")
 
+                # Squeeze to remove extra dimensions if necessary
+                cmn = acc_mean_diff[iexp].squeeze()  # Squeeze to ensure 1D tensor
+                cse = acc_se_diff[iexp].squeeze()    # Same for standard error
 
-    # num_layers = dropout_results["progdrop_loss_high"].size(2)
-    # dropout_fraction = dropout_results["dropout_fraction"]
-    # fraction_dropped_nodes = dropout_results["fraction_dropped_nodes"]
-    # print(fraction_dropped_nodes)
+                # Ensure cmn and dropout_fraction have the same length
+                if len(cmn.shape) == 1 and cmn.shape[0] == dropout_fraction.shape[0]:
+                    ax[layer, idx].plot(
+                        dropout_fraction,
+                        cmn,  # Now this should be 1D
+                        color=cmap(iexp),
+                        marker=".",
+                        markersize=msize,
+                        label=name + " (High - Low)",
+                    )
+                    ax[layer, idx].fill_between(dropout_fraction, cmn + cse, cmn - cse, color=(cmap(iexp), alpha))
+                else:
+                    print(f"Shape mismatch: cmn.shape: {cmn.shape}, dropout_fraction.shape: {dropout_fraction.shape}")
 
-    # print("Plotting fraction of dropped nodes per layer...")
+            if layer == 0:
+                ax[layer, idx].set_title(label)
 
-    # fig, ax = plt.subplots(figsize=(8, 6))
+            if layer == num_layers - 1:
+                ax[layer, idx].set_xlabel("Dropout Fraction")
+                ax[layer, idx].set_xlim(0, 1)
 
-    # # Plot a curve for each dropout fraction
-    # for drop_idx, fraction in enumerate(dropout_fraction):
-    #     dropped_nodes_fraction = fraction_dropped_nodes[:, drop_idx]  # Fraction of dropped nodes per layer
-    #     ax.plot(dropped_nodes_fraction, label=f"Dropout fraction: {fraction:.2f}", marker='o', linestyle='-', alpha=0.7)
+            if idx == 0:
+                ax[layer, idx].set_ylabel("Accuracy Difference (High - Low)")
 
-    # # Set plot titles and labels
-    # ax.set_title("Fraction of Dropped Nodes per Layer")
-    # ax.set_xlabel("Layer Index")
-    # ax.set_ylabel("Fraction of Dropped Nodes")
-    # ax.set_xticks(range(num_layers))
-    # ax.legend(loc="best")
+            if iexp == num_exp - 1:
+                ax[layer, idx].legend(loc="best")
 
-    # Show or save the plot
-    exp.plot_ready("fraction_dropped_nodes_per_layer")
- 
+    exp.plot_ready("prog_dropout_" + extra_name + "_accuracy_diff")
+
 
 def plot_eigenfeatures(exp, results, prms):
     """method for plotting results related to eigen-analysis"""
