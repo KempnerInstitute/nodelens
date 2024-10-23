@@ -535,7 +535,7 @@ def alignment(input, weight, method="alignment", relative=True):
     kurtosis_correction = 0.5 * torch.norm(weight, p=2, dim=1) * kurtosis[:weight.shape[1]].mean()  
 
     #single_node_info += -1 * skewness_correction 
-    single_node_info += kurtosis_correction * 1
+    #single_node_info += kurtosis_correction * 1
 
     # Step 4: Continue with redundancy and total information as before
     redundancy_matrix = compute_redundancy(weight, cc)
