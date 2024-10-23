@@ -86,6 +86,7 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
     )
 
 
+
 def eigenvector_dropout(exp, nets, dataset, eigen_results, train_set=False):
     """
     do targeted eigenvector dropout with precomputed eigenfeatures
