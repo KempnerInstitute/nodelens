@@ -470,26 +470,6 @@ def compute_redundancy(weights, input_covariance):
     return redundancy_matrix
 
 
-def alignment_rank(input, weight, method="alignment", relative=True, rank_approx=50):
-    """
-    Compute first-order information term using low-rank approximation of the covariance matrix.
-    """
-    # Compute covariance matrix of input
-    input_centered = input - input.mean(dim=0, keepdim=True)
-    cov_matrix = torch.matmul(input_centered.T, input_centered) / (input.shape[0] - 1)
-    
-    # Perform SVD for low-rank approximation
-    U, S, _ = torch.svd(cov_matrix)
-    U_k = U[:, :rank_approx]  # Top k eigenvectors
-    S_k = S[:rank_approx]  # Corresponding eigenvalues
-    
-    # Low-rank approximation of covariance matrix
-    low_rank_cov = torch.matmul(U_k, torch.diag(S_k)).matmul(U_k.T)
-    
-    # Compute Rayleigh quotient using the low-rank covariance
-    rq_approx = torch.sum(torch.matmul(weight, low_rank_cov) * weight, dim=1) / torch.sum(weight * weight, dim=1)
-    
-    return rq_approx
 
 def alignment(input, weight, method="alignment", relative=True):
     """
@@ -533,7 +513,7 @@ def alignment(input, weight, method="alignment", relative=True):
     rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
 
     # Step 3: Compute Single-Node Information for each node (with kurtosis correction)
-    single_node_infof = rq / torch.trace(cc)  # First term (proportional to RQ)
+    single_node_info = rq / torch.trace(cc)  # First term (proportional to RQ)
     
     # Compute third-order term: Skewness correction
     skewness = compute_skewness_inplace(input)
@@ -554,8 +534,8 @@ def alignment(input, weight, method="alignment", relative=True):
 
     kurtosis_correction = 0.5 * torch.norm(weight, p=2, dim=1) * kurtosis[:weight.shape[1]].mean()  
 
-    #single_node_info -= skewness_correction/10000
-    single_node_info = kurtosis_correction
+    #single_node_info += -1 * skewness_correction 
+    single_node_info += kurtosis_correction * 1
 
     # Step 4: Continue with redundancy and total information as before
     redundancy_matrix = compute_redundancy(weight, cc)
@@ -628,6 +608,8 @@ def plot_information_results(single_node_info, adjusted_single_node_info, redund
 
     # Display total information
     print(f"Total Information for the Layer: {total_info.item():.4f}")
+
+
 
 def get_maximum_strides(h_input, w_input, layer):
     h_max = int(np.floor((h_input + 2 * layer.padding[0] - layer.dilation[0] * (layer.kernel_size[0] - 1) - 1) / layer.stride[0] + 1))
