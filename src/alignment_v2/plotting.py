@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import matplotlib as mpl
 
 import torch
-from alignment.utils import compute_stats_by_type, named_transpose, transpose_list, rms
+from alignment_v2.utils import compute_stats_by_type, named_transpose, transpose_list, rms
 
 
 def plot_train_results(exp, train_results, test_results, prms):
@@ -143,7 +143,7 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     acc_mean_low, acc_se_low = compute_stats_by_type(dropout_results["progdrop_acc_low"], num_types=num_types, dim=0, method="se")
     acc_mean_rand, acc_se_rand = compute_stats_by_type(dropout_results["progdrop_acc_rand"], num_types=num_types, dim=0, method="se")
 
-    acc_mean_diff, acc_se_diff = compute_stats_by_type(dropout_results["progdrop_acc_rand"]*0+dropout_results["progdrop_acc_high"], num_types=num_types, dim=0, method="se")
+    acc_mean_diff, acc_se_diff = compute_stats_by_type(dropout_results["progdrop_acc_low"]-dropout_results["progdrop_acc_rand"], num_types=num_types, dim=0, method="se")
 
     # Contract into lists for looping through to plot
     loss_mean = [loss_mean_high, loss_mean_low, loss_mean_rand]

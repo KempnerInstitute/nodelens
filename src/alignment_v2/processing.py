@@ -1,8 +1,8 @@
 import os
 from tqdm import tqdm
 import torch
-from alignment import train
-from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
+from alignment_v2 import train
+from alignment_v2.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
 
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):

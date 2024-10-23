@@ -1,9 +1,9 @@
 import torch
-from alignment.models.registry import get_model
-from alignment.experiments import arglib
-from alignment import processing
-from alignment import plotting
-from alignment.experiments.experiment import Experiment
+from alignment_v2.models.registry import get_model
+from alignment_v2.experiments import arglib
+from alignment_v2 import processing
+from alignment_v2 import plotting
+from alignment_v2.experiments.experiment import Experiment
 
 #python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use-wandb --dropout_by_layer --epochs 5
 
