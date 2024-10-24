@@ -12,7 +12,7 @@ from matplotlib import pyplot as plt
 
 from alignment import files
 from alignment.datasets import get_dataset
-from alignment.utils import compress_directory
+from alignment_v2.utils import compress_directory
 
 class Experiment(ABC):
     def __init__(self, args=None) -> None:
