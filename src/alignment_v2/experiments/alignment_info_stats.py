@@ -93,11 +93,11 @@ class AlignmentStatisticsInfo(Experiment):
         #     self, nets, optimizers, dataset, dropout_results_pre
         # )
 
-        # Step 3: Sequential dropout experiment (drop nodes layer by layer based on alignment)
-        # print("Performing sequential dropout experiment...")
-        # sequential_dropout_results_pre, sequential_dropout_parameters_pre = processing.sequential_dropout_experiment(
-        #     self, nets, dataset
-        # )
+        Step 3: Sequential dropout experiment (drop nodes layer by layer based on alignment)
+        print("Performing sequential dropout experiment...")
+        sequential_dropout_results_pre, sequential_dropout_parameters_pre = processing.sequential_dropout_experiment(
+            self, nets, dataset
+        )
         
         # Retrain the network after sequential dropout
         # print("Retraining the pruned network after sequential dropout...")
