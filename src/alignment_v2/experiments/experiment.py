@@ -154,12 +154,6 @@ class Experiment(ABC):
             help="prevents saving of results or plots",
         )
         parser.add_argument(
-            "--use-wandb",
-            default=False,
-            action="store_true",
-            help="enable W&B logging and tracking",
-        )
-        parser.add_argument(
             "--justplot",
             default=False,
             action="store_true",
@@ -191,7 +185,7 @@ class Experiment(ABC):
         )
 
         # add meta arguments
-        self.meta_args += ["nosave", "justplot", "save_networks", "showprms", "showall", "device", "use-wandb"]
+        self.meta_args += ["nosave", "justplot", "save_networks", "showprms", "showall", "device"]
 
         # common parameters that shouldn't be updated when loading old experiment
         parser.add_argument(

@@ -7,7 +7,7 @@ from torch import nn
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
 
-from alignment_v2 import files
+from alignment import files
 from alignment_v2.models.base import AlignmentNetwork
 
 REQUIRED_PROPERTIES = ["dataset_path", "dataset_constructor", "loss_function"]

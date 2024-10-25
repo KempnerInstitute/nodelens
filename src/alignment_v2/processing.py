@@ -43,41 +43,41 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     return train_results, test_results
 
 
-# def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
-#     """
-#     perform a progressive dropout (of nodes) experiment
-#     alignment is optional, but will be recomputed if you've already measured it. You can provide it
-#     by setting: alignment=test_results['alignment'] if ``train_networks`` has already been run.
-#     """
-#     # do targeted dropout experiment
-#     print("performing targeted dropout...")
-#     dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
-#     dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
-#     return dropout_results, dropout_parameters
-
-def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False, by_layer=False, layer_idx=None):
+def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
     """
-    Perform progressive dropout, either layer-by-layer or across all layers at once.
-    If by_layer=True, we only dropout nodes in the specified layer (layer_idx).
+    perform a progressive dropout (of nodes) experiment
+    alignment is optional, but will be recomputed if you've already measured it. You can provide it
+    by setting: alignment=test_results['alignment'] if ``train_networks`` has already been run.
     """
-    dropout_results = {}
-    dropout_parameters = {}
-
-    if by_layer:
-        print(f"Performing dropout for layer {layer_idx}")
-        
-        # Drop nodes in the specified layer only
-        dropout_results = train.progressive_dropout(
-            nets, dataset, alignment=alignment, layer_idx=layer_idx, train_set=train_set, by_layer=True
-        )
-        
-    else:
-        # Standard dropout across all layers
-        dropout_results = train.progressive_dropout(
-            nets, dataset, alignment=alignment, train_set=train_set, by_layer=False
-        )
-
+    # do targeted dropout experiment
+    print("performing targeted dropout...")
+    dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
+    dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
     return dropout_results, dropout_parameters
+
+# def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False, by_layer=False, layer_idx=None):
+#     """
+#     Perform progressive dropout, either layer-by-layer or across all layers at once.
+#     If by_layer=True, we only dropout nodes in the specified layer (layer_idx).
+#     """
+#     dropout_results = {}
+#     dropout_parameters = {}
+
+#     if by_layer:
+#         print(f"Performing dropout for layer {layer_idx}")
+        
+#         # Drop nodes in the specified layer only
+#         dropout_results = train.progressive_dropout(
+#             nets, dataset, alignment=alignment, layer_idx=layer_idx, train_set=train_set, by_layer=True
+#         )
+        
+#     else:
+#         # Standard dropout across all layers
+#         dropout_results = train.progressive_dropout(
+#             nets, dataset, alignment=alignment, train_set=train_set, by_layer=False
+#         )
+
+#     return dropout_results, dropout_parameters
 
 def sequential_dropout_experiment(exp, nets, dataset):
     """
