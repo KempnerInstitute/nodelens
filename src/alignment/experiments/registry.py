@@ -9,7 +9,6 @@ EXPERIMENT_REGISTRY = {
     "adversarial_shaping": AdversarialShaping,
 }
 
-
 def get_experiment(experiment_name, build=False, **kwargs):
     """
     lookup model constructor from model registry by name
@@ -23,7 +22,6 @@ def get_experiment(experiment_name, build=False, **kwargs):
     if build:
         return experiment(**kwargs)
     return experiment
-
 
 def create_experiment():
     """
