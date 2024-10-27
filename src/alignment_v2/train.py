@@ -491,9 +491,6 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     progdrop_acc_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_acc_rand = torch.zeros((num_nets, num_drops, num_layers))
 
-    # Preallocate to track the fraction of nodes dropped across batches
-    fraction_dropped_nodes = torch.zeros((num_layers, num_drops))
-
     # to keep track of how many values have been added
     num_batches = 0
 
@@ -508,18 +505,10 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
 
         # get dropout indices for this fraction of dropouts
         for dropidx, fraction in enumerate(drop_fraction):
-            #idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
             idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
 
             # do drop out for each layer (or across all depending on parameters)
             for layer in range(num_layers):
-                num_nodes_in_layer = idx_eigenvalue[layer].size(1)  # Total nodes in the layer
-                num_dropped_high = idx_high[layer].size(1)  # Number of dropped nodes for high alignment
-                # Compute the fraction of dropped nodes
-                fraction_dropped_high = num_dropped_high / num_nodes_in_layer
-                # Store the fraction in the results for this dropout level and layer
-                fraction_dropped_nodes[layer, dropidx] += fraction_dropped_high  # Assuming we're interested in high alignment here
-
                 if by_layer:
                     drop_high, drop_low, drop_rand = (
                         [idx_high[layer]],
@@ -569,12 +558,7 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
                 progdrop_acc_high[:, dropidx, layer] += torch.tensor(acc_high)
                 progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
                 progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)
-                
 
-
-    # Average the fraction of dropped nodes over batches
-    fraction_dropped_nodes /= num_batches
-    
     results = {
         "progdrop_loss_high": progdrop_loss_high / num_batches,
         "progdrop_loss_low": progdrop_loss_low / num_batches,
@@ -585,7 +569,6 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         "dropout_fraction": drop_fraction,
         "by_layer": by_layer,
         "idx_dropout_layers": idx_dropout_layers,
-        "fraction_dropped_nodes": fraction_dropped_nodes,  # store fraction directly
     }
 
     return results

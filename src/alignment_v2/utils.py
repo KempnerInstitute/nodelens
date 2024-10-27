@@ -513,7 +513,7 @@ def alignment(input, weight, method="alignment", relative=True):
     rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
 
     # Step 3: Compute Single-Node Information for each node (with kurtosis correction)
-    single_node_info = rq / torch.trace(cc)  # First term (proportional to RQ)
+    single_node_info = rq #/ torch.trace(cc)  # First term (proportional to RQ)
     
     # Compute third-order term: Skewness correction
     skewness = compute_skewness_inplace(input)
