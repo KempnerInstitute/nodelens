@@ -13,7 +13,8 @@ from alignment_v2.utils import (check_iterable,
                              set_net_mode,
                              get_unfold_params,
                              smart_pca,
-                             alignment)
+                             alignment,
+                             alignment_expansion)
 
 from alignment_v2.models.layers import (LAYER_REGISTRY, 
                                      REGISTRY_REQUIREMENTS, 
@@ -53,6 +54,28 @@ class AttributeReference:
             return getattr(self.parent, name)
         else:
             raise AttributeError(f"parent object (instance of {type(self.parent)}) has no attribute '{name}'")
+
+
+#### Houman comments 28 Oct
+# The AlignmentNetwork class currently uses the following methods for RQ calculation:
+
+# 	1.	get_layer_inputs: This method retrieves inputs to each layer by performing a forward pass and storing activations.
+# 	2.	_preprocess_inputs: Handles input unfolding based on layer type. For convolutional layers, it uses torch.nn.functional.unfold to create patches from the input image, but by default, these patches are collapsed along the batch dimension.
+# 	3.	measure_alignment: Computes RQ using the alignment function for each layer, but it does not directly handle CNN-specific covariance across spatial patches.
+
+# The current measure_alignment setup does compute RQ but may not correctly address the filter-wise alignment requirements in CNNs. Here’s how it can be improved for CNNs:
+
+# Proposed Changes to the Code
+
+# To ensure correct RQ calculation for each filter in a CNN layer:
+
+# 	1.	Update _preprocess_inputs:
+# 	•	Modify _preprocess_inputs to handle patches so that they match the filter dimensions of CNN layers exactly.
+# 	•	Retain patches in a format that separates spatial dimensions without collapsing into the batch.
+# 	2.	Add measure_alignment_per_filter:
+# 	•	Create a new method to compute the RQ per filter.
+# 	•	Use the updated _preprocess_inputs to unfold input patches.
+# 	•	Calculate covariance and RQ for each filter’s weights independently.
 
 
 class AlignmentNetwork(nn.Module, ABC):
@@ -370,7 +393,33 @@ class AlignmentNetwork(nn.Module, ABC):
 
         # return processed input data
         return preprocessed
+    
+    
+    
+    ### NEW: to test for CNN. The new function keeps the convolutional input patches separated by batch and spatial stride dimensions when compress_convolutional=False, preserving spatial information. For CNN layers, unfold is used to extract receptive field patches for each filter’s alignment.
 
+    # def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True):
+    #     """
+    #     Updated to keep spatial information for CNN layers.
+    #     """
+    #     preprocessed = []
+    #     layers = self.get_alignment_layers()
+    #     metaprms = self.get_alignment_metaparameters()
+
+    #     for input, layer, metaprm in zip(inputs_to_layers, layers, metaprms):
+    #         if metaprm["unfold"]:
+    #             layer_prms = get_unfold_params(layer)
+    #             unfolded_input = torch.nn.functional.unfold(input, layer.kernel_size, **layer_prms)
+    #             if not compress_convolutional:
+    #                 unfolded_input = unfolded_input.view(
+    #                     input.size(0), -1, unfolded_input.size(-1)
+    #                 )  # Keep batch and stride dimensions separate
+    #             preprocessed.append(unfolded_input)
+    #         else:
+    #             preprocessed.append(input)
+
+    #     return preprocessed
+    
     @torch.no_grad()
     def compare_weights(self, weights, norm=False):
         """
@@ -396,6 +445,62 @@ class AlignmentNetwork(nn.Module, ABC):
         preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
         weights = self.get_alignment_weights(flatten=True)
         return [alignment(input, weight, method=method, relative=relative) for input, weight in zip(preprocessed, weights)]
+
+    @torch.no_grad()
+    def measure_alignment_expansion(self, x, precomputed=False, method="alignment_expansion", relative=True):
+        """
+        measure alignment of the networks weights with the inputs to each layer from batch **x**
+        """
+        # Pre-layer activations start with input (x) and ignore output
+        inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
+        preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
+        weights = self.get_alignment_weights(flatten=True)
+        return [alignment_expansion(input, weight, method='alignment_expansion', relative=relative) for input, weight in zip(preprocessed, weights)]
+
+
+    # # NEW: •	Computes RQ per filter by first unfolding patches for each convolutional layer. Applies the alignment function to measure RQ across each filter.
+    # @torch.no_grad()
+    # def measure_alignment(self, x, per_filter=False, precomputed=False, method="alignment", relative=True):
+    #     """
+    #     Measure alignment of the network's weights with the inputs to each layer from batch **x**.
+        
+    #     Parameters:
+    #     ----------
+    #     x : torch.Tensor
+    #         Input data for the forward pass.
+    #     per_filter : bool, optional
+    #         If True, computes alignment for each filter individually in convolutional layers.
+    #         If False, computes alignment for the layer as a whole.
+    #     precomputed : bool, optional
+    #         If True, assumes that hidden activations are already computed and stored.
+    #     method : str, optional
+    #         Alignment method, typically 'alignment' (default) or 'similarity'.
+    #     relative : bool, optional
+    #         If True, computes relative RQ (i.e., normalized by the trace of the covariance matrix).
+        
+    #     Returns:
+    #     -------
+    #     list
+    #         A list of alignment values, either per-layer or per-filter based on `per_filter`.
+    #     """
+    #     # Pre-layer activations start with input (x) and ignore output
+    #     inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
+    #     preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
+    #     weights = self.get_alignment_weights(flatten=True)
+
+    #     # Calculate alignment per layer or per filter
+    #     alignment_values = []
+    #     for input, weight, metaprms in zip(preprocessed, weights, self.metaparameters):
+    #         if per_filter and metaprm["unfold"]:  # Per-filter calculation in convolutional layers
+    #             filter_alignments = [
+    #                 alignment(input, weight[f_idx:f_idx+1], method=method, relative=relative)
+    #                 for f_idx in range(weight.shape[0])
+    #             ]
+    #             alignment_values.append(torch.cat(filter_alignments))
+    #         else:  # Default layer-wise calculation
+    #             alignment_values.append(alignment(input, weight, method=method, relative=relative))
+        
+    #     return alignment_values
 
     @torch.no_grad()
     def measure_alignment_weights(self, x, weights, precomputed=False, method="alignment", relative=True):

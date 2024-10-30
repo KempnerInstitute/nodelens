@@ -12,6 +12,7 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
         train_set=True,
         num_epochs=exp.args.epochs,
         alignment=not (exp.args.no_alignment),
+        alignment_expansion=True,#not (exp.args.no_alignment),
         delta_weights=exp.args.delta_weights,
         frequency=exp.args.frequency,
         run=exp.run,
