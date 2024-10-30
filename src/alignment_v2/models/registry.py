@@ -1,4 +1,4 @@
-from alignment.models import models
+from alignment_v2.models import models
 
 MODEL_REGISTRY = {
     "MLP": models.MLP,

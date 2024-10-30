@@ -60,6 +60,8 @@ class AlignmentStatisticsInfo(Experiment):
 
         optimizers = [optim(net.parameters(), lr=self.args.default_lr, weight_decay=self.args.default_wd) for net in nets]
 
+        print(self.args)
+
         prms = {
             "vals": [self.args.network],  # require iterable for identifying how many types of networks there are (just one type...)
             "name": "network",
@@ -77,7 +79,7 @@ class AlignmentStatisticsInfo(Experiment):
         # Step 1: Train the full network
         nets, optimizers, prms = self.create_networks()
         dataset = self.prepare_dataset(nets[0])
-        
+                
         print("Training the full network...")
         train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
 
@@ -105,6 +107,12 @@ class AlignmentStatisticsInfo(Experiment):
         #     self, nets, optimizers, dataset, sequential_dropout_results_pre
         # )
         
+        # measure eigenfeatures
+        #eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
+
+        # do targeted dropout experiment
+        #evec_dropout_results, evec_dropout_parameters = processing.eigenvector_dropout(self, nets, dataset, eigen_results, train_set=False)
+
         # Step 4: Store all the results
         results = dict(
             prms=prms,
@@ -122,6 +130,9 @@ class AlignmentStatisticsInfo(Experiment):
             #sequential_dropout_parameters_pre=sequential_dropout_parameters_pre,
             #sequential_retrain_results=sequential_retrain_results,
             #sequential_retrain_test_results=sequential_retrain_test_results
+            #eigen_results=eigen_results,
+            #evec_dropout_results=evec_dropout_results,
+            #evec_dropout_parameters=evec_dropout_parameters
         )
 
         return results, nets
@@ -168,6 +179,14 @@ class AlignmentStatisticsInfo(Experiment):
         #     results["prms"],
         #     dropout_type="nodes_post_retrain_sequential"
         # )   
+        # plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
+        # plotting.plot_dropout_results(
+        #     self,
+        #     results["evec_dropout_results"],
+        #     results["evec_dropout_parameters"],
+        #     results["prms"],
+        #     dropout_type="eigenvectors",
+        # )
     # def plot(self, results):
     #     """
     #     main plotting loop

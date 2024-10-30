@@ -325,7 +325,7 @@ def fast_rank(input):
 
 
 # ------------------ alignment functions ----------------------
-def alignment_old(input, weight, method="alignment", relative=True):
+def alignment(input, weight, method="alignment", relative=True):
     """
     measure alignment (proportion variance explained) between **input** and **weight**
 
@@ -471,7 +471,7 @@ def compute_redundancy(weights, input_covariance):
 
 
 
-def alignment(input, weight, method="alignment", relative=True):
+def alignment_expansion(input, weight, method="alignment_expansion", relative=True):
     """
     Measure alignment (proportion variance explained) between **input** and **weight**
     and compute single-node information, redundancy, and total information for the layer.
@@ -502,7 +502,7 @@ def alignment(input, weight, method="alignment", relative=True):
     """
     
     # Step 1: Compute covariance of input
-    if method == "alignment":
+    if method == "alignment_expansion":
         cc = torch.cov(input.T)  # Covariance matrix of input
     elif method == "similarity":
         cc = torch.corrcoef(input.T)  # Correlation matrix of input
@@ -534,8 +534,8 @@ def alignment(input, weight, method="alignment", relative=True):
 
     kurtosis_correction = 0.5 * torch.norm(weight, p=2, dim=1) * kurtosis[:weight.shape[1]].mean()  
 
-    #single_node_info += -1 * skewness_correction 
-    #single_node_info += kurtosis_correction * 1
+    #single_node_info +=  skewness_correction 
+    single_node_info += kurtosis_correction 
 
     # Step 4: Continue with redundancy and total information as before
     redundancy_matrix = compute_redundancy(weight, cc)

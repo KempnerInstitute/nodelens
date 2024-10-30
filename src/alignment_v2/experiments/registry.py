@@ -1,5 +1,5 @@
 from argparse import ArgumentParser
-from alignment.experiments.alignment_info_stats import AlignmentStatisticsInfo
+from alignment_v2.experiments.alignment_info_stats import AlignmentStatisticsInfo
 from alignment.experiments.alignment_stats import AlignmentStatistics
 from alignment.experiments.alignment_comparison import AlignmentComparison
 from alignment.experiments.adversarial_shaping import AdversarialShaping

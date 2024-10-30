@@ -190,8 +190,8 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
             if iexp == num_exp - 1:
                 ax[layer, idx].legend(loc="best")
-
-    exp.plot_ready("prog_dropout_" + extra_name + "_loss")
+    if exp is not None:
+        exp.plot_ready("prog_dropout_" + extra_name + "_loss")
 
     fig, ax = plt.subplots(
         num_layers,
@@ -232,8 +232,8 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
             if iexp == num_exp - 1:
                 ax[layer, idx].legend(loc="best")
-
-    exp.plot_ready("prog_dropout_" + extra_name + "_accuracy")
+    if exp is not None:
+        exp.plot_ready("prog_dropout_" + extra_name + "_accuracy")
     
     # Plot Difference in Accuracy (High - Low)
     fig, ax = plt.subplots(
@@ -283,7 +283,8 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
             if iexp == num_exp - 1:
                 ax[layer, idx].legend(loc="best")
 
-    exp.plot_ready("prog_dropout_" + extra_name + "_accuracy_diff")
+    if exp is not None:
+        exp.plot_ready("prog_dropout_" + extra_name + "_accuracy_diff")
 
 
 def plot_eigenfeatures(exp, results, prms):

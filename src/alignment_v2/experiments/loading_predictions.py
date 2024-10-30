@@ -1,10 +1,10 @@
 import numpy as np
 import torch
-from alignment.experiments.experiment import Experiment
-from alignment.models.registry import get_model, get_model_parameters
-from alignment import arglib
-from alignment import utils
-from alignment import processing
+from alignment_v2.experiments.experiment import Experiment
+from alignment_v2.models.registry import get_model, get_model_parameters
+from alignment_v2 import arglib
+from alignment_v2 import utils
+from alignment_v2 import processing
 
 from matplotlib import pyplot as plt
 
