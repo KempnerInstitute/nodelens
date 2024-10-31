@@ -43,3 +43,14 @@ checkpointing:
 extra:
   num_drops: 9
   dropout_by_layer: False
+
+  ###  For alignment_comparison and loading_prediction experiments
+  comparison: "lr"
+  regularizers: ["none", "dropout", "weight_decay"]
+  lrs: [1e-2, 1e-3, 1e-4]
+  compare_dropout: 0.5
+  compare_wd: 1e-5
+
+  ###  For adversarial_shaping experiment
+  cutoffs: [1e-2, 1e-3, 1e-4, 0.0]
+  manual_frequency: 5

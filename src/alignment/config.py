@@ -1,4 +1,5 @@
 from typing import (cast,
+                    List,
                     Union,
                     Type,
                     TypeVar,
@@ -145,6 +146,43 @@ class ExtraConfig(BaseConfig):
     dropout_by_layer: bool = False
     """
     Whether to do progressive dropout by layer or across all layers.
+    """
+    
+    #############################  For alignment_comparison and loading_prediction experiments
+    comparison: str = "lr"
+    """
+    Determines what should be compared, e.g, 'lr', 'regularizer'. 
+    """
+
+    regularizers: List[str] = field(default_factory=lambda: ["none", "dropout", "weight_decay"])
+    """
+    What regularizers to use for comparison
+    """
+
+    lrs: List[float] = field(default_factory=lambda: [1e-2, 1e-3, 1e-4])
+    """
+    What learning rates to use for comparison
+    """
+
+    compare_dropout: float = 0.5
+    """
+    Dropout when doing regularizer comparison.
+    """
+    
+    compare_wd: float = 1e-5
+    """
+    Weight-decay when doing regularizer comparison.
+    """
+
+    #############################  For adversarial_shaping experiment
+    cutoffs: List[float] = field(default_factory=lambda: [1e-2, 1e-3, 1e-4, 0.0])
+    """
+    What fraction of total variance to cut eigenvalues off at.
+    """
+
+    manual_frequency: int = 5
+    """
+    How frequently (by epoch) to do manual shaping with eigenvectors.
     """
 
 @dataclass

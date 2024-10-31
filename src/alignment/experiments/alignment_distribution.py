@@ -1,6 +1,5 @@
 import torch
 from alignment.models.registry import get_model
-from alignment import arglib
 from alignment import processing
 from alignment import plotting
 from alignment.experiments.experiment import Experiment
@@ -11,18 +10,7 @@ class AlignmentDistribution(Experiment):
         return "alignment_distribution"
 
     def prepare_path(self):
-        return [self.args.network, self.args.dataset, self.args.optimizer]
-
-    def make_args(self, parser):
-        """
-        Method for adding experiment specific arguments to the argument parser
-        """
-        parser = arglib.add_standard_training_parameters(parser)
-        parser = arglib.add_checkpointing(parser)
-        parser = arglib.add_dropout_experiment_details(parser)
-        parser = arglib.add_network_metaparameters(parser)
-        parser = arglib.add_alignment_analysis_parameters(parser)
-        return parser
+        return [self.args.model.name, self.args.dataset.name, self.args.optimizer.name]
 
     def create_networks(self):
         """
@@ -34,34 +22,34 @@ class AlignmentDistribution(Experiment):
         with each network
         """
         # get optimizer
-        if self.args.optimizer == "Adam":
+        if self.args.optimizer.name == "Adam":
             optim = torch.optim.Adam
-        elif self.args.optimizer == "SGD":
+        elif self.args.optimizer.name == "SGD":
             optim = torch.optim.SGD
         else:
-            raise ValueError(f"optimizer ({self.args.optimizer}) not recognized")
+            raise ValueError(f"optimizer ({self.args.optimizer.name}) not recognized")
 
         nets = [
             get_model(
-                self.args.network,
+                self.args.model.name,
                 build=True,
-                dataset=self.args.dataset,
-                dropout=self.args.default_dropout,
-                ignore_flag=self.args.ignore_flag,
+                dataset=self.args.dataset.name,
+                dropout=self.args.model.default_dropout,
+                ignore_flag=self.args.alignment.ignore_flag,
             )
-            for _ in range(self.args.replicates)
+            for _ in range(self.args.training.replicates)
         ]
         nets = [net.to(self.device) for net in nets]
 
-        optimizers = [optim(net.parameters(), lr=self.args.default_lr, weight_decay=self.args.default_wd) for net in nets]
+        optimizers = [optim(net.parameters(), lr=self.args.optimizer.default_lr, weight_decay=self.args.optimizer.default_wd) for net in nets]
 
         prms = {
-            "vals": [self.args.network],  # require iterable for identifying how many types of networks there are (just one type...)
+            "vals": [self.args.model.name],  # require iterable for identifying how many types of networks there are (just one type...)
             "name": "network",
-            "dataset": self.args.dataset,
-            "dropout": self.args.default_dropout,
-            "lr": self.args.default_lr,
-            "weight_decay": self.args.default_wd,
+            "dataset": self.args.dataset.name,
+            "dropout": self.args.model.default_dropout,
+            "lr": self.args.optimizer.default_lr,
+            "weight_decay": self.args.optimizer.default_wd,
         }
         return nets, optimizers, prms
 

@@ -20,7 +20,18 @@ class Experiment(ABC):
         self.args = cfg
         self.basename = self.get_basename()  # Register basename of experiment
         self.basepath = Path(self.args.results_path) / self.basename  # Register basepath of experiment
-        self.get_args()  # Parse arguments to python program
+        
+        # a list of meta arguments that shouldn't be updated when loading an old experiment
+        self.meta_args = ["no_save", "just_plot", "save_networks", "show_params", "show_all", "device"]
+        
+        # manage device
+        if self.args.device is None:
+            self.args.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # do checks
+        if self.args.use_timestamp and self.args.just_plot:
+            assert self.args.timestamp is not None, "if use_timestamp=True and plotting stored results, must provide a timestamp"
+        
         self.register_timestamp()  # Register timestamp of experiment
         self.run = self.configure_wandb()  # Create a wandb run object (or None depending on args.use_wandb)
         self.device = self.args.device
@@ -132,36 +143,6 @@ class Experiment(ABC):
 
         Must return a list of strings that will be appended to the base path to make an experiment directory.
         See ``get_dir()`` for details.
-        """
-        pass
-
-    def get_args(self):
-        """
-        Method for defining and parsing arguments.
-
-        This method defines the standard arguments used for any Experiment, and
-        the required method make_args() is used to add any additional arguments
-        specific to each experiment.
-        """
-        self.meta_args = []  # a list of arguments that shouldn't be updated when loading an old experiment
-
-        # add meta arguments
-        self.meta_args += ["no_save", "just_plot", "save_networks", "show_params", "show_all", "device"]
-
-        # manage device
-        if self.args.device is None:
-            self.args.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # do checks
-        if self.args.use_timestamp and self.args.just_plot:
-            assert self.args.timestamp is not None, "if use_timestamp=True and plotting stored results, must provide a timestamp"
-
-    @abstractmethod
-    def make_args(self, parser) -> ArgumentParser:
-        """
-        Required method for defining special-case arguments.
-
-        This should just use the add_argument method on the parser provided as input.
         """
         pass
 
