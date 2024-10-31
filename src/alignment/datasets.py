@@ -1,3 +1,5 @@
+import sys
+from pathlib import Path
 from warnings import warn
 from abc import ABC, abstractmethod
 
@@ -7,10 +9,10 @@ from torch import nn
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
 
-from alignment import files
 from alignment.models.base import AlignmentNetwork
+from alignment.config import ExperimentConfig
 
-REQUIRED_PROPERTIES = ["dataset_path", "dataset_constructor", "loss_function"]
+REQUIRED_PROPERTIES = ["dataset_constructor", "loss_function"]
 
 
 def default_loader_parameters(
@@ -194,17 +196,16 @@ class DataSet(ABC):
 class MNIST(DataSet):
     def set_properties(self):
         """defines the required properties for MNIST"""
-        self.dataset_path = files.dataset_path("MNIST")
         self.dataset_constructor = torchvision.datasets.MNIST
         self.loss_function = nn.CrossEntropyLoss()
         self.dist_params = dict(mean=[0.1307], std=[0.3081])
 
-    def dataset_kwargs(self, train=True, download=False):
+    def dataset_kwargs(self, train=True, download=False, root=None):
         """set data constructor kwargs for MNIST"""
         kwargs = dict(
             train=train,
-            root=self.dataset_path,
             download=download,
+            root = root,
             transform=self.transform,
         )
         return kwargs
@@ -213,17 +214,16 @@ class MNIST(DataSet):
 class CIFAR10(DataSet):
     def set_properties(self):
         """defines the required properties for CIFAR10"""
-        self.dataset_path = files.dataset_path("CIFAR10")
         self.dataset_constructor = torchvision.datasets.CIFAR10
         self.loss_function = nn.CrossEntropyLoss()
         self.dist_params = dict(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 
-    def dataset_kwargs(self, train=True, download=False):
+    def dataset_kwargs(self, train=True, download=False, root=None):
         """set data constructor kwargs for CIFAR10"""
         kwargs = dict(
             train=train,
-            root=self.dataset_path,
             download=download,
+            root=root,
             transform=self.transform,
         )
         return kwargs
@@ -232,7 +232,6 @@ class CIFAR10(DataSet):
 class CIFAR100(CIFAR10):
     def set_properties(self):
         """defines the required properties for CIFAR100"""
-        self.dataset_path = files.dataset_path("CIFAR100")
         self.dataset_constructor = torchvision.datasets.CIFAR100
         self.loss_function = nn.CrossEntropyLoss()
         self.dist_params = dict(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
@@ -246,17 +245,16 @@ class ImageNet2012(DataSet):
         preprocessing according to pytorch documentation:
         https://pytorch.org/hub/pytorch_vision_alexnet/
         """
-        self.dataset_path = files.dataset_path("ImageNet")
         self.dataset_constructor = torchvision.datasets.ImageNet
         self.loss_function = nn.CrossEntropyLoss()
         self.dist_params = dict(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.center_crop = 224
 
-    def dataset_kwargs(self, train=True):
+    def dataset_kwargs(self, train=True, root=None):
         """set data constructor kwargs for ImageNet2012"""
         kwargs = dict(
             split="train" if train else "val",
-            root=self.dataset_path,
+            root=root,
             transform=self.transform,
         )
         return kwargs
@@ -310,13 +308,11 @@ def get_dataset(
 if __name__ == "__main__":
     """simple program for downloading a dataset"""
 
-    from argparse import ArgumentParser
+    try:
+        yaml_path, args_list = sys.argv[1]
+    except IndexError:
+        raise ValueError(f"Usage: {sys.argv[0]} [CONFIG_PATH]")
 
-    def get_args(args=None):
-        parser = ArgumentParser(description="simple program for downloading a dataset to the local file location")
-        parser.add_argument("--dataset", type=str, default="MNIST")
-        return parser.parse_args(args=args)
+    cfg = ExperimentConfig.load(yaml_path)
 
-    args = get_args()
-
-    dataset = get_dataset(args.dataset, build=True, dataset_parameters=dict(download=True))
+    dataset = get_dataset(cfg.dataset.name, build=True, dataset_parameters=dict(download=True, root=Path(cfg.dataset.path)))
