@@ -1,17 +1,17 @@
 experiment: alignment_stats
-results_path: /n/holylabs/LABS/kempner_dev/Users/amazloumi/alignment_dir/results
+results_path: # <-- Add path to where results to be saved/loaded
 no_save: False
 just_plot: False
 save_networks: False
 show_params: False
 show_all: False
 #device: cpu 
-use_timestamp: false
+use_timestamp: False
 #timestamp: # The timestamp of previous experiment to plot.
 
 dataset:
   name: MNIST
-  path: /n/holylabs/LABS/kempner_dev/Users/amazloumi/alignment_dir/datasets
+  path: # <-- Add path to your dataset
   download: True # Downloads it if it does not exist. 
 
 model:
