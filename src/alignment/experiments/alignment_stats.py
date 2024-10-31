@@ -1,6 +1,5 @@
 import torch
 from alignment.models.registry import get_model
-from alignment.experiments import arglib
 from alignment import processing
 from alignment import plotting
 from alignment.experiments.experiment import Experiment
@@ -12,17 +11,6 @@ class AlignmentStatistics(Experiment):
 
     def prepare_path(self):
         return [self.args.model.name, self.args.dataset.name, self.args.optimizer.name]
-
-    def make_args(self, parser):
-        """
-        Method for adding experiment specific arguments to the argument parser
-        """
-        parser = arglib.add_standard_training_parameters(parser)
-        parser = arglib.add_checkpointing(parser)
-        parser = arglib.add_dropout_experiment_details(parser)
-        parser = arglib.add_network_metaparameters(parser)
-        parser = arglib.add_alignment_analysis_parameters(parser)
-        return parser
 
     def create_networks(self):
         """
