@@ -1,4 +1,5 @@
 import torch
+
 from alignment.models.registry import get_model
 from alignment import processing
 from alignment import plotting
