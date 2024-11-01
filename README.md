@@ -16,6 +16,7 @@ clone the repository from GitHub, then navigate to the cloned folder.
 
 Create your environment with the following command. Mamba is much faster than
 conda, but replace `mamba` with `conda` if you haven't installed `mamba`.
+
 ```
 mamba env create -f environment.yml
 mamba activate networkAlignmentAnalysis
@@ -38,9 +39,12 @@ pip install -e .
 
 There's no unit test, but to check if the install was successful, run the 
 following script while in the environment and in the top directory:
+
 ```
 python experiment.py configs/default_config.yaml
 ```
+
+Note that you need to at least fill in the two place holders in the config file for dataset path and results path.
 
 For checking HPC cluster related code, there's a MWE 
 [here](cluster/ddp-example/), note that details will differ regarding the HPC
