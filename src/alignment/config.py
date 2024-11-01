@@ -35,9 +35,9 @@ class ModelConfig(BaseConfig):
     What base network architecture to use.
     """
 
-    default_dropout: float = 0
+    dropout: float = 0
     """
-    Default dropout rate.
+    Dropout rate.
     """
 
 @dataclass
@@ -64,14 +64,14 @@ class OptimizerConfig(BaseConfig):
     What optimizer to train with.
     """
 
-    default_lr: float = 1e-3
+    lr: float = 1e-3
     """
-    Default learning rate.
+    Learning rate.
     """
 
-    default_wd: float = 0
+    weight_decay: float = 0
     """
-    Default weight decay.
+    Weight decay.
     """
 
 @dataclass
