@@ -35,22 +35,22 @@ class AlignmentDistribution(Experiment):
                 self.args.model.name,
                 build=True,
                 dataset=self.args.dataset.name,
-                dropout=self.args.model.default_dropout,
+                dropout=self.args.model.dropout,
                 ignore_flag=self.args.alignment.ignore_flag,
             )
             for _ in range(self.args.training.replicates)
         ]
         nets = [net.to(self.device) for net in nets]
 
-        optimizers = [optim(net.parameters(), lr=self.args.optimizer.default_lr, weight_decay=self.args.optimizer.default_wd) for net in nets]
+        optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=self.args.optimizer.weight_decay) for net in nets]
 
         prms = {
             "vals": [self.args.model.name],  # require iterable for identifying how many types of networks there are (just one type...)
             "name": "network",
             "dataset": self.args.dataset.name,
-            "dropout": self.args.model.default_dropout,
-            "lr": self.args.optimizer.default_lr,
-            "weight_decay": self.args.optimizer.default_wd,
+            "dropout": self.args.model.dropout,
+            "lr": self.args.optimizer.lr,
+            "weight_decay": self.args.optimizer.weight_decay,
         }
         return nets, optimizers, prms
 

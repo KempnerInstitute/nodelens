@@ -16,12 +16,12 @@ dataset:
 
 model:
   name: MLP
-  default_dropout: 0
+  dropout: 0
 
 optimizer:
   name: Adam
-  default_lr: 1e-3
-  default_wd: 0
+  lr: 1e-3
+  weight_decay: 0
 
 training:
   batch_size: 1024
