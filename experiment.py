@@ -1,4 +1,5 @@
 from matplotlib.pyplot import show
+
 from alignment.experiments.registry import create_experiment
 
 if __name__ == "__main__":
