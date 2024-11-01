@@ -39,29 +39,12 @@ pip install -e .
 There's no unit test, but to check if the install was successful, run the 
 following script while in the environment and in the top directory:
 ```
-python experiment.py alignment_stats --epochs 1 --replicates 1 --nosave
+python experiment.py configs/default_config.yaml
 ```
 
 For checking HPC cluster related code, there's a MWE 
 [here](cluster/ddp-example/), note that details will differ regarding the HPC
 system etc.
-
-### Local File Management
-The repository depends on local file management to be established for many of
-the core functions to be used. Specifically, a local folder containing 
-standard machine learning datasets (like MNIST) and a file path designated for
-saving any data created by the experiment scripts. 
-
-To get this working, you'll need to edit ``networkAlignmentAnalysis/files.py`` 
-file to include the directory containing your ML datasets and a results 
-directory. To do so, pick a root directory and add a folder called "datasets"
-and another one called "results" to it. Add the root directory to the 
-dictionary called `PATH_REGISTRY`. The key should be whatever is returned by
-``socket.gethostname()`` and the value should be the root folder on your 
-computer. You'll also need to add whatever ML datasets you want to run 
-experiments on. Right now it's only setup for MNIST, but support for more is
-coming soon. Follow the directions on ML dataset websites and the convention
-set by ``dataset_path()`` (found in ``files.py``) for full compatibility. 
 
 ## Usage and Tutorial
 Detailed usage and tutorials can be found in a dedicated markdown file 
