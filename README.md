@@ -41,7 +41,7 @@ There's no unit test, but to check if the install was successful, run the
 following script while in the environment and in the top directory:
 
 ```
-python experiment.py configs/default_config.yaml
+python experiment.py configs/config_alignment_stats.yaml
 ```
 
 Note that you need to at least fill in the two place holders in the config file for dataset path and results path.
