@@ -50,14 +50,14 @@ class LoadingPredictions(Experiment):
             lrs = [lr for lr in self.args.extra.lrs for _ in range(self.args.training.replicates)]
             nets = [
                 model_constructor(
-                    dropout=self.args.model.default_dropout,
+                    dropout=self.args.model.dropout,
                     **model_parameters,
                     ignore_flag=self.args.alignment.ignore_flag,
                 )
                 for _ in lrs
             ]
             nets = [net.to(self.device) for net in nets]
-            optimizers = [optim(net.parameters(), lr=lr, weight_decay=self.args.optimizer.default_wd) for net, lr in zip(nets, lrs)]
+            optimizers = [optim(net.parameters(), lr=lr, weight_decay=self.args.optimizer.weight_decay) for net, lr in zip(nets, lrs)]
             prms = {
                 "lrs": lrs,  # the value of the independent variable for each network
                 "name": "lr",  # the name of the parameter being varied
@@ -73,7 +73,7 @@ class LoadingPredictions(Experiment):
             weight_decays = [wd for wd in weight_decay_values for _ in range(self.args.training.replicates)]
             nets = [model_constructor(dropout=do, **model_parameters, ignore_flag=self.args.alignment.ignore_flag) for do in dropouts]
             nets = [net.to(self.device) for net in nets]
-            optimizers = [optim(net.parameters(), lr=self.args.optimizer.default_lr, weight_decay=wd) for net, wd in zip(nets, weight_decays)]
+            optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=wd) for net, wd in zip(nets, weight_decays)]
             prms = {
                 "dropouts": dropouts,  # dropout values by network
                 "weight_decays": weight_decays,  # weight decay values by network

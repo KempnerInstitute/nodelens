@@ -46,14 +46,14 @@ class AdversarialShaping(Experiment):
         cutoffs = [co for co in self.args.extra.cutoffs for _ in range(self.args.training.replicates)]
         nets = [
             model_constructor(
-                dropout=self.args.model.default_dropout,
+                dropout=self.args.model.dropout,
                 **model_parameters,
                 ignore_flag=self.args.alignment.ignore_flag,
             )
             for _ in cutoffs
         ]
         nets = [net.to(self.device) for net in nets]
-        optimizers = [optim(net.parameters(), lr=self.args.optimizer.default_lr, weight_decay=self.args.optimizer.default_wd) for net in nets]
+        optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=self.args.optimizer.weight_decay) for net in nets]
         prms = {
             "cutoffs": cutoffs,  # the value of the independent variable for each network
             "name": "cutoff",  # the name of the parameter being varied
