@@ -34,7 +34,7 @@ using the instructions on the pytorch
 After creating and activating the environment, you can install the package.
 
 ```
-pip install -e .
+pip install -e .[all]
 ```
 
 There's no unit test, but to check if the install was successful, run the 
