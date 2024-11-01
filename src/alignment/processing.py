@@ -1,6 +1,8 @@
 import os
-from tqdm import tqdm
+
 import torch
+from tqdm import tqdm
+
 from alignment import train
 from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
 

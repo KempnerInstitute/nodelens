@@ -1,15 +1,13 @@
-import numpy as np
 import torch
+import numpy as np
+from matplotlib import pyplot as plt
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.metrics import confusion_matrix
+
 from alignment.experiments.experiment import Experiment
 from alignment.models.registry import get_model, get_model_parameters
 from alignment import utils
 from alignment import processing
-
-from matplotlib import pyplot as plt
-
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.metrics import confusion_matrix
-
 
 class LoadingPredictions(Experiment):
     def get_basename(self):

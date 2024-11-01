@@ -1,3 +1,5 @@
+from os import PathLike
+from dataclasses import dataclass, field
 from typing import (cast,
                     List,
                     Union,
@@ -6,11 +8,8 @@ from typing import (cast,
                     Optional,
 )
 
-from dataclasses import dataclass, field
-
 from omegaconf import OmegaConf as om
 from omegaconf.errors import OmegaConfBaseException
-from os import PathLike
 
 C = TypeVar("C", bound="BaseConfig")
 
