@@ -1,7 +1,7 @@
 import torch
+
 from alignment.experiments.experiment import Experiment
 from alignment.models.registry import get_model, get_model_parameters
-from alignment.experiments import arglib
 from alignment import processing
 from alignment import plotting
 from alignment.utils import get_eval_transform_by_cutoff
@@ -18,37 +18,7 @@ class AdversarialShaping(Experiment):
         """
         Define save location for each instance of this experiment type
         """
-        return [self.args.network, self.args.dataset, self.args.optimizer]
-
-    def make_args(self, parser):
-        """
-        Method for adding experiment specific arguments to the argument parser
-        """
-        parser = arglib.add_standard_training_parameters(parser)
-        parser = arglib.add_network_metaparameters(parser)
-        parser = arglib.add_checkpointing(parser)
-        parser = arglib.add_dropout_experiment_details(parser)
-        parser = arglib.add_alignment_analysis_parameters(parser)
-
-        # add special experiment parameters
-        # -- the "comparison" determines what should be compared by the script --
-        # -- depending on selection, something about the networks are varied throughout the experiment --
-        parser.add_argument(
-            "--cutoffs",
-            type=float,
-            nargs="*",
-            default=[1e-2, 1e-3, 1e-4, 0.0],
-            help="what fraction of total variance to cut eigenvalues off at",
-        )
-        parser.add_argument(
-            "--manual-frequency",
-            type=int,
-            default=5,
-            help="how frequently (by epoch) to do manual shaping with eigenvectors",
-        )
-
-        # return parser
-        return parser
+        return [self.args.model.name, self.args.dataset.name, self.args.optimizer.name]
 
     # ----------------------------------------------
     # ------ methods for main experiment loop ------
@@ -62,32 +32,32 @@ class AdversarialShaping(Experiment):
         their optimizers and a params dictionary with the experiment parameters associated
         with each network
         """
-        model_constructor = get_model(self.args.network)
-        model_parameters = get_model_parameters(self.args.network, self.args.dataset)
+        model_constructor = get_model(self.args.model.name)
+        model_parameters = get_model_parameters(self.args.model.name, self.args.dataset.name)
 
         # get optimizer
-        if self.args.optimizer == "Adam":
+        if self.args.optimizer.name == "Adam":
             optim = torch.optim.Adam
-        elif self.args.optimizer == "SGD":
+        elif self.args.optimizer.name == "SGD":
             optim = torch.optim.SGD
         else:
-            raise ValueError(f"optimizer ({self.args.optimizer}) not recognized")
+            raise ValueError(f"optimizer ({self.args.optimizer.name}) not recognized")
 
-        cutoffs = [co for co in self.args.cutoffs for _ in range(self.args.replicates)]
+        cutoffs = [co for co in self.args.extra.cutoffs for _ in range(self.args.training.replicates)]
         nets = [
             model_constructor(
-                dropout=self.args.default_dropout,
+                dropout=self.args.model.dropout,
                 **model_parameters,
-                ignore_flag=self.args.ignore_flag,
+                ignore_flag=self.args.alignment.ignore_flag,
             )
             for _ in cutoffs
         ]
         nets = [net.to(self.device) for net in nets]
-        optimizers = [optim(net.parameters(), lr=self.args.default_lr, weight_decay=self.args.default_wd) for net in nets]
+        optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=self.args.optimizer.weight_decay) for net in nets]
         prms = {
             "cutoffs": cutoffs,  # the value of the independent variable for each network
             "name": "cutoff",  # the name of the parameter being varied
-            "vals": self.args.cutoffs,  # the list of unique values for the relevant parameter
+            "vals": self.args.extra.cutoffs,  # the list of unique values for the relevant parameter
         }
         return nets, optimizers, prms
 
@@ -108,7 +78,7 @@ class AdversarialShaping(Experiment):
         # train networks
         special_parameters = dict(
             manual_shape=True,
-            manual_frequency=self.args.manual_frequency,
+            manual_frequency=self.args.extra.manual_frequency,
             manual_transforms=[get_eval_transform_by_cutoff(co) for co in prms["cutoffs"]],
             manual_layers=nets[0].get_alignment_layer_indices(),
         )

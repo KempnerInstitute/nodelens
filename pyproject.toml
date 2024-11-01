@@ -14,7 +14,8 @@ requires-python = ">=3.8"
 license = { file = "LICENSE" }
 dependencies = [
     "numpy",
-    "torch>=2.1,<2.5",
+    "torch",
+    "omegaconf",
 ]
 
 [tool.setuptools]

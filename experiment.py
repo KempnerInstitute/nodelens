@@ -1,20 +1,20 @@
 from matplotlib.pyplot import show
-#from alignment.experiments.registry import create_experiment
-from alignment_v2.experiments.registry import create_experiment
+
+from alignment.experiments.registry import create_experiment
 
 if __name__ == "__main__":
 
     # Create experiment
     exp = create_experiment()
 
-    if exp.args.showprms:
+    if exp.args.show_params:
         # Load saved experiment (just experiment parameters)
         _ = exp.load_experiment(no_results=True)
 
         # Report parameters of saved experiment
         exp.report(args=True)
 
-    elif not exp.args.justplot:
+    elif not exp.args.just_plot:
         # Report experiment details
         exp.report(init=True, args=True, meta_args=True)
 
@@ -22,7 +22,7 @@ if __name__ == "__main__":
         results, nets = exp.main()
 
         # Save results if requested
-        if not exp.args.nosave:
+        if not exp.args.no_save:
             exp.save_experiment(results)
 
             # Save copy of repo
@@ -41,9 +41,9 @@ if __name__ == "__main__":
         exp.report(args=True)
 
     # Plot results unless calling script to show saved parameters
-    if not exp.args.showprms:
+    if not exp.args.show_params:
         exp.plot(results)
 
         # Show all figures at end if requested
-        if exp.args.showall:
+        if exp.args.show_all:
             show()

@@ -1,6 +1,8 @@
 import os
-from tqdm import tqdm
+
 import torch
+from tqdm import tqdm
+
 from alignment import train
 from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
 
@@ -10,17 +12,17 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     # do training loop
     parameters = dict(
         train_set=True,
-        num_epochs=exp.args.epochs,
-        alignment=not (exp.args.no_alignment),
-        delta_weights=exp.args.delta_weights,
-        frequency=exp.args.frequency,
+        num_epochs=exp.args.training.epochs,
+        alignment=not (exp.args.alignment.no_alignment),
+        delta_weights=exp.args.alignment.delta_weights,
+        frequency=exp.args.alignment.frequency,
         run=exp.run,
     )
 
     # update with special parameters
     parameters.update(**special_parameters)
 
-    if exp.args.use_prev & os.path.isfile(exp.get_checkpoint_path()):
+    if exp.args.checkpointing.use_prev & os.path.isfile(exp.get_checkpoint_path()):
         nets, optimizers, results = load_checkpoints(nets, optimizers, exp.args.device, exp.get_checkpoint_path())
         for net in nets:
             net.train()
@@ -29,8 +31,8 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
         parameters["results"] = results
         print("loaded networks from previous checkpoint")
 
-    if exp.args.save_ckpts:
-        parameters["save_checkpoints"] = (True, exp.args.ckpt_frequency, exp.get_checkpoint_path(), exp.args.device)
+    if exp.args.checkpointing.save_checkpoints:
+        parameters["save_checkpoints"] = (True, exp.args.checkpointing.frequency, exp.get_checkpoint_path(), exp.args.device)
 
     print("training networks...")
     train_results = train.train(nets, optimizers, dataset, **parameters)
@@ -51,7 +53,7 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
     """
     # do targeted dropout experiment
     print("performing targeted dropout...")
-    dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
+    dropout_parameters = dict(num_drops=exp.args.extra.num_drops, by_layer=exp.args.extra.dropout_by_layer, train_set=train_set)
     dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
     return dropout_results, dropout_parameters
 
@@ -93,7 +95,7 @@ def eigenvector_dropout(exp, nets, dataset, eigen_results, train_set=False):
     """
     # do targeted dropout experiment
     print("performing targeted eigenvector dropout...")
-    evec_dropout_parameters = dict(num_drops=exp.args.num_drops, by_layer=exp.args.dropout_by_layer, train_set=train_set)
+    evec_dropout_parameters = dict(num_drops=exp.args.extra.num_drops, by_layer=exp.args.extra.dropout_by_layer, train_set=train_set)
     evec_dropout_results = train.eigenvector_dropout(nets, dataset, eigen_results["eigvals"], eigen_results["eigvecs"], **evec_dropout_parameters)
     return evec_dropout_results, evec_dropout_parameters
 

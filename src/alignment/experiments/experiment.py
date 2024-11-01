@@ -10,17 +10,28 @@ import torch
 import wandb
 from matplotlib import pyplot as plt
 
-from alignment import files
 from alignment.datasets import get_dataset
 from alignment.utils import compress_directory
 
 
 class Experiment(ABC):
-    def __init__(self, args=None) -> None:
+    def __init__(self, cfg) -> None:
         """Experiment constructor"""
+        self.args = cfg
         self.basename = self.get_basename()  # Register basename of experiment
-        self.basepath = files.results_path() / self.basename  # Register basepath of experiment
-        self.get_args(args=args)  # Parse arguments to python program
+        self.basepath = Path(self.args.results_path) / self.basename  # Register basepath of experiment
+        
+        # a list of meta arguments that shouldn't be updated when loading an old experiment
+        self.meta_args = ["no_save", "just_plot", "save_networks", "show_params", "show_all", "device"]
+        
+        # manage device
+        if self.args.device is None:
+            self.args.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # do checks
+        if self.args.use_timestamp and self.args.just_plot:
+            assert self.args.timestamp is not None, "if use_timestamp=True and plotting stored results, must provide a timestamp"
+        
         self.register_timestamp()  # Register timestamp of experiment
         self.run = self.configure_wandb()  # Create a wandb run object (or None depending on args.use_wandb)
         self.device = self.args.device
@@ -36,8 +47,8 @@ class Experiment(ABC):
             print("using device: ", self.device)
 
             # Report any other relevant details
-            if self.args.save_networks and self.args.nosave:
-                print("Note: setting nosave to True will overwrite save_networks. Nothing will be saved.")
+            if self.args.save_networks and self.args.no_save:
+                print("Note: setting no_save to True will overwrite save_networks. Nothing will be saved.")
 
         # Report experiment parameters
         if args:
@@ -102,7 +113,7 @@ class Experiment(ABC):
 
     def configure_wandb(self):
         """create a wandb run file and set environment parameters appropriately"""
-        if self.args.use_wandb:
+        if self.args.checkpointing.use_wandb:
             wandb.login()
             run = wandb.init(
                 project=self.get_basename(),
@@ -132,92 +143,6 @@ class Experiment(ABC):
 
         Must return a list of strings that will be appended to the base path to make an experiment directory.
         See ``get_dir()`` for details.
-        """
-        pass
-
-    def get_args(self, args=None):
-        """
-        Method for defining and parsing arguments.
-
-        This method defines the standard arguments used for any Experiment, and
-        the required method make_args() is used to add any additional arguments
-        specific to each experiment.
-        """
-        self.meta_args = []  # a list of arguments that shouldn't be updated when loading an old experiment
-        parser = ArgumentParser(description=f"arguments for {self.basename}")
-        parser = self.make_args(parser)
-
-        # saving and new experiment loading parameters
-        parser.add_argument(
-            "--nosave",
-            default=False,
-            action="store_true",
-            help="prevents saving of results or plots",
-        )
-        parser.add_argument(
-            "--justplot",
-            default=False,
-            action="store_true",
-            help="plot saved data without retraining and analyzing networks",
-        )
-        parser.add_argument(
-            "--save-networks",
-            default=False,
-            action="store_true",
-            help="if --nosave wasn't provided, will also save networks that are trained",
-        )
-        parser.add_argument(
-            "--showprms",
-            default=False,
-            action="store_true",
-            help="show parameters of previously saved experiment without doing anything else",
-        )
-        parser.add_argument(
-            "--showall",
-            default=False,
-            action="store_true",
-            help="if true, will show all plots at once rather than having the user close each one for the next",
-        )
-        parser.add_argument(
-            "--device",
-            type=str,
-            default=None,
-            help="which device to use (automatic if not provided)",
-        )
-
-        # add meta arguments
-        self.meta_args += ["nosave", "justplot", "save_networks", "showprms", "showall", "device"]
-
-        # common parameters that shouldn't be updated when loading old experiment
-        parser.add_argument(
-            "--use-timestamp",
-            default=False,
-            action="store_true",
-            help="if used, will save data in a folder named after the current time (or whatever is provided in --timestamp)",
-        )
-        parser.add_argument(
-            "--timestamp",
-            default=None,
-            help="the timestamp of a previous experiment to plot or observe parameters",
-        )
-
-        # parse arguments (passing directly because initial parser will remove the "--experiment" argument)
-        self.args = parser.parse_args(args=args)
-
-        # manage device
-        if self.args.device is None:
-            self.args.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # do checks
-        if self.args.use_timestamp and self.args.justplot:
-            assert self.args.timestamp is not None, "if use_timestamp=True and plotting stored results, must provide a timestamp"
-
-    @abstractmethod
-    def make_args(self, parser) -> ArgumentParser:
-        """
-        Required method for defining special-case arguments.
-
-        This should just use the add_argument method on the parser provided as input.
         """
         pass
 
@@ -344,20 +269,21 @@ class Experiment(ABC):
     def prepare_dataset(self, transform_parameters):
         """simple method for getting dataset"""
         return get_dataset(
-            self.args.dataset,
+            self.args.dataset.name,
             build=True,
+            dataset_parameters=dict(download=self.args.dataset.download, root=self.args.dataset.path),
             transform_parameters=transform_parameters,
-            loader_parameters={"batch_size": self.args.batch_size},
+            loader_parameters={"batch_size": self.args.training.batch_size},
             device=self.args.device,
         )
 
     def plot_ready(self, name):
         """standard method for saving and showing plot when it's ready"""
         # if saving, then save the plot
-        if not self.args.nosave:
+        if not self.args.no_save:
             plt.savefig(str(self.get_path(name)))
         if self.run is not None:
             self.run.log({name: wandb.Image(plt)})
-        # show the plot now if not doing showall
-        if not self.args.showall:
+        # show the plot now if not doing show_all
+        if not self.args.show_all:
             plt.show()
