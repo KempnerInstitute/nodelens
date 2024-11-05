@@ -447,7 +447,7 @@ class AlignmentNetwork(nn.Module, ABC):
         return [alignment(input, weight, method=method, relative=relative) for input, weight in zip(preprocessed, weights)]
 
     @torch.no_grad()
-    def measure_alignment_expansion(self, x, precomputed=False, method="alignment_expansion", relative=True):
+    def measure_alignment_expansion(self, x, precomputed=False, method="alignment_0", relative=True):
         """
         measure alignment of the networks weights with the inputs to each layer from batch **x**
         """
@@ -455,7 +455,7 @@ class AlignmentNetwork(nn.Module, ABC):
         inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
         preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
         weights = self.get_alignment_weights(flatten=True)
-        return [alignment_expansion(input, weight, method='alignment_expansion', relative=relative) for input, weight in zip(preprocessed, weights)]
+        return [alignment_expansion(input, weight, method=method, relative=relative) for input, weight in zip(preprocessed, weights)]
 
 
     # # NEW: •	Computes RQ per filter by first unfolding patches for each convolutional layer. Applies the alignment function to measure RQ across each filter.
