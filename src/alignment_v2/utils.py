@@ -502,18 +502,18 @@ def alignment_expansion(input, weight, method="alignment_expansion", relative=Tr
     """
     
     # Step 1: Compute covariance of input
-    if method == "alignment_expansion":
-        cc = torch.cov(input.T)  # Covariance matrix of input
-    elif method == "similarity":
-        cc = torch.corrcoef(input.T)  # Correlation matrix of input
-    else:
-        raise ValueError(f"Method {method} not recognized. Use 'alignment' or 'similarity'.")
+    # if method == "alignment_expansion":
+    cc = torch.cov(input.T)  # Covariance matrix of input
+    # elif method == "alignment_expansion":
+    #     cc = torch.corrcoef(input.T)  # Correlation matrix of input
+    # else:
+    #     raise ValueError(f"Method {method} not recognized. Use 'alignment' or 'similarity'.")
 
     # Step 2: Compute Rayleigh Quotient (RQ) for each node
     rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
 
     # Step 3: Compute Single-Node Information for each node (with kurtosis correction)
-    single_node_info = rq / torch.trace(cc)  # First term (proportional to RQ)
+    single_node_info = torch.log(rq)# / torch.trace(cc)  # First term (proportional to RQ)
     
     # Compute third-order term: Skewness correction
     skewness = compute_skewness_inplace(input)
@@ -523,7 +523,8 @@ def alignment_expansion(input, weight, method="alignment_expansion", relative=Tr
         skewness = skewness.view(1, -1)  # Reshape skewness to (1, d) for broadcasting
     
     # Apply the skewness correction term
-    skewness_correction = torch.abs(torch.sum(weight * skewness, dim=1))
+    normalized_weight = weight #/ weight.norm(p=2, dim=1, keepdim=True)
+    skewness_correction = torch.sum(normalized_weight * skewness, dim=1) 
 
     # Compute kurtosis-based correction term
     kurtosis = compute_kurtosis_low_rank(input)  # Kurtosis is computed for each input feature
@@ -532,18 +533,28 @@ def alignment_expansion(input, weight, method="alignment_expansion", relative=Tr
     # if kurtosis.dim() == 1:
     #     kurtosis = kurtosis.unsqueeze(0)  # Add a dimension to match the weight tensor shape
 
-    kurtosis_correction = 0.5 * torch.norm(weight, p=2, dim=1) * kurtosis[:weight.shape[1]].mean()  
+    kurtosis_correction = 0.5 * torch.norm(normalized_weight, p=2, dim=1) * kurtosis[:weight.shape[1]].mean()  
 
-    #single_node_info +=  skewness_correction 
-    single_node_info += kurtosis_correction 
+    #single_node_info = skewness_correction 
+    #single_node_info = kurtosis_correction 
 
     # Step 4: Continue with redundancy and total information as before
-    redundancy_matrix = compute_redundancy(weight, cc)
+    redundancy_matrix = torch.abs(compute_redundancy(normalized_weight, cc))
     adjusted_single_node_info = adjust_information_with_redundancy(single_node_info, redundancy_matrix)#single_node_info.clone()
     
     total_info = torch.sum(adjusted_single_node_info)
 
-    return single_node_info#, adjusted_single_node_info, redundancy_matrix, total_info
+    if method == "alignment_0":
+        info = adjusted_single_node_info
+    elif method == "alignment_1":
+        info = skewness_correction
+    elif method == "alignment_2":
+        info = kurtosis_correction
+    elif method == "alignment_red":
+        info = redundancy_matrix
+    
+
+    return info
 
 def adjust_information_with_redundancy(single_node_info, redundancy_matrix):
     """
@@ -559,16 +570,19 @@ def adjust_information_with_redundancy(single_node_info, redundancy_matrix):
     n = single_node_info.size(0)
 
     # Compute pairwise differences between single-node information
-    info_diffs = single_node_info.view(n, 1) - single_node_info.view(1, n)
+    #info_diffs = single_node_info.view(n, 1) - single_node_info.view(1, n)
 
     # Create a mask where the single-node information is smaller for each pair
-    mask = (info_diffs < 0).float()
+    #mask = (info_diffs < 0).float()
 
     # Subtract redundancy from the node with smaller information
-    redundancy_adjustment = torch.sum(mask * redundancy_matrix, dim=1)
+    #redundancy_adjustment = torch.sum(mask * redundancy_matrix, dim=1)
+    redundancy_matrix.fill_diagonal_(0)
+    
+    redundancy_adjustment = torch.sum(redundancy_matrix, dim=1)
 
     # Adjust the single-node information
-    adjusted_info = single_node_info - 0 * redundancy_adjustment
+    adjusted_info =redundancy_adjustment
 
     return adjusted_info
 

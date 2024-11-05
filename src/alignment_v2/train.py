@@ -72,7 +72,10 @@ def train(nets, optimizers, dataset, **parameters):
             results["alignment"] = []
 
         if measure_alignment_expansion:
-            results["alignment_expansion"] = []
+            results["alignment_0"] = []
+            results["alignment_1"] = []
+            results["alignment_2"] = []
+            results["alignment_red"] = []
 
         # measure weight norm throughout training
         if measure_delta_weights:
@@ -145,7 +148,10 @@ def train(nets, optimizers, dataset, **parameters):
 
                 if measure_alignment_expansion:
                     # Measure alignment if requested
-                    results["alignment_expansion"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_expansion") for net in nets])
+                    results["alignment_0"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
+                    results["alignment_1"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_1") for net in nets])
+                    results["alignment_2"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_2") for net in nets])
+                    results["alignment_red"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_red") for net in nets])
 
                 if measure_delta_weights or measure_delta_alignment:
                     c_delta_weights = [net.compare_weights(init_weight) for net, init_weight in zip(nets, results["init_weights"])]
@@ -209,7 +215,10 @@ def train(nets, optimizers, dataset, **parameters):
     # condense optional analyses
     for k in [
         "alignment",
-        "alignment_expansion",
+        "alignment_0",
+        "alignment_1",
+        "alignment_2",
+        "alignment_red",
         "delta_weights",
         "delta_alignment",
         "avgcorr",
@@ -258,7 +267,10 @@ def test(nets, dataset, **parameters):
     if measure_alignment:
         alignment = []
     if measure_alignment_expansion:
-        alignment_expansion = []
+        alignment_0 = []
+        alignment_1 = []
+        alignment_2 = []
+        alignment_red = []
 
     batch_loop = tqdm(dataloader) if verbose else dataloader
     for batch in batch_loop:
@@ -279,7 +291,10 @@ def test(nets, dataset, **parameters):
         if measure_alignment:
             alignment.append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
         if measure_alignment_expansion:
-            alignment_expansion.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_expansion") for net in nets])
+            alignment_0.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
+            alignment_1.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_1") for net in nets])
+            alignment_2.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_2") for net in nets])
+            alignment_red.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_red") for net in nets])
 
     results = {
         "loss": [loss / num_batches for loss in total_loss],
@@ -289,7 +304,10 @@ def test(nets, dataset, **parameters):
     if measure_alignment:
         results["alignment"] = condense_values(transpose_list(alignment))
     if measure_alignment_expansion:
-        results["alignment_expansion"] = condense_values(transpose_list(alignment_expansion))
+        results["alignment_0"] = condense_values(transpose_list(alignment_0))
+        results["alignment_1"] = condense_values(transpose_list(alignment_1))
+        results["alignment_2"] = condense_values(transpose_list(alignment_2))
+        results["alignment_red"] = condense_values(transpose_list(alignment_red))
 
     if run is not None:
         run.summary["test_loss"] = torch.mean(torch.tensor(results["loss"]))

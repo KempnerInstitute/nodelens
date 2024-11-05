@@ -163,45 +163,46 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     )
     ax = np.reshape(ax, (num_layers, num_types))
 
-    for idx, label in enumerate(labels):
-        for layer in range(num_layers):
-            for iexp, name in enumerate(names):
-                cmn = loss_mean[iexp][idx, :, layer]
-                cse = loss_se[iexp][idx, :, layer]
-                ax[layer, idx].plot(
-                    dropout_fraction,
-                    cmn,
-                    color=cmap(iexp),
-                    marker=".",
-                    markersize=msize,
-                    label=name,
-                )
-                ax[layer, idx].fill_between(dropout_fraction, cmn + cse, cmn - cse, color=(cmap(iexp), alpha))
+    if 1==2:
+        for idx, label in enumerate(labels):
+            for layer in range(num_layers):
+                for iexp, name in enumerate(names):
+                    cmn = loss_mean[iexp][idx, :, layer]
+                    cse = loss_se[iexp][idx, :, layer]
+                    ax[layer, idx].plot(
+                        dropout_fraction,
+                        cmn,
+                        color=cmap(iexp),
+                        marker=".",
+                        markersize=msize,
+                        label=name,
+                    )
+                    ax[layer, idx].fill_between(dropout_fraction, cmn + cse, cmn - cse, color=(cmap(iexp), alpha))
 
-            if layer == 0:
-                ax[layer, idx].set_title(label)
+                if layer == 0:
+                    ax[layer, idx].set_title(label)
 
-            if layer == num_layers - 1:
-                ax[layer, idx].set_xlabel("Dropout Fraction")
-                ax[layer, idx].set_xlim(0, 1)
+                if layer == num_layers - 1:
+                    ax[layer, idx].set_xlabel("Dropout Fraction")
+                    ax[layer, idx].set_xlim(0, 1)
 
-            if idx == 0:
-                ax[layer, idx].set_ylabel("Loss w/ Dropout")
+                if idx == 0:
+                    ax[layer, idx].set_ylabel("Loss w/ Dropout")
 
-            if iexp == num_exp - 1:
-                ax[layer, idx].legend(loc="best")
-    if exp is not None:
-        exp.plot_ready("prog_dropout_" + extra_name + "_loss")
+                if iexp == num_exp - 1:
+                    ax[layer, idx].legend(loc="best")
+        if exp is not None:
+            exp.plot_ready("prog_dropout_" + extra_name + "_loss")
 
-    fig, ax = plt.subplots(
-        num_layers,
-        num_types,
-        figsize=(num_types * figdim, num_layers * figdim),
-        sharex=True,
-        sharey=True,
-        layout="constrained",
-    )
-    ax = np.reshape(ax, (num_layers, num_types))
+        fig, ax = plt.subplots(
+            num_layers,
+            num_types,
+            figsize=(num_types * figdim, num_layers * figdim),
+            sharex=True,
+            sharey=True,
+            layout="constrained",
+        )
+        ax = np.reshape(ax, (num_layers, num_types))
 
     for idx, label in enumerate(labels):
         for layer in range(num_layers):
@@ -253,8 +254,8 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
                 #print(f"acc_mean_diff[iexp].shape: {acc_mean_diff[iexp].shape}, dropout_fraction.shape: {dropout_fraction.shape}")
 
                 # Squeeze to remove extra dimensions if necessary
-                cmn = acc_mean_diff[iexp].squeeze()  # Squeeze to ensure 1D tensor
-                cse = acc_se_diff[iexp].squeeze()    # Same for standard error
+                cmn = acc_mean_diff[iexp][idx, :, layer]  # Squeeze to ensure 1D tensor
+                cse = acc_se_diff[iexp][idx, :, layer]    # Same for standard error
 
                 # Ensure cmn and dropout_fraction have the same length
                 if len(cmn.shape) == 1 and cmn.shape[0] == dropout_fraction.shape[0]:
