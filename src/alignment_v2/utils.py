@@ -356,16 +356,20 @@ def alignment(input, weight, method="alignment", relative=True):
     assert method == "alignment" or method == "similarity", "method must be set to either 'alignment' or 'similarity' (or None, default is alignment)"
     if method == "alignment":
         cc = torch.cov(input.T)
+        #cc = torch.corrcoef(input.T)
     elif method == "similarity":
         cc = smartcorr(input.T)
     else:
         raise ValueError(f"did not recognize method ({method}), must be 'alignment' or 'similarity'")
-    # Compute rayleigh quotient
+    
     rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
+    
     if relative:
-        # proportion of variance explained by a projection of the input onto each weight
-        return rq / torch.trace(cc)
-    # variance explained by a projection of the input onto each weight
+       return rq / torch.trace(cc)
+    
+    # shuffled_rq = rq[torch.randperm(rq.size(0))]  # Shuffle RQ values
+    # rq = shuffled_rq / torch.trace(cc)
+    
     return rq
 
 
