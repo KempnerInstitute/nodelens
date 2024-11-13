@@ -329,9 +329,15 @@ def get_dropout_indices(idx_alignment, fraction):
     num_nets = idx_alignment[0].size(0)
     num_nodes = [idx.size(1) for idx in idx_alignment]
     num_drop = [int(nodes * fraction) for nodes in num_nodes]
-    idx_high = [idx[:, -drop:] for idx, drop in zip(idx_alignment, num_drop)]
-    idx_low = [idx[:, :drop] for idx, drop in zip(idx_alignment, num_drop)]
-    idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) for nodes, drop in zip(num_nodes, num_drop)]
+    #idx_high = [idx[:, -drop:] for idx, drop in zip(idx_alignment, num_drop)]   ORIGINAL
+    #idx_low = [idx[:, :drop] for idx, drop in zip(idx_alignment, num_drop)]     ORIGINAL
+    idx_high = [torch.sort(idx[:, -drop:], dim=1).values for idx, drop in zip(idx_alignment, num_drop)]
+    idx_low = [torch.sort(idx[:, :drop], dim=1).values for idx, drop in zip(idx_alignment, num_drop)]
+    #idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) for nodes, drop in zip(num_nodes, num_drop)]     ORIGINAL
+    # idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) 
+    #             for nodes, drop in zip(num_nodes, num_drop)]                   # Random alignment
+    idx_rand = [idx[:, torch.randperm(idx.size(1))[:drop]] for idx, drop in zip(idx_alignment, num_drop)]
+    
     return idx_high, idx_low, idx_rand
 
 

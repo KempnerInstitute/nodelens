@@ -145,6 +145,7 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
     acc_mean_diff, acc_se_diff = compute_stats_by_type(dropout_results["progdrop_acc_low"]-dropout_results["progdrop_acc_rand"], num_types=num_types, dim=0, method="se")
 
+
     # Contract into lists for looping through to plot
     loss_mean = [loss_mean_high, loss_mean_low, loss_mean_rand]
     loss_se = [loss_se_high, loss_se_low, loss_se_rand]
@@ -207,6 +208,7 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     for idx, label in enumerate(labels):
         for layer in range(num_layers):
             for iexp, name in enumerate(names):
+                                
                 cmn = acc_mean[iexp][idx, :, layer]
                 cse = acc_se[iexp][idx, :, layer]
                 ax[layer, idx].plot(
@@ -252,10 +254,9 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
             for iexp, name in enumerate(names_diff):
                 # Debugging: print shapes
                 #print(f"acc_mean_diff[iexp].shape: {acc_mean_diff[iexp].shape}, dropout_fraction.shape: {dropout_fraction.shape}")
-
                 # Squeeze to remove extra dimensions if necessary
-                cmn = acc_mean_diff[iexp][idx, :, layer]  # Squeeze to ensure 1D tensor
-                cse = acc_se_diff[iexp][idx, :, layer]    # Same for standard error
+                cmn = acc_mean_diff[iexp][:, layer]  # Squeeze to ensure 1D tensor
+                cse = acc_se_diff[iexp][:, layer]    # Same for standard error
 
                 # Ensure cmn and dropout_fraction have the same length
                 if len(cmn.shape) == 1 and cmn.shape[0] == dropout_fraction.shape[0]:
