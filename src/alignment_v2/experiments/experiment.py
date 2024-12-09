@@ -10,7 +10,7 @@ import torch
 import wandb
 from matplotlib import pyplot as plt
 
-from alignment import files
+from alignment_v2 import files
 from alignment_v2.datasets import get_dataset
 from alignment_v2.utils import compress_directory
 
