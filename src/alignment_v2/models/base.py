@@ -394,8 +394,43 @@ class AlignmentNetwork(nn.Module, ABC):
         # return processed input data
         return preprocessed
     
-    
-    
+# def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True, preserve_spatial=False):
+#     """
+#     Preprocess inputs for alignment:
+#     - Convolutional layers: Unfolds inputs into patches based on kernel size and stride.
+#     - Linear layers: Leaves inputs unchanged.
+
+#     Args:
+#         inputs_to_layers: List of tensors, one per layer's input.
+#         compress_convolutional: Whether to flatten unfolded inputs for convolutional layers.
+#         preserve_spatial: If True, retains the spatial structure of convolutional outputs.
+
+#     Returns:
+#         List of preprocessed inputs, one per layer.
+#     """
+#     preprocessed = []
+#     layers = self.get_alignment_layers()
+#     metaprms = self.get_alignment_metaparameters()
+
+#     for input, layer, metaprm in zip(inputs_to_layers, layers, metaprms):
+#         if metaprm["unfold"]:
+#             # Unfold inputs based on the convolutional layer's parameters
+#             layer_prms = get_unfold_params(layer)
+#             unfolded_input = torch.nn.functional.unfold(input, layer.kernel_size, **layer_prms)
+
+#             if compress_convolutional and not preserve_spatial:
+#                 # Flatten unfolded inputs
+#                 unfolded_input = unfolded_input.transpose(1, 2).contiguous().view(-1, unfolded_input.size(1))
+#             elif preserve_spatial:
+#                 # Retain spatial structure
+#                 unfolded_input = unfolded_input.transpose(1, 2).contiguous()
+#             preprocessed.append(unfolded_input)
+#         else:
+#             # For linear layers, no unfolding or preprocessing required
+#             preprocessed.append(input)
+
+#     return preprocessed
+
     ### NEW: to test for CNN. The new function keeps the convolutional input patches separated by batch and spatial stride dimensions when compress_convolutional=False, preserving spatial information. For CNN layers, unfold is used to extract receptive field patches for each filter’s alignment.
 
     # def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True):
@@ -435,7 +470,7 @@ class AlignmentNetwork(nn.Module, ABC):
                 delta_weights.append(cw - iw)
         return delta_weights
 
-    @torch.no_grad()
+    @torch.no_grad() 
     def measure_alignment(self, x, precomputed=False, method="alignment", relative=True):
         """
         measure alignment of the networks weights with the inputs to each layer from batch **x**
@@ -446,6 +481,35 @@ class AlignmentNetwork(nn.Module, ABC):
         weights = self.get_alignment_weights(flatten=True)
         return [alignment(input, weight, method=method, relative=relative) for input, weight in zip(preprocessed, weights)]
 
+    # @torch.no_grad()
+    # def measure_alignment(self, x, precomputed=False, method="alignment", relative=True, preserve_spatial=False):
+    #     """
+    #     Measure alignment (RQ) of the network's weights with the inputs to each layer.
+
+    #     Args:
+    #         x: Input batch.
+    #         precomputed: If True, use precomputed activations.
+    #         method: Alignment method ("alignment" or other supported methods).
+    #         relative: Whether to compute relative RQ.
+    #         preserve_spatial: Whether to retain spatial structure for convolutional layers.
+
+    #     Returns:
+    #         List of RQ values for each layer.
+    #     """
+    #     inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
+    #     preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True, preserve_spatial=preserve_spatial)
+    #     weights = self.get_alignment_weights(flatten=True)
+
+    #     alignments = []
+    #     for input, weight in zip(preprocessed, weights):
+    #         # Compute covariance matrix
+    #         C = torch.cov(input.T)
+
+    #         # Compute Rayleigh Quotient (RQ)
+    #         rq = (weight @ C @ weight.T).diag() / (weight @ weight.T).diag()
+    #         alignments.append(rq)
+
+    #     return alignments
     @torch.no_grad()
     def measure_alignment_expansion(self, x, precomputed=False, method="alignment_0", relative=True):
         """

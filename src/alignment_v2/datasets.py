@@ -7,7 +7,7 @@ from torch import nn
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
 
-from alignment import files
+from alignment_v2 import files
 from alignment_v2.models.base import AlignmentNetwork
 
 REQUIRED_PROPERTIES = ["dataset_path", "dataset_constructor", "loss_function"]
@@ -15,7 +15,7 @@ REQUIRED_PROPERTIES = ["dataset_path", "dataset_constructor", "loss_function"]
 
 def default_loader_parameters(
     distributed,
-    batch_size=1024,
+    batch_size=1024*2,
     num_workers=2,
     shuffle=True,
     pin_memory=True,

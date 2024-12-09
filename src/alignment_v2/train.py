@@ -336,10 +336,58 @@ def get_dropout_indices(idx_alignment, fraction):
     #idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) for nodes, drop in zip(num_nodes, num_drop)]     ORIGINAL
     # idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) 
     #             for nodes, drop in zip(num_nodes, num_drop)]                   # Random alignment
-    idx_rand = [idx[:, torch.randperm(idx.size(1))[:drop]] for idx, drop in zip(idx_alignment, num_drop)]
+    idx_rand = [torch.sort(idx[:, torch.randperm(idx.size(1))[:drop]],dim=1).values for idx, drop in zip(idx_alignment, num_drop)]
     
     return idx_high, idx_low, idx_rand
 
+
+@torch.no_grad()
+def get_dropout_indices000(idx_alignment, fraction):
+    """
+    Returns dropout indices for high, low, and random alignment for each layer and each network.
+
+    Args:
+        idx_alignment (list of tensors): List where each tensor corresponds to alignment data for a layer.
+            Each tensor in idx_alignment has the shape (num_nets, layer_dimension).
+        fraction (float): Fraction of nodes to drop for each layer.
+
+    Returns:
+        tuple: Three lists (idx_high, idx_low, idx_rand) with dropout indices for each layer and each network.
+               Each list contains tensors of shape (num_nets, num_dropped_nodes).
+    """
+    num_layers = len(idx_alignment)
+    num_nets = idx_alignment[0].size(0)  # Number of networks
+
+    idx_high = []
+    idx_low = []
+    idx_rand = []
+
+    for layer_idx in range(num_layers):
+        layer_alignment = idx_alignment[layer_idx]  # Shape: (num_nets, layer_dimension)
+        layer_dimension = layer_alignment.size(1)
+        
+        # Calculate number of nodes to drop based on the layer's dimension
+        num_drop = int(layer_dimension * fraction)
+        
+        # Sort indices by alignment values for each network individually
+        sorted_indices = torch.argsort(layer_alignment, dim=1)
+        
+        # High alignment dropout: select highest RQ values
+        high_indices = sorted_indices[:, -num_drop:]  # Shape: (num_nets, num_drop)
+        high_indices = torch.sort(high_indices, dim=1).values  # Ensure sorted order
+        idx_high.append(high_indices)
+        
+        # Low alignment dropout: select lowest RQ values
+        low_indices = sorted_indices[:, :num_drop]  # Shape: (num_nets, num_drop)
+        low_indices = torch.sort(low_indices, dim=1).values  # Ensure sorted order
+        idx_low.append(low_indices)
+        
+        # Random alignment dropout: select random RQ values
+        rand_indices = torch.randperm(layer_dimension, device=layer_alignment.device)[:num_drop]
+        rand_indices = rand_indices.repeat(num_nets, 1)  # Repeat for each network
+        idx_rand.append(rand_indices)
+
+    return idx_high, idx_low, idx_rand
 
 @torch.no_grad()
 @test_nets
@@ -392,6 +440,9 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     alignment = [torch.mean(align, dim=1) for align in alignment]
     idx_alignment = [torch.argsort(align, dim=1) for align in alignment]
 
+    print(len(idx_alignment))
+    print(idx_alignment[0].shape)
+    
     # preallocate variables and define metaparameters
     num_nets = len(nets)
     num_drops = parameters.get("num_drops", 9)
@@ -399,6 +450,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     by_layer = parameters.get("by_layer", False)
     num_layers = len(idx_dropout_layers) if by_layer else 1
 
+    
     # preallocate tracker tensors
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_low = torch.zeros((num_nets, num_drops, num_layers))
@@ -423,6 +475,16 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         for dropidx, fraction in enumerate(drop_fraction):
             idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, fraction)
 
+            if dropidx == 149:
+                # print('idx_H = ', idx_high[0][0,:].shape)
+                print('idx_H = ', idx_high[0][0,:].shape, ', fraction = ', fraction, ', original size = ', idx_alignment[0].shape)
+                print('idx_H = ', idx_high[1][0,:].shape, ', fraction = ', fraction, ', original size = ', idx_alignment[1].shape)
+                print('idx_H = ', idx_high[2][0,:].shape, ', fraction = ', fraction, ', original size = ', idx_alignment[2].shape)
+                # print('idx_H = ', idx_high[2][0,:].shape)
+                # print('idx_R = ', idx_rand[0][0,:].shape)
+                # print('idx_R = ', idx_rand[1][0,:].shape)
+                # print('idx_R = ', idx_rand[2][0,:].shape)
+
             # do drop out for each layer (or across all depending on parameters)
             for layer in range(num_layers):
                 if by_layer:
@@ -432,6 +494,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         [idx_rand[layer]],
                     )
                     drop_layer = [idx_dropout_layers[layer]]
+                    
                 else:
                     drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
                     drop_layer = copy(idx_dropout_layers)
@@ -459,6 +522,52 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                 progdrop_acc_high[:, dropidx, layer] += torch.tensor(acc_high)
                 progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
                 progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)
+            
+            
+            
+            # # Iterate over each layer when `by_layer` is True
+            # for layer in range(num_layers):
+            #     if by_layer:
+            #         # Get the dropout indices for the current layer only
+            #         drop_high, drop_low, drop_rand = (
+            #             idx_high[layer],   # Single layer high alignment dropout indices
+            #             idx_low[layer],    # Single layer low alignment dropout indices
+            #             idx_rand[layer],   # Single layer random dropout indices
+            #         )
+            #         drop_layer = [idx_dropout_layers[layer]]  # Current layer only
+            #     else:
+            #         # Apply dropout across all layers together
+            #         drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
+            #         drop_layer = idx_dropout_layers
+
+            #     # Perform targeted dropout on the current layer (or all layers if `by_layer` is False)
+            #     out_high = [
+            #         net.forward_targeted_dropout(images, [drop_high], drop_layer)[0] for net in nets
+            #     ]
+            #     out_low = [
+            #         net.forward_targeted_dropout(images, [drop_low], drop_layer)[0] for net in nets
+            #     ]
+            #     out_rand = [
+            #         net.forward_targeted_dropout(images, [drop_rand], drop_layer)[0] for net in nets
+            #     ]
+
+            #     # Calculate losses and accuracies for each dropout strategy
+            #     loss_high = [dataset.measure_loss(out, labels).item() for out in out_high]
+            #     loss_low = [dataset.measure_loss(out, labels).item() for out in out_low]
+            #     loss_rand = [dataset.measure_loss(out, labels).item() for out in out_rand]
+
+            #     acc_high = [dataset.measure_accuracy(out, labels) for out in out_high]
+            #     acc_low = [dataset.measure_accuracy(out, labels) for out in out_low]
+            #     acc_rand = [dataset.measure_accuracy(out, labels) for out in out_rand]
+
+            #     # Store results in the tensors
+            #     progdrop_loss_high[:, dropidx, layer] += torch.tensor(loss_high)
+            #     progdrop_loss_low[:, dropidx, layer] += torch.tensor(loss_low)
+            #     progdrop_loss_rand[:, dropidx, layer] += torch.tensor(loss_rand)
+
+            #     progdrop_acc_high[:, dropidx, layer] += torch.tensor(acc_high)
+            #     progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
+            #     progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)            
 
     results = {
         "progdrop_loss_high": progdrop_loss_high / num_batches,
@@ -743,7 +852,7 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         # get dropout indices for this fraction of dropouts
         for dropidx, fraction in enumerate(drop_fraction):
             idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
-
+            
             # do drop out for each layer (or across all depending on parameters)
             for layer in range(num_layers):
                 if by_layer:
