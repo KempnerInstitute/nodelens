@@ -3,6 +3,9 @@
 slurm-*.out
 *.pt
 *.mat
+*.out
+*.err
+*.pth
 
 # cluster jobs
 jobs/

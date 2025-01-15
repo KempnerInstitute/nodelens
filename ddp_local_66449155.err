@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/scripts/ddp_alexnet.py", line 8, in <module>
-    import torch
-ModuleNotFoundError: No module named 'torch'
