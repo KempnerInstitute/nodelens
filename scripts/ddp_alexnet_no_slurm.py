@@ -23,7 +23,11 @@ from alignment_v2 import plotting
 # 1. Worker function for each process
 ##############################################################################
 def ddp_worker(rank, world_size, port, epochs, batch_size, lr, dropout_rate):
-
+    """
+    This function is executed by each of the spawned processes.
+    'rank' is the local index (0..world_size-1).
+    We do not rely on Slurm variables at all.
+    """
     try:
         # Force IPv4 on localhost to avoid IPv6 or "address family not supported" issues
         master_addr = "127.0.0.1"
@@ -65,7 +69,7 @@ def ddp_worker(rank, world_size, port, epochs, batch_size, lr, dropout_rate):
             build=True,
             transform_parameters=ddp_net.module,  # for alignment transforms
             loader_parameters=loader_params,
-            device="cpu",   # transforms on CPU
+            device="cuda",   # transforms on CPU
             distributed=True  # so DistributedSampler is used
         )
 
@@ -131,7 +135,7 @@ def ddp_worker(rank, world_size, port, epochs, batch_size, lr, dropout_rate):
 # 2. Main function: spawns local processes
 ##############################################################################
 def main():
-
+    # Set any hyper-params you like:
     world_size  = 4  # number of GPUs on this node
     epochs      = 2
     batch_size  = 64
