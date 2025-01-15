@@ -50,8 +50,6 @@ def train(nets, optimizers, dataset, **parameters):
 
     # --- optional training method: manual shaping with eigenvectors ---
     manual_shape = parameters.get("manual_shape", False)  # true or False, whether to do this
-    # frequency of manual shape (similar to measure_frequency)
-    # if positive, by minibatch, if negative, by epoch
     manual_frequency = parameters.get("manual_frequency", -1)
     manual_transforms = parameters.get("manual_transforms", None)  # len()==len(nets) callable methods
     manual_layers = parameters.get("manual_layers", None)  # index to which layers
@@ -80,12 +78,12 @@ def train(nets, optimizers, dataset, **parameters):
         # measure weight norm throughout training
         if measure_delta_weights:
             results["delta_weights"] = []
-            results["init_weights"] = [net.get_alignment_weights() for net in nets]
+            results["init_weights"] = [net.module.get_alignment_weights() if hasattr(net, "module") else net.get_alignment_weights() for net in nets]
 
         # measure alignment of weight updates throughout training
         if measure_delta_alignment:
             if not "init_weights" in results:
-                results["init_weights"] = [net.get_alignment_weights() for net in nets]
+                results["init_weights"] = [net.module.get_alignment_weights() if hasattr(net, "module") else net.get_alignment_weights() for net in nets]
             results["delta_alignment"] = []
 
         # compare true alignment distribution to expected distribution (according to Fiete alignment definition)
@@ -97,7 +95,6 @@ def train(nets, optimizers, dataset, **parameters):
             if measure_delta_alignment:
                 results["compare_delta_alignment_observed"] = []
 
-    # If loaded from checkpoint but running more epochs than initialized for.
     elif results["loss"].shape[0] < num_steps:
         add_steps = num_steps - results["loss"].shape[0]
         assert (add_steps / (parameters["num_epochs"] - num_complete)) == len(
@@ -116,7 +113,6 @@ def train(nets, optimizers, dataset, **parameters):
 
     for epoch in epoch_loop:
 
-        # Create batch loop with optional progress updates
         batch_loop = dataloader
         if verbose:
             batch_loop = tqdm(batch_loop, desc="minibatch", leave=False)
@@ -125,14 +121,10 @@ def train(nets, optimizers, dataset, **parameters):
             cidx = epoch * len(dataloader) + idx
             images, labels = dataset.unwrap_batch(batch)
 
-            # Zero the gradients
             for opt in optimizers:
                 opt.zero_grad()
 
-            # Perform forward pass
             outputs = [net(images, store_hidden=True) for net in nets]
-
-            # Perform backward pass & optimization
             loss = [dataset.measure_loss(output, labels) for output in outputs]
             for l, opt in zip(loss, optimizers):
                 l.backward()
@@ -143,53 +135,37 @@ def train(nets, optimizers, dataset, **parameters):
 
             if idx % measure_frequency == 0:
                 if measure_alignment:
-                    # Measure alignment if requested
-                    #results["alignment"].append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
                     alignment_vals = []
                     for net in nets:
-                        # If net is a DDP object, use net.module.
-                        # If net is a raw model, just use net.
                         real_net = net.module if hasattr(net, "module") else net
-
-                        # Now call real_net.measure_alignment(...)
-                        alignment_val = real_net.measure_alignment(
-                            images,
-                            precomputed=True,
-                            method="alignment"
-                        )
+                        alignment_val = real_net.measure_alignment(images, precomputed=True, method="alignment")
                         alignment_vals.append(alignment_val)
-
                     results["alignment"].append(alignment_vals)
                     
                 if measure_alignment_expansion:
-                    # Measure alignment if requested
-                    results["alignment_0"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
-                    results["alignment_1"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_1") for net in nets])
-                    results["alignment_2"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_2") for net in nets])
-                    results["alignment_red"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_red") for net in nets])
-
-                    alignment0_vals, alignment1_vals, alignment2_vals, alignmentred_vals = [], []
+                    # Old lines commented, replaced with the new approach
+                    # results["alignment_0"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
+                    # ...
+                    alignment0_vals, alignment1_vals, alignment2_vals, alignmentred_vals = [], [], [], []
                     for net in nets:
                         real_net = net.module if hasattr(net, "module") else net
                         alignment0_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_0"))
                         alignment1_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_1"))
                         alignment2_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_2"))
                         alignmentred_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_red"))
-                    
                     results["alignment_0"].append(alignment0_vals)
                     results["alignment_1"].append(alignment1_vals)
                     results["alignment_2"].append(alignment2_vals)
                     results["alignment_red"].append(alignmentred_vals)
-                    
-
 
                 if measure_delta_weights or measure_delta_alignment:
-                    c_delta_weights = [net.compare_weights(init_weight) for net, init_weight in zip(nets, results["init_weights"])]
+                    c_delta_weights = []
+                    for net, init_weight in zip(nets, results["init_weights"]):
+                        real_net = net.module if hasattr(net, "module") else net
+                        c_delta_weights.append(real_net.compare_weights(init_weight))
                     if measure_delta_weights:
-                        # Save change in weights if requested
                         results["delta_weights"].append(c_delta_weights)
                     if measure_delta_alignment:
-                        # Save delta weight alignment if requested
                         c_delta_alignment = []
                         for net, weights_ in zip(nets, c_delta_weights):
                             real_net = net.module if hasattr(net, "module") else net
@@ -199,42 +175,70 @@ def train(nets, optimizers, dataset, **parameters):
                         results["delta_alignment"].append(c_delta_alignment)
 
                 if compare_expected:
-                    # Measure distribution of alignment, compare with expected given "Alignment" from Fiete definition
                     if measure_alignment:
                         c_alignment = results["alignment"][-1]
                     else:
-                        c_alignment = [net.measure_alignment(images, precomputed=True, method="alignment") for net in nets]
-                    c_inputs = [net.get_layer_inputs(images, precomputed=True) for net in nets]
-                    c_inputs = [net._preprocess_inputs(cin) for net, cin in zip(nets, c_inputs)]
-                    c_evals = [[smart_pca(c.T)[0] for c in cin] for cin in c_inputs]
-                    c_dist = [[expected_alignment_distribution(ev, valid_rotation=False, bins=calign_bins)[0] for ev in c_eval] for c_eval in c_evals]
-                    t_dist = [[torch.histogram(align.cpu(), bins=calign_bins, density=True)[0] for align in c_align] for c_align in c_alignment]
+                        c_alignment = []
+                        for net in nets:
+                            real_net = net.module if hasattr(net, "module") else net
+                            c_alignment.append(real_net.measure_alignment(images, precomputed=True, method="alignment"))
+                    c_inputs = []
+                    for net in nets:
+                        real_net = net.module if hasattr(net, "module") else net
+                        c_inputs.append(real_net.get_layer_inputs(images, precomputed=True))
+                    for i in range(len(nets)):
+                        net_ = nets[i]
+                        real_net_ = net_.module if hasattr(net_, "module") else net_
+                        c_inputs[i] = real_net_._preprocess_inputs(c_inputs[i])
+                    c_evals = []
+                    for cin in c_inputs:
+                        c_eval_sub = []
+                        for c in cin:
+                            w,_ = smart_pca(c.T)
+                            c_eval_sub.append(w)
+                        c_evals.append(c_eval_sub)
+                    calign_bins = results["compare_alignment_bins"]
+                    c_dist = []
+                    for c_eval in c_evals:
+                        subdist = []
+                        for ev in c_eval:
+                            subdist.append(expected_alignment_distribution(ev, valid_rotation=False, bins=calign_bins)[0])
+                        c_dist.append(subdist)
+                    t_dist = []
+                    for c_align in c_alignment:
+                        align_sub = []
+                        for align in c_align:
+                            align_sub.append(torch.histogram(align.cpu(), bins=calign_bins, density=True)[0])
+                        t_dist.append(align_sub)
                     results["compare_alignment_expected"].append(c_dist)
                     results["compare_alignment_observed"].append(t_dist)
                     if measure_delta_alignment:
                         d_alignment = results["delta_alignment"][-1]
-                        d_dist = [[torch.histogram(dalign.cpu(), bins=calign_bins, density=True)[0] for dalign in d_align] for d_align in d_alignment]
+                        d_dist = []
+                        for d_align in d_alignment:
+                            align_sub = []
+                            for dalign in d_align:
+                                align_sub.append(torch.histogram(dalign.cpu(), bins=calign_bins, density=True)[0])
+                            d_dist.append(align_sub)
                         results["compare_delta_alignment_observed"].append(d_dist)
 
             if run is not None:
                 run.log(
                     {f"losses/loss-{ii}": l.item() for ii, l in enumerate(loss)}
                     | {f"accuracies/accuracy-{ii}": dataset.measure_accuracy(output, labels) for ii, output in enumerate(outputs)}
-                    # {f'alignments/alignment-{ii}': alignment for ii, alignment in enumerate(results['alignment'][-1])}
                     | {"batch": cidx}
                 )
 
         if manual_shape:
-            # only do it at the end of #=manual_frequency epochs (but not last)
             if ((epoch + 1) % manual_frequency == 0) and (epoch < parameters["num_epochs"] - 1):
                 for net, transform in tqdm(zip(nets, manual_transforms), desc="manual shaping", leave=False):
-                    # just use this minibatch for computing eigenfeatures
-                    inputs, _ = net._process_collect_activity(dataset, train_set=False, with_updates=False, use_training_mode=False)
-                    _, eigenvalues, eigenvectors = net.measure_eigenfeatures(inputs, with_updates=False)
-                    idx_to_layer_lookup = {layer: idx for idx, layer in enumerate(net.get_alignment_layer_indices())}
+                    real_net = net.module if hasattr(net, "module") else net
+                    inputs, _ = real_net._process_collect_activity(dataset, train_set=False, with_updates=False, use_training_mode=False)
+                    _, eigenvalues, eigenvectors = real_net.measure_eigenfeatures(inputs, with_updates=False)
+                    idx_to_layer_lookup = {layer: idx for idx, layer in enumerate(real_net.get_alignment_layer_indices())}
                     eigenvalues = [eigenvalues[idx_to_layer_lookup[ml]] for ml in manual_layers]
                     eigenvectors = [eigenvectors[idx_to_layer_lookup[ml]] for ml in manual_layers]
-                    net.shape_eigenfeatures(manual_layers, eigenvalues, eigenvectors, transform)
+                    real_net.shape_eigenfeatures(manual_layers, eigenvalues, eigenvectors, transform)
 
         if save_ckpt & (epoch % freq_ckpt == 0):
             save_checkpoint(
@@ -244,7 +248,6 @@ def train(nets, optimizers, dataset, **parameters):
                 path_ckpt,
             )
 
-    # condense optional analyses
     for k in [
         "alignment",
         "alignment_0",
@@ -271,31 +274,24 @@ def train(nets, optimizers, dataset, **parameters):
 def test(nets, dataset, **parameters):
     """method for testing network on supervised learning problem"""
 
-    # --- optional W&B logging ---
     run = parameters.get("run")
 
-    # input argument checks
     if not (isinstance(nets, list)):
         nets = [nets]
 
-    # preallocate variables and define metaparameters
     verbose = parameters.get("verbose", True)
     num_nets = len(nets)
 
-    # retrieve requested dataloader from dataset
-    use_test = not parameters.get("train_set", False)  # if train_set=True, use_test=False
+    use_test = not parameters.get("train_set", False)
     dataloader = dataset.test_loader if use_test else dataset.train_loader
 
-    # Performance Measurements
     total_loss = [0 for _ in range(num_nets)]
     num_correct = [0 for _ in range(num_nets)]
     num_batches = 0
 
-    # --- optional analyses ---
     measure_alignment = parameters.get("alignment", True)
     measure_alignment_expansion = parameters.get("alignment_expansion", True)
 
-    # measure alignment throughout training
     if measure_alignment:
         alignment = []
     if measure_alignment_expansion:
@@ -308,26 +304,14 @@ def test(nets, dataset, **parameters):
     for batch in batch_loop:
         images, labels = dataset.unwrap_batch(batch)
 
-        # Perform forward pass
         outputs = [net(images, store_hidden=True) for net in nets]
 
-        # Performance Measurements
         for idx, output in enumerate(outputs):
             total_loss[idx] += dataset.measure_loss(output, labels).item()
             num_correct[idx] += dataset.measure_accuracy(output, labels).item()
 
-        # Keep track of number of batches
         num_batches += 1
 
-        # Measure Alignment
-        # if measure_alignment:
-        #     alignment.append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
-        # if measure_alignment_expansion:
-        #     alignment_0.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
-        #     alignment_1.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_1") for net in nets])
-        #     alignment_2.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_2") for net in nets])
-        #     alignment_red.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_red") for net in nets])
-        
         if measure_alignment:
             a_vals = []
             for net in nets:
@@ -336,7 +320,7 @@ def test(nets, dataset, **parameters):
             alignment.append(a_vals)
 
         if measure_alignment_expansion:
-            a0_vals, a1_vals, a2_vals, ared_vals = [], [], [],
+            a0_vals, a1_vals, a2_vals, ared_vals = [], [], [], []
             for net in nets:
                 real_net = net.module if hasattr(net, "module") else net
                 a0_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_0"))
@@ -371,72 +355,40 @@ def test(nets, dataset, **parameters):
 def get_dropout_indices(idx_alignment, fraction):
     """
     convenience method for getting a fraction of dropout indices from each layer
-
-    idx_alignment should be a list of the indices of alignment (sorted from lowest to highest)
-    where len(idx_alignment)=num_layers_per_network and each element is a tensor such that
-    idx_alignment[0].shape=(num_nodes_per_layer, num_networks)
-
-    returns a fraction of indices to drop of highest, lowest, and random alignment
     """
     num_nets = idx_alignment[0].size(0)
     num_nodes = [idx.size(1) for idx in idx_alignment]
     num_drop = [int(nodes * fraction) for nodes in num_nodes]
-    #idx_high = [idx[:, -drop:] for idx, drop in zip(idx_alignment, num_drop)]   ORIGINAL
-    #idx_low = [idx[:, :drop] for idx, drop in zip(idx_alignment, num_drop)]     ORIGINAL
     idx_high = [torch.sort(idx[:, -drop:], dim=1).values for idx, drop in zip(idx_alignment, num_drop)]
     idx_low = [torch.sort(idx[:, :drop], dim=1).values for idx, drop in zip(idx_alignment, num_drop)]
-    #idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) for nodes, drop in zip(num_nodes, num_drop)]     ORIGINAL
-    # idx_rand = [torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0) 
-    #             for nodes, drop in zip(num_nodes, num_drop)]                   # Random alignment
     idx_rand = [torch.sort(idx[:, torch.randperm(idx.size(1))[:drop]],dim=1).values for idx, drop in zip(idx_alignment, num_drop)]
-    
     return idx_high, idx_low, idx_rand
-
 
 @torch.no_grad()
 def get_dropout_indices000(idx_alignment, fraction):
     """
     Returns dropout indices for high, low, and random alignment for each layer and each network.
-
-    Args:
-        idx_alignment (list of tensors): List where each tensor corresponds to alignment data for a layer.
-            Each tensor in idx_alignment has the shape (num_nets, layer_dimension).
-        fraction (float): Fraction of nodes to drop for each layer.
-
-    Returns:
-        tuple: Three lists (idx_high, idx_low, idx_rand) with dropout indices for each layer and each network.
-               Each list contains tensors of shape (num_nets, num_dropped_nodes).
     """
     num_layers = len(idx_alignment)
-    num_nets = idx_alignment[0].size(0)  # Number of networks
+    num_nets = idx_alignment[0].size(0)
 
     idx_high = []
     idx_low = []
     idx_rand = []
 
     for layer_idx in range(num_layers):
-        layer_alignment = idx_alignment[layer_idx]  # Shape: (num_nets, layer_dimension)
+        layer_alignment = idx_alignment[layer_idx]
         layer_dimension = layer_alignment.size(1)
-        
-        # Calculate number of nodes to drop based on the layer's dimension
         num_drop = int(layer_dimension * fraction)
-        
-        # Sort indices by alignment values for each network individually
         sorted_indices = torch.argsort(layer_alignment, dim=1)
-        
-        # High alignment dropout: select highest RQ values
-        high_indices = sorted_indices[:, -num_drop:]  # Shape: (num_nets, num_drop)
-        high_indices = torch.sort(high_indices, dim=1).values  # Ensure sorted order
+        high_indices = sorted_indices[:, -num_drop:]
+        high_indices = torch.sort(high_indices, dim=1).values
         idx_high.append(high_indices)
-        
-        # Low alignment dropout: select lowest RQ values
-        low_indices = sorted_indices[:, :num_drop]  # Shape: (num_nets, num_drop)
-        low_indices = torch.sort(low_indices, dim=1).values  # Ensure sorted order
+        low_indices = sorted_indices[:, :num_drop]
+        low_indices = torch.sort(low_indices, dim=1).values
         idx_low.append(low_indices)
-        
-        # Random alignment dropout: select random RQ values
         rand_indices = torch.randperm(layer_dimension, device=layer_alignment.device)[:num_drop]
-        rand_indices = rand_indices.repeat(num_nets, 1)  # Repeat for each network
+        rand_indices = rand_indices.repeat(num_nets, 1)
         idx_rand.append(rand_indices)
 
     return idx_high, idx_low, idx_rand
@@ -446,64 +398,37 @@ def get_dropout_indices000(idx_alignment, fraction):
 def progressive_dropout(nets, dataset, alignment=None, **parameters):
     """
     method for testing network on supervised learning problem with progressive dropout
-
-    takes as input a list of networks (usually trained) and a dataset, along with some
-    experiment parameters (although there are defaults coded into the method)
-
-    note that this only works when each network in the list has the same architecture!
-    to analyze a group of networks with different architectures, run this function multiple
-    times and concatenate the results.
-
-    alignment, when provided is a list of the alignment measurement for each layer of
-    each network. It is expected that each alignment list has the structure:
-    len(alignment)=num_alignment_layers
-    alignment[i].shape = (num_networks, num_batches, num_dimensions_per_layer)
-    : see how the outputs of ``measure_alignment`` is handled in the ``train`` and ``test``
-    functions of this module to understand how to structure it in that format.
-
-    will measure the loss and accuracy on the dataset using targeted dropout, where
-    the method will progressively dropout more and more nodes based on the highest, lowest,
-    or random alignment. Can either do it for each layer separately or all togehter using
-    the parameters['by_layer'] kwarg.
     """
 
-    # input argument check
     if not (isinstance(nets, list)):
         nets = [nets]
 
-    # get index to each alignment layer
-    idx_dropout_layers = nets[0].get_alignment_layer_indices()
+    real_net = nets[0].module if hasattr(nets[0], 'module') else nets[0]
+    idx_dropout_layers = real_net.get_alignment_layer_indices()
 
-    # get alignment of networks if not provided
     if alignment is None:
         alignment = test(nets, dataset, **parameters)["alignment"]
 
     alignment = [alignment[i] for i in idx_dropout_layers]
-    # check if alignment has the right length (ie number of layers) (otherwise can't make assumptions about where the classification layer is)
     assert len(alignment) == len(idx_dropout_layers), "the number of layers in **alignment** doesn't correspond to the number of alignment layers"
 
-    # don't dropout classification layer if included as an alignment layer
-    classification_layer = nets[0].num_layers(all=True) - 1  # index to last layer in network
+    classification_layer = nets[0].module.num_layers(all=True) - 1 if hasattr(nets[0], 'module') else nets[0].num_layers(all=True) - 1
     if classification_layer in idx_dropout_layers:
         idx_dropout_layers.pop(-1)
         alignment.pop(-1)
 
-    # get average alignment (across batches) and index of average alignment by node
     alignment = [torch.mean(align, dim=1) for align in alignment]
     idx_alignment = [torch.argsort(align, dim=1) for align in alignment]
 
     print(len(idx_alignment))
     print(idx_alignment[0].shape)
     
-    # preallocate variables and define metaparameters
     num_nets = len(nets)
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     by_layer = parameters.get("by_layer", False)
     num_layers = len(idx_dropout_layers) if by_layer else 1
 
-    
-    # preallocate tracker tensors
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers))
@@ -511,33 +436,17 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     progdrop_acc_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_acc_rand = torch.zeros((num_nets, num_drops, num_layers))
 
-    # to keep track of how many values have been added
     num_batches = 0
-
-    # retrieve requested dataloader from dataset
     use_train = parameters.get("train_set", False)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
 
-    # let dataloader be outer loop to minimize extract / load / transform time
     for batch in tqdm(dataloader):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1
 
-        # get dropout indices for this fraction of dropouts
         for dropidx, fraction in enumerate(drop_fraction):
             idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, fraction)
 
-            if dropidx == 149:
-                # print('idx_H = ', idx_high[0][0,:].shape)
-                print('idx_H = ', idx_high[0][0,:].shape, ', fraction = ', fraction, ', original size = ', idx_alignment[0].shape)
-                print('idx_H = ', idx_high[1][0,:].shape, ', fraction = ', fraction, ', original size = ', idx_alignment[1].shape)
-                print('idx_H = ', idx_high[2][0,:].shape, ', fraction = ', fraction, ', original size = ', idx_alignment[2].shape)
-                # print('idx_H = ', idx_high[2][0,:].shape)
-                # print('idx_R = ', idx_rand[0][0,:].shape)
-                # print('idx_R = ', idx_rand[1][0,:].shape)
-                # print('idx_R = ', idx_rand[2][0,:].shape)
-
-            # do drop out for each layer (or across all depending on parameters)
             for layer in range(num_layers):
                 if by_layer:
                     drop_high, drop_low, drop_rand = (
@@ -546,95 +455,40 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         [idx_rand[layer]],
                     )
                     drop_layer = [idx_dropout_layers[layer]]
-                    
                 else:
                     drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
                     drop_layer = copy(idx_dropout_layers)
 
-                # get output with targeted dropout
                 out_high = []
                 for idx, net_ in enumerate(nets):
-                    real_net = net_.module if hasattr(net_, "module") else net_
-                    out = real_net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_high], drop_layer)[0]
-                    out_high.append(out)
+                    real_net_ = net_.module if hasattr(net_, "module") else net_
+                    out_ = real_net_.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_high], drop_layer)[0]
+                    out_high.append(out_)
                 out_low = []
                 for idx, net_ in enumerate(nets):
-                    real_net = net_.module if hasattr(net_, "module") else net_
-                    out = real_net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_low], drop_layer)[0]
-                    out_low.append(out)
+                    real_net_ = net_.module if hasattr(net_, "module") else net_
+                    out_ = real_net_.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_low], drop_layer)[0]
+                    out_low.append(out_)
                 out_rand = []
                 for idx, net_ in enumerate(nets):
-                    real_net = net_.module if hasattr(net_, "module") else net_
-                    out = real_net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_rand], drop_layer)[0]
-                    out_rand.append(out)
-                # out_high = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_high], drop_layer)[0] for idx, net in enumerate(nets)]
-                # out_low = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_low], drop_layer)[0] for idx, net in enumerate(nets)]
-                # out_rand = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_rand], drop_layer)[0] for idx, net in enumerate(nets)]
+                    real_net_ = net_.module if hasattr(net_, "module") else net_
+                    out_ = real_net_.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_rand], drop_layer)[0]
+                    out_rand.append(out_)
 
-                # get loss with targeted dropout
                 loss_high = [dataset.measure_loss(out, labels).item() for out in out_high]
                 loss_low = [dataset.measure_loss(out, labels).item() for out in out_low]
                 loss_rand = [dataset.measure_loss(out, labels).item() for out in out_rand]
 
-                # get accuracy with targeted dropout
                 acc_high = [dataset.measure_accuracy(out, labels) for out in out_high]
                 acc_low = [dataset.measure_accuracy(out, labels) for out in out_low]
                 acc_rand = [dataset.measure_accuracy(out, labels) for out in out_rand]
 
-                # add to storage tensors
                 progdrop_loss_high[:, dropidx, layer] += torch.tensor(loss_high)
                 progdrop_loss_low[:, dropidx, layer] += torch.tensor(loss_low)
                 progdrop_loss_rand[:, dropidx, layer] += torch.tensor(loss_rand)
-
                 progdrop_acc_high[:, dropidx, layer] += torch.tensor(acc_high)
                 progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
                 progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)
-            
-            
-            
-            # # Iterate over each layer when `by_layer` is True
-            # for layer in range(num_layers):
-            #     if by_layer:
-            #         # Get the dropout indices for the current layer only
-            #         drop_high, drop_low, drop_rand = (
-            #             idx_high[layer],   # Single layer high alignment dropout indices
-            #             idx_low[layer],    # Single layer low alignment dropout indices
-            #             idx_rand[layer],   # Single layer random dropout indices
-            #         )
-            #         drop_layer = [idx_dropout_layers[layer]]  # Current layer only
-            #     else:
-            #         # Apply dropout across all layers together
-            #         drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
-            #         drop_layer = idx_dropout_layers
-
-            #     # Perform targeted dropout on the current layer (or all layers if `by_layer` is False)
-            #     out_high = [
-            #         net.forward_targeted_dropout(images, [drop_high], drop_layer)[0] for net in nets
-            #     ]
-            #     out_low = [
-            #         net.forward_targeted_dropout(images, [drop_low], drop_layer)[0] for net in nets
-            #     ]
-            #     out_rand = [
-            #         net.forward_targeted_dropout(images, [drop_rand], drop_layer)[0] for net in nets
-            #     ]
-
-            #     # Calculate losses and accuracies for each dropout strategy
-            #     loss_high = [dataset.measure_loss(out, labels).item() for out in out_high]
-            #     loss_low = [dataset.measure_loss(out, labels).item() for out in out_low]
-            #     loss_rand = [dataset.measure_loss(out, labels).item() for out in out_rand]
-
-            #     acc_high = [dataset.measure_accuracy(out, labels) for out in out_high]
-            #     acc_low = [dataset.measure_accuracy(out, labels) for out in out_low]
-            #     acc_rand = [dataset.measure_accuracy(out, labels) for out in out_rand]
-
-            #     # Store results in the tensors
-            #     progdrop_loss_high[:, dropidx, layer] += torch.tensor(loss_high)
-            #     progdrop_loss_low[:, dropidx, layer] += torch.tensor(loss_low)
-            #     progdrop_loss_rand[:, dropidx, layer] += torch.tensor(loss_rand)
-
-            #     progdrop_acc_high[:, dropidx, layer] += torch.tensor(acc_high)
-            #     progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
-            #     progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)            
 
     results = {
         "progdrop_loss_high": progdrop_loss_high / num_batches,
@@ -651,8 +505,6 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     return results
 
 
-
-
 @torch.no_grad()
 def prune_network_by_alignment(nets, idx_alignment, fraction, method="high"):
     """
@@ -663,16 +515,12 @@ def prune_network_by_alignment(nets, idx_alignment, fraction, method="high"):
     num_nets = len(nets)
 
     for net_idx, net in enumerate(nets):
-        # Create a new instance of the network with the same architecture
-        pruned_net = type(net)()  # Assumes a constructor without arguments; adjust if needed
-        pruned_net.load_state_dict(net.state_dict())  # Copy weights and buffers
+        pruned_net = type(net)()
+        pruned_net.load_state_dict(net.state_dict())
 
-        # Apply pruning by removing connections based on alignment
         for layer_idx, idx in enumerate(idx_alignment):
             num_nodes = idx.size(1)
-            num_drop = min(int(num_nodes * fraction), num_nodes)  # Limit num_drop to available nodes
-
-            # Select nodes to drop based on alignment method
+            num_drop = min(int(num_nodes * fraction), num_nodes)
             if method == "high":
                 drop_idx = idx[:, -num_drop:]
             elif method == "low":
@@ -681,15 +529,11 @@ def prune_network_by_alignment(nets, idx_alignment, fraction, method="high"):
                 drop_idx = torch.stack([torch.randperm(num_nodes)[:num_drop] for _ in range(idx.size(0))], dim=0)
             else:
                 raise ValueError("Unknown pruning method: Choose 'high', 'low', or 'random'.")
-
-            # Ensure indices are within the valid range for the layer dimensions
             drop_idx = drop_idx.clamp(0, num_nodes - 1)
-
             for layer in pruned_net.modules():
                 if hasattr(layer, 'weight'):
-                    # Filter `drop_idx` to ensure it only contains valid indices within the layer's size
                     drop_idx = drop_idx[drop_idx < layer.weight.data.size(1)]
-                    layer.weight.data[:, drop_idx] = 0  # Pruning weights with safe indices
+                    layer.weight.data[:, drop_idx] = 0
                     pruned_nets.append(pruned_net)
 
     return pruned_nets
@@ -710,6 +554,7 @@ def train_network(net, dataset, epochs=5, learning_rate=0.001):
     
     return net
 
+
 def progressive_dropout_train(nets, dataset, alignment=None, **parameters):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -718,15 +563,16 @@ def progressive_dropout_train(nets, dataset, alignment=None, **parameters):
         nets = [nets]
     nets = [net.to(device) for net in nets]
 
-    idx_dropout_layers = nets[0].get_alignment_layer_indices()
+    real_net_0 = nets[0].module if hasattr(nets[0], 'module') else nets[0]
+    idx_dropout_layers = real_net_0.get_alignment_layer_indices()
     
     if alignment is None:
         alignment = test(nets, dataset, **parameters)["alignment"]
 
     assert len(alignment) == len(idx_dropout_layers), \
         f"Mismatch in alignment layer count: alignment has {len(alignment)} layers, expected {len(idx_dropout_layers)} layers."
-        
-    classification_layer = nets[0].num_layers(all=True) - 1
+
+    classification_layer = real_net_0.num_layers(all=True) - 1
     if classification_layer in idx_dropout_layers:
         idx_dropout_layers.pop(-1)
         alignment.pop(-1)
@@ -740,7 +586,6 @@ def progressive_dropout_train(nets, dataset, alignment=None, **parameters):
     by_layer = parameters.get("by_layer", False)
     num_layers = len(idx_dropout_layers) if by_layer else 1
 
-    # Initialize loss and accuracy tensors
     progdrop_loss_high_before, progdrop_loss_low_before, progdrop_loss_rand_before = [], [], []
     progdrop_acc_high_before, progdrop_acc_low_before, progdrop_acc_rand_before = [], [], []
 
@@ -773,15 +618,13 @@ def progressive_dropout_train(nets, dataset, alignment=None, **parameters):
                     drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
                     drop_layer = deepcopy(idx_dropout_layers)
 
-                # Generate and prune networks, tracking their sizes
                 pruned_nets_high = [train_network(prune_network_by_alignment([net], idx_alignment, fraction, method="high")[0].to(device), dataset) for net in nets]
                 pruned_nets_low = [train_network(prune_network_by_alignment([net], idx_alignment, fraction, method="low")[0].to(device), dataset) for net in nets]
                 pruned_nets_rand = [train_network(prune_network_by_alignment([net], idx_alignment, fraction, method="random")[0].to(device), dataset) for net in nets]
 
-                # Track losses and accuracies before and after retraining
-                out_high_before = [net(images) for net in pruned_nets_high]
-                out_low_before = [net(images) for net in pruned_nets_low]
-                out_rand_before = [net(images) for net in pruned_nets_rand]
+                out_high_before = [net_(images) for net_ in pruned_nets_high]
+                out_low_before = [net_(images) for net_ in pruned_nets_low]
+                out_rand_before = [net_(images) for net_ in pruned_nets_rand]
 
                 loss_high_before = [dataset.measure_loss(out, labels).item() for out in out_high_before]
                 loss_low_before = [dataset.measure_loss(out, labels).item() for out in out_low_before]
@@ -791,19 +634,16 @@ def progressive_dropout_train(nets, dataset, alignment=None, **parameters):
                 acc_low_before = [dataset.measure_accuracy(out, labels) for out in out_low_before]
                 acc_rand_before = [dataset.measure_accuracy(out, labels) for out in out_rand_before]
 
-                # Store results in the dynamically updated arrays
                 progdrop_loss_high_before.append(loss_high_before)
                 progdrop_loss_low_before.append(loss_low_before)
                 progdrop_loss_rand_before.append(loss_rand_before)
-
                 progdrop_acc_high_before.append(acc_high_before)
                 progdrop_acc_low_before.append(acc_low_before)
                 progdrop_acc_rand_before.append(acc_rand_before)
 
-                # Track losses and accuracies after retraining
-                out_high_after = [net(images) for net in pruned_nets_high]
-                out_low_after = [net(images) for net in pruned_nets_low]
-                out_rand_after = [net(images) for net in pruned_nets_rand]
+                out_high_after = [net_(images) for net_ in pruned_nets_high]
+                out_low_after = [net_(images) for net_ in pruned_nets_low]
+                out_rand_after = [net_(images) for net_ in pruned_nets_rand]
 
                 loss_high_after = [dataset.measure_loss(out, labels).item() for out in out_high_after]
                 loss_low_after = [dataset.measure_loss(out, labels).item() for out in out_low_after]
@@ -813,16 +653,13 @@ def progressive_dropout_train(nets, dataset, alignment=None, **parameters):
                 acc_low_after = [dataset.measure_accuracy(out, labels) for out in out_low_after]
                 acc_rand_after = [dataset.measure_accuracy(out, labels) for out in out_rand_after]
 
-                # Store results after retraining
                 progdrop_loss_high_after.append(loss_high_after)
                 progdrop_loss_low_after.append(loss_low_after)
                 progdrop_loss_rand_after.append(loss_rand_after)
-
                 progdrop_acc_high_after.append(acc_high_after)
                 progdrop_acc_low_after.append(acc_low_after)
                 progdrop_acc_rand_after.append(acc_rand_after)
 
-    # Organize results into tensors after collection for consistency
     results = {
         "progdrop_loss_high_before": torch.tensor(progdrop_loss_high_before) / num_batches,
         "progdrop_loss_low_before": torch.tensor(progdrop_loss_low_before) / num_batches,
@@ -843,60 +680,30 @@ def progressive_dropout_train(nets, dataset, alignment=None, **parameters):
 
     return results
 
+
 @torch.no_grad()
 @test_nets
 def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     """
     method for testing network on supervised learning problem with eigenvector dropout
-
-    takes as input a list of networks (usually trained) and a dataset, along with the
-    eigenvectors of the input to each alignment layer along with some experiment
-    parameters (although there are defaults coded into the method)
-
-    note that this only works when each network in the list has the same architecture!
-    to analyze a group of networks with different architectures, run this function multiple
-    times and concatenate the results.
-
-    eigenvectors must have the following structure:
-    a list of lists of eigenvectors to each layer for each network such that:
-    len(eigenvectors) = num_networks
-    len(eigenvectors[i]) = num_alignment_layers for all i
-    eigenvectors[i][j].shape = (num_dim_input_to_j, num_dim_input_to_j)
-
-    eigenvalues should have same structure except have vectors instead of square matrices
-
-    will measure the loss and accuracy on the dataset using targeted dropout, where
-    the method will progressively dropout more and more eigenvectors based on the highest,
-    lowest, or random eigenvalues. Can either do it for each layer separately or all
-    together using the parameters['by_layer'] kwarg.
     """
 
-    # input argument check
     if not (isinstance(nets, list)):
         nets = [nets]
 
-    # get index to each alignment layer
-    idx_dropout_layers = nets[0].get_alignment_layer_indices()
+    idx_dropout_layers = nets[0].module.get_alignment_layer_indices() if hasattr(nets[0], 'module') else nets[0].get_alignment_layer_indices()
 
-    # check if alignment has the right length (ie number of layers) (otherwise can't make assumptions about where the classification layer is)
-    assert all(
-        [len(ev) == len(idx_dropout_layers) for ev in eigenvectors]
-    ), "the number of layers in **eigenvectors** doesn't correspond to the number of alignment layers"
-    assert all(
-        [len(ev) == len(idx_dropout_layers) for ev in eigenvalues]
-    ), "the number of layers in **eigenvalues** doesn't correspond to the number of alignment layers"
+    assert all([len(ev) == len(idx_dropout_layers) for ev in eigenvectors]), "the number of layers in **eigenvectors** doesn't correspond to the number of alignment layers"
+    assert all([len(ev) == len(idx_dropout_layers) for ev in eigenvalues]), "the number of layers in **eigenvalues** doesn't correspond to the number of alignment layers"
 
-    # preallocate variables and define metaparameters
     num_nets = len(nets)
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     by_layer = parameters.get("by_layer", False)
     num_layers = len(idx_dropout_layers) if by_layer else 1
 
-    # create index of eigenvalue for compatibility with get_dropout_indices
     idx_eigenvalue = [torch.fliplr(torch.tensor(range(0, ev.size(1))).expand(num_nets, -1)) for ev in eigenvectors[0]]
 
-    # preallocate tracker tensors
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers))
@@ -904,23 +711,17 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     progdrop_acc_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_acc_rand = torch.zeros((num_nets, num_drops, num_layers))
 
-    # to keep track of how many values have been added
     num_batches = 0
-
-    # retrieve requested dataloader from dataset
     use_test = not parameters.get("train_set", True)
     dataloader = dataset.test_loader if use_test else dataset.train_loader
 
-    # let dataloader be outer loop to minimize extract / load / transform time
     for batch in tqdm(dataloader):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1
 
-        # get dropout indices for this fraction of dropouts
         for dropidx, fraction in enumerate(drop_fraction):
             idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
             
-            # do drop out for each layer (or across all depending on parameters)
             for layer in range(num_layers):
                 if by_layer:
                     drop_high, drop_low, drop_rand = (
@@ -929,45 +730,41 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
                         [idx_rand[layer]],
                     )
                     drop_layer = [idx_dropout_layers[layer]]
-                    drop_evals = [[evals[layer]] for evals in eigenvalues]
-                    drop_evecs = [[evecs[layer]] for evecs in eigenvectors]
+                    drop_evals = [[ev[layer]] for ev in eigenvalues]
+                    drop_evecs = [[evc[layer]] for evc in eigenvectors]
                 else:
                     drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
                     drop_layer = copy(idx_dropout_layers)
                     drop_evals = deepcopy(eigenvalues)
                     drop_evecs = deepcopy(eigenvectors)
 
-                # get output with targeted dropout
-                out_high = [
-                    net.forward_eigenvector_dropout(images, evals, evecs, [drop[idx, :] for drop in drop_high], drop_layer)[0]
-                    for idx, (net, evals, evecs) in enumerate(zip(nets, drop_evals, drop_evecs))
-                ]
+                out_high = []
+                for idx, (net, evals, evecs) in enumerate(zip(nets, drop_evals, drop_evecs)):
+                    real_net = net.module if hasattr(net, 'module') else net
+                    out_ = real_net.forward_eigenvector_dropout(images, evals, evecs, [drop[idx, :] for drop in drop_high], drop_layer)[0]
+                    out_high.append(out_)
+                out_low = []
+                for idx, (net, evals, evecs) in enumerate(zip(nets, drop_evals, drop_evecs)):
+                    real_net = net.module if hasattr(net, 'module') else net
+                    out_ = real_net.forward_eigenvector_dropout(images, evals, evecs, [drop[idx, :] for drop in drop_low], drop_layer)[0]
+                    out_low.append(out_)
+                out_rand = []
+                for idx, (net, evals, evecs) in enumerate(zip(nets, drop_evals, drop_evecs)):
+                    real_net = net.module if hasattr(net, 'module') else net
+                    out_ = real_net.forward_eigenvector_dropout(images, evals, evecs, [drop[idx, :] for drop in drop_rand], drop_layer)[0]
+                    out_rand.append(out_)
 
-                out_low = [
-                    net.forward_eigenvector_dropout(images, evals, evecs, [drop[idx, :] for drop in drop_low], drop_layer)[0]
-                    for idx, (net, evals, evecs) in enumerate(zip(nets, drop_evals, drop_evecs))
-                ]
-
-                out_rand = [
-                    net.forward_eigenvector_dropout(images, evals, evecs, [drop[idx, :] for drop in drop_rand], drop_layer)[0]
-                    for idx, (net, evals, evecs) in enumerate(zip(nets, drop_evals, drop_evecs))
-                ]
-
-                # get loss with targeted dropout
                 loss_high = [dataset.measure_loss(out, labels).item() for out in out_high]
                 loss_low = [dataset.measure_loss(out, labels).item() for out in out_low]
                 loss_rand = [dataset.measure_loss(out, labels).item() for out in out_rand]
 
-                # get accuracy with targeted dropout
                 acc_high = [dataset.measure_accuracy(out, labels) for out in out_high]
                 acc_low = [dataset.measure_accuracy(out, labels) for out in out_low]
                 acc_rand = [dataset.measure_accuracy(out, labels) for out in out_rand]
 
-                # add to storage tensors
                 progdrop_loss_high[:, dropidx, layer] += torch.tensor(loss_high)
                 progdrop_loss_low[:, dropidx, layer] += torch.tensor(loss_low)
                 progdrop_loss_rand[:, dropidx, layer] += torch.tensor(loss_rand)
-
                 progdrop_acc_high[:, dropidx, layer] += torch.tensor(acc_high)
                 progdrop_acc_low[:, dropidx, layer] += torch.tensor(acc_low)
                 progdrop_acc_rand[:, dropidx, layer] += torch.tensor(acc_rand)
