@@ -77,11 +77,11 @@ class CNN2P2(AlignmentNetwork):
         in_channels=1,
         output_dim=10,
         channels=[32, 64],
-        kernel_size= [5, 5],#[5, 5],
+        kernel_size= [5, 5],
         stride=[1, 1],
         padding=[2, 2],
         num_hidden=[3136, 128],
-        dropout=0,#0.5,
+        dropout=0,
         flag=True,
     ):
         """architecture definition"""
