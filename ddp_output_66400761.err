@@ -1,5 +1,0 @@
-/n/sw/Miniforge3-24.7.1-0/bin/python: can't open file '/n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/ddp_alexnet_alignment.py': [Errno 2] No such file or directory
-/n/sw/Miniforge3-24.7.1-0/bin/python: can't open file '/n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/ddp_alexnet_alignment.py': [Errno 2] No such file or directory
-/n/sw/Miniforge3-24.7.1-0/bin/python: can't open file '/n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/ddp_alexnet_alignment.py': [Errno 2] No such file or directory
-/n/sw/Miniforge3-24.7.1-0/bin/python: can't open file '/n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/ddp_alexnet_alignment.py': [Errno 2] No such file or directory
-srun: error: holygpu8a19203: tasks 0-3: Exited with exit code 2
