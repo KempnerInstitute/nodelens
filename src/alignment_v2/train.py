@@ -144,14 +144,44 @@ def train(nets, optimizers, dataset, **parameters):
             if idx % measure_frequency == 0:
                 if measure_alignment:
                     # Measure alignment if requested
-                    results["alignment"].append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
+                    #results["alignment"].append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
+                    alignment_vals = []
+                    for net in nets:
+                        # If net is a DDP object, use net.module.
+                        # If net is a raw model, just use net.
+                        real_net = net.module if hasattr(net, "module") else net
 
+                        # Now call real_net.measure_alignment(...)
+                        alignment_val = real_net.measure_alignment(
+                            images,
+                            precomputed=True,
+                            method="alignment"
+                        )
+                        alignment_vals.append(alignment_val)
+
+                    results["alignment"].append(alignment_vals)
+                    
                 if measure_alignment_expansion:
                     # Measure alignment if requested
                     results["alignment_0"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
                     results["alignment_1"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_1") for net in nets])
                     results["alignment_2"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_2") for net in nets])
                     results["alignment_red"].append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_red") for net in nets])
+
+                    alignment0_vals, alignment1_vals, alignment2_vals, alignmentred_vals = [], []
+                    for net in nets:
+                        real_net = net.module if hasattr(net, "module") else net
+                        alignment0_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_0"))
+                        alignment1_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_1"))
+                        alignment2_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_2"))
+                        alignmentred_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_red"))
+                    
+                    results["alignment_0"].append(alignment0_vals)
+                    results["alignment_1"].append(alignment1_vals)
+                    results["alignment_2"].append(alignment2_vals)
+                    results["alignment_red"].append(alignmentred_vals)
+                    
+
 
                 if measure_delta_weights or measure_delta_alignment:
                     c_delta_weights = [net.compare_weights(init_weight) for net, init_weight in zip(nets, results["init_weights"])]
