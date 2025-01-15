@@ -16,6 +16,7 @@ from alignment_v2.train import progressive_dropout
 # python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use_wandb --dropout_by_layer --epochs 50 --ddp  --num-drops 14 --batch-size 1000 --replicates 10
 # python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use_wandb --epochs 50 --ddp  --num-drops 14 --batch-size 1000 --replicates 10
 # python experiment.py alignment_info_stats --save-networks --network AlexNet --dataset ImageNet --use_wandb --dropout_by_layer --epochs 5 --ddp  --num-drops 14 --batch-size 1000
+# python experiment.py alignment_info_stats --save-networks --network AlexNet --dataset ImageNet --use_wandb --epochs 5 --ddp  --num-drops 14 --batch-size 1000
 
 class AlignmentStatisticsInfo(Experiment):
     def get_basename(self):
@@ -173,7 +174,9 @@ class AlignmentStatisticsInfo(Experiment):
 
     def main(self):
         if self.args.ddp:
-            world_size = 4
+            world_size = int(os.environ["WORLD_SIZE"])
+            rank = int(os.environ["RANK"])
+            local_rank = int(os.environ["LOCAL_RANK"])
             epochs = self.args.epochs
             batch_size = self.args.batch_size
             lr = self.args.default_lr
