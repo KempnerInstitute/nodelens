@@ -190,10 +190,12 @@ def train(nets, optimizers, dataset, **parameters):
                         results["delta_weights"].append(c_delta_weights)
                     if measure_delta_alignment:
                         # Save delta weight alignment if requested
-                        c_delta_alignment = [
-                            net.measure_alignment_weights(images, weights, precomputed=True, method="alignment")
-                            for net, weights in zip(nets, c_delta_weights)
-                        ]
+                        c_delta_alignment = []
+                        for net, weights_ in zip(nets, c_delta_weights):
+                            real_net = net.module if hasattr(net, "module") else net
+                            c_delta_alignment.append(
+                                real_net.measure_alignment_weights(images, weights_, precomputed=True, method="alignment")
+                            )
                         results["delta_alignment"].append(c_delta_alignment)
 
                 if compare_expected:
@@ -318,14 +320,34 @@ def test(nets, dataset, **parameters):
         num_batches += 1
 
         # Measure Alignment
+        # if measure_alignment:
+        #     alignment.append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
+        # if measure_alignment_expansion:
+        #     alignment_0.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
+        #     alignment_1.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_1") for net in nets])
+        #     alignment_2.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_2") for net in nets])
+        #     alignment_red.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_red") for net in nets])
+        
         if measure_alignment:
-            alignment.append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
-        if measure_alignment_expansion:
-            alignment_0.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_0") for net in nets])
-            alignment_1.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_1") for net in nets])
-            alignment_2.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_2") for net in nets])
-            alignment_red.append([net.measure_alignment_expansion(images, precomputed=True, method="alignment_red") for net in nets])
+            a_vals = []
+            for net in nets:
+                real_net = net.module if hasattr(net, "module") else net
+                a_vals.append(real_net.measure_alignment(images, precomputed=True, method="alignment"))
+            alignment.append(a_vals)
 
+        if measure_alignment_expansion:
+            a0_vals, a1_vals, a2_vals, ared_vals = [], [], [],
+            for net in nets:
+                real_net = net.module if hasattr(net, "module") else net
+                a0_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_0"))
+                a1_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_1"))
+                a2_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_2"))
+                ared_vals.append(real_net.measure_alignment_expansion(images, precomputed=True, method="alignment_red"))
+            alignment_0.append(a0_vals)
+            alignment_1.append(a1_vals)
+            alignment_2.append(a2_vals)
+            alignment_red.append(ared_vals)
+    
     results = {
         "loss": [loss / num_batches for loss in total_loss],
         "accuracy": [correct / num_batches for correct in num_correct],
@@ -530,9 +552,24 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     drop_layer = copy(idx_dropout_layers)
 
                 # get output with targeted dropout
-                out_high = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_high], drop_layer)[0] for idx, net in enumerate(nets)]
-                out_low = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_low], drop_layer)[0] for idx, net in enumerate(nets)]
-                out_rand = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_rand], drop_layer)[0] for idx, net in enumerate(nets)]
+                out_high = []
+                for idx, net_ in enumerate(nets):
+                    real_net = net_.module if hasattr(net_, "module") else net_
+                    out = real_net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_high], drop_layer)[0]
+                    out_high.append(out)
+                out_low = []
+                for idx, net_ in enumerate(nets):
+                    real_net = net_.module if hasattr(net_, "module") else net_
+                    out = real_net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_low], drop_layer)[0]
+                    out_low.append(out)
+                out_rand = []
+                for idx, net_ in enumerate(nets):
+                    real_net = net_.module if hasattr(net_, "module") else net_
+                    out = real_net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_rand], drop_layer)[0]
+                    out_rand.append(out)
+                # out_high = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_high], drop_layer)[0] for idx, net in enumerate(nets)]
+                # out_low = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_low], drop_layer)[0] for idx, net in enumerate(nets)]
+                # out_rand = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_rand], drop_layer)[0] for idx, net in enumerate(nets)]
 
                 # get loss with targeted dropout
                 loss_high = [dataset.measure_loss(out, labels).item() for out in out_high]
