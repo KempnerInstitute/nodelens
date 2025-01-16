@@ -366,10 +366,9 @@ class AlignmentNetwork(nn.Module):
                 hidden_outputs.append(output)
             return dropout_hook
         
-        
         for idx_layer, layer in enumerate(self.alignment_layers):
             if idx_layer in layers:
-                dropout_idx = idxs[idx_layer]
+                dropout_idx = idxs[{val: idx for idx, val in enumerate(layers)}[idx_layer]]
                 hooks.append(layer.register_forward_hook(dropout(dropout_idx)))
         
         x = self.base_model(x)
