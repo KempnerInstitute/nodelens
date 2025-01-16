@@ -1,5 +1,5 @@
 from warnings import warn
-from abc import ABC, abstractmethod
+from typing import Optional
 
 import torch
 from torch import nn
@@ -14,7 +14,6 @@ from alignment.utils import (check_iterable,
                              get_unfold_params,
                              smart_pca,
                              alignment)
-
 from alignment.models.layers import (LAYER_REGISTRY, 
                                      REGISTRY_REQUIREMENTS, 
                                      check_metaparameters)
@@ -55,142 +54,140 @@ class AttributeReference:
             raise AttributeError(f"parent object (instance of {type(self.parent)}) has no attribute '{name}'")
 
 
-class AlignmentNetwork(nn.Module, ABC):
+class AlignmentNetwork(nn.Module):
     """
     This is the base class for a neural network used for alignment-related experiments.
 
     The point of all the wrangling of standard torch workflows in this class is to make
     it easy to perform all the alignment-related computations for networks with different
     architectures without having to rewrite similar code over and over again. In this way,
-    the user only needs to add a layer type to the **LAYER_REGISTRY** in this file and
-    then alignment methods can be automatically applied.
+    the user only needs to pass in a base model, and specify the layers to participate in 
+    alignment computation along with their disired input layer. No need for registration 
+    the model and layers manually.
 
-    The forward method of **AlignmentNetwork** passes the input (*x*) through each registered
-    layer of the network in order of it's registration. If hidden activations are requested, then
-    the output of each registered layer is saved. The alignment methods are applied to the
-    hidden activation at the output of layer L-1 and the weights of layer L.
+    The forward method of **AlignmentNetwork** passes the input (*x*) through the base model
+    forward method. If hidden activations are requested, then the output of each layer participated
+    in the alignment computation is saved through setting up forward hooks. The alignment methods 
+    are applied to the hidden activation at the output of corresponding input layer and the weight
+    of layer participate in the experiment.
 
     Note: some shape wrangling (like that which happens between a convolutional layer and a
     linear layer are often treated as a nn.Module layer), but these don't require alignment-
-    related processing. To use these, set 'ignore' of the metaparameters to True. Alternatively,
-    you can append them to the last component of a layer.
+    related processing.
 
-    Note: the choice of where to put layers matters. I usually nest a dropout in a sequential
-    layer in front of whatever layer is relevant for alignment, because then the previous
-    hidden outputs will be measured before using dropout. Of course, this may not be desired,
-    it's just about your scientific question.
+    Note: to maintain the flexiblity of the code, user is resposible to make sure that the requested
+    input layer is feasible for the requested alignment layer and has a compatible output shape for
+    alignment computation on the target layer.
 
-    A layer in the layer_registry should have the following properties:
+    An target alignment layer should have the following properties:
     1. Be a child of the nn.Module class with a forward method
-    2. Have at most one "relevant" processing stage with weights for measuring alignment
+    2. Have processing stage with weights for measuring alignment
     """
 
-    def __init__(self, reference=True, **kwargs):
+    def __init__(self, base_model: nn.Module, alignment_layer_names: Optional[dict] = None, **kwargs):
         super().__init__()  # register it as a nn.Module
-        self.layers = nn.ModuleList()  # a list of all modules in the forward pass
-        self.metaparameters = []  # list of dictionaries containing metaparameters for each layer
-        self.hidden = []  # list of tensors containing hidden activations
-        self.ignore_flag = kwargs.pop("ignore_flag", False)  # whether to ignore flagged layers
-        self.initialize(**kwargs)  # initialize the architecture using child class method
-        if reference:
+        self.base_model = base_model
+        self.alignment_layers = nn.ModuleList()  # a list of all the layers for the alignment computation
+        self.alignment_names = []
+        self.hidden = {}  # a parallel list to maintain the output/activation of the input layers aka inputs to the alignment layers
+        self.hooks = {} # a dictionary list to maintain the handle of the forward hooks on input layers
+        self._initialize_layers(alignment_layer_names, **kwargs)  # initialize the architecture using child class method
+        
+        #if reference:
             # create reference to self in "model" attribute for compatibility with DDP
-            self.module = AttributeReference(self)
+        #    self.module = AttributeReference(self)
 
-    @abstractmethod
-    def initialize(self, **kwargs):
+    def _initialize_layers(self, alignment_layer_names, **kwargs):
         """
-        initialize is defined by child objects of the AlignmentNetwork class and is where
-        the network architecture is established
-
-        generally, initialize methods create a set of layers that represent the network
-        and use the `register_layer` method to add them to the network.
-
-        depending on the child network, various kwargs are required to initialize the network
-        these are passed into the class constructor and relayed to initialize. See each class
-        definition's initialize method for the specific kwargs relevant to each network type
+        This method initialize the layers participating the alignment computation and their 
+        corresponding input layers. the self.input_layer is being used to add the forward hooks
+        to collect their hidden activations. then these activations will be used as inputs to
+        the corresponding target alignment layers to compute the alignment scores.
         """
-        pass
+        if alignment_layer_names is None:
+            self.layer_to_input_names = None
+            for name, layer in self.base_model.named_modules():
+                if not hasattr(layer, 'weight'): continue
+                self.alignment_layers.append(layer)
+                self.alignment_names.append(name)
+        else:
+            self.layer_to_input_names = {}
+            for name, layer in self.base_model.named_modules():
+                if name in alignment_layer_names.keys():
+                    if not hasattr(layer, 'weight'):
+                        warn_message = f"Skipping the selected layer {name} ({layer.__class__.__name__}) becuase it does not have a weight attribute"
+                        warn(warn_message, RuntimeWarning, stacklevel=1)
+                        continue 
+                    self.alignment_layers.append(layer)
+                    self.alignment_names.append(name)
+                    # making the order the same as alignment_layers
+                    self.layer_to_input_names[name] = alignment_layer_names[name]
 
-    @abstractmethod
-    def get_transform_parameters(self, dataset):
+    def is_classification_layer_included(self):
         """
-        this method is required throughout the repository to load specific transform parameters
-        for each dataset for each network. In each child class of AlignmentNetwork, this method
-        should define a dictionary where the possible datasets are the keys (as strings) and the
-        value for each dataset-key is another dictionary passed into the DataSet constructor to
-        define the transform parameters
+        convenience method to check if the last layer is included in the alignment layers?
+        This check is useful since we don't dropout classification layer
+        # it gets the name of the last layer in network and check if it is in alignment layer names
         """
-        pass
-
-    def register_layer(self, layer, **kwargs):
-        """
-        register_layer adds a **layer** to the network's module list and it's associated metaparameters
-        for determining what kind of aligment-related processing is done on the layer
-
-        by default, the layer is used as a key to lookup the metaparameters from the **LAYER_REGISTRY**.
-        kwargs can update keys in the metaparameters. If the layer class is not registered, then all
-        metaparameters must be provided as kwargs.
-
-        Required kwargs are: name, layer_index, alignment_method, unfold, ignore, ...
-        """
-        if not isinstance(layer, nn.Module):
-            raise TypeError(f"provided layer is of type: {type(layer)}, but only nn.Module objects are permitted!")
-
-        # load default metaparameters for this type of layer (or empty dictionary)
-        metaparameters = LAYER_REGISTRY.get(type(layer), {})
-
-        # for each possible entry in layer metaparameters, check if it's provided and not none, then update it
-        for metaprms in REGISTRY_REQUIREMENTS:
-            if metaprms in kwargs and kwargs[metaprms] is not None:
-                metaparameters[metaprms] = kwargs[metaprms]
-
-        # check whether metaparameters contain the correct keys
-        check_metaparameters(metaparameters, throw=True)
-
-        # add layer to network
-        self.layers.append(layer)
-        self.metaparameters.append(metaparameters)
+        classification_layer_name = [name for name, layer in self.base_model.named_modules() if hasattr(layer, 'weight')][-1]
+        return classification_layer_name in self.alignment_names
 
     def num_layers(self, all=False):
         """
         convenience method for getting the number of layers in network
         if all=False (default), will get the number of alignment layers
-        if all=True, will get total number of registered layers in network
+        if all=True, will get total number of layers in network that has
+        weight attribute and can be used for alignment computation
         """
         if all:
-            return len(self.layers)
-        return len(self.get_alignment_layers())
+            return sum(1 for m in self.base_model.modules() if hasattr(m, 'weight'))
+        return len(self.alignment_layers)
+    
+    def setup_forward_hooks(self):
+        def getActivation(name):
+            def activation_hook(module, input, output):
+                self.hidden[name] = output
+            return activation_hook
+        
+        def getInput(name):
+            def input_hook(module, input, output):
+                self.hidden[name] = input[0]
+            return input_hook
+        
+        if self.layer_to_input_names is None:
+            for name, alignment_layer in zip(self.alignment_names, self.alignment_layers):
+                self.hooks[name] = alignment_layer.register_forward_hook(getInput(name))
+        else:
+            for name, input_layer in self.base_model.named_modules():
+                if name in self.layer_to_input_names.values():
+                    self.hooks[name] = input_layer.register_forward_hook(getActivation(name))
+                if name in self.layer_to_input_names.keys() and self.layer_to_input_names[name] is None:
+                    self.hooks[name] = input_layer.register_forward_hook(getInput(name))
 
-    def _include_layer(self, metaprms):
-        """
-        internal method for checking whether to include a registered layer
-
-        ignore conditions:
-        if metaprms['ignore']==True, will always ignore the layer
-        if metaprms['flag']==True and self.ignore_flag==True, will ignore
-        """
-        return not metaprms["ignore"] and not (metaprms["flag"] and self.ignore_flag)
-
-    def set_ignore_flag(self, ignore_flag):
-        """method for setting the ignore_flag switch"""
-        assert isinstance(ignore_flag, bool), "ignore_flag setting must be a bool"
-        self.ignore_flag = ignore_flag
-
+    def remove_forward_hooks(self):
+        for _, hook in self.hooks.items():
+            hook.remove()
+    
     def forward(self, x, store_hidden=False):
-        """standard forward pass of all layers with option of storing hidden activations (and output)"""
-        self.hidden = []  # always reset so as to not keep a previous forward pass accidentally
-        for layer in self.layers:
-            x = layer(x)  # pass through next layer
-            if store_hidden:
-                self.hidden.append(x)
-        return x
+        """
+        standard forward pass of the base_model with option of storing 
+        the activation/output of the corresponding input layers to the 
+        alignment layers using forward hook
+        """
+        if store_hidden:
+            self.hidden = {} # reset the stored activation
+            self.setup_forward_hooks()
+        out = self.base_model(x)
+        if store_hidden:
+            self.remove_forward_hooks()
+        return out
 
     def get_dropout(self):
         """
         Return list of dropout probability for any dropout layers in network
         """
         p = []
-        for module in self.modules():
+        for module in self.base_model.modules():
             if isinstance(module, nn.Dropout):
                 p.append(module.p)
         return p
@@ -200,12 +197,9 @@ class AlignmentNetwork(nn.Module, ABC):
         Set dropout of all layers in a network
         Note that this will overwrite whatever was previously used
         """
-        for module in self.modules():
+        for module in self.base_model.modules():
             if isinstance(module, nn.Dropout):
                 module.p = p
-
-        if hasattr(self, "dropout"):
-            setattr(self, "dropout", p)
 
     def set_dropout_by_layer(self, p):
         """
@@ -225,94 +219,30 @@ class AlignmentNetwork(nn.Module, ABC):
         for layer, drop_prob in zip(dropout_layers, p):
             layer.p = drop_prob
 
-        # set dropout attribute if it exists
-        if hasattr(self, "dropout"):
-            setattr(self, "dropout", p)
-
     @torch.no_grad()
-    def get_layer_inputs(self, x, precomputed=False, idx=None):
+    def get_layer_inputs(self, x, precomputed=False):
         """method for getting list of layer inputs throughout the network"""
         if not precomputed:
             # do a forward pass and store hidden activations if not precomputed
             _ = self.forward(x, store_hidden=True)
 
-        # filter activations by inputs to alignment layers
+        # extract activations by inputs to alignment layers out of slef.hidden
         layer_inputs = []
-        possible_inputs = [x, *self.hidden[:-1]]
-        for inputs, metaprms in zip(possible_inputs, self.metaparameters):
-            if self._include_layer(metaprms):
-                layer_inputs.append(inputs)
+        for name in self.alignment_names:
+            name_idx = name
+            if self.layer_to_input_names is not None and self.layer_to_input_names[name] is not None:
+                name_idx = self.layer_to_input_names[name]
+            layer_inputs.append(self.hidden[name_idx])
 
-        # return outputs
-        if idx is None:
-            return layer_inputs
-        return layer_inputs[idx]
+        return layer_inputs
 
     @torch.no_grad()
-    def get_layer_outputs(self, x=None, precomputed=False, idx=None):
-        """method for getting list of layer outputs throughout the network"""
-        if not precomputed:
-            if x is None:
-                raise ValueError("x needs to be provided if precomputed is False")
-            else:
-                # do a forward pass and store hidden activations if not precomputed
-                _ = self.forward(x, store_hidden=True)
-
-        # filter activations by outputs of alignment layers
-        layer_outputs = []
-        for hidden, metaprms in zip(self.hidden, self.metaparameters):
-            if self._include_layer(metaprms):
-                layer_outputs.append(hidden)
-
-        # return outputs
-        if idx is None:
-            return layer_outputs
-        return layer_outputs[idx]
-
-    @torch.no_grad()
-    def get_layer(self, layer, metaprms):
-        """get alignment layer from **layer** (which might be a sequential layer, etc.) based on metaprms"""
-        if metaprms["layer_index"] is None:
-            return layer
-        else:
-            return layer[metaprms["layer_index"]]
-
-    @torch.no_grad()
-    def get_alignment_layers(self, idx=None):
+    def get_alignment_layers(self):
         """convenience method for retrieving registered layers for alignment measurements throughout the network"""
-        layers = []
-        for layer, metaprms in zip(self.layers, self.metaparameters):
-            if self._include_layer(metaprms):
-                # ATL: deprecated line because the lambda method layer_handle prevented saving-- layers.append(metaprms["layer_handle"](layer))
-                layers.append(self.get_layer(layer, metaprms))  # get layer without layer_handle lambda method
-        if idx is None:
-            return layers
-        return layers[idx]
+        return self.alignment_layers
 
     @torch.no_grad()
-    def get_alignment_metaparameters(self, idx=None):
-        """convenience method for retrieving registered layers for alignment measurements throughout the network"""
-        metaparameters = []
-        for metaprms in self.metaparameters:
-            if self._include_layer(metaprms):
-                metaparameters.append(metaprms)
-        if idx is None:
-            return metaparameters
-        return metaparameters[idx]
-
-    @torch.no_grad()
-    def get_alignment_layer_indices(self, idx=None):
-        """convenience method for retrieving the absolute indices of alignment layers throughout the network"""
-        idx_layers = []
-        for ii, metaprms in enumerate(self.metaparameters):
-            if self._include_layer(metaprms):
-                idx_layers.append(ii)
-        if idx is None:
-            return idx_layers
-        return idx_layers[idx]
-
-    @torch.no_grad()
-    def get_alignment_weights(self, idx=None, flatten=False):
+    def get_alignment_weights(self, flatten=False):
         """
         convenience method for retrieving registered weights for alignment measurements throughout the network
 
@@ -320,7 +250,7 @@ class AlignmentNetwork(nn.Module, ABC):
         """
         # go through each layer and retrieve weight as desired
         weights = []
-        for layer in self.get_alignment_layers():
+        for layer in self.alignment_layers:
             # get weight data for this layer
             weight = layer.weight.data.clone()
 
@@ -331,10 +261,8 @@ class AlignmentNetwork(nn.Module, ABC):
             # add weights to list
             weights.append(weight)
 
-        # return
-        if idx is None:
-            return weights
-        return weights[idx]
+        
+        return weights
 
     def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True):
         """
@@ -351,13 +279,9 @@ class AlignmentNetwork(nn.Module, ABC):
         # initialize new list of inputs to layers
         preprocessed = []
 
-        # get layer parameters and metaparameters
-        layers = self.get_alignment_layers()
-        metaprms = self.get_alignment_metaparameters()
-
         # do requested processing and add to output
-        for input, layer, metaprm in zip(inputs_to_layers, layers, metaprms):
-            if metaprm["unfold"]:
+        for input, layer in zip(inputs_to_layers, self.alignment_layers):
+            if type(layer) == torch.nn.modules.conv.Conv2d:
                 # if convolutional layer, unfold layer to (batch / conv_dim / num_strides)
                 layer_prms = get_unfold_params(layer)
                 unfolded_input = torch.nn.functional.unfold(input, layer.kernel_size, **layer_prms)
@@ -430,18 +354,29 @@ class AlignmentNetwork(nn.Module, ABC):
         assert check_iterable(idxs) and check_iterable(layers), "idxs and layers need to be iterables with the same length"
         assert len(idxs) == len(layers), "idxs and layers need to be iterables with the same length"
         assert len(layers) == len(set(layers)), "layers must not have any repeated elements"
-        assert all([layer >= 0 and layer < len(self.layers) - 1 for layer in layers]), "dropout only works on first N-1 layers"
 
         hidden_outputs = []
-        for idx_layer, (layer, metaprms) in enumerate(zip(self.layers, self.metaparameters)):
-            x = layer(x)  # pass through next layer
+        hooks = []
+
+        def dropout(dropout_idx):
+            def dropout_hook(module, input, output):
+                fraction_dropout = len(dropout_idx) / output.shape[1]
+                output[:, dropout_idx] = 0
+                output = output * (1 - fraction_dropout)
+                hidden_outputs.append(output)
+            return dropout_hook
+        
+        
+        for idx_layer, layer in enumerate(self.alignment_layers):
             if idx_layer in layers:
-                dropout_idx = idxs[{val: idx for idx, val in enumerate(layers)}[idx_layer]]
-                fraction_dropout = len(dropout_idx) / x.shape[1]
-                x[:, dropout_idx] = 0
-                x = x * (1 - fraction_dropout)
-            if self._include_layer(metaprms):
-                hidden_outputs.append(x)
+                dropout_idx = idxs[idx_layer]
+                hooks.append(layer.register_forward_hook(dropout(dropout_idx)))
+        
+        x = self.base_model(x)
+
+        for hook in hooks:
+            hook.remove()
+                
 
         # return output of network and outputs of each alignment layer
         return x, hidden_outputs
@@ -834,37 +769,3 @@ class AlignmentNetwork(nn.Module, ABC):
             shaped_weights = torch.reshape(shaped_weights, shape)
             # update the network
             self.get_alignment_layers(idx=idx).weight.data = shaped_weights
-
-
-# def ExperimentalNetwork(AlignmentNetwork):
-#     """maintain some experimental methods here"""
-#     def doOjaUpdate(self, x, alpha):
-#         # Rule: dW = alpha * (xy - wy**2)
-#         B = x.shape[0]
-#         activations = self.getActivations(x)
-#         # Layer 1:
-#         H,D = (activations[0].shape[1], x.shape[1])
-#         dfc1 = alpha * (activations[0].T @ x - torch.sum(self.fc1.weight.data.clone().detach().reshape(H,D,1) * (activations[0]*2).T.reshape(H,B,1).permute(0,2,1),dim=2))
-#         self.fc1.weight.data = self.fc1.weight.data + dfc1
-#         self.fc1.weight.data = self.fc1.weight.data / torch.norm(self.fc1.weight.data,dim=1,keepdim=True)
-#         #print(f"fc1: Weight.shape:{self.fc1.weight.data.shape}, update.shape:{dfc1.shape}")
-#         # Layer 2:
-#         H,D = (activations[1].shape[1], activations[0].shape[1])
-#         dfc2 = alpha * (activations[1].T @ activations[0] - torch.sum(self.fc2.weight.data.clone().detach().reshape(H,D,1) * (activations[1]*2).T.reshape(H,B,1).permute(0,2,1),dim=2))
-#         self.fc2.weight.data = self.fc2.weight.data + dfc2
-#         self.fc2.weight.data = self.fc2.weight.data / torch.norm(self.fc2.weight.data,dim=1,keepdim=True)
-#         #print(f"fc2: Weight.shape:{self.fc2.weight.data.shape}, update.shape:{dfc2.shape}")
-#         # Layer 3:
-#         H,D = (activations[2].shape[1], activations[1].shape[1])
-#         dfc3 = alpha * (activations[2].T @ activations[1] - torch.sum(self.fc3.weight.data.clone().detach().reshape(H,D,1) * (activations[2]*2).T.reshape(H,B,1).permute(0,2,1),dim=2))
-#         self.fc3.weight.data = self.fc3.weight.data + dfc3
-#         self.fc3.weight.data = self.fc3.weight.data / torch.norm(self.fc3.weight.data,dim=1,keepdim=True)
-#         #print(f"fc3: Weight.shape:{self.fc3.weight.data.shape}, update.shape:{dfc3.shape}")
-#         # Layer 4:
-#         H,D = (activations[3].shape[1], activations[2].shape[1])
-#         dfc4 = alpha * (activations[3].T @ activations[2] - torch.sum(self.fc4.weight.data.clone().detach().reshape(H,D,1) * (activations[3]*2).T.reshape(H,B,1).permute(0,2,1),dim=2))
-#         self.fc4.weight.data = self.fc4.weight.data + dfc4
-#         self.fc4.weight.data = self.fc4.weight.data / torch.norm(self.fc4.weight.data,dim=1,keepdim=True)
-#         #print(f"fc4: Weight.shape:{self.fc4.weight.data.shape}, update.shape:{dfc4.shape}")
-
-#
