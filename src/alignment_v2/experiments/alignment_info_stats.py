@@ -16,7 +16,8 @@ from alignment_v2.train import progressive_dropout
 # python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use_wandb --dropout_by_layer --epochs 50 --ddp  --num-drops 14 --batch-size 1000 --replicates 10
 # python experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use_wandb --epochs 50 --ddp  --num-drops 14 --batch-size 1000 --replicates 10
 # python experiment.py alignment_info_stats --save-networks --network AlexNet --dataset ImageNet --use_wandb --dropout_by_layer --epochs 5 --ddp  --num-drops 14 --batch-size 1000
-# python experiment.py alignment_info_stats --save-networks --network AlexNet --dataset ImageNet --use_wandb --epochs 5 --ddp  --num-drops 14 --batch-size 1000
+# python experiment.py alignment_info_stats --save-networks --network AlexNet --dataset ImageNet --use_wandb --epochs 50 --ddp  --num-drops 14 --batch-size 1000
+# torchrun --nproc_per_node=4 experiment.py alignment_info_stats --save-networks --network MLP --dataset MNIST --use_wandb --dropout_by_layer --epochs 50 --ddp  --num-drops 14 --batch-size 1000 --replicates 10
 
 class AlignmentStatisticsInfo(Experiment):
     def get_basename(self):
@@ -79,6 +80,9 @@ class AlignmentStatisticsInfo(Experiment):
         Child process for DDP training. Only rank=0 will save final results to a file.
         """
         try:
+            if rank != 0:
+                self.args.nosave = True
+
             os.environ["MASTER_ADDR"] = "127.0.0.1"
             os.environ["MASTER_PORT"] = str(port)
             dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -162,7 +166,6 @@ class AlignmentStatisticsInfo(Experiment):
                         "dropout_results": drop_res
                     }
                 
-                # Rank 0 saves the final results to disk
                 torch.save(final_ddp_results, "ddp_results.pth")
 
         except Exception as e:
@@ -174,9 +177,9 @@ class AlignmentStatisticsInfo(Experiment):
 
     def main(self):
         if self.args.ddp:
-            world_size = int(os.environ["WORLD_SIZE"])
-            rank = int(os.environ["RANK"])
-            local_rank = int(os.environ["LOCAL_RANK"])
+            world_size = 4#int(os.environ["WORLD_SIZE"])
+            #rank = int(os.environ["RANK"])
+            #local_rank = int(os.environ["LOCAL_RANK"])
             epochs = self.args.epochs
             batch_size = self.args.batch_size
             lr = self.args.default_lr
@@ -223,7 +226,6 @@ class AlignmentStatisticsInfo(Experiment):
                 full_dropout_parameters_pre=dropout_parameters_pre,
             )
 
-            # We can do our normal plotting
             self.plot(results)
             return results, nets
 
@@ -265,17 +267,14 @@ class AlignmentStatisticsInfo(Experiment):
             if isinstance(train_res, dict) and "loss" in train_res:
                 if "loss" in train_res and "accuracy" in train_res:
                     prms = {"vals": ["DDP-Net"], "name": "DDP-Net"}
-                    # or you can store prms in ddp_results too
                     plotting.plot_train_results(self, train_res, None, prms)
 
-            # Plot the dropout
             if isinstance(drop_res, dict) and "progdrop_loss_high" in drop_res:
-                # minimal prms for plotting
                 ddp_prms = {"vals": ["DDP-Net"], "name": "DDP-Net"}
                 plotting.plot_dropout_results(
                     self,
                     drop_res,
-                    {"by_layer": False, "num_drops": 3},  
+                    {"by_layer": False, "num_drops": 3},
                     ddp_prms,
                     dropout_type="ddp_nodes"
                 )

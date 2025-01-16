@@ -2,9 +2,9 @@
 #SBATCH --job-name=alexnet-alignment       # Job name
 #SBATCH --output=ddp_%j.out               # Standard output log
 #SBATCH --error=ddp_%j.err                # Standard error log
-#SBATCH --time=24:00:00                   # Max wall time
+#SBATCH --time=00:30:00                   # Max wall time
 #SBATCH --partition=kempner_h100          # GPU partition or queue
-#SBATCH --nodes=4                         # 4 nodes total
+#SBATCH --nodes=1                         # 4 nodes total
 #SBATCH --ntasks-per-node=4              # 4 tasks per node => 16 tasks total
 #SBATCH --gres=gpu:4                     # 4 GPUs on each node
 #SBATCH --cpus-per-task=24               # Adjust as needed
@@ -16,8 +16,6 @@ conda activate networkAlignmentAnalysis   # your conda environment
 
 # This sets total WORLD_SIZE = (# of nodes) * (# of GPUs per node)
 export WORLD_SIZE=$((SLURM_NNODES * SLURM_GPUS_ON_NODE))
-# For multi-node DDP, you need a MASTER_ADDR & MASTER_PORT
-# Typically, pick the first node in your SLURM allocation as the master
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=29500  # or any free port number
 
@@ -32,8 +30,8 @@ srun \
     --ntasks=$WORLD_SIZE \
     python experiment.py alignment_info_stats \
         --save-networks \
-        --network AlexNet \
-        --dataset ImageNet \
+        --network MLP \
+        --dataset MNIST \
         --use_wandb \
         --dropout_by_layer \
         --epochs 100 \
