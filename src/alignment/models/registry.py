@@ -12,6 +12,7 @@ MODEL_REGISTRY = {
     "AlexNet": alexnet,
 }
 
+# TODO: moving the dataset argument to the config file.
 DATASET_ARGUMENTS = {
     "MLP": {
         "MNIST": dict(input_dim=784, output_dim=10),
@@ -48,7 +49,8 @@ def get_model_parameters(model_name, dataset):
     # get dataset specific arguments
     return DATASET_ARGUMENTS[model_name][dataset]
 
-
+# TODO: Adding the option of getting an nn.Module as the base model or, current version, getting
+# the model_name and takes the base model from the registered models.
 def get_model(model_name, alignment_layer_names: Optional[dict] = None, build=False, dataset=None, **kwargs):
     """
     lookup model constructor from model registry by name
