@@ -1,20 +1,17 @@
 from torch import nn
 from torchvision.models import alexnet as torch_alexnet
 
-from alignment.models.base import AlignmentNetwork
-from alignment.models.layers import (default_metaprms_conv2d, 
-                                     default_metaprms_ignore, 
-                                     default_metaprms_linear)
 
-
-class MLP(AlignmentNetwork):
+class MLP(nn.Module):
     """
     3 hidden layer fully-connected relu network for MNIST including dropouts after input layer
 
     includes optional kwargs for changing the hidden layer widths and the input dimensionality
     """
 
-    def initialize(self, input_dim=784, hidden_widths=[100, 100, 50], output_dim=10, dropout=0.5, linear=False):
+    def __init__(self, input_dim=784, hidden_widths=[100, 100, 50], output_dim=10, dropout=0.5, linear=False):
+        super().__init__()
+        
         """architecture definition"""
 
         # Define activation function (ReLU is default, but network can be "LINEAR" if requested)
@@ -24,23 +21,23 @@ class MLP(AlignmentNetwork):
             activation = nn.ReLU()
 
         # Input layer is always Linear then ReLU
-        layerInput = nn.Sequential(nn.Linear(input_dim, hidden_widths[0]), activation)
+        self.layerInput = nn.Sequential(nn.Linear(input_dim, hidden_widths[0]), activation)
 
         # Hidden layers are dropout / Linear / ReLU
-        layerHidden = []
+        self.layerHidden = nn.ModuleList()
         for ii in range(len(hidden_widths) - 1):
             hwin, hwout = hidden_widths[ii], hidden_widths[ii + 1]
-            layerHidden.append(nn.Sequential(nn.Dropout(p=dropout), nn.Linear(hwin, hwout), activation))
+            self.layerHidden.append(nn.Sequential(nn.Dropout(p=dropout), nn.Linear(hwin, hwout), activation))
 
         # Output layer is alwyays Dropout then Linear
-        layerOutput = nn.Sequential(nn.Dropout(p=dropout), nn.Linear(hidden_widths[-1], output_dim))
-
-        # Register layers in order
-        self.register_layer(layerInput, **default_metaprms_linear(0))
-        for layer in layerHidden:
-            self.register_layer(layer, **default_metaprms_linear(1))
-        self.register_layer(layerOutput, **default_metaprms_linear(1))
-
+        self.layerOutput = nn.Sequential(nn.Dropout(p=dropout), nn.Linear(hidden_widths[-1], output_dim))
+    
+    def forward(self, x):
+        x = self.layerInput(x)
+        for hidden_layer in self.layerHidden:
+            x = hidden_layer(x)
+        return self.layerOutput(x)
+    
     def get_transform_parameters(self, dataset):
         """MLP specific transformations for each dataset"""
         params = {
@@ -65,14 +62,14 @@ class MLP(AlignmentNetwork):
         return params[dataset]
 
 
-class CNN2P2(AlignmentNetwork):
+class CNN2P2(nn.Module):
     """
     CNN with 2 convolutional layers, a max pooling stage, and 2 feedforward layers with dropout
 
     Has flexible build method but strict 2 convolutional / max pooling / 2 feedforward architecture
     """
 
-    def initialize(
+    def __init__(
         self,
         in_channels=1,
         output_dim=10,
@@ -84,6 +81,7 @@ class CNN2P2(AlignmentNetwork):
         dropout=0.5,
         flag=True,
     ):
+        super().__init__()
         """architecture definition"""
 
         for val, name in zip(
@@ -94,7 +92,7 @@ class CNN2P2(AlignmentNetwork):
         assert len(num_hidden) == 2, "num_hidden must be 2 elements describing the number of hidden for each of two feedforward layers"
 
         # create layers
-        layer1 = nn.Sequential(
+        self.layer1 = nn.Sequential(
             nn.Conv2d(
                 in_channels,
                 channels[0],
@@ -105,7 +103,7 @@ class CNN2P2(AlignmentNetwork):
             nn.ReLU(),
             nn.MaxPool2d(2, stride=2),
         )
-        layer2 = nn.Sequential(
+        self.layer2 = nn.Sequential(
             nn.Conv2d(
                 channels[0],
                 channels[1],
@@ -117,24 +115,22 @@ class CNN2P2(AlignmentNetwork):
             nn.MaxPool2d(2, stride=2),
             nn.Flatten(start_dim=1),
         )
-        layer3 = nn.Sequential(
+        self.layer3 = nn.Sequential(
             nn.Dropout(p=dropout),
             nn.Linear(num_hidden[0], num_hidden[1]),
             nn.ReLU(),
         )
-        layer4 = nn.Sequential(
+        self.layer4 = nn.Sequential(
             nn.Dropout(p=dropout),
             nn.Linear(num_hidden[1], output_dim),
         )
 
-        self.register_layer(layer1, **default_metaprms_conv2d(0, flag=flag))
-        self.register_layer(layer2, **default_metaprms_conv2d(0, flag=flag))
-        self.register_layer(layer3, **default_metaprms_linear(1))
-        self.register_layer(layer4, **default_metaprms_linear(1))
-
-        # add these parameters as attributes for easy lookup later
-        self.dropout = dropout
-
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        return self.layer4(x)
+    
     def get_transform_parameters(self, dataset):
         """CNN2P2 specific transformations for each dataset"""
         params = {
@@ -159,7 +155,7 @@ class CNN2P2(AlignmentNetwork):
         return params[dataset]
 
 
-class AlexNet(AlignmentNetwork):
+class AlexNet(nn.Module):
     """
     Local reimplementation of AlexNet so I can measure internal features during training without hooks
 
@@ -194,7 +190,7 @@ class AlexNet(AlignmentNetwork):
     )
     """
 
-    def initialize(self, dropout=0.5, num_classes=1000, weights=None, flag=True):
+    def __init__(self, dropout=0.5, num_classes=1000, weights=None, flag=True):
         """architecture definition"""
 
         # start by loading the architecture of alexnet along with pretrained weights (if requested)
