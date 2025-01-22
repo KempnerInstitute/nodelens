@@ -364,6 +364,7 @@ class AlignmentNetwork(nn.Module):
                 output[:, dropout_idx] = 0
                 output = output * (1 - fraction_dropout)
                 hidden_outputs.append(output)
+                return output
             return dropout_hook
         
         for idx_layer, layer in enumerate(self.alignment_layers):
