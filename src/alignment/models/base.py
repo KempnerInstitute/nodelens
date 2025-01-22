@@ -99,10 +99,12 @@ class AlignmentNetwork(nn.Module):
 
     def _initialize_layers(self, alignment_layer_names, **kwargs):
         """
-        This method initialize the layers participating the alignment computation and their 
-        corresponding input layers. the self.input_layer is being used to add the forward hooks
-        to collect their hidden activations. then these activations will be used as inputs to
-        the corresponding target alignment layers to compute the alignment scores.
+        This method initialize the layers participating the alignment computation and if alignment_layer_names is not None, their 
+        corresponding input layers. after this method:
+        self.alignment_layers will hold the list of layers participating in alignment computation
+        self.alignment_names will hold the names of the self.alignment_layers with the same order
+        and if alignment_layer_names is not None, self.layer_to_input_names will hold a copy of this map from
+        alignment layer names to their input layer names.
         """
         if alignment_layer_names is None:
             self.layer_to_input_names = None
@@ -144,25 +146,25 @@ class AlignmentNetwork(nn.Module):
         return len(self.alignment_layers)
     
     def setup_forward_hooks(self):
-        def getActivation(name):
+        def get_activation(name):
             def activation_hook(module, input, output):
                 self.hidden[name] = output
             return activation_hook
         
-        def getInput(name):
+        def get_input(name):
             def input_hook(module, input, output):
                 self.hidden[name] = input[0]
             return input_hook
         
         if self.layer_to_input_names is None:
             for name, alignment_layer in zip(self.alignment_names, self.alignment_layers):
-                self.hooks[name] = alignment_layer.register_forward_hook(getInput(name))
+                self.hooks[name] = alignment_layer.register_forward_hook(get_input(name))
         else:
             for name, input_layer in self.base_model.named_modules():
                 if name in self.layer_to_input_names.values():
-                    self.hooks[name] = input_layer.register_forward_hook(getActivation(name))
+                    self.hooks[name] = input_layer.register_forward_hook(get_activation(name))
                 if name in self.layer_to_input_names.keys() and self.layer_to_input_names[name] is None:
-                    self.hooks[name] = input_layer.register_forward_hook(getInput(name))
+                    self.hooks[name] = input_layer.register_forward_hook(get_input(name))
 
     def remove_forward_hooks(self):
         for _, hook in self.hooks.items():
@@ -355,28 +357,38 @@ class AlignmentNetwork(nn.Module):
         assert len(idxs) == len(layers), "idxs and layers need to be iterables with the same length"
         assert len(layers) == len(set(layers)), "layers must not have any repeated elements"
 
-        hidden_outputs = []
+        hidden_outputs_dict = {}
         hooks = []
 
-        def dropout(dropout_idx):
+        def dropout(name, dropout_idx):
             def dropout_hook(module, input, output):
                 fraction_dropout = len(dropout_idx) / output.shape[1]
                 output[:, dropout_idx] = 0
                 output = output * (1 - fraction_dropout)
-                hidden_outputs.append(output)
+                hidden_outputs_dict[name] = output
                 return output
             return dropout_hook
         
-        for idx_layer, layer in enumerate(self.alignment_layers):
+        def get_output(name):
+            def output_hook(module, input, output):
+                hidden_outputs_dict[name] = output
+            return output_hook
+        
+        
+        for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
                 dropout_idx = idxs[{val: idx for idx, val in enumerate(layers)}[idx_layer]]
-                hooks.append(layer.register_forward_hook(dropout(dropout_idx)))
+                hooks.append(layer.register_forward_hook(dropout(name , dropout_idx)))
+            else:
+                hooks.append(layer.register_forward_hook(get_output(name)))
         
         x = self.base_model(x)
 
         for hook in hooks:
             hook.remove()
-                
+        
+        assert self.num_layers() == len(hidden_outputs_dict), "number of outputs and the number of alignment layers need to be the same"
+        hidden_outputs = [hidden_outputs_dict[name] for name in self.alignment_names]
 
         # return output of network and outputs of each alignment layer
         return x, hidden_outputs
