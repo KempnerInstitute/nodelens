@@ -727,7 +727,7 @@ class AlignmentNetwork(nn.Module):
         eigenvalue for a specific set of layers.
 
         idx_layers is a list indicating which layers to shape (where the indices
-        should correspond to indices in self.get_alignment_layer_indices())
+        should correspond to order of the layers in self.get_alignment_layers())
 
         eigenvalues and eigenvectors should be a list with length=len(idx_layers)
         and each should correspond to the eigenvalues & eigenvectors of the input
@@ -741,9 +741,9 @@ class AlignmentNetwork(nn.Module):
         where it shapes each eigenvector by the square of the eigenvalues
         """
         # do some input checks
-        assert all([idx in self.get_alignment_layer_indices() for idx in idx_layers]), (
+        assert all([idx in range(self.num_layers()) for idx in idx_layers]), (
             "idx_layers includes some indices not in alignment layers",
-            f"(provided: {idx_layers}, alignment_layer_indices: {self.get_alignment_layer_indices()})",
+            f"(provided: {idx_layers}, alignment layer indecies: {list(range(self.num_layers()))})",
         )
         assert len(idx_layers) == len(eigenvalues), "length of idx_layers and eigenvalues doesn't match"
         assert len(idx_layers) == len(eigenvectors), "length of idx_layers and eigenvectors doesn't match"
@@ -754,8 +754,8 @@ class AlignmentNetwork(nn.Module):
         eigenvectors = [evecs.to(device) for evecs in eigenvectors]
 
         # get weights and original shapes of requested alignment layers
-        weight_shape = [self.get_alignment_weights(idx=idx).shape for idx in idx_layers]
-        weights = [self.get_alignment_weights(idx=idx, flatten=True) for idx in idx_layers]
+        weight_shape = [self.get_alignment_weights()[idx].shape for idx in idx_layers]
+        weights = [self.get_alignment_weights(flatten=True)[idx] for idx in idx_layers]
 
         # measure original norm of weights
         norm_of_weights = [torch.norm(weight, dim=1, keepdim=True) for weight in weights]
@@ -781,4 +781,4 @@ class AlignmentNetwork(nn.Module):
             # reshape to original shape
             shaped_weights = torch.reshape(shaped_weights, shape)
             # update the network
-            self.get_alignment_layers(idx=idx).weight.data = shaped_weights
+            self.get_alignment_layers()[idx].weight.data = shaped_weights
