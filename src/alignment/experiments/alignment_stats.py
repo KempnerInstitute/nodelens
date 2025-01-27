@@ -1,6 +1,7 @@
 import torch
 
-from alignment.models.registry import get_model
+from alignment.models.registry import (get_model,
+                                       get_transform_parameters)
 from alignment import processing
 from alignment import plotting
 from alignment.experiments.experiment import Experiment
@@ -36,7 +37,6 @@ class AlignmentStatistics(Experiment):
                 build=True,
                 dataset=self.args.dataset.name,
                 dropout=self.args.model.dropout,
-                ignore_flag=self.args.alignment.ignore_flag,
             )
             for _ in range(self.args.training.replicates)
         ]
@@ -67,7 +67,7 @@ class AlignmentStatistics(Experiment):
         nets, optimizers, prms = self.create_networks()
 
         # load dataset
-        dataset = self.prepare_dataset(nets[0])
+        dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
 
         # train networks
         train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
