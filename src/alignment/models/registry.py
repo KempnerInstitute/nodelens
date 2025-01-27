@@ -33,24 +33,6 @@ DATASET_ARGUMENTS = {
     },
 }
 
-params = {
-            "MNIST": {
-                "flatten": False,
-                "resize": None,
-            },
-            "CIFAR10": {
-                "flatten": False,
-                "resize": None,
-            },
-            "CIFAR100": {
-                "flatten": False,
-                "resize": None,
-            },
-            "ImageNet": {
-                "flatten": False,
-            },
-        }
-
 # TODO: moving transfrom parameters to the condig file
 def gray_to_rgb(batch):
     batch[0] = batch[0].expand(-1, 3, -1, -1)
