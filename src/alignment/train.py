@@ -182,9 +182,8 @@ def train(nets, optimizers, dataset, **parameters):
                     # just use this minibatch for computing eigenfeatures
                     inputs, _ = net._process_collect_activity(dataset, train_set=False, with_updates=False, use_training_mode=False)
                     _, eigenvalues, eigenvectors = net.measure_eigenfeatures(inputs, with_updates=False)
-                    idx_to_layer_lookup = {layer: idx for idx, layer in enumerate(net.get_alignment_layer_indices())}
-                    eigenvalues = [eigenvalues[idx_to_layer_lookup[ml]] for ml in manual_layers]
-                    eigenvectors = [eigenvectors[idx_to_layer_lookup[ml]] for ml in manual_layers]
+                    eigenvalues = [eigenvalues[ml] for ml in manual_layers]
+                    eigenvectors = [eigenvectors[ml] for ml in manual_layers]
                     net.shape_eigenfeatures(manual_layers, eigenvalues, eigenvectors, transform)
 
         if save_ckpt & (epoch % freq_ckpt == 0):

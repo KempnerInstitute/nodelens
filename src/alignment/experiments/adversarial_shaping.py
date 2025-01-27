@@ -1,7 +1,10 @@
 import torch
 
 from alignment.experiments.experiment import Experiment
-from alignment.models.registry import get_model, get_model_parameters
+from alignment.models.registry import (get_model,
+                                       get_model_parameters,
+                                       get_transform_parameters)
+from alignment.models.base import AlignmentNetwork
 from alignment import processing
 from alignment import plotting
 from alignment.utils import get_eval_transform_by_cutoff
@@ -32,7 +35,7 @@ class AdversarialShaping(Experiment):
         their optimizers and a params dictionary with the experiment parameters associated
         with each network
         """
-        model_constructor = get_model(self.args.model.name)
+        base_model_constructor = get_model(self.args.model.name)
         model_parameters = get_model_parameters(self.args.model.name, self.args.dataset.name)
 
         # get optimizer
@@ -45,11 +48,10 @@ class AdversarialShaping(Experiment):
 
         cutoffs = [co for co in self.args.extra.cutoffs for _ in range(self.args.training.replicates)]
         nets = [
-            model_constructor(
+            AlignmentNetwork(base_model_constructor(
                 dropout=self.args.model.dropout,
                 **model_parameters,
-                ignore_flag=self.args.alignment.ignore_flag,
-            )
+            ))
             for _ in cutoffs
         ]
         nets = [net.to(self.device) for net in nets]
@@ -73,14 +75,14 @@ class AdversarialShaping(Experiment):
         nets, optimizers, prms = self.create_networks()
 
         # load dataset
-        dataset = self.prepare_dataset(nets[0])
+        dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
 
         # train networks
         special_parameters = dict(
             manual_shape=True,
             manual_frequency=self.args.extra.manual_frequency,
             manual_transforms=[get_eval_transform_by_cutoff(co) for co in prms["cutoffs"]],
-            manual_layers=nets[0].get_alignment_layer_indices(),
+            manual_layers=list(range(nets[0].num_layers())),
         )
 
         train_results, test_results = processing.train_networks(self, nets, optimizers, dataset, alignment=True, **special_parameters)
