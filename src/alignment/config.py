@@ -98,11 +98,6 @@ class AlignmentConfig(BaseConfig):
     If used, will not measure alignment during training and testing.
     """
 
-    ignore_flag: bool = False
-    """
-    If used, will omit flagged layers in analyses.
-    """
-
     delta_weights: bool = False
     """
     If used, will measure delta-weights during training.
