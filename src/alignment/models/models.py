@@ -1,6 +1,4 @@
 from torch import nn
-from torchvision.models import alexnet as torch_alexnet
-
 
 class MLP(nn.Module):
     """
@@ -37,31 +35,6 @@ class MLP(nn.Module):
         for hidden_layer in self.layerHidden:
             x = hidden_layer(x)
         return self.layerOutput(x)
-    
-    # TODO: moving transformer configs to the config file.
-    def get_transform_parameters(self, dataset):
-        """MLP specific transformations for each dataset"""
-        params = {
-            "MNIST": {
-                "flatten": True,
-                "resize": None,
-            },
-            "CIFAR10": {
-                "flatten": True,
-                "resize": None,
-            },
-            "CIFAR100": {
-                "flatten": True,
-                "resize": None,
-            },
-            "ImageNet": {
-                "flatten": True,
-            },
-        }
-        if dataset not in params:
-            raise ValueError(f"Dataset ({dataset}) is not in params dictionary: {[k for k in params]}")
-        return params[dataset]
-
 
 class CNN2P2(nn.Module):
     """
@@ -131,26 +104,3 @@ class CNN2P2(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         return self.layer4(x)
-    
-    def get_transform_parameters(self, dataset):
-        """CNN2P2 specific transformations for each dataset"""
-        params = {
-            "MNIST": {
-                "flatten": False,
-                "resize": None,
-            },
-            "CIFAR10": {
-                "flatten": False,
-                "resize": None,
-            },
-            "CIFAR100": {
-                "flatten": False,
-                "resize": None,
-            },
-            "ImageNet": {
-                "flatten": False,
-            },
-        }
-        if dataset not in params:
-            raise ValueError(f"Dataset ({dataset}) is not in params dictionary: {[k for k in params]}")
-        return params[dataset]

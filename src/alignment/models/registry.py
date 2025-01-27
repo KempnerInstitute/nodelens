@@ -33,6 +33,54 @@ DATASET_ARGUMENTS = {
     },
 }
 
+params = {
+            "MNIST": {
+                "flatten": False,
+                "resize": None,
+            },
+            "CIFAR10": {
+                "flatten": False,
+                "resize": None,
+            },
+            "CIFAR100": {
+                "flatten": False,
+                "resize": None,
+            },
+            "ImageNet": {
+                "flatten": False,
+            },
+        }
+
+# TODO: moving transfrom parameters to the condig file
+def gray_to_rgb(batch):
+    batch[0] = batch[0].expand(-1, 3, -1, -1)
+    return batch
+TRANSFORM_PARAMETERS = {
+    "MLP": {
+        "MNIST": dict(flatten=True, resize=None),
+        "CIFAR10": dict(flatten=True, resize=None),
+        "CIFAR100": dict(flatten=True, resize=None),
+        "ImageNet": dict(flatten=True),
+    },
+    "CNN2P2": {
+        "MNIST": dict(flatten=False, resize=None),
+        "CIFAR10": dict(flatten=False, resize=None),
+        "CIFAR100": dict(flatten=False, resize=None),
+        "ImageNet": dict(flatten=False),
+    },
+    "AlexNet": {
+        "MNIST": dict(flatten=False, resize=(256, 256), extra_transform=[gray_to_rgb,]),
+        "CIFAR10": dict(flatten=False, resize=(256, 256)),
+        "CIFAR100": dict(flatten=False, resize=(256, 256)),
+        "ImageNet": dict(center_crop=224, flatten=False, resize=(256, 256)),
+    },
+}
+
+def get_transform_parameters(model_name, dataset):
+    """
+    return transformations per dataset per model
+    """
+    return TRANSFORM_PARAMETERS[model_name][dataset]
 
 def get_model_parameters(model_name, dataset):
     """
