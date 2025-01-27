@@ -283,7 +283,7 @@ class AlignmentNetwork(nn.Module):
 
         # do requested processing and add to output
         for input, layer in zip(inputs_to_layers, self.alignment_layers):
-            if type(layer) == torch.nn.modules.conv.Conv2d:
+            if isinstance(layer, torch.nn.modules.conv.Conv2d):
                 # if convolutional layer, unfold layer to (batch / conv_dim / num_strides)
                 layer_prms = get_unfold_params(layer)
                 unfolded_input = torch.nn.functional.unfold(input, layer.kernel_size, **layer_prms)
@@ -416,9 +416,17 @@ class AlignmentNetwork(nn.Module):
         assert len(layers) == len(eigenvalues), "list of eigenvalues must have same length as list of layers"
         assert len(layers) == len(eigenvectors), "list of eigenvectors must have same length as list of layers"
         device = get_device(x)
+        
+        hidden_inputs_dict = {}
+        hooks = []
+        org_forward_methods = {}
 
-        hidden_inputs = []
-        for idx_layer, (layer, metaprms) in enumerate(zip(self.layers, self.metaparameters)):
+        def get_input(name):
+            def input_hook(module, input, output):
+                hidden_inputs_dict[name] = input
+            return input_hook
+
+        for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
                 # we need to get the target subspace after dropping out eigenvectors
 
@@ -436,40 +444,51 @@ class AlignmentNetwork(nn.Module):
                 # this will roughly preserve the average norm of the data for each sample
                 dropout_correction = torch.sqrt(torch.sum(eigenvalues[idx_to_layer]) / torch.sum(dropout_eval))
 
+                # do forward pass through this layer
+                kwargs = dict(subspace=dropout_evec, correction=dropout_correction)
+                self._forward_subspace(name, layer, hidden_inputs_dict, hooks, org_forward_methods, **kwargs)
             else:
-                # if not target layer, we don't want to do any subspace processing
-                dropout_evec = None
-                dropout_correction = None
+               hooks.append(layer.register_backward_hook(get_input(name)))
+        
+        x = self.base_model(x)
+        
+        for hook in hooks:
+            hook.remove()
+        
+        for name, layer in zip(self.alignment_names, self.alignment_layers):
+            if name in org_forward_methods.keys():
+                layer.forward = org_forward_methods[name]
 
-            # do forward pass through this layer
-            kwargs = dict(subspace=dropout_evec, correction=dropout_correction)
-            x, input_to_layer = self._forward_subspace(x, layer, metaprms, **kwargs)
-
-            if self._include_layer(metaprms):
-                hidden_inputs.append(input_to_layer)
+        assert self.num_layers() == len(hidden_inputs_dict), f"number of inputs {len(hidden_inputs_dict)} and the number of alignment layers {self.num_layers()} need to be the same"
+        hidden_inputs = [hidden_inputs_dict[name] for name in self.alignment_names]
 
         # return output of network and inputs to each alignment layer
         return x, hidden_inputs
 
-    def _forward_subspace(self, x, layer, metaprms, subspace=None, correction=None):
+    def _forward_subspace(self, name, layer, hidden_inputs_dict, hooks, org_forward_methods, subspace=None, correction=None):
         """helper for sending to forward function of desired type"""
-        if metaprms["unfold"]:
-            return self._forward_subspace_convolutional(x, layer, metaprms, subspace=subspace, correction=correction)
+        if isinstance(layer, torch.nn.modules.conv.Conv2d):
+            self._forward_subspace_convolutional(name, layer, hidden_inputs_dict, org_forward_methods, subspace=subspace, correction=correction)
         else:
-            return self._forward_subspace_linear(x, layer, metaprms, subspace=subspace, correction=correction)
+            self._forward_subspace_linear(name, layer, hidden_inputs_dict, hooks, subspace=subspace, correction=correction)
 
-    def _forward_subspace_linear(self, x, layer, _, subspace=None, correction=None):
+    def _forward_subspace_linear(self, name, layer, hidden_inputs_dict, hooks, subspace=None, correction=None):
         """
         implement forward pass for linear layer with optional subspace projection of input to layer
         """
-        if subspace is not None:
-            x = torch.matmul(torch.matmul(x, subspace), subspace.T)
-            if correction is not None:
-                x = x * correction
-        out = layer(x)
-        return out, x
+        def subsapace_linear(name, hidden_inputs_dict, subspace, correction):
+            def modify_input_hook(module, input):
+                if subspace is not None:
+                    input = torch.matmul(torch.matmul(input[0], subspace), subspace.T)
+                    if correction is not None:
+                        input = input * correction
+                hidden_inputs_dict[name] = input
+                return input
+            return modify_input_hook
 
-    def _forward_subspace_convolutional(self, x, layer, metaprms, subspace=None, correction=None):
+        hooks.append(layer.register_forward_pre_hook(subsapace_linear(name, hidden_inputs_dict, subspace, correction)))
+
+    def _forward_subspace_convolutional(self, name, layer, hidden_inputs_dict, org_forward_methods, subspace=None, correction=None):
         """
         implement forward pass for convolutional layer with optional subspace projection of input
 
@@ -482,18 +501,18 @@ class AlignmentNetwork(nn.Module):
         projects onto the subspace within each stride of the convolution
         """
 
-        def _conv_with_subspace(x, layer, subspace, correction):
+        def _conv_with_subspace(self, x, name=name, hidden_inputs_dict=hidden_inputs_dict, subspace=subspace, correction=correction):
             """internal helper for convolving in a subspace"""
             # start by getting size of input to conv layer and layer parameters
-            h_max, w_max = get_maximum_strides(x.size(2), x.size(3), layer)
-            layer_prms = get_unfold_params(layer)
+            h_max, w_max = get_maximum_strides(x.size(2), x.size(3), self)
+            layer_prms = get_unfold_params(self)
 
             # perform convolution in unfolded space
-            weight = layer.weight.data
+            weight = self.weight.data
             weight = weight.view(weight.size(0), -1)
 
             # this is the layer we want to reimplement with a subspace projection
-            x = torch.nn.functional.unfold(x, layer.kernel_size, **layer_prms)
+            x = torch.nn.functional.unfold(x, self.kernel_size, **layer_prms)
 
             # project out subspace
             x = torch.matmul(subspace, torch.matmul(subspace.T, x))
@@ -504,38 +523,20 @@ class AlignmentNetwork(nn.Module):
 
             # save input to target conv layer
             input_to_conv = x.clone()
+            hidden_inputs_dict[name] = input_to_conv
 
             # convolve
             x = torch.matmul(weight, x).view(x.size(0), weight.size(0), h_max, w_max)
 
             # add bias
-            x = x + layer.bias.view(-1, 1, 1)
+            x = x + self.bias.view(-1, 1, 1)
 
-            return x, input_to_conv
+            return x
 
         if subspace is not None:
-            if isinstance(layer, torch.nn.Sequential):
-                layer_idx = metaprms["layer_index"]
-                for idx, sublayer in enumerate(layer):
-                    if idx == layer_idx:
-                        # if conv layer, do convolution with subspace
-                        x, input_to_conv = _conv_with_subspace(x, sublayer, subspace, correction)
-                    else:
-                        # if not target layer, we can process with no funny business
-                        x = sublayer(x)
-
-                # return output of layer and input to convolutional layer
-                return x, input_to_conv
-
-            else:
-                # if not packaged in sequential, can do this directly
-                x, input_to_conv = _conv_with_subspace(x, layer, subspace, correction)
-
-            return x, input_to_conv
-
-        else:
-            # if not using subspace, just pass input through layer and return input/output
-            return layer(x), x
+            org_forward_methods[name] = layer.forward
+            # if not packaged in sequential, can do this directly
+            layer.forward = _conv_with_subspace.__get__(layer, nn.Module)
 
     @torch.no_grad()
     def measure_eigenfeatures(self, inputs, with_updates=True, centered=True):
@@ -597,9 +598,9 @@ class AlignmentNetwork(nn.Module):
         # measure the contribution of each eigenvector on the representation of each input
         beta_activity = []
         inputs = self._preprocess_inputs(inputs, compress_convolutional=False)
-        zipped = zip(inputs, eigenvectors, self.get_alignment_layers(), self.get_alignment_metaparameters())
-        for input, evec, layer, metaprm in zipped:
-            if metaprm["unfold"]:
+        zipped = zip(inputs, eigenvectors, self.get_alignment_layers())
+        for input, evec, layer in zipped:
+            if isinstance(layer, torch.nn.modules.conv.Conv2d):
                 print("measure_class_eigenfeatures has not integrated new convolutional approach")
                 stride_var = torch.var(input, dim=1, keepdim=True)
                 projection = torch.matmul(evec.T, input)
