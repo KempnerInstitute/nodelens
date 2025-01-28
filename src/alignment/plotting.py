@@ -97,21 +97,21 @@ def plot_train_results(exp, train_results, test_results, prms):
     if plot_alignment:
         num_align_epochs = align_mean.size(2)
         num_layers = align_mean.size(0)
-        fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", sharex=True)
+        fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", sharex=True, squeeze=False)
         for idx, label in enumerate(labels):
             for layer in range(num_layers):
                 cmn = align_mean[layer, idx] * 100
                 cse = align_se[layer, idx] * 100
-                ax[layer].plot(range(num_align_epochs), cmn, color=cmap(idx), label=label)
-                ax[layer].fill_between(range(num_align_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
+                ax[0, layer].plot(range(num_align_epochs), cmn, color=cmap(idx), label=label)
+                ax[0, layer].fill_between(range(num_align_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
 
         for layer in range(num_layers):
-            ax[layer].set_ylim(0, None)
-            ax[layer].set_xlabel("Training Epoch")
-            ax[layer].set_ylabel("Alignment (%)")
-            ax[layer].set_title(f"Layer {layer}")
+            ax[0, layer].set_ylim(0, None)
+            ax[0, layer].set_xlabel("Training Epoch")
+            ax[0, layer].set_ylabel("Alignment (%)")
+            ax[0, layer].set_title(f"Layer {layer}")
 
-        ax[0].legend(loc="lower right")
+        ax[0, 0].legend(loc="lower right")
 
         exp.plot_ready("train_alignment_by_layer")
 
@@ -157,6 +157,7 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
         sharex=True,
         sharey=True,
         layout="constrained",
+        squeeze=False
     )
     ax = np.reshape(ax, (num_layers, num_types))
 
@@ -197,6 +198,7 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
         sharex=True,
         sharey=True,
         layout="constrained",
+        squeeze=False
     )
     ax = np.reshape(ax, (num_layers, num_types))
 
@@ -279,7 +281,7 @@ def plot_eigenfeatures(exp, results, prms):
     figdim = 3
     alpha = 0.3
     num_layers = len(mean_beta)
-    fig, ax = plt.subplots(2, num_layers, figsize=(num_layers * figdim, figdim * 2), layout="constrained")
+    fig, ax = plt.subplots(2, num_layers, figsize=(num_layers * figdim, figdim * 2), layout="constrained", squeeze=False)
 
     for layer in range(num_layers):
         num_input = mean_evals[layer].size(1)
@@ -318,7 +320,7 @@ def plot_eigenfeatures(exp, results, prms):
 
     exp.plot_ready("eigenfeatures")
 
-    fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained")
+    fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", squeeze=False)
 
     for layer in range(num_layers):
         num_input = mean_evals[layer].size(1)
@@ -330,24 +332,24 @@ def plot_eigenfeatures(exp, results, prms):
             se_beta = torch.std(mean_beta[layer][idx], dim=0) / np.sqrt(num_nodes)
             mn_sort = torch.mean(mean_sorted[layer][idx], dim=0)
             se_sort = torch.std(mean_sorted[layer][idx], dim=0) / np.sqrt(num_nodes)
-            ax[layer].plot(
+            ax[0, layer].plot(
                 range(num_input),
                 mn_ev,
                 color=cmap(idx),
                 linestyle="--",
                 label="eigvals" if idx == 0 else None,
             )
-            ax[layer].plot(range(num_input), mn_beta, color=cmap(idx), label=label)
-            ax[layer].fill_between(range(num_input), mn_beta + se_beta, mn_beta - se_beta, color=(cmap(idx), alpha))
+            ax[0, layer].plot(range(num_input), mn_beta, color=cmap(idx), label=label)
+            ax[0, layer].fill_between(range(num_input), mn_beta + se_beta, mn_beta - se_beta, color=(cmap(idx), alpha))
 
-            ax[layer].set_xscale("log")
-            ax[layer].set_yscale("log")
-            ax[layer].set_xlabel("Input Dimension")
-            ax[layer].set_ylabel("Relative Eigval & Beta")
-            ax[layer].set_title(f"Layer {layer}")
+            ax[0, layer].set_xscale("log")
+            ax[0, layer].set_yscale("log")
+            ax[0, layer].set_xlabel("Input Dimension")
+            ax[0, layer].set_ylabel("Relative Eigval & Beta")
+            ax[0, layer].set_title(f"Layer {layer}")
 
             if layer == num_layers - 1:
-                ax[layer].legend(loc="best")
+                ax[0, layer].legend(loc="best")
 
     exp.plot_ready("eigenfeatures_loglog")
 
@@ -356,6 +358,7 @@ def plot_eigenfeatures(exp, results, prms):
         num_layers,
         figsize=(num_layers * figdim, figdim * num_types),
         layout="constrained",
+        squeeze=False,
     )
     ax = np.reshape(ax, (num_types, num_layers))
     for layer in range(num_layers):
@@ -436,22 +439,22 @@ def plot_adversarial_results(exp, eigen_results, adversarial_results, prms):
     exp.plot_ready("adversarial_success")
 
     print("plotting adversarial structure...")
-    fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained")
+    fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", squeeze=False)
     for layer in range(num_layers):
         num_input = mean_beta[layer].size(2)
         for idx, label in enumerate(labels):
-            ax[layer].plot(
+            ax[0, layer].plot(
                 range(num_input),
                 torch.nanmean(mean_beta[layer][:, idx], dim=0).detach(),
                 color=cmap(idx),
                 label=label,
             )
-        ax[layer].set_xscale("log")
-        ax[layer].set_xlabel("Input Dimension")
-        ax[layer].set_ylabel("Average Component of Pertubation")
-        ax[layer].set_title(f"Layer {layer}")
+        ax[0, layer].set_xscale("log")
+        ax[0, layer].set_xlabel("Input Dimension")
+        ax[0, layer].set_ylabel("Average Component of Pertubation")
+        ax[0, layer].set_title(f"Layer {layer}")
         if layer == num_layers - 1:
-            ax[layer].legend(loc="best")
+            ax[0, layer].legend(loc="best")
 
     exp.plot_ready("adversarial_structure")
 
@@ -480,7 +483,7 @@ def plot_rf(rf, width, alignment=None, alignBounds=None, showRFs=None, figSize=5
 
     # plotting
     n = int(np.ceil(np.sqrt(rf.shape[0])))
-    fig, axes = plt.subplots(nrows=n, ncols=n, sharex=True, sharey=True)
+    fig, axes = plt.subplots(nrows=n, ncols=n, sharex=True, sharey=True, squeeze=False)
     fig.set_size_inches(figSize, figSize)
 
     N = 1000
