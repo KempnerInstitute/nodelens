@@ -40,6 +40,12 @@ class ModelConfig(BaseConfig):
     Dropout rate.
     """
 
+    alignment_layers: Optional[dict] = None
+    """
+    A dictionary specifying the layers participating in alignment computation and their corresponding input layers
+    none indicates all layers to praticipate. Both key and values should be layer names from model.named_modules() 
+    """
+
 @dataclass
 class DatasetConfig(BaseConfig):
     name: str = "MNIST"

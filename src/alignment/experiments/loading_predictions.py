@@ -55,7 +55,8 @@ class LoadingPredictions(Experiment):
                 AlignmentNetwork(base_model_constructor(
                     dropout=self.args.model.dropout,
                     **model_parameters,
-                ))
+                ),
+                alignment_layer_names=self.args.model.alignment_layers)
                 for _ in lrs
             ]
             nets = [net.to(self.device) for net in nets]
@@ -73,7 +74,7 @@ class LoadingPredictions(Experiment):
             weight_decay_values = [self.args.extra.compare_wd * (reg == "weight_decay") for reg in self.args.extra.regularizers]
             dropouts = [do for do in dropout_values for _ in range(self.args.training.replicates)]
             weight_decays = [wd for wd in weight_decay_values for _ in range(self.args.training.replicates)]
-            nets = [AlignmentNetwork(base_model_constructor(dropout=do, **model_parameters)) for do in dropouts]
+            nets = [AlignmentNetwork(base_model_constructor(dropout=do, **model_parameters), alignment_layer_names=self.args.model.alignment_layers) for do in dropouts]
             nets = [net.to(self.device) for net in nets]
             optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=wd) for net, wd in zip(nets, weight_decays)]
             prms = {

@@ -34,6 +34,7 @@ class AlignmentStatistics(Experiment):
         nets = [
             get_model(
                 self.args.model.name,
+                alignment_layer_names=self.args.model.alignment_layers,
                 build=True,
                 dataset=self.args.dataset.name,
                 dropout=self.args.model.dropout,
