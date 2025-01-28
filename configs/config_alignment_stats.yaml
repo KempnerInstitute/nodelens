@@ -17,7 +17,7 @@ dataset:
 model:
   name: MLP
   dropout: 0
-  alignment_layers: {"layerInput.0": null, "layerHidden.0.1": "layerHidden.0.0", "layerHidden.1.1": "layerHidden.1.0"} # Specify the layers participating in alignment - for all layers use null 
+  alignment_layers: null # Specify the layers participating in alignment - for all layers use null | exp for MLP: {"layerInput.0": null, "layerHidden.0.1": "layerHidden.0.0", "layerHidden.1.1": "layerHidden.1.0"}
 
 optimizer:
   name: Adam
