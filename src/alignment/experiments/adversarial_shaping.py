@@ -51,7 +51,8 @@ class AdversarialShaping(Experiment):
             AlignmentNetwork(base_model_constructor(
                 dropout=self.args.model.dropout,
                 **model_parameters,
-            ))
+            ),
+            alignment_layer_names=self.args.model.alignment_layers)
             for _ in cutoffs
         ]
         nets = [net.to(self.device) for net in nets]
