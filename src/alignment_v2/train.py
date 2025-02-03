@@ -1,6 +1,6 @@
 import torch
 from tqdm import tqdm
-from utils import train_nets, test_nets, save_checkpoint
+from alignment_v2.utils import train_nets, test_nets, save_checkpoint
 
 @train_nets
 def train(nets, opts, dataset, **params):
