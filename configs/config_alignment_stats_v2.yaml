@@ -11,7 +11,7 @@ timestamp: null
 
 dataset:
   name: "ImageNet"
-  path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST" # <-- Add path to your dataset
+  path: "/n/holylfs06/LABS/kempner_shared/Lab/data/imagenet_1k" #"/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST" # <-- Add path to your dataset
   download: false
 
 model:
