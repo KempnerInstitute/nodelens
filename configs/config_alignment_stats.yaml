@@ -1,5 +1,5 @@
 experiment: alignment_stats
-results_path: # <-- Add path to where results to be saved/loaded
+results_path: ${oc.env:RESULTS_PATH,NOT_SET} # Add path to where results to be saved/loaded in your .env file
 no_save: False
 just_plot: False
 save_networks: False
@@ -11,7 +11,7 @@ use_timestamp: False
 
 dataset:
   name: MNIST
-  path: # <-- Add path to your dataset
+  path: ${oc.env:MNIST_PATH,NOT_SET} # Add path to your dataset in your .env file
   download: True # Downloads it if it does not exist.
 
 model:

@@ -24,9 +24,28 @@ class BaseConfig:
         try:
             raw = om.load(str(path))
             conf = om.merge(schema, raw)
-            return cast(C, om.to_object(conf))
+            return cls._check_config(cast(C, om.to_object(conf)))
         except OmegaConfBaseException as e:
-            raise ValueError(str(e))
+            raise ValueError(str(e)) from e
+        
+    @classmethod
+    def _check_config(cls, cfg: C):
+        """Check that the config is valid. 
+        
+        Subclasses can override this method for additional checks. The standard checks are:
+        - results_path is set
+
+        - dataset.path is set
+
+        It is expected that these will be set as environment variables, e.g. RESULTS_PATH, MNIST_PATH etc
+        These can be set in a .env file in the root directory of the project. 
+        """
+        if hasattr(cfg, "results_path") and cfg.results_path == "NOT_SET":
+            raise ValueError("results_path is not set -- please make a .env file and set RESULTS_PATH to a valid path!")
+        if hasattr(cfg, "dataset") and hasattr(cfg.dataset, "path") and cfg.dataset.path == "NOT_SET":
+            dataset_name = cfg.dataset.name
+            raise ValueError(f"{dataset_name}.path is not set -- please make a .env file and set {dataset_name}_PATH to the local path of the dataset!")
+        return cfg
 
 @dataclass
 class ModelConfig(BaseConfig):
