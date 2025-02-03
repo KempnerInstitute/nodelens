@@ -1,0 +1,50 @@
+experiment: alignment_stats
+results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment"
+no_save: false
+just_plot: false
+save_networks: false
+show_params: false
+show_all: false
+use_timestamp: false
+
+dataset:
+  name: MNIST
+  path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST"
+  download: true
+
+model:
+  name: MLP
+  dropout: 0
+  alignment_layers: null
+
+optimizer:
+  name: Adam
+  lr: 1e-3
+  weight_decay: 0
+
+training:
+  batch_size: 1024
+  epochs: 1
+  replicates: 1
+
+alignment:
+  no_alignment: false
+  delta_weights: false
+  frequency: 1
+
+checkpointing:
+  use_prev: false
+  save_checkpoints: false
+  frequency: 1
+  use_wandb: false
+
+extra:
+  num_drops: 9
+  dropout_by_layer: false
+  comparison: "lr"
+  regularizers: ["none", "dropout", "weight_decay"]
+  lrs: [1e-2, 1e-3, 1e-4]
+  compare_dropout: 0.5
+  compare_wd: 1e-5
+  cutoffs: [1e-2, 1e-3, 1e-4, 0.0]
+  manual_frequency: 5

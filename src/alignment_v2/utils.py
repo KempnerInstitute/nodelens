@@ -1,196 +1,51 @@
-import os
-import math
-import zipfile
-from typing import List
-from warnings import warn
-from contextlib import contextmanager
-from functools import wraps
-from natsort import natsorted
-from gitignore_parser import parse_gitignore
-
 import torch
 import numpy as np
-from scipy.linalg import null_space
-from sklearn.decomposition import IncrementalPCA
-from sklearn.decomposition import PCA
+from functools import wraps
+from contextlib import contextmanager
+import math
+from torch.linalg import matrix_rank, eigh
 
-# -------------- context managers & decorators --------------
-@contextmanager
-def no_grad(no_grad=True):
-    if no_grad:
-        with torch.no_grad():
-            yield
-    else:
-        yield
+def get_unfold_params(layer):
+    return dict(stride=layer.stride, padding=layer.padding, dilation=layer.dilation)
 
+def set_net_mode(net, training=True):
+    old = net.training
+    net.train() if training else net.eval()
+    return old
 
 def test_nets(func):
     @wraps(func)
     def wrapper(nets, *args, **kwargs):
-        # get original training mode and set to eval
-        in_training_mode = [set_net_mode(net, training=False) for net in nets]
-
-        # do decorated function
-        func_outputs = func(nets, *args, **kwargs)
-
-        # return networks to whatever mode they used to be in
-        for train_mode, net in zip(in_training_mode, nets):
-            set_net_mode(net, training=train_mode)
-
-        # return decorated function outputs
-        return func_outputs
-
-    # return decorated function
+        modes = [set_net_mode(n, False) for n in nets]
+        out = func(nets, *args, **kwargs)
+        for m, n in zip(modes, nets):
+            set_net_mode(n, m)
+        return out
     return wrapper
-
 
 def train_nets(func):
     @wraps(func)
     def wrapper(nets, *args, **kwargs):
-        # get original training mode and set to train
-        in_training_mode = [set_net_mode(net, training=True) for net in nets]
-
-        # do decorated function
-        func_outputs = func(nets, *args, **kwargs)
-
-        # return networks to whatever mode they used to be in
-        for train_mode, net in zip(in_training_mode, nets):
-            set_net_mode(net, training=train_mode)
-
-        # return decorated function outputs
-        return func_outputs
-
-    # return decorated function
+        modes = [set_net_mode(n, True) for n in nets]
+        out = func(nets, *args, **kwargs)
+        for m, n in zip(modes, nets):
+            set_net_mode(n, m)
+        return out
     return wrapper
 
-
-def set_net_mode(net, training=True):
-    """helper for setting mode of network and returning current mode"""
-    # get current mode of network
-    in_training_mode = net.training
-    # set to training mode or evaluation mode
-    if training:
-        net.train()
-    else:
-        net.eval()
-    # return original mode of network
-    return in_training_mode
+def default_alignment(x, w, relative=True):
+    # Rayleigh quotient: (w^T C w) / (w^T w)
+    # where C is covariance of x (assumes x is (batch, features))
+    if x.dim() > 2:
+        x = x.view(x.size(0), -1)
+    c = torch.cov(x.T)
+    rq = torch.sum((w @ c) * w, dim=1) / torch.sum(w * w, dim=1)
+    if relative:
+        return rq / torch.trace(c)
+    return rq
 
 
-# ------- some other things -------
-def get_device(obj):
-    """simple method to get device of input tensor or nn.Module"""
-    if isinstance(obj, torch.nn.Module):
-        return next(obj.parameters()).device.type
-    elif isinstance(obj, torch.Tensor):
-        return "cuda" if obj.is_cuda else "cpu"
-    else:
-        raise ValueError("")
-
-
-def check_iterable(val):
-    """duck-type check if val is iterable"""
-    try:
-        _ = iter(val)
-    except:
-        return False
-    else:
-        return True
-
-
-def remove_by_idx(input, idx, dim):
-    """
-    remove part of input indexed by idx on dim
-    """
-    idx_keep = [i for i in range(input.size(dim)) if i not in idx]
-    return torch.index_select(input, dim, torch.tensor(idx_keep).to(input.device))
-
-
-def get_eval_transform_by_cutoff(cutoff):
-    """
-    get method for transforming eigenvalues into a binary keep fraction
-
-    will scale each eigenvector by 1 or 0 depending on whether that eigenvalue
-    explains more than **cutoff** fraction of the variance
-
-    returns a callable method
-    """
-
-    def eval_transform(evals):
-        assert torch.all(evals >= 0), "found negative eigenvalues, doesn't work for 'cutoff' eval_transform"
-        evals = evals / torch.sum(evals)
-        return 1.0 * (evals > cutoff)
-
-    return eval_transform
-
-
-def fractional_histogram(*args, **kwargs):
-    """wrapper of np.histogram() with relative counts instead of total or density"""
-    counts, bins = np.histogram(*args, **kwargs)
-    counts = counts / np.sum(counts)
-    return counts, bins
-
-
-def edge2center(edges):
-    """from a list of edges of bins (e.g. for torch.histogram()), return the centers between the edges"""
-    assert edges.ndim == 1, "edges must be a 1-d array"
-    return edges[:-1] + np.diff(edges) / 2
-
-
-def smartcorr(input):
-    """
-    Performs torch corrcoef on the input data but sets each pair-wise correlation coefficent
-    to 0 where the activity has no variance (var=0) for a particular dimension (replaces nans with zeros)sss
-    """
-    idx_zeros = torch.var(input, dim=1) == 0
-    cc = torch.corrcoef(input)
-    cc[idx_zeros, :] = 0
-    cc[:, idx_zeros] = 0
-    return cc
-
-
-def batch_cov(input, centered=True, correction=True):
-    """
-    Performs batched covariance on input data of shape (batch, dim, samples) or (dim, samples)
-
-    Where the resulting batch covariance matrix has shape (batch, dim, dim) or (dim, dim)
-    and bcov[i] = torch.cov(input[i]) if input.ndim==3
-
-    if centered=True (default) will subtract the means first
-
-    if correction=True, will use */(N-1) otherwise will use */N
-    """
-    assert (input.ndim == 2) or (input.ndim == 3), "input must be a 2D or 3D tensor"
-    assert isinstance(correction, bool), "correction must be a boolean variable"
-
-    # check if batch dimension was provided
-    no_batch = input.ndim == 2
-
-    # add an empty batch dimension if not provided
-    if no_batch:
-        input = input.unsqueeze(0)
-
-    # measure number of samples of each input matrix
-    S = input.size(2)
-
-    # subtract mean if doing centered covariance
-    if centered:
-        input = input - input.mean(dim=2, keepdim=True)
-
-    # measure covariance of each input matrix
-    bcov = torch.bmm(input, input.transpose(1, 2))
-
-    # correct for number of samples
-    bcov /= S - 1.0 * correction
-
-    # remove empty batch dimension if not provided
-    if no_batch:
-        bcov = bcov.squeeze(0)
-
-    return bcov
-
-
-def smart_pca(input, centered=True, use_rank=True, correction=True):
+def smart_pca(x, centered=True, use_rank=True, correction=True):
     """
     smart algorithm for pca optimized for speed
 
@@ -201,12 +56,18 @@ def smart_pca(input, centered=True, use_rank=True, correction=True):
 
     if it fails, will fall back on performing sklearns IncrementalPCA whenever forcetry=True
     """
-    assert (input.ndim == 2) or (input.ndim == 3), "input should be a matrix or batched matrices"
-    assert isinstance(correction, bool), "correction should be a boolean"
-
-    if input.ndim == 2:
-        no_batch = True
-        input = input.unsqueeze(0)  # create batch dimension for uniform code
+    # x: (samples, features)
+    if centered:
+        x = x - x.mean(dim=0, keepdim=True)
+    if x.size(1) > x.size(0):
+        # use SVD
+        u, s, v = torch.linalg.svd(x, full_matrices=False)
+        w = (s**2) / (x.size(0) - 1)
+        # pad zeros if needed
+        if w.size(0) < x.size(1):
+            pad = torch.zeros(x.size(1) - w.size(0), device=w.device)
+            w = torch.cat((w, pad))
+        return w, v.T
     else:
         no_batch = False
 
@@ -731,189 +592,74 @@ def named_transpose(list_of_lists, reduction=None):
     if reduction is used, it will be applied to each output, otherwise will make them lists
     """
     if reduction is not None:
-        return map(reduction, zip(*list_of_lists))
-    return map(list, zip(*list_of_lists))
+        return map(reduction, zip(*lol))
+    return list(map(list, zip(*lol)))
 
-
-def ptp(tensor, dim=None, keepdim=False):
-    """
-    simple method for measuring range of tensor on requested dimension or on all data
-    """
-    if dim is None:
-        return tensor.max() - tensor.min()
-    return tensor.max(dim, keepdim).values - tensor.min(dim, keepdim).values
-
-
-def rms(tensor, dim=None, keepdim=False):
-    """simple method for measuring root-mean-square on requested dimension or on all data in tensor"""
-    if dim is None:
-        return torch.sqrt(torch.mean(tensor**2))
-    return torch.sqrt(torch.mean(tensor**2, dim=dim, keepdim=keepdim))
-
-
-def compute_stats_by_type(tensor, num_types, dim, method="var"):
-    """
-    helper method for returning the mean and variance across a certain dimension
-    where multiple types are concatenated on that dimension
-
-    for example, suppose we trained 2 networks each with 3 sets of parameters
-    and concatenated the loss in a tensor like [set1-loss-net1, set1-loss-net2, set2-loss-net1, ...]
-    then this would contract across the nets from each set and return the mean and variance
-    """
-    num_on_dim = tensor.size(dim)
-    num_per_type = int(num_on_dim / num_types)
-    tensor_by_type = tensor.unsqueeze(dim)
-    expand_shape = list(tensor_by_type.shape)
-    expand_shape[dim + 1] = num_per_type
-    expand_shape[dim] = num_types
-    tensor_by_type = tensor_by_type.view(expand_shape)
-    type_means = torch.mean(tensor_by_type, dim=dim + 1)
-    if method == "var":
-        type_dev = torch.var(tensor_by_type, dim=dim + 1)
-    elif method == "std":
-        type_dev = torch.std(tensor_by_type, dim=dim + 1)
-    elif method == "se":
-        type_dev = torch.std(tensor_by_type, dim=dim + 1) / np.sqrt(num_per_type)
-    elif method == "range":
-        type_dev = ptp(tensor_by_type, dim=dim + 1)
+def compute_stats_by_type(tensor, num_types, dim, method="se"):
+    num = tensor.size(dim)
+    per_type = num // num_types
+    tensor = tensor.unsqueeze(dim)
+    new_shape = list(tensor.shape)
+    new_shape[dim] = num_types
+    new_shape.insert(dim+1, per_type)
+    tensor = tensor.view(new_shape)
+    means = torch.mean(tensor, dim=dim+1)
+    if method=="se":
+        dev = torch.std(tensor, dim=dim+1) / np.sqrt(per_type)
+    elif method=="std":
+        dev = torch.std(tensor, dim=dim+1)
+    elif method=="var":
+        dev = torch.var(tensor, dim=dim+1)
+    elif method=="range":
+        dev = tensor.max(dim=dim+1).values - tensor.min(dim=dim+1).values
     else:
-        raise ValueError(f"Method ({method}) not recognized.")
+        raise ValueError("Unknown method")
+    return means, dev
 
-    return type_means, type_dev
+def rms(x, dim=None, keepdim=False):
+    if dim is None:
+        return torch.sqrt(torch.mean(x**2))
+    return torch.sqrt(torch.mean(x**2, dim=dim, keepdim=keepdim))
 
+@contextmanager
+def no_grad(no_grad=True):
+    if no_grad:
+        with torch.no_grad():
+            yield
+    else:
+        yield
 
-def weighted_average(data, weights, dim, keepdim=False, ignore_nan=False):
-    """
-    take the weighted average of **data** on a certain dimension with **weights**
-
-    weights should be a nonnegative vector that broadcasts into data
-    avg = sum_i(data_i * weight_i, dim) / sum_i(weight_i, dim)
-
-    if ignore_nan=True, (default=False), will ignore nans in weighted average
-    """
-    assert data.ndim == weights.ndim, "data and weights must have same number of dimensions"
-    assert torch.all(weights[~torch.isnan(weights)] >= 0), "weights must be nonnegative"
-
-    for d in dim if check_iterable(dim) else [dim]:
-        assert data.size(d) == weights.size(
-            d
-        ), f"data and weights must have same size in averaging dimensions (data.size({d})={data.size(d)}, (weight.size({d})={weights.size(d)}))"
-
-    # use normal sum if not ignore nan, otherwise use nansum
-    sum = torch.nansum if ignore_nan else torch.sum
-
-    # make sure nans are in the same place in weights and data for accurate division by total weight
-    if ignore_nan:
-        weights = weights.expand(data.size())
-        weights = torch.masked_fill(weights, torch.isnan(data), torch.nan)
-
-    # numerator & denominator of weighted average
-    numerator = sum(data * weights, dim=dim, keepdim=keepdim)
-    denominator = sum(weights, dim=dim, keepdim=keepdim)
-
-    # return weighted average
-    return numerator / denominator
-
-
-def fgsm_attack(image, epsilon, data_grad, transform, sign):
-    """update an image with fast-gradient sign method"""
-    warn("fgsm_attack is only going to be in utils temporarily!", DeprecationWarning, stacklevel=2)
-    # Collect the element-wise sign of the data gradient
-    if sign:
+def fgsm_attack(image, epsilon, data_grad, transform, use_sign):
+    if use_sign:
         data_grad = data_grad.sign()
     else:
         data_grad = data_grad.clone()
-    # Create the perturbed image by adjusting each pixel of the input image
-    perturbed_image = image + epsilon * data_grad
-    # Adding clipping to maintain [0,1] range
-    perturbed_image = transform(perturbed_image)
-    # Return the perturbed image
-    return perturbed_image
+    perturbed = image + epsilon * data_grad
+    perturbed = transform(perturbed)
+    return perturbed
 
+def condense_values(full):
+    # full: list[network][batch][layer]
+    num_layers = len(full[0][0])
+    return [torch.stack([torch.cat([f[layer].unsqueeze(0) for f in net], dim=0)
+                         for net in full]) for layer in range(num_layers)]
 
-def str2bool(str):
-    if isinstance(str, bool):
-        return str
-    if str.lower() in ("true", "1"):
-        return True
-    elif str.lower() in ("false", "0"):
-        return False
-    else:
-        raise TypeError("Boolean type expected")
+def save_checkpoint(nets, opts, results, path):
+    ckpt = {f"model_state_dict_{i}": net.state_dict() for i, net in enumerate(nets)}
+    ckpt.update({f"optimizer_state_dict_{i}": opt.state_dict() for i, opt in enumerate(opts)})
+    ckpt.update(results)
+    torch.save(ckpt, path)
 
-
-def save_checkpoint(nets, optimizers, results, path):
-    """
-    Method for saving checkpoints for networks throughout training.
-    """
-    multi_model_ckpt = {f"model_state_dict_{i}": net.state_dict() for i, net in enumerate(nets)}
-    multi_optimizer_ckpt = {f"optimizer_state_dict_{i}": opt.state_dict() for i, opt in enumerate(optimizers)}
-    checkpoint = results | multi_model_ckpt | multi_optimizer_ckpt
-    torch.save(checkpoint, path)
-
-
-def load_checkpoints(nets, optimizers, device, path):
-    """
-    Method for loading presaved checkpoint during training.
-    TODO: device handling for passing between gpu/cpu
-    """
-
-    if device == "cpu":
-        checkpoint = torch.load(path, map_location=device)
-    elif device == "cuda":
-        checkpoint = torch.load(path)
-
-    net_ids = natsorted([key for key in checkpoint if key.startswith("model_state_dict")])
-    opt_ids = natsorted([key for key in checkpoint if key.startswith("optimizer_state_dict")])
-    assert all(
-        [oi.split("_")[-1] == ni.split("_")[-1] for oi, ni in zip(opt_ids, net_ids)]
-    ), "nets and optimizers cannot be matched up from checkpoint"
-
-    [net.load_state_dict(checkpoint.pop(net_id)) for net, net_id in zip(nets, net_ids)]
-    [opt.load_state_dict(checkpoint.pop(opt_id)) for opt, opt_id in zip(optimizers, opt_ids)]
-
-    if device == "cuda":
-        [net.to(device) for net in nets]
-
-    return nets, optimizers, checkpoint
-
-
-def match_git(path):
-    """simple method for determining if a path is a git-related file or directory"""
-    if ".git" in path:
-        return True
-    return False
-
-
-def compress_directory(output_path, directory_path=None):
-    """send an entire directory to a zip file at output_path, using .gitignore and ignoring .git files"""
-    if directory_path is None:
-        # relative to utils -- this is the main repo path
-        directory_path = os.path.dirname(os.path.abspath(__file__)) + "/../.."
-        print(directory_path)
-    # Parse .gitignore file
-    gitignore_path = os.path.join(directory_path, ".gitignore")
-    matches = parse_gitignore(gitignore_path)
-
-    # Prepare list for copying files
-    files_to_copy = []
-    archive_names = []
-    for dirpath, dirnames, files in os.walk(directory_path):
-        if matches(dirpath) or match_git(dirpath):
-            # clear any files from within this path
-            dirnames[:] = []
-        else:
-            # Filter files based on .gitignore rules (and don't save any .git files)
-            keep_files = [f for f in files if not matches(f) and not match_git(f)]
-            # Make full path
-            full_files = [os.path.join(dirpath, f) for f in keep_files]
-            for file in full_files:
-                # Add file to the copy list
-                files_to_copy.append(file)
-                archive_names.append(os.path.relpath(file, directory_path))
-
-    # create zip file
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        # go through directory
-        for file, name in zip(files_to_copy, archive_names):
-            zipf.write(file, arcname=name)
+def load_checkpoints(nets, opts, device, path):
+    ckpt = torch.load(path, map_location=device)
+    from natsort import natsorted
+    model_keys = natsorted([k for k in ckpt if k.startswith("model_state_dict")])
+    opt_keys = natsorted([k for k in ckpt if k.startswith("optimizer_state_dict")])
+    for net, key in zip(nets, model_keys):
+        net.load_state_dict(ckpt.pop(key))
+    for opt, key in zip(opts, opt_keys):
+        opt.load_state_dict(ckpt.pop(key))
+    if device=="cuda":
+        for net in nets:
+            net.to(device)
+    return nets, opts, ckpt
