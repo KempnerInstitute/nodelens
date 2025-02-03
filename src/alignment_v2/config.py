@@ -19,19 +19,19 @@ class BaseConfig:
 
 @dataclass
 class ModelConfig(BaseConfig):
-    name: str = "MLP"
+    name: str = "mlp"
     dropout: float = 0
     alignment_layers: Optional[dict] = None
 
 @dataclass
 class DatasetConfig(BaseConfig):
-    name: str = "MNIST"
+    name: str = "mnist"
     path: Optional[str] = None
     download: bool = False
 
 @dataclass
 class OptimizerConfig(BaseConfig):
-    name: str = "Adam"
+    name: str = "adam"
     lr: float = 1e-3
     weight_decay: float = 0
 
@@ -59,11 +59,11 @@ class ExtraConfig(BaseConfig):
     num_drops: int = 9
     dropout_by_layer: bool = False
     comparison: str = "lr"
-    regularizers: List[str] = field(default_factory=lambda: ["none","dropout","weight_decay"])
-    lrs: List[float] = field(default_factory=lambda: [1e-2,1e-3,1e-4])
+    regularizers: List[str] = field(default_factory=lambda: ["none", "dropout", "weight_decay"])
+    lrs: List[float] = field(default_factory=lambda: [1e-2, 1e-3, 1e-4])
     compare_dropout: float = 0.5
     compare_wd: float = 1e-5
-    cutoffs: List[float] = field(default_factory=lambda: [1e-2,1e-3,1e-4,0.0])
+    cutoffs: List[float] = field(default_factory=lambda: [1e-2, 1e-3, 1e-4, 0.0])
     manual_frequency: int = 5
 
 @dataclass
@@ -78,7 +78,6 @@ class ExperimentConfig(BaseConfig):
     device: Optional[str] = None
     use_timestamp: bool = False
     timestamp: Optional[str] = None
-
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
