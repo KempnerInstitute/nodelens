@@ -1,4 +1,4 @@
-name: networkAlignmentAnalysis
+name: alignment
 channels:
   - pytorch
   - nvidia
