@@ -11,14 +11,7 @@ from torchvision.transforms import v2 as transforms
 
 REQUIRED_PROPERTIES = ["dataset_constructor", "loss_function"]
 
-def default_loader_parameters(
-    distributed,
-    batch_size=1024,
-    num_workers=2,
-    shuffle=True,
-    pin_memory=True,
-    persistent_workers=True,
-):
+def default_loader_parameters(distributed, batch_size=1024, num_workers=2, shuffle=True, pin_memory=True, persistent_workers=True):
     return dict(
         batch_size=batch_size,
         num_workers=num_workers,
@@ -28,14 +21,7 @@ def default_loader_parameters(
     )
 
 class DataSet(ABC):
-    def __init__(
-        self,
-        device=None,
-        distributed=False,
-        dataset_parameters={},
-        transform_parameters={},
-        loader_parameters={},
-    ):
+    def __init__(self, device=None, distributed=False, dataset_parameters={}, transform_parameters={}, loader_parameters={}):
         self.set_properties()
         self.check_properties()
         self.device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -168,14 +154,7 @@ DATASET_REGISTRY = {
     "ImageNet": ImageNet2012,
 }
 
-def get_dataset(
-    dataset_name,
-    build=False,
-    dataset_parameters={},
-    transform_parameters={},
-    loader_parameters={},
-    **kwargs,
-):
+def get_dataset(dataset_name, build=False, dataset_parameters={}, transform_parameters={}, loader_parameters={}, **kwargs):
     if dataset_name not in DATASET_REGISTRY:
         raise ValueError(f"Dataset ({dataset_name}) is not in DATASET_REGISTRY")
     dataset_cls = DATASET_REGISTRY[dataset_name]
