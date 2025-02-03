@@ -211,6 +211,9 @@ def smart_pca(input, centered=True, use_rank=True, correction=True):
 
     _, D, S = input.size()
     if D > S:
+        # subtract mean if doing centered covariance
+        if centered:
+            input = input - input.mean(dim=2, keepdim=True)
         # if more dimensions than samples, it's more efficient to run svd
         v, w, _ = named_transpose([torch.linalg.svd(inp) for inp in input])
         # convert singular values to eigenvalues
