@@ -1,0 +1,43 @@
+experiment: imagenet_alignment_train
+results_path: "/path/to/results/imagenet_train"
+no_save: false
+just_plot: false
+save_networks: true
+show_params: false
+show_all: false
+use_timestamp: false
+
+dataset:
+  name: ImageNet
+  path: "/path/to/imagenet"
+  download: false
+
+model:
+  name: alexnet
+  dropout: 0.5
+  alignment_layers: null
+
+optimizer:
+  name: SGD
+  lr: 0.01
+  weight_decay: 1e-4
+
+training:
+  batch_size: 256
+  epochs: 1
+  replicates: 1
+
+alignment:
+  no_alignment: false
+  delta_weights: true
+  frequency: 10
+
+checkpointing:
+  use_prev: false
+  save_checkpoints: true
+  frequency: 1
+  use_wandb: false
+
+extra:
+  num_drops: 9
+  dropout_by_layer: false
