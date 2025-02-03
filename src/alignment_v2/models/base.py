@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from tqdm import tqdm
 
-from alignment.core.utils import (check_iterable,
+from alignment_v2.utils import (check_iterable,
                              get_maximum_strides,
                              weighted_average,
                              get_device,
@@ -14,7 +14,7 @@ from alignment.core.utils import (check_iterable,
                              get_unfold_params,
                              smart_pca,
                              alignment)
-from alignment.models.layers import (LAYER_REGISTRY, 
+from alignment_v2.models.layers import (LAYER_REGISTRY, 
                                      REGISTRY_REQUIREMENTS, 
                                      check_metaparameters)
 

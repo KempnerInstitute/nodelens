@@ -1,5 +1,5 @@
 from torch import nn
-from alignment import utils
+from alignment_v2 import utils
 
 # The LAYER_REGISTRY contains meta parameters for each type of layer used in alignment networks
 REGISTRY_REQUIREMENTS = [

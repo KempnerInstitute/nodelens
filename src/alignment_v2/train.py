@@ -3,7 +3,7 @@ from copy import copy, deepcopy
 import torch
 from tqdm import tqdm
 
-from alignment.core.utils import (
+from alignment_v2.utils import (
     transpose_list,
     condense_values,
     test_nets,
