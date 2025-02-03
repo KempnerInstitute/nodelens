@@ -117,7 +117,6 @@ def smart_pca(input, centered=True, use_rank=True, correction=True):
         no_batch = False
     _, D, S = input.size()
     if D > S:
-                # subtract mean if doing centered covariance
         if centered:
             input = input - input.mean(dim=2, keepdim=True)
         v, w, _ = named_transpose([torch.linalg.svd(inp) for inp in input])
@@ -197,8 +196,9 @@ def expected_alignment_distribution(eigenvalues, relative=True, valid_rotation=T
         coefficients = torch.ones((N, N * num_tests))
     coefficients = coefficients.to(get_device(eigenvalues))
     weights = eigenvalues * coefficients
-    alignment = torch.sum(eigenvalues * weights, dim=0) / weights.sum(dim=0)
-    counts, bins = torch.histogram(alignment.cpu(), bins=bins, density=True)
+    align = torch.sum(eigenvalues * weights, dim=0) / weights.sum(dim=0)
+    counts, bins = torch.histogram(align.cpu(), bins=bins, density=True)
+    from alignment.core.utils import edge2center
     centers = edge2center(bins)
     return counts, bins, centers
 
@@ -296,19 +296,20 @@ def weighted_average(data, weights, dim, keepdim=False, ignore_nan=False):
     assert data.ndim == weights.ndim, "data and weights must have same number of dimensions"
     assert torch.all(weights[~torch.isnan(weights)] >= 0), "weights must be nonnegative"
 
+    from alignment.core.utils import check_iterable
     for d in dim if check_iterable(dim) else [dim]:
         assert data.size(d) == weights.size(
             d
         ), f"data and weights must have same size in averaging dimensions (data.size({d})={data.size(d)}, (weight.size({d})={weights.size(d)}))"
 
-    sum = torch.nansum if ignore_nan else torch.sum
+    sum_fn = torch.nansum if ignore_nan else torch.sum
 
     if ignore_nan:
         weights = weights.expand(data.size())
         weights = torch.masked_fill(weights, torch.isnan(data), torch.nan)
 
-    numerator = sum(data * weights, dim=dim, keepdim=keepdim)
-    denominator = sum(weights, dim=dim, keepdim=keepdim)
+    numerator = sum_fn(data * weights, dim=dim, keepdim=keepdim)
+    denominator = sum_fn(weights, dim=dim, keepdim=keepdim)
     return numerator / denominator
 
 def fgsm_attack(image, epsilon, data_grad, transform, sign):
@@ -343,7 +344,6 @@ def load_checkpoints(nets, optimizers, device, path):
     elif device == "cuda":
         checkpoint = torch.load(path)
 
-    from natsort import natsorted
     net_ids = natsorted([key for key in checkpoint if key.startswith("model_state_dict")])
     opt_ids = natsorted([key for key in checkpoint if key.startswith("optimizer_state_dict")])
     assert all(
