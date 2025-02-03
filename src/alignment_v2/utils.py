@@ -5,6 +5,9 @@ from contextlib import contextmanager
 import math
 from torch.linalg import matrix_rank, eigh
 
+def get_unfold_params(layer):
+    return dict(stride=layer.stride, padding=layer.padding, dilation=layer.dilation)
+
 def set_net_mode(net, training=True):
     old = net.training
     net.train() if training else net.eval()
