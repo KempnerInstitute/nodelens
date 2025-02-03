@@ -41,7 +41,7 @@ class ModelConfig(BaseConfig):
 class DatasetConfig(BaseConfig):
     name: str = "MNIST"
     path: Optional[str] = None
-    download: bool = False
+    #download: bool = False
 
 @dataclass
 class OptimizerConfig(BaseConfig):

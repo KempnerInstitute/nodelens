@@ -11,6 +11,7 @@ from alignment_v2.utils import (
     save_checkpoint,
     smart_pca,
     expected_alignment_distribution,
+    get_dropout_indices,
 )
 
 @train_nets
@@ -211,7 +212,6 @@ def test(nets, dataset, **parameters):
     }
 
     if measure_alignment:
-        from alignment.core.utils import transpose_list, condense_values
         results["alignment"] = condense_values(transpose_list(alignment))
 
     if run is not None:
@@ -364,7 +364,6 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     use_test = not parameters.get("train_set", True)
     dataloader = dataset.test_loader if use_test else dataset.train_loader
 
-    from alignment.core.utils import get_dropout_indices
     for batch in tqdm(dataloader):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1

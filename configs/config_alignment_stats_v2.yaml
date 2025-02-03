@@ -11,7 +11,7 @@ timestamp: null
 dataset:
   name: "ImageNet"
   path: "/n/holylfs06/LABS/kempner_shared/Lab/data/imagenet_1k"  # <-- Add path to your dataset
-  download: false
+  #download: false
 
 model:
   name: "AlexNet"
