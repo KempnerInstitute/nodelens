@@ -182,9 +182,8 @@ def train(nets, optimizers, dataset, **parameters):
                     # just use this minibatch for computing eigenfeatures
                     inputs, _ = net._process_collect_activity(dataset, train_set=False, with_updates=False, use_training_mode=False)
                     _, eigenvalues, eigenvectors = net.measure_eigenfeatures(inputs, with_updates=False)
-                    idx_to_layer_lookup = {layer: idx for idx, layer in enumerate(net.get_alignment_layer_indices())}
-                    eigenvalues = [eigenvalues[idx_to_layer_lookup[ml]] for ml in manual_layers]
-                    eigenvectors = [eigenvectors[idx_to_layer_lookup[ml]] for ml in manual_layers]
+                    eigenvalues = [eigenvalues[ml] for ml in manual_layers]
+                    eigenvectors = [eigenvectors[ml] for ml in manual_layers]
                     net.shape_eigenfeatures(manual_layers, eigenvalues, eigenvectors, transform)
 
         if save_ckpt & (epoch % freq_ckpt == 0):
@@ -329,20 +328,19 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     if not (isinstance(nets, list)):
         nets = [nets]
 
-    # get index to each alignment layer
-    idx_dropout_layers = nets[0].get_alignment_layer_indices()
+    # get the number of alignment layers
+    n_alignment_idx = nets[0].num_layers()
 
     # get alignment of networks if not provided
     if alignment is None:
         alignment = test(nets, dataset, **parameters)["alignment"]
 
     # check if alignment has the right length (ie number of layers) (otherwise can't make assumptions about where the classification layer is)
-    assert len(alignment) == len(idx_dropout_layers), "the number of layers in **alignment** doesn't correspond to the number of alignment layers"
+    assert len(alignment) == n_alignment_idx, "the number of layers in **alignment** doesn't correspond to the number of alignment layers"
 
     # don't dropout classification layer if included as an alignment layer
-    classification_layer = nets[0].num_layers(all=True) - 1  # index to last layer in network
-    if classification_layer in idx_dropout_layers:
-        idx_dropout_layers.pop(-1)
+    if nets[0].is_classification_layer_included():
+        n_alignment_idx -= 1
         alignment.pop(-1)
 
     # get average alignment (across batches) and index of average alignment by node
@@ -354,7 +352,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     by_layer = parameters.get("by_layer", False)
-    num_layers = len(idx_dropout_layers) if by_layer else 1
+    num_layers = n_alignment_idx if by_layer else 1
 
     # preallocate tracker tensors
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
@@ -388,10 +386,10 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         [idx_low[layer]],
                         [idx_rand[layer]],
                     )
-                    drop_layer = [idx_dropout_layers[layer]]
+                    drop_layer = [layer]
                 else:
                     drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
-                    drop_layer = copy(idx_dropout_layers)
+                    drop_layer = [ix for ix in range(n_alignment_idx)]
 
                 # get output with targeted dropout
                 out_high = [net.forward_targeted_dropout(images, [drop[idx, :] for drop in drop_high], drop_layer)[0] for idx, net in enumerate(nets)]
@@ -426,7 +424,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         "progdrop_acc_rand": progdrop_acc_rand / num_batches,
         "dropout_fraction": drop_fraction,
         "by_layer": by_layer,
-        "idx_dropout_layers": idx_dropout_layers,
+        "idx_dropout_layers": [ix for ix in range(n_alignment_idx)],
     }
 
     return results
@@ -465,14 +463,14 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         nets = [nets]
 
     # get index to each alignment layer
-    idx_dropout_layers = nets[0].get_alignment_layer_indices()
+    n_alignment_idx = nets[0].num_layers()
 
     # check if alignment has the right length (ie number of layers) (otherwise can't make assumptions about where the classification layer is)
     assert all(
-        [len(ev) == len(idx_dropout_layers) for ev in eigenvectors]
+        [len(ev) == n_alignment_idx for ev in eigenvectors]
     ), "the number of layers in **eigenvectors** doesn't correspond to the number of alignment layers"
     assert all(
-        [len(ev) == len(idx_dropout_layers) for ev in eigenvalues]
+        [len(ev) == n_alignment_idx for ev in eigenvalues]
     ), "the number of layers in **eigenvalues** doesn't correspond to the number of alignment layers"
 
     # preallocate variables and define metaparameters
@@ -480,7 +478,7 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     by_layer = parameters.get("by_layer", False)
-    num_layers = len(idx_dropout_layers) if by_layer else 1
+    num_layers = n_alignment_idx if by_layer else 1
 
     # create index of eigenvalue for compatibility with get_dropout_indices
     idx_eigenvalue = [torch.fliplr(torch.tensor(range(0, ev.size(1))).expand(num_nets, -1)) for ev in eigenvectors[0]]
@@ -517,12 +515,12 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
                         [idx_low[layer]],
                         [idx_rand[layer]],
                     )
-                    drop_layer = [idx_dropout_layers[layer]]
+                    drop_layer = [layer]
                     drop_evals = [[evals[layer]] for evals in eigenvalues]
                     drop_evecs = [[evecs[layer]] for evecs in eigenvectors]
                 else:
                     drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
-                    drop_layer = copy(idx_dropout_layers)
+                    drop_layer = [ix for ix in range(n_alignment_idx)]
                     drop_evals = deepcopy(eigenvalues)
                     drop_evecs = deepcopy(eigenvectors)
 
@@ -570,7 +568,7 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         "progdrop_acc_rand": progdrop_acc_rand / num_batches,
         "dropout_fraction": drop_fraction,
         "by_layer": by_layer,
-        "idx_dropout_layers": idx_dropout_layers,
+        "idx_dropout_layers": [ix for ix in range(n_alignment_idx)],
     }
 
     return results
