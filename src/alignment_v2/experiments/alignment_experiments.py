@@ -2,10 +2,10 @@ import torch
 import argparse
 import sys
 
-from alignment.models.registry import (get_model, get_transform_parameters)
-from alignment.core import processing
-from alignment.core.config import ExperimentConfig
-from alignment.experiments.experiment import Experiment
+from alignment_v2.models.registry import (get_model, get_transform_parameters)
+from alignment_v2 import processing
+from alignment_v2.config import ExperimentConfig
+from alignment_v2.experiments.experiment import Experiment
 
 class GeneralAlignmentExperiment(Experiment):
     """
@@ -125,5 +125,6 @@ if __name__ == "__main__":
     cli_main()
     
     
-    
-# python alignment_v2/experiments/alignment_experiment.py --config config/config_alignment_stats.yaml
+# Run this script from the command line from alignment folder
+
+# python src/alignment_v2/experiments/alignment_experiments.py --config configs/config_alignment_stats_v2.yaml
