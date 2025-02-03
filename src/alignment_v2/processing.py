@@ -8,12 +8,16 @@ from alignment.core.utils import load_checkpoints, test_nets, transpose_list, fg
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     """train and test networks"""
+    # alignment is only computed if compute_alignment == True and compute_during_training == True
+    do_alignment = exp.args.alignment.compute_alignment and exp.args.alignment.compute_during_training
+
     parameters = dict(
         train_set=True,
         num_epochs=exp.args.training.epochs,
-        alignment=not (exp.args.alignment.no_alignment),
-        delta_weights=exp.args.alignment.delta_weights,
-        frequency=exp.args.alignment.frequency,
+        alignment=do_alignment,
+        measure_weight_deltas=exp.args.alignment.measure_weight_deltas,
+        alignment_eval_frequency=exp.args.alignment.alignment_eval_frequency,
+        methods=exp.args.alignment.methods,
         run=exp.run,
     )
 
@@ -34,8 +38,13 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     print("training networks...")
     train_results = train.train(nets, optimizers, dataset, **parameters)
 
-    print("testing networks...")
+    # do testing loop if we want alignment during inference or we simply want final evaluation
+    do_alignment_inference = exp.args.alignment.compute_alignment and exp.args.alignment.compute_during_inference
+
     parameters["train_set"] = False
+    parameters["alignment"] = do_alignment_inference
+
+    print("testing networks (inference)...")
     test_results = train.test(nets, dataset, **parameters)
 
     return train_results, test_results
@@ -51,7 +60,11 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
     return dropout_results, dropout_parameters
 
 def measure_eigenfeatures(exp, nets, dataset, train_set=False):
+    """
+    measure eigenfeatures for each net
+    """
     print("measuring eigenfeatures...")
+    from alignment.core.utils import transpose_list
     beta, eigvals, eigvecs, class_betas = [], [], [], []
     for net in tqdm(nets):
         inputs, labels = net._process_collect_activity(
@@ -77,6 +90,9 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
     )
 
 def eigenvector_dropout(exp, nets, dataset, eigen_results, train_set=False):
+    """
+    do targeted eigenvector dropout with precomputed eigenfeatures
+    """
     print("performing targeted eigenvector dropout...")
     evec_dropout_parameters = dict(num_drops=exp.args.extra.num_drops, by_layer=exp.args.extra.dropout_by_layer, train_set=train_set)
     evec_dropout_results = train.eigenvector_dropout(nets, dataset, eigen_results["eigvals"], eigen_results["eigvecs"], **evec_dropout_parameters)
@@ -87,12 +103,14 @@ def measure_adversarial_attacks(nets, dataset, exp, eigen_results, train_set=Fal
     """
     do adversarial attack and measure structure with regards to eigenfeatures
     """
+
     def get_beta(inputs, eigenvectors):
         return [input.cpu() @ evec for input, evec in zip(inputs, eigenvectors)]
 
     epsilons = parameters.get("epsilons")
     use_sign = parameters.get("use_sign")
     fgsm_transform = parameters.get("fgsm_transform", lambda x: x)
+
     eigenvectors = eigen_results["eigvecs"]
 
     num_eps = len(epsilons)
@@ -152,14 +170,6 @@ def measure_adversarial_attacks(nets, dataset, exp, eigen_results, train_set=Fal
                 examples[ii][epsidx].append((init_pred[idx], final_pred[idx], adv_ex[idx]))
 
     accuracy = accuracy / float(len(dataloader.dataset))
+    from alignment.core.utils import transpose_list
     betas = transpose_list([[cb / float(len(dataloader.dataset)) for cb in beta] for beta in betas])
     return dict(accuracy=accuracy, betas=betas, examples=examples, epsilons=epsilons, use_sign=use_sign)
-
-@test_nets
-def measure_alignment_distribution(nets, dataset, **parameters):
-    """
-    method for measuring alignment distribution and several associated analyses
-    """
-    parameters = dict(
-        train_set=True,
-    )
