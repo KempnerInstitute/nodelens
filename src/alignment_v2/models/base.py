@@ -21,17 +21,6 @@ from alignment.models.layers import (LAYER_REGISTRY,
 class AttributeReference:
     """
     Simple class designed to be a reference to the parent class as an attribute.
-
-    This is required for compatibility with using DDP for training pytorch modules,
-    since we'll sometimes train DDP models and sometimes not, we want the code to
-    work the same way. However, if you instantiate a DPP model from a network:
-
-    net = AlignmentNetwork()
-    ddp_net = DDP(net)
-
-    Then the AlignmentNetwork methods will only be accessible in ddp_net.module.__. Therefore,
-    if we have a system whereby the AlignmentNetwork methods can also be accessed in
-    net.module.__, then the code can be the same regardless of whether we're using DDP or not.
     """
 
     def __init__(self, parent):
@@ -350,6 +339,7 @@ class AlignmentNetwork(nn.Module):
                 warn_message = f"Number of elements to each class is unequal (min={min_per_class}, max={max_per_class}). Clipping examples."
                 warn(warn_message, RuntimeWarning, stacklevel=1)
             idx_to_class = [idx[:min_per_class] for idx in idx_to_class]
+        import torch
         idx_to_class = torch.stack(idx_to_class).unsqueeze(1)
         beta_activity = []
         inputs = self._preprocess_inputs(inputs, compress_convolutional=False)
@@ -373,7 +363,6 @@ class AlignmentNetwork(nn.Module):
         zipped = enumerate(zip(inputs, weights))
         iterate = tqdm(zipped) if with_updates else zipped
         for ii, (input, weight) in iterate:
-            from alignment.core.utils import smart_pca
             w, v = smart_pca(input.T, centered=centered)
             weight = weight / torch.norm(weight, dim=1, keepdim=True)
             beta.append(weight.cpu() @ v)
