@@ -1,0 +1,58 @@
+
+experiment: "alexnet_alignment_example"
+results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment" # <-- Add path to where results to be saved/loaded
+no_save: false
+just_plot: false
+save_networks: false
+show_params: false
+show_all: false
+use_timestamp: false
+timestamp: null
+
+dataset:
+  name: "ImageNet"
+  path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST" # <-- Add path to your dataset
+  download: false
+
+model:
+  name: "AlexNet"
+  dropout: 0
+  # For demonstration, we pick a single layer from AlexNet 'features' to measure alignment.
+  # If you want all layers, set alignment_layers: null
+  alignment_layers:
+    "features.8": null
+
+optimizer:
+  name: "Adam"
+  lr: 1e-4
+  weight_decay: 0
+
+training:
+  batch_size: 64
+  epochs: 0
+  replicates: 1
+
+alignment:
+  compute_alignment: true
+  measure_weight_deltas: false
+  alignment_eval_frequency: 1
+  methods: ["RQ","MI_0"]
+  compute_during_training: false
+  compute_during_inference: true
+
+checkpointing:
+  use_prev: false
+  save_checkpoints: false
+  frequency: 1
+  use_wandb: false
+
+extra:
+  num_drops: 0
+  dropout_by_layer: false
+  comparison: "lr"
+  regularizers: ["none", "dropout", "weight_decay"]
+  lrs: [1e-3, 1e-4]
+  compare_dropout: 0.5
+  compare_wd: 1e-5
+  cutoffs: [1e-2, 1e-3, 1e-4, 0.0]
+  manual_frequency: 5
