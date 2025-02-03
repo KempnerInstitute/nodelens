@@ -1,5 +1,5 @@
-experiment: alignment_stats
-results_path: "/path/to/results"
+experiment: imagenet_alignment_pretrained
+results_path: "/path/to/results/imagenet_pretrained"
 no_save: false
 just_plot: false
 save_networks: false
@@ -8,12 +8,12 @@ show_all: false
 use_timestamp: false
 
 dataset:
-  name: MNIST
-  path: "/path/to/mnist"
-  download: true
+  name: ImageNet
+  path: "/path/to/imagenet"
+  download: false
 
 model:
-  name: MLP
+  name: alexnet
   dropout: 0
   alignment_layers: null
 
@@ -23,8 +23,8 @@ optimizer:
   weight_decay: 0
 
 training:
-  batch_size: 1024
-  epochs: 1
+  batch_size: 256
+  epochs: 0  # zero epochs; we use the pretrained weights
   replicates: 1
 
 alignment:
@@ -41,10 +41,3 @@ checkpointing:
 extra:
   num_drops: 9
   dropout_by_layer: false
-  comparison: "lr"
-  regularizers: ["none", "dropout", "weight_decay"]
-  lrs: [1e-2, 1e-3, 1e-4]
-  compare_dropout: 0.5
-  compare_wd: 1e-5
-  cutoffs: [1e-2, 1e-3, 1e-4, 0.0]
-  manual_frequency: 5
