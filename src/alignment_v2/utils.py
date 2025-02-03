@@ -5,9 +5,6 @@ from contextlib import contextmanager
 import math
 from torch.linalg import matrix_rank, eigh
 
-def get_unfold_params(layer):
-    return dict(stride=layer.stride, padding=layer.padding, dilation=layer.dilation)
-
 def set_net_mode(net, training=True):
     old = net.training
     net.train() if training else net.eval()
@@ -44,18 +41,7 @@ def default_alignment(x, w, relative=True):
         return rq / torch.trace(c)
     return rq
 
-
 def smart_pca(x, centered=True, use_rank=True, correction=True):
-    """
-    smart algorithm for pca optimized for speed
-
-    input should either have shape (batch, dim, samples) or (dim, samples)
-    if dim > samples, will use svd and if samples < dim will use covariance/eigh method
-
-    will center data when centered=True
-
-    if it fails, will fall back on performing sklearns IncrementalPCA whenever forcetry=True
-    """
     # x: (samples, features)
     if centered:
         x = x - x.mean(dim=0, keepdim=True)
