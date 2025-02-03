@@ -1,5 +1,5 @@
 experiment: alignment_stats
-results_path: "/path/to/results"
+results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment"
 no_save: false
 just_plot: false
 save_networks: false
@@ -9,7 +9,7 @@ use_timestamp: false
 
 dataset:
   name: MNIST
-  path: "/path/to/mnist"
+  path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST"
   download: true
 
 model:

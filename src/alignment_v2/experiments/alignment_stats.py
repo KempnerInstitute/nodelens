@@ -2,8 +2,8 @@
 import sys
 import torch
 from alignment_v2.registry import get_model, get_transform_parameters
-import alignment_v2.processing
-import alignment_v2.plotting
+from alignment_v2 import processing
+from alignment_v2 import plotting
 from alignment_v2.datasets import get_dataset
 from alignment_v2.config import ExperimentConfig
 

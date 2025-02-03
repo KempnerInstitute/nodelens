@@ -1,7 +1,7 @@
 import os
 import torch
 from tqdm import tqdm
-import alignment_v2.train
+from  alignment_v2 import train
 from alignment_v2.utils import test_nets
 
 def train_networks(exp, nets, opts, dataset, **special_params):
