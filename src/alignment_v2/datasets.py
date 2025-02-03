@@ -1,183 +1,118 @@
-import sys
-from pathlib import Path
-from warnings import warn
-from abc import ABC, abstractmethod
-
 import torch
-import torchvision
-from torch import nn
-from torch.utils.data.distributed import DistributedSampler
-from torchvision.transforms import v2 as transforms
+import argparse
+import sys
 
-REQUIRED_PROPERTIES = ["dataset_constructor", "loss_function"]
+from alignment_v2.models.registry import (get_model, get_transform_parameters)
+from alignment_v2 import processing
+from alignment_v2.config import ExperimentConfig
+from alignment_v2.experiments.experiment import Experiment
 
-def default_loader_parameters(distributed, batch_size=1024, num_workers=2, shuffle=True, pin_memory=True, persistent_workers=True):
-    return dict(
-        batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=False if distributed else shuffle,
-        pin_memory=pin_memory,
-        persistent_workers=persistent_workers,
-    )
+class GeneralAlignmentExperiment(Experiment):
+    """
+    This experiment can run training or inference on general networks (e.g. MLP, AlexNet),
+    computing alignment using one or multiple alignment methods, either during training
+    or inference, based on the new config fields.
+    """
+    def get_basename(self):
+        return "general_alignment_experiment"
 
-class DataSet(ABC):
-    def __init__(self, device=None, distributed=False, dataset_parameters={}, transform_parameters={}, loader_parameters={}):
-        self.set_properties()
-        self.check_properties()
-        self.device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
-        self.distributed = distributed
-        self.extra_transform = transform_parameters.pop("extra_transform", None)
-        self.transform_parameters = transform_parameters
-        self.make_transform(**transform_parameters)
-        self.dataloader_parameters = default_loader_parameters(distributed, **loader_parameters)
-        self.dataset_parameters = dataset_parameters
-        self.load_dataset(**dataset_parameters)
+    def prepare_path(self):
+        return [self.args.model.name, self.args.dataset.name, self.args.optimizer.name]
 
-    def check_properties(self):
-        if not all([hasattr(self, prop) for prop in REQUIRED_PROPERTIES]):
-            not_found = [prop for prop in REQUIRED_PROPERTIES if not hasattr(self, prop)]
-            raise ValueError(f"The following required properties were not set: {not_found}")
-
-    @abstractmethod
-    def set_properties(self):
-        pass
-
-    @abstractmethod
-    def dataset_kwargs(self, train=True, **kwargs):
-        pass
-
-    def load_dataset(self, **kwargs):
-        self.train_dataset = self.dataset_constructor(**self.dataset_kwargs(train=True, **kwargs))
-        self.test_dataset = self.dataset_constructor(**self.dataset_kwargs(train=False, **kwargs))
-        self.train_sampler = DistributedSampler(self.train_dataset) if self.distributed else None
-        self.test_sampler = DistributedSampler(self.test_dataset) if self.distributed else None
-        self.train_loader = torch.utils.data.DataLoader(self.train_dataset, sampler=self.train_sampler, **self.dataloader_parameters)
-        self.test_loader = torch.utils.data.DataLoader(self.test_dataset, sampler=self.test_sampler, **self.dataloader_parameters)
-
-    def unwrap_batch(self, batch, device=None):
-        device = self.device if device is None else device
-        if self.extra_transform:
-            if isinstance(self.extra_transform, list):
-                for et in self.extra_transform:
-                    batch = et(batch)
-            else:
-                warn("extra_transform is not a list, this is deprecated!", DeprecationWarning, stacklevel=2)
-                batch = self.extra_transform(batch)
-        inputs, targets = batch
-        inputs, targets = inputs.to(device), targets.to(device)
-        return inputs, targets
-
-    def make_transform(self, center_crop=None, resize=None, flatten=False, out_channels=None):
-        chain = [
-            transforms.ToImage(),
-            transforms.ToDtype(torch.float32, scale=True),
+    def create_networks(self):
+        if self.args.optimizer.name == "Adam":
+            optim = torch.optim.Adam
+        elif self.args.optimizer.name == "SGD":
+            optim = torch.optim.SGD
+        else:
+            raise ValueError(f"optimizer ({self.args.optimizer.name}) not recognized")
+        nets = [
+            get_model(
+                self.args.model.name,
+                alignment_layer_names=self.args.model.alignment_layers,
+                build=True,
+                dataset=self.args.dataset.name,
+                dropout=self.args.model.dropout,
+            )
+            for _ in range(self.args.training.replicates)
         ]
-        if center_crop:
-            chain.append(transforms.CenterCrop(center_crop))
-        chain.append(transforms.Normalize((self.dist_params["mean"]), (self.dist_params["std"])))
-        if resize:
-            chain.append(transforms.Resize(resize, antialias=True))
-        if out_channels:
-            chain.append(transforms.Grayscale(num_output_channels=out_channels))
-        if flatten:
-            chain.append(transforms.Lambda(torch.flatten))
-        self.transform = transforms.Compose(chain)
+        nets = [net.to(self.device) for net in nets]
+        optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=self.args.optimizer.weight_decay) for net in nets]
+        prms = {
+            "vals": [self.args.model.name],
+            "name": "network",
+            "dataset": self.args.dataset.name,
+            "dropout": self.args.model.dropout,
+            "lr": self.args.optimizer.lr,
+            "weight_decay": self.args.optimizer.weight_decay,
+        }
+        return nets, optimizers, prms
 
-    def measure_loss(self, outputs, targets, reduction=None):
-        if reduction is None:
-            return self.loss_function(outputs, targets)
-        old_reduction = self.loss_function.reduction
-        self.loss_function.reduction = reduction
-        loss = self.loss_function(outputs, targets)
-        self.loss_function.reduction = old_reduction
-        return loss
-
-    def measure_accuracy(self, outputs, targets, k=1, percentage=True):
-        topk = outputs.topk(k, dim=1, sorted=True, largest=True)[1]
-        correct = torch.sum(torch.any(topk == targets.view(-1, 1), dim=1))
-        return 100 * correct / outputs.size(0) if percentage else correct
-
-class MNIST(DataSet):
-    def set_properties(self):
-        self.dataset_constructor = torchvision.datasets.MNIST
-        self.loss_function = nn.CrossEntropyLoss()
-        self.dist_params = dict(mean=[0.1307], std=[0.3081])
-
-    def dataset_kwargs(self, train=True, download=False, root=None, **kwargs):
-        return dict(
-            train=train,
-            download=download,
-            root=root,
-            transform=self.transform,
-        )
-
-class CIFAR10(DataSet):
-    def set_properties(self):
-        self.dataset_constructor = torchvision.datasets.CIFAR10
-        self.loss_function = nn.CrossEntropyLoss()
-        self.dist_params = dict(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-
-    def dataset_kwargs(self, train=True, download=False, root=None, **kwargs):
-        return dict(
-            train=train,
-            download=download,
-            root=root,
-            transform=self.transform,
-        )
-
-class CIFAR100(CIFAR10):
-    def set_properties(self):
-        self.dataset_constructor = torchvision.datasets.CIFAR100
-        self.loss_function = nn.CrossEntropyLoss()
-        self.dist_params = dict(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-
-class ImageNet2012(DataSet):
-    def set_properties(self):
-        self.dataset_constructor = torchvision.datasets.ImageNet
-        self.loss_function = nn.CrossEntropyLoss()
-        self.dist_params = dict(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        self.center_crop = 224
-
-    def dataset_kwargs(self, train=True, download=None, root=None, **kwargs):
-        kwargs.pop('download', None)
-        return dict(
-            split="train" if train else "val",
-            root=root,
-            transform=self.transform,
-            **kwargs,
-        )
-
-DATASET_REGISTRY = {
-    "MNIST": MNIST,
-    "CIFAR10": CIFAR10,
-    "CIFAR100": CIFAR100,
-    "ImageNet": ImageNet2012,
-}
-
-def get_dataset(dataset_name, build=False, dataset_parameters={}, transform_parameters={}, loader_parameters={}, **kwargs):
-    if dataset_name not in DATASET_REGISTRY:
-        raise ValueError(f"Dataset ({dataset_name}) is not in DATASET_REGISTRY")
-    dataset_cls = DATASET_REGISTRY[dataset_name]
-    if build:
-        if not isinstance(transform_parameters, dict):
-            raise TypeError("transform_parameters must be a dictionary")
-        return dataset_cls(
-            dataset_parameters=dataset_parameters,
+    def prepare_dataset(self, transform_parameters):
+        ds_params = dict(root=self.args.dataset.path)
+        if self.args.dataset.name.lower() != "imagenet":
+            ds_params["download"] = self.args.dataset.download
+        return get_dataset(
+            self.args.dataset.name,
+            build=True,
+            dataset_parameters=ds_params,
             transform_parameters=transform_parameters,
-            loader_parameters=loader_parameters,
-            **kwargs,
+            loader_parameters={"batch_size": self.args.training.batch_size},
+            device=self.args.device,
         )
-    return dataset_cls
+
+    def main(self):
+        nets, optimizers, prms = self.create_networks()
+        dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
+        train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
+        dropout_results, dropout_parameters = processing.progressive_dropout_experiment(
+            self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
+        )
+        eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
+        evec_dropout_results, evec_dropout_parameters = processing.eigenvector_dropout(self, nets, dataset, eigen_results, train_set=False)
+        results = dict(
+            prms=prms,
+            train_results=train_results,
+            test_results=test_results,
+            dropout_results=dropout_results,
+            dropout_parameters=dropout_parameters,
+            eigen_results=eigen_results,
+            evec_dropout_results=evec_dropout_results,
+            evec_dropout_parameters=evec_dropout_parameters,
+        )
+        return results, nets
+
+    def plot(self, results):
+        from alignment_v2.core import plotting
+        plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
+        plotting.plot_dropout_results(
+            self,
+            results["dropout_results"],
+            results["dropout_parameters"],
+            results["prms"],
+            dropout_type="nodes",
+        )
+        plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
+        plotting.plot_dropout_results(
+            self,
+            results["evec_dropout_results"],
+            results["evec_dropout_parameters"],
+            results["prms"],
+            dropout_type="eigenvectors",
+        )
+
+def cli_main():
+    parser = argparse.ArgumentParser(description="Run a general alignment experiment.")
+    parser.add_argument("--config", type=str, required=True, help="Path to the YAML config")
+    args = parser.parse_args(sys.argv[1:])
+    cfg = ExperimentConfig.load(args.config)
+    experiment = GeneralAlignmentExperiment(cfg)
+    if cfg.just_plot:
+        experiment.plot_from_existing()
+    else:
+        results, nets = experiment.run()
+        if not cfg.no_save:
+            experiment.save_results(results)
 
 if __name__ == "__main__":
-    from alignment.config import ExperimentConfig
-    try:
-        yaml_path, args_list = sys.argv[1]
-    except IndexError:
-        raise ValueError(f"Usage: {sys.argv[0]} [CONFIG_PATH]")
-    cfg = ExperimentConfig.load(yaml_path)
-    dataset = get_dataset(
-        cfg.dataset.name,
-        build=True,
-        dataset_parameters=dict(root=Path(cfg.dataset.path)),
-    )
+    cli_main()

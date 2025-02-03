@@ -242,7 +242,8 @@ class Experiment(ABC):
         return get_dataset(
             self.args.dataset.name,
             build=True,
-            dataset_parameters=dict(download=self.args.dataset.download, root=self.args.dataset.path),
+            #dataset_parameters=dict(download=self.args.dataset.download, root=self.args.dataset.path),
+            dataset_parameters=dict(root=self.args.dataset.path),
             transform_parameters=transform_parameters,
             loader_parameters={"batch_size": self.args.training.batch_size},
             device=self.args.device,
