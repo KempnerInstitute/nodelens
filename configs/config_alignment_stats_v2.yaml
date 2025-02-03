@@ -1,6 +1,5 @@
-
 experiment: "alexnet_alignment_example"
-results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment" # <-- Add path to where results to be saved/loaded
+results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment"  # <-- Add path to where results to be saved/loaded
 no_save: false
 just_plot: false
 save_networks: false
@@ -11,14 +10,14 @@ timestamp: null
 
 dataset:
   name: "ImageNet"
-  path: "/n/holylfs06/LABS/kempner_shared/Lab/data/imagenet_1k" #"/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST" # <-- Add path to your dataset
+  path: "/n/holylfs06/LABS/kempner_shared/Lab/data/imagenet_1k"  # <-- Add path to your dataset
   download: false
 
 model:
   name: "AlexNet"
   dropout: 0
   # For demonstration, we pick a single layer from AlexNet 'features' to measure alignment.
-  # If you want all layers, set alignment_layers: null
+  # for all layers, set alignment_layers: null
   alignment_layers:
     "features.8": null
 
@@ -36,7 +35,7 @@ alignment:
   compute_alignment: true
   measure_weight_deltas: false
   alignment_eval_frequency: 1
-  methods: ["RQ","MI_0"]
+  methods: ["RQ", "MI_0"]
   compute_during_training: false
   compute_during_inference: true
 
