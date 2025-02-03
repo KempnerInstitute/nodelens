@@ -1,6 +1,6 @@
 from warnings import warn
 from typing import Optional
-
+from contextlib import contextmanager
 import torch
 from torch import nn
 from tqdm import tqdm
@@ -90,6 +90,8 @@ class AlignmentNetwork(nn.Module):
         self.alignment_layers = nn.ModuleList()  # a list of all the layers for the alignment computation
         self.alignment_names = []
         self.hidden = {}  # a parallel list to maintain the output/activation of the input layers aka inputs to the alignment layers
+        # Maybe we can put this in the forward_hooks context manager so it's only created and used when needed? 
+        # Basically I'm wondering if it's used at any point other than when calling forward with store_hidden=True?
         self.hooks = {} # a dictionary list to maintain the handle of the forward hooks on input layers
         self._initialize_layers(alignment_layer_names, **kwargs)  # initialize the architecture using child class method
         
@@ -145,6 +147,14 @@ class AlignmentNetwork(nn.Module):
             return sum(1 for m in self.base_model.modules() if hasattr(m, 'weight'))
         return len(self.alignment_layers)
     
+    @contextmanager
+    def forward_hooks(self):
+        try:
+            self.setup_forward_hooks()
+            yield
+        finally:
+            self.remove_forward_hooks()
+
     def setup_forward_hooks(self):
         def get_activation(name):
             def activation_hook(module, input, output):
@@ -178,10 +188,11 @@ class AlignmentNetwork(nn.Module):
         """
         if store_hidden:
             self.hidden = {} # reset the stored activation
-            self.setup_forward_hooks()
-        out = self.base_model(x)
-        if store_hidden:
-            self.remove_forward_hooks()
+            # Use a context manager to ensure hooks are removed after forward pass
+            with self.forward_hooks():
+                out = self.base_model(x)
+        else:
+            out = self.base_model(x)
         return out
 
     def get_dropout(self):
@@ -358,8 +369,7 @@ class AlignmentNetwork(nn.Module):
         assert len(layers) == len(set(layers)), "layers must not have any repeated elements"
 
         hidden_outputs_dict = {}
-        hooks = []
-
+        
         def dropout(name, dropout_idx):
             def dropout_hook(module, input, output):
                 fraction_dropout = len(dropout_idx) / output.shape[1]
@@ -374,19 +384,25 @@ class AlignmentNetwork(nn.Module):
                 hidden_outputs_dict[name] = output
             return output_hook
         
+        @contextmanager
+        def dropout_context():
+            hooks = []
+            try:
+                for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
+                    if idx_layer in layers:
+                        dropout_idx = idxs[{val: idx for idx, val in enumerate(layers)}[idx_layer]]
+                        hooks.append(layer.register_forward_hook(dropout(name , dropout_idx)))
+                    else:
+                        hooks.append(layer.register_forward_hook(get_output(name)))
+                
+                yield
+            finally:
+                for hook in hooks:
+                    hook.remove()
         
-        for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
-            if idx_layer in layers:
-                dropout_idx = idxs[{val: idx for idx, val in enumerate(layers)}[idx_layer]]
-                hooks.append(layer.register_forward_hook(dropout(name , dropout_idx)))
-            else:
-                hooks.append(layer.register_forward_hook(get_output(name)))
-        
-        x = self.base_model(x)
+        with dropout_context():
+            x = self.base_model(x)
 
-        for hook in hooks:
-            hook.remove()
-        
         assert self.num_layers() == len(hidden_outputs_dict), "number of outputs and the number of alignment layers need to be the same"
         hidden_outputs = [hidden_outputs_dict[name] for name in self.alignment_names]
 
@@ -418,42 +434,49 @@ class AlignmentNetwork(nn.Module):
         device = get_device(x)
         
         hidden_inputs_dict = {}
-        hooks = []
         org_forward_methods = {}
-
-        def get_input(name):
-            def input_hook(module, input, output):
-                hidden_inputs_dict[name] = input
-            return input_hook
-
-        for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
-            if idx_layer in layers:
-                # we need to get the target subspace after dropping out eigenvectors
-
-                # get index to target layer
-                idx_to_layer = {val: idx for idx, val in enumerate(layers)}[idx_layer]
-
-                # get dropout indices of which eigenvectors to remove
-                dropout_idx = idxs[idx_to_layer]
-
-                # retrieve only the requested eigenvectors & eigenvalues
-                dropout_evec = remove_by_idx(eigenvectors[idx_to_layer].to(device), dropout_idx, 1)
-                dropout_eval = remove_by_idx(eigenvalues[idx_to_layer].to(device), dropout_idx, 0)
-
-                # correction is defined as the square root as the ratio of variance preserved in the subspace
-                # this will roughly preserve the average norm of the data for each sample
-                dropout_correction = torch.sqrt(torch.sum(eigenvalues[idx_to_layer]) / torch.sum(dropout_eval))
-
-                # do forward pass through this layer
-                kwargs = dict(subspace=dropout_evec, correction=dropout_correction)
-                self._forward_subspace(name, layer, hidden_inputs_dict, hooks, org_forward_methods, **kwargs)
-            else:
-               hooks.append(layer.register_backward_hook(get_input(name)))
         
-        x = self.base_model(x)
-        
-        for hook in hooks:
-            hook.remove()
+        def eigenvector_dropout_context():
+            hooks = []
+
+            def get_input(name):
+                def input_hook(module, input, output):
+                    hidden_inputs_dict[name] = input
+                return input_hook
+
+            try:
+                for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
+                    if idx_layer in layers:
+                        # we need to get the target subspace after dropping out eigenvectors
+
+                        # get index to target layer
+                        idx_to_layer = {val: idx for idx, val in enumerate(layers)}[idx_layer]
+
+                        # get dropout indices of which eigenvectors to remove
+                        dropout_idx = idxs[idx_to_layer]
+
+                        # retrieve only the requested eigenvectors & eigenvalues
+                        dropout_evec = remove_by_idx(eigenvectors[idx_to_layer].to(device), dropout_idx, 1)
+                        dropout_eval = remove_by_idx(eigenvalues[idx_to_layer].to(device), dropout_idx, 0)
+
+                        # correction is defined as the square root as the ratio of variance preserved in the subspace
+                        # this will roughly preserve the average norm of the data for each sample
+                        dropout_correction = torch.sqrt(torch.sum(eigenvalues[idx_to_layer]) / torch.sum(dropout_eval))
+
+                        # do forward pass through this layer
+                        kwargs = dict(subspace=dropout_evec, correction=dropout_correction)
+                        self._forward_subspace(name, layer, hidden_inputs_dict, hooks, org_forward_methods, **kwargs)
+                    else:
+                        hooks.append(layer.register_backward_hook(get_input(name)))
+
+                    yield
+
+            finally:
+                for hook in hooks:
+                    hook.remove()
+
+        with eigenvector_dropout_context():
+            x = self.base_model(x)
         
         for name, layer in zip(self.alignment_names, self.alignment_layers):
             if name in org_forward_methods.keys():
@@ -476,7 +499,7 @@ class AlignmentNetwork(nn.Module):
         """
         implement forward pass for linear layer with optional subspace projection of input to layer
         """
-        def subsapace_linear(name, hidden_inputs_dict, subspace, correction):
+        def subspace_linear(name, hidden_inputs_dict, subspace, correction):
             def modify_input_hook(module, input):
                 if subspace is not None:
                     input = torch.matmul(torch.matmul(input[0], subspace), subspace.T)
@@ -486,7 +509,7 @@ class AlignmentNetwork(nn.Module):
                 return input
             return modify_input_hook
 
-        hooks.append(layer.register_forward_pre_hook(subsapace_linear(name, hidden_inputs_dict, subspace, correction)))
+        hooks.append(layer.register_forward_pre_hook(subspace_linear(name, hidden_inputs_dict, subspace, correction)))
 
     def _forward_subspace_convolutional(self, name, layer, hidden_inputs_dict, org_forward_methods, subspace=None, correction=None):
         """
