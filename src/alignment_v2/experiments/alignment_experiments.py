@@ -123,3 +123,7 @@ def cli_main():
 
 if __name__ == "__main__":
     cli_main()
+    
+    
+    
+# python alignment/experiments/alignment_experiment.py --config config/config_alignment_stats.yaml
