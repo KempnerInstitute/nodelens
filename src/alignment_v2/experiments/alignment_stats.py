@@ -1,8 +1,11 @@
+
+import sys
 import torch
-from registry import get_model, get_transform_parameters
-import processing
-import plotting
-from datasets import get_dataset
+from alignment_v2.registry import get_model, get_transform_parameters
+import alignment_v2.processing
+import alignment_v2.plotting
+from alignment_v2.datasets import get_dataset
+from alignment_v2.config import ExperimentConfig
 
 class AlignmentStatsExperiment:
     def __init__(self, config):
@@ -62,10 +65,12 @@ class AlignmentStatsExperiment:
         plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
         plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
 
+    
 if __name__=="__main__":
-    # Example usage:
-    from config import ExperimentConfig
-    cfg = ExperimentConfig.load("src/configs/config_alignment_stats.yaml")
+    if len(sys.argv) < 2:
+        raise ValueError("Please provide the config file path as the first argument.")
+    config_path = sys.argv[1]
+    cfg = ExperimentConfig.load(config_path)
     exp = AlignmentStatsExperiment(cfg)
     results, nets = exp.main()
     exp.plot(results)
