@@ -1,115 +1,165 @@
 import os
+
 import torch
 from tqdm import tqdm
-from  alignment_v2 import train
-from alignment_v2.utils import test_nets
 
-def train_networks(exp, nets, opts, dataset, **special_params):
-    params = dict(
+from alignment.core import train
+from alignment.core.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
+
+def train_networks(exp, nets, optimizers, dataset, **special_parameters):
+    """train and test networks"""
+    parameters = dict(
         train_set=True,
         num_epochs=exp.args.training.epochs,
-        alignment=not exp.args.alignment.no_alignment,
+        alignment=not (exp.args.alignment.no_alignment),
         delta_weights=exp.args.alignment.delta_weights,
         frequency=exp.args.alignment.frequency,
-        run=exp.run
+        run=exp.run,
     )
-    params.update(special_params)
-    if exp.args.checkpointing.use_prev and os.path.isfile(exp.get_checkpoint_path()):
-        nets, opts, res = train.load_checkpoints(nets, opts, exp.args.device, exp.get_checkpoint_path())
+
+    parameters.update(**special_parameters)
+
+    if exp.args.checkpointing.use_prev & os.path.isfile(exp.get_checkpoint_path()):
+        nets, optimizers, results = load_checkpoints(nets, optimizers, exp.args.device, exp.get_checkpoint_path())
         for net in nets:
             net.train()
-        params["num_complete"] = res["epoch"] + 1
-        params["results"] = res
-        print("Loaded checkpoint")
+
+        parameters["num_complete"] = results["epoch"] + 1
+        parameters["results"] = results
+        print("loaded networks from previous checkpoint")
+
     if exp.args.checkpointing.save_checkpoints:
-        params["save_checkpoints"] = (True, exp.args.checkpointing.frequency, exp.get_checkpoint_path(), exp.args.device)
-    print("Training networks...")
-    train_results = train.train(nets, opts, dataset, **params)
-    print("Testing networks...")
-    params["train_set"] = False
-    test_results = train.test(nets, dataset, **params)
+        parameters["save_checkpoints"] = (True, exp.args.checkpointing.frequency, exp.get_checkpoint_path(), exp.args.device)
+
+    print("training networks...")
+    train_results = train.train(nets, optimizers, dataset, **parameters)
+
+    print("testing networks...")
+    parameters["train_set"] = False
+    test_results = train.test(nets, dataset, **parameters)
+
     return train_results, test_results
 
+def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
+    """
+    perform a progressive dropout (of nodes) experiment
+    alignment is optional, but will be recomputed if you've already measured it.
+    """
+    print("performing targeted dropout...")
+    dropout_parameters = dict(num_drops=exp.args.extra.num_drops, by_layer=exp.args.extra.dropout_by_layer, train_set=train_set)
+    dropout_results = train.progressive_dropout(nets, dataset, alignment=alignment, **dropout_parameters)
+    return dropout_results, dropout_parameters
+
 def measure_eigenfeatures(exp, nets, dataset, train_set=False):
-    print("Measuring eigenfeatures...")
-    beta, eigvals, eigvecs = [], [], []
-    for net in tqdm(nets):
-        inputs, _ = net._process_collect_activity(dataset, train_set=train_set, with_updates=False, use_training_mode=False)
-        w, v = net.measure_eigenfeatures(inputs, with_updates=False)
-        beta.append((net.get_alignment_weights(flatten=True)[0] / torch.norm(net.get_alignment_weights(flatten=True)[0])))
-        eigvals.append(w)
-        eigvecs.append(v)
-    return {"beta": beta, "eigvals": eigvals, "eigvecs": eigvecs}
-
-def progressive_dropout_experiment(exp,nets,dataset,alignment=None,train_set=False):
-    print("targeted dropout...")
-    pars=dict(num_drops=exp.args.extra.num_drops,by_layer=exp.args.extra.dropout_by_layer,train_set=train_set)
-    out=train.progressive_dropout(nets,dataset,alignment=alignment,**pars)
-    return out,pars
-
-def measure_eigenfeatures(exp,nets,dataset,train_set=False):
     print("measuring eigenfeatures...")
-    from tqdm import tqdm
-    beta,eigvals,eigvecs,class_betas=[],[],[],[]
+    beta, eigvals, eigvecs, class_betas = [], [], [], []
     for net in tqdm(nets):
-        inp,lab=net._process_collect_activity(dataset,train_set=train_set,with_updates=False,use_training_mode=False)
-        ef=net.measure_eigenfeatures(inp,with_updates=False)
-        c=net.measure_class_eigenfeatures(inp,lab,ef[2],rms=False,with_updates=False)
-        beta.append(ef[0]); eigvals.append(ef[1]); eigvecs.append(ef[2]); class_betas.append(c)
-    ds=dataset.train_loader if train_set else dataset.test_loader
-    cn=ds.dataset.classes
-    return dict(beta=beta,eigvals=eigvals,eigvecs=eigvecs,class_betas=class_betas,class_names=cn)
+        inputs, labels = net._process_collect_activity(
+            dataset,
+            train_set=train_set,
+            with_updates=False,
+            use_training_mode=False,
+        )
+        eigenfeatures = net.measure_eigenfeatures(inputs, with_updates=False)
+        beta_by_class = net.measure_class_eigenfeatures(inputs, labels, eigenfeatures[2], rms=False, with_updates=False)
+        beta.append(eigenfeatures[0])
+        eigvals.append(eigenfeatures[1])
+        eigvecs.append(eigenfeatures[2])
+        class_betas.append(beta_by_class)
 
-def eigenvector_dropout(exp,nets,dataset,e_res,train_set=False):
-    print("eigenvector dropout...")
-    pars=dict(num_drops=exp.args.extra.num_drops,by_layer=exp.args.extra.dropout_by_layer,train_set=train_set)
-    out=train.eigenvector_dropout(nets,dataset,e_res["eigvals"],e_res["eigvecs"],**pars)
-    return out,pars
+    class_names = getattr(dataset.train_loader if train_set else dataset.test_loader, "dataset").classes
+    return dict(
+        beta=beta,
+        eigvals=eigvals,
+        eigvecs=eigvecs,
+        class_betas=class_betas,
+        class_names=class_names,
+    )
+
+def eigenvector_dropout(exp, nets, dataset, eigen_results, train_set=False):
+    print("performing targeted eigenvector dropout...")
+    evec_dropout_parameters = dict(num_drops=exp.args.extra.num_drops, by_layer=exp.args.extra.dropout_by_layer, train_set=train_set)
+    evec_dropout_results = train.eigenvector_dropout(nets, dataset, eigen_results["eigvals"], eigen_results["eigvecs"], **evec_dropout_parameters)
+    return evec_dropout_results, evec_dropout_parameters
 
 @test_nets
-def measure_adversarial_attacks(nets,dataset,exp,eigen_results,train_set=False,**parameters):
-    def get_beta(inputs,eigenvectors):
-        return [i.cpu()@e for i,e in zip(inputs,eigenvectors)]
-    epsilons=parameters.get("epsilons")
-    use_sign=parameters.get("use_sign")
-    fgsm_transform=parameters.get("fgsm_transform",lambda x:x)
-    evecs=eigen_results["eigvecs"]
-    num_eps=len(epsilons)
-    num_nets=len(nets)
-    acc=torch.zeros((num_nets,num_eps))
-    examples=[[[] for _ in range(num_eps)] for _ in range(num_nets)]
-    betas=[[torch.zeros((num_nets,e.size(0))) for e in evecs[0]] for _ in range(num_eps)]
-    dl=dataset.train_loader if train_set else dataset.test_loader
-    from tqdm import tqdm
-    for batch in tqdm(dl):
-        inp,lab=dataset.unwrap_batch(batch)
-        inputs=[inp.clone() for _ in range(num_nets)]
-        for i2 in inputs:
-            i2.requires_grad=True
-        outs=[n(i2,store_hidden=True) for n,i2 in zip(nets,inputs)]
-        l_inputs=[n.get_layer_inputs(i2,precomputed=True) for n,i2 in zip(nets,inputs)]
-        init_preds=[torch.argmax(o,axis=1) for o in outs]
-        c_betas=transpose_list([get_beta(x,e) for x,e in zip(l_inputs,evecs)])
-        s_betas=[torch.stack(cb) for cb in c_betas]
-        loss=[dataset.measure_loss(o,lab) for o in outs]
-        for lz in nets:
-            lz.zero_grad()
-        for lz in loss:
-            lz.backward()
-        grads=[i2.grad.data for i2 in inputs]
-        for ei, eps in enumerate(epsilons):
-            perturbed=[fgsm_attack(i2,eps,g,fgsm_transform,use_sign) for i2,g in zip(inputs,grads)]
-            outs2=[n(p,store_hidden=True) for n,p in zip(nets,perturbed)]
-            l_inp2=[n.get_layer_inputs(p,precomputed=True) for n,p in zip(nets,perturbed)]
-            c_eps=transpose_list([get_beta(x,e) for x,e in zip(l_inp2,evecs)])
-            s_eps=[torch.stack(ce) for ce in c_eps]
-            d_eps=[se - sb for se,sb in zip(s_eps,s_betas)]
-            r_eps=[torch.sqrt(torch.mean(de**2,dim=1)) for de in d_eps]
-            for ii,rb in enumerate(r_eps):
-                betas[ei][ii]+=rb.detach()
-            final_preds=[torch.argmax(o,axis=1) for o in outs2]
-            acc[:,ei]+=torch.tensor([sum(fp==lab).cpu() for fp in final_preds])
-            # storing examples if needed
-    acc=acc/float(len(dl.dataset))
-    betas=transpose_list([[cb/float(len(dl.dataset)) for cb in b] for b in betas])
-    return dict(accuracy=acc,betas=betas,examples=examples,epsilons=epsilons,use_sign=use_sign)
+def measure_adversarial_attacks(nets, dataset, exp, eigen_results, train_set=False, **parameters):
+    """
+    do adversarial attack and measure structure with regards to eigenfeatures
+    """
+    def get_beta(inputs, eigenvectors):
+        return [input.cpu() @ evec for input, evec in zip(inputs, eigenvectors)]
+
+    epsilons = parameters.get("epsilons")
+    use_sign = parameters.get("use_sign")
+    fgsm_transform = parameters.get("fgsm_transform", lambda x: x)
+    eigenvectors = eigen_results["eigvecs"]
+
+    num_eps = len(epsilons)
+    num_nets = len(nets)
+    accuracy = torch.zeros((num_nets, num_eps))
+    examples = [[[] for _ in range(num_eps)] for _ in range(num_nets)]
+    betas = [[torch.zeros((num_nets, evec.size(0))) for evec in eigenvectors[0]] for _ in range(num_eps)]
+
+    dataloader = dataset.train_loader if train_set else dataset.test_loader
+
+    for batch in tqdm(dataloader):
+        input, labels = dataset.unwrap_batch(batch)
+
+        inputs = [input.clone() for _ in range(num_nets)]
+        for inp in inputs:
+            inp.requires_grad = True
+
+        outputs = [net(inp, store_hidden=True) for net, inp in zip(nets, inputs)]
+        input_to_layers = [net.get_layer_inputs(inp, precomputed=True) for net, inp in zip(nets, inputs)]
+        init_preds = [torch.argmax(output, axis=1) for output in outputs]
+        least_likely = [torch.argmin(output, axis=1) for output in outputs]
+
+        c_betas = transpose_list([get_beta(inp, evec) for inp, evec in zip(input_to_layers, eigenvectors)])
+        s_betas = [torch.stack(cb) for cb in c_betas]
+
+        loss = [dataset.measure_loss(output, labels) for output in outputs]
+
+        for net in nets:
+            net.zero_grad()
+
+        for l in loss:
+            l.backward()
+
+        data_grads = [inp.grad.data for inp in inputs]
+
+        for epsidx, eps in enumerate(epsilons):
+            perturbed_inputs = [fgsm_attack(inp, eps, data_grad, fgsm_transform, use_sign) for inp, data_grad in zip(inputs, data_grads)]
+            outputs = [net(perturbed_input, store_hidden=True) for net, perturbed_input in zip(nets, perturbed_inputs)]
+            input_to_layers = [net.get_layer_inputs(perturbed_input, precomputed=True) for net, perturbed_input in zip(nets, perturbed_inputs)]
+            c_eps_betas = transpose_list([get_beta(inp, evec) for inp, evec in zip(input_to_layers, eigenvectors)])
+            s_eps_betas = [torch.stack(ceb) for ceb in c_eps_betas]
+            d_eps_betas = [sebeta - sbeta for sebeta, sbeta in zip(s_eps_betas, s_betas)]
+            rms_betas = [torch.sqrt(torch.mean(db**2, dim=1)) for db in d_eps_betas]
+
+            for ii, rbeta in enumerate(rms_betas):
+                betas[epsidx][ii] += rbeta.detach()
+
+            final_preds = [torch.argmax(output, axis=1) for output in outputs]
+            accuracy[:, epsidx] += torch.tensor([sum(final_pred == labels).cpu() for final_pred in final_preds])
+
+            idx_success = [
+                torch.where((init_pred == labels) & (final_pred != labels))[0].cpu() for init_pred, final_pred in zip(init_preds, final_preds)
+            ]
+
+            adv_exs = [perturbed_input.detach().cpu().numpy() for perturbed_input in perturbed_inputs]
+            for ii, (adv_ex, idx, init_pred, final_pred) in enumerate(zip(adv_exs, idx_success, init_preds, final_preds)):
+                examples[ii][epsidx].append((init_pred[idx], final_pred[idx], adv_ex[idx]))
+
+    accuracy = accuracy / float(len(dataloader.dataset))
+    betas = transpose_list([[cb / float(len(dataloader.dataset)) for cb in beta] for beta in betas])
+    return dict(accuracy=accuracy, betas=betas, examples=examples, epsilons=epsilons, use_sign=use_sign)
+
+@test_nets
+def measure_alignment_distribution(nets, dataset, **parameters):
+    """
+    method for measuring alignment distribution and several associated analyses
+    """
+    parameters = dict(
+        train_set=True,
+    )

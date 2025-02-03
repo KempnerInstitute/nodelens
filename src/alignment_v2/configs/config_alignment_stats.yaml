@@ -1,21 +1,23 @@
 experiment: alignment_stats
-results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment"
-no_save: false
-just_plot: false
-save_networks: false
-show_params: false
-show_all: false
-use_timestamp: false
+results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment" # <-- Add path to where results to be saved/loaded
+no_save: False
+just_plot: False
+save_networks: False
+show_params: False
+show_all: False
+#device: cpu
+use_timestamp: False
+#timestamp: # The timestamp of previous experiment to plot.
 
 dataset:
   name: MNIST
-  path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST"
-  download: true
+  path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/datasets/datasets/MNIST" # <-- Add path to your dataset
+  download: True # Downloads it if it does not exist.
 
 model:
   name: MLP
   dropout: 0
-  alignment_layers: null
+  alignment_layers: null # Specify the layers participating in alignment - for all layers use null | exp for MLP: {"layerInput.0": null, "layerHidden.0.1": "layerHidden.0.0", "layerHidden.1.1": "layerHidden.1.0"}
 
 optimizer:
   name: Adam
@@ -28,23 +30,27 @@ training:
   replicates: 1
 
 alignment:
-  no_alignment: false
-  delta_weights: false
+  no_alignment: False
+  delta_weights: False
   frequency: 1
 
 checkpointing:
-  use_prev: false
-  save_checkpoints: false
+  use_prev: False
+  save_checkpoints: False
   frequency: 1
-  use_wandb: false
+  use_wandb: False
 
 extra:
   num_drops: 9
-  dropout_by_layer: false
+  dropout_by_layer: False
+
+  ###  For alignment_comparison and loading_prediction experiments
   comparison: "lr"
   regularizers: ["none", "dropout", "weight_decay"]
   lrs: [1e-2, 1e-3, 1e-4]
   compare_dropout: 0.5
   compare_wd: 1e-5
+
+  ###  For adversarial_shaping experiment
   cutoffs: [1e-2, 1e-3, 1e-4, 0.0]
   manual_frequency: 5
