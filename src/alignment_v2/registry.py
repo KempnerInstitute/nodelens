@@ -1,8 +1,8 @@
+from torch import nn
 from typing import Optional
 import torchvision.models as tv
-from models import MLP, CNN2P2
-from base import AlignmentNetwork
-from torch import nn
+from alignment_v2.models import MLP, CNN2P2
+from alignment_v2.base import AlignmentNetwork
 
 MODEL_REGISTRY = {
     "mlp": MLP,

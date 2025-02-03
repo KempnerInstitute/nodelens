@@ -1,7 +1,7 @@
 import os
 import torch
 from tqdm import tqdm
-import train
+import alignment_v2.train
 
 def train_networks(exp, nets, opts, dataset, **special_params):
     params = dict(

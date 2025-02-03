@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from utils import set_net_mode, default_alignment, get_unfold_params
+from alignment_v2.utils import set_net_mode, default_alignment, get_unfold_params
 
 class AlignmentNetwork(nn.Module):
     def __init__(self, base_model: nn.Module, alignment_layer_names=None, alignment_fn=None):

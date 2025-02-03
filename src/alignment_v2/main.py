@@ -3,8 +3,8 @@
 
 import sys
 import torch
-from configs.alignment_config import ExperimentConfig
-from experiments.alignment_stats import AlignmentStatistics
+from alignment_v2.configs.alignment_config import ExperimentConfig
+from alignment_v2.experiments.alignment_stats import AlignmentStatistics
 
 def main():
     cfg_path = sys.argv[1]

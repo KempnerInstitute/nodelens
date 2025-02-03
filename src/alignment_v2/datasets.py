@@ -6,7 +6,7 @@ import torch
 import torchvision
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
-from config import ExperimentConfig
+from alignment_v2.config import ExperimentConfig
 
 REQUIRED_PROPERTIES = ["dataset_constructor", "loss_function"]
 
