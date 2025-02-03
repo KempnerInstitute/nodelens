@@ -1,93 +1,95 @@
-#!/usr/bin/env python
-import sys
-import os
 import torch
 
-if __name__ == "__main__" and __package__ is None:
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-    __package__ = "alignment_v2.experiments"
+from alignment.models.registry import (get_model,
+                                       get_transform_parameters)
+from alignment.core import processing
+from alignment.core import plotting
+from alignment.experiments.experiment import Experiment
 
-from alignment_v2.registry import get_model, get_transform_parameters
-from alignment_v2 import processing
-from alignment_v2 import plotting
-from alignment_v2.datasets import get_dataset
-from alignment_v2.config import ExperimentConfig
+class AlignmentStatistics(Experiment):
+    def get_basename(self):
+        return "alignment_stats"
 
-class AlignmentStatsExperiment:
-    def __init__(self, config):
-        self.args = config
-        self.device = config.device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.run = None  
-
-    def get_checkpoint_path(self):
-        return "ckpt.pt"  
-
-    def prepare_dataset(self):
-        transform_params = get_transform_parameters(self.args.model.name, self.args.dataset.name)
-        ds = get_dataset(
-            self.args.dataset.name,
-            build=True,
-            dataset_parameters=dict(download=self.args.dataset.download, root=self.args.dataset.path),
-            transform_parameters=transform_params,
-            loader_parameters=dict(batch_size=self.args.training.batch_size)
-        )
-        return ds
+    def prepare_path(self):
+        return [self.args.model.name, self.args.dataset.name, self.args.optimizer.name]
 
     def create_networks(self):
-        if self.args.optimizer.name.lower() == "adam":
-            from torch.optim import Adam
-            opt_cls = Adam
-        elif self.args.optimizer.name.lower() == "sgd":
-            from torch.optim import SGD
-            opt_cls = SGD
+        """
+        method for creating networks
+        """
+        if self.args.optimizer.name == "Adam":
+            optim = torch.optim.Adam
+        elif self.args.optimizer.name == "SGD":
+            optim = torch.optim.SGD
         else:
-            raise ValueError("Unknown optimizer: {}".format(self.args.optimizer.name))
-        nets = []
-        opts = []
-        for _ in range(self.args.training.replicates):
-            net = get_model(
+            raise ValueError(f"optimizer ({self.args.optimizer.name}) not recognized")
+
+        nets = [
+            get_model(
                 self.args.model.name,
                 alignment_layer_names=self.args.model.alignment_layers,
                 build=True,
                 dataset=self.args.dataset.name,
-                dropout=self.args.model.dropout
+                dropout=self.args.model.dropout,
             )
-            net.to(self.device)
-            opt = opt_cls(net.parameters(), lr=self.args.optimizer.lr, weight_decay=self.args.optimizer.weight_decay)
-            nets.append(net)
-            opts.append(opt)
+            for _ in range(self.args.training.replicates)
+        ]
+        nets = [net.to(self.device) for net in nets]
+
+        optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=self.args.optimizer.weight_decay) for net in nets]
+
         prms = {
             "vals": [self.args.model.name],
             "name": "network",
             "dataset": self.args.dataset.name,
             "dropout": self.args.model.dropout,
             "lr": self.args.optimizer.lr,
-            "weight_decay": self.args.optimizer.weight_decay
+            "weight_decay": self.args.optimizer.weight_decay,
         }
-        return nets, opts, prms
+        return nets, optimizers, prms
 
     def main(self):
-        nets, opts, prms = self.create_networks()
-        ds = self.prepare_dataset()
-        train_res, test_res = processing.train_networks(self, nets, opts, ds)
-        eig_res = processing.measure_eigenfeatures(self, nets, ds, train_set=False)
-        results = {
-            "prms": prms,
-            "train_results": train_res,
-            "test_results": test_res,
-            "eigen_results": eig_res
-        }
+        nets, optimizers, prms = self.create_networks()
+
+        dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
+
+        train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
+
+        dropout_results, dropout_parameters = processing.progressive_dropout_experiment(
+            self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
+        )
+
+        eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
+
+        evec_dropout_results, evec_dropout_parameters = processing.eigenvector_dropout(self, nets, dataset, eigen_results, train_set=False)
+
+        results = dict(
+            prms=prms,
+            train_results=train_results,
+            test_results=test_results,
+            dropout_results=dropout_results,
+            dropout_parameters=dropout_parameters,
+            eigen_results=eigen_results,
+            evec_dropout_results=evec_dropout_results,
+            evec_dropout_parameters=evec_dropout_parameters,
+        )
+
         return results, nets
 
     def plot(self, results):
         plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
+        plotting.plot_dropout_results(
+            self,
+            results["dropout_results"],
+            results["dropout_parameters"],
+            results["prms"],
+            dropout_type="nodes",
+        )
         plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        raise ValueError("Please provide the config file path as the first argument.")
-    config_path = sys.argv[1]
-    cfg = ExperimentConfig.load(config_path)
-    exp = AlignmentStatsExperiment(cfg)
-    results, nets = exp.main()
-    exp.plot(results)
+        plotting.plot_dropout_results(
+            self,
+            results["evec_dropout_results"],
+            results["evec_dropout_parameters"],
+            results["prms"],
+            dropout_type="eigenvectors",
+        )
