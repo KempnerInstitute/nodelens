@@ -187,9 +187,9 @@ class AlignmentNetwork(nn.Module):
         alignment layers using forward hook
         """
         if store_hidden:
-            self.hidden = {} # reset the stored activation
             # Use a context manager to ensure hooks are removed after forward pass
             with self.forward_hooks():
+                self.hidden = {} # reset the stored activation
                 out = self.base_model(x)
         else:
             out = self.base_model(x)
@@ -436,6 +436,7 @@ class AlignmentNetwork(nn.Module):
         hidden_inputs_dict = {}
         org_forward_methods = {}
         
+        @contextmanager
         def eigenvector_dropout_context():
             hooks = []
 
@@ -469,7 +470,7 @@ class AlignmentNetwork(nn.Module):
                     else:
                         hooks.append(layer.register_backward_hook(get_input(name)))
 
-                    yield
+                yield
 
             finally:
                 for hook in hooks:
