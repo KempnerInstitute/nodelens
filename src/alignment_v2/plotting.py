@@ -35,7 +35,6 @@ def plot_train_results(exp, train_results, test_results, prms):
     xOffset = [-0.2, 0.2]
     get_x = lambda idx: [xOffset[0] + idx, xOffset[1] + idx]
 
-    # Make Training and Testing Performance Figure
     alpha = 0.3
     figdim = 3
     figratio = 2
@@ -67,7 +66,6 @@ def plot_train_results(exp, train_results, test_results, prms):
     ax[1].set_xlim(-0.5, num_types - 0.5)
     ax[1].set_ylim(ylims)
 
-    # plot loss results fot training and testing
     for idx, label in enumerate(labels):
         cmn = train_acc_mean[:, idx]
         cse = train_acc_se[:, idx]
@@ -92,7 +90,6 @@ def plot_train_results(exp, train_results, test_results, prms):
 
     exp.plot_ready("train_test_performance")
 
-    # Make Alignment Figure
     if plot_alignment:
         num_align_epochs = align_mean.size(2)
         num_layers = align_mean.size(0)
@@ -130,7 +127,6 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     extra_name = "by_layer" if by_layer else "all_layers"
     extra_name += dropout_type
 
-    # Get statistics across each network type for progressive dropout experiment
     print("measuring statistics on dropout analysis...")
     loss_mean_high, loss_se_high = compute_stats_by_type(dropout_results["progdrop_loss_high"], num_types=num_types, dim=0, method="se")
     loss_mean_low, loss_se_low = compute_stats_by_type(dropout_results["progdrop_loss_low"], num_types=num_types, dim=0, method="se")
@@ -140,14 +136,12 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     acc_mean_low, acc_se_low = compute_stats_by_type(dropout_results["progdrop_acc_low"], num_types=num_types, dim=0, method="se")
     acc_mean_rand, acc_se_rand = compute_stats_by_type(dropout_results["progdrop_acc_rand"], num_types=num_types, dim=0, method="se")
 
-    # Contract into lists for looping through to plot
     loss_mean = [loss_mean_high, loss_mean_low, loss_mean_rand]
     loss_se = [loss_se_high, loss_se_low, loss_se_rand]
     acc_mean = [acc_mean_high, acc_mean_low, acc_mean_rand]
     acc_se = [acc_se_high, acc_se_low, acc_se_rand]
 
     print("plotting dropout results...")
-    # Plot Loss for progressive dropout experiment
     fig, ax = plt.subplots(
         num_layers,
         num_types,
@@ -250,28 +244,17 @@ def plot_eigenfeatures(exp, results, prms):
 
     print("measuring statistics of eigenfeature analyses...")
 
-    # shape wrangling
-    from alignment.core.utils import transpose_list
     beta = [torch.stack(b) for b in transpose_list(beta)]
     eigvals = [torch.stack(ev) for ev in transpose_list(eigvals)]
     class_betas = [torch.stack(cb) for cb in transpose_list(class_betas)]
 
-    # normalize to relative values
     beta = [b / b.sum(dim=2, keepdim=True) for b in beta]
     eigvals = [ev / ev.sum(dim=1, keepdim=True) for ev in eigvals]
     class_betas = [cb / cb.sum(dim=2, keepdim=True) for cb in class_betas]
 
-    # reuse these a few times
-    from alignment.core.utils import named_transpose, compute_stats_by_type
     statprms = lambda method: dict(num_types=num_types, dim=0, method=method)
-
-    # get mean and variance eigenvalues for each layer for each network type
     mean_evals, var_evals = named_transpose([compute_stats_by_type(ev, **statprms("var")) for ev in eigvals])
-
-    # get sorted betas (sorted within each neuron)
     sorted_beta = [torch.sort(b, descending=True, dim=2).values for b in beta]
-
-    # get mean / se beta for each layer for each network type
     mean_beta, se_beta = named_transpose([compute_stats_by_type(b, **statprms("var")) for b in beta])
     mean_sorted, se_sorted = named_transpose([compute_stats_by_type(b, **statprms("var")) for b in sorted_beta])
     mean_class_beta, se_class_beta = named_transpose([compute_stats_by_type(cb, **statprms("var")) for cb in class_betas])
@@ -288,7 +271,7 @@ def plot_eigenfeatures(exp, results, prms):
         for idx, label in enumerate(labels):
             mn_ev = mean_evals[layer][idx]
             se_ev = var_evals[layer][idx]
-            mn_beta = torch.mean(mean_beta[layer][idx], dim=0)
+            mn_beta_ = torch.mean(mean_beta[layer][idx], dim=0)
             se_beta_ = torch.std(mean_beta[layer][idx], dim=0) / np.sqrt(num_nodes)
             mn_sort = torch.mean(mean_sorted[layer][idx], dim=0)
             se_sort = torch.std(mean_sorted[layer][idx], dim=0) / np.sqrt(num_nodes)
@@ -299,8 +282,8 @@ def plot_eigenfeatures(exp, results, prms):
                 linestyle="--",
                 label="eigvals" if idx == 0 else None,
             )
-            ax[0, layer].plot(range(num_input), mn_beta, color=cmap(idx), label=label)
-            ax[0, layer].fill_between(range(num_input), mn_beta + se_beta_, mn_beta - se_beta_, color=(cmap(idx), alpha))
+            ax[0, layer].plot(range(num_input), mn_beta_, color=cmap(idx), label=label)
+            ax[0, layer].fill_between(range(num_input), mn_beta_ + se_beta_, mn_beta_ - se_beta_, color=(cmap(idx), alpha))
             ax[1, layer].plot(range(num_input), mn_sort, color=cmap(idx), label=label)
             ax[1, layer].fill_between(range(num_input), mn_sort + se_sort, mn_sort - se_sort, color=(cmap(idx), alpha))
 
@@ -327,7 +310,7 @@ def plot_eigenfeatures(exp, results, prms):
         for idx, label in enumerate(labels):
             mn_ev = mean_evals[layer][idx]
             se_ev = var_evals[layer][idx]
-            mn_beta = torch.mean(mean_beta[layer][idx], dim=0)
+            mn_beta_ = torch.mean(mean_beta[layer][idx], dim=0)
             se_beta_ = torch.std(mean_beta[layer][idx], dim=0) / np.sqrt(num_nodes)
             mn_sort = torch.mean(mean_sorted[layer][idx], dim=0)
             se_sort = torch.std(mean_sorted[layer][idx], dim=0) / np.sqrt(num_nodes)
@@ -338,8 +321,8 @@ def plot_eigenfeatures(exp, results, prms):
                 linestyle="--",
                 label="eigvals" if idx == 0 else None,
             )
-            ax[0, layer].plot(range(num_input), mn_beta, color=cmap(idx), label=label)
-            ax[0, layer].fill_between(range(num_input), mn_beta + se_beta_, mn_beta - se_beta_, color=(cmap(idx), alpha))
+            ax[0, layer].plot(range(num_input), mn_beta_, color=cmap(idx), label=label)
+            ax[0, layer].fill_between(range(num_input), mn_beta_ + se_beta_, mn_beta_ - se_beta_, color=(cmap(idx), alpha))
 
             ax[0, layer].set_xscale("log")
             ax[0, layer].set_yscale("log")
@@ -393,7 +376,7 @@ def plot_adversarial_results(exp, eigen_results, adversarial_results, prms):
         adversarial_results["betas"],
         eigen_results["eigvals"],
     )
-    epsilons, use_sign = adversarial_results["epsilons"], adversarial_results["use_sign"]
+    epsilons, use_sign = adversarial_results["use_sign"], adversarial_results["use_sign"]
 
     num_types = len(prms["vals"])
     labels = [f"{prms['name']}={val}" for val in prms["vals"]]
@@ -401,24 +384,22 @@ def plot_adversarial_results(exp, eigen_results, adversarial_results, prms):
 
     print("measuring statistics of adversarial analyses...")
 
-    from alignment.core.utils import transpose_list
     accuracy = torch.stack([torch.stack(acc) for acc in transpose_list(accuracy)])  # (num_epsilon, num_nets)
-    eigvals = [torch.stack(ev) for ev in transpose_list(eigvals)]  # [(num_nets, dim_layer) for each layer]
-    beta = [torch.stack(b) for b in beta]  # [(epsilon, num_nets, dim_layer) for each layer]
+    eigvals = [torch.stack(ev) for ev in transpose_list(eigvals)]
+    beta = [torch.stack(b) for b in beta]
 
     beta = [b / b.sum(dim=2, keepdim=True) for b in beta]
     eigvals = [ev / ev.sum(dim=1, keepdim=True) for ev in eigvals]
 
-    from alignment.core.utils import compute_stats_by_type, named_transpose
     statprms = lambda dim, method: dict(num_types=num_types, dim=dim, method=method)
-
-    mean_acc, se_acc = compute_stats_by_type(accuracy, **statprms(1, "var"))  # (num_epsilon, num_types)
+    mean_acc, se_acc = compute_stats_by_type(accuracy, **statprms(1, "var"))
+    from alignment.core.utils import named_transpose
     mean_beta, se_beta = named_transpose(
         [compute_stats_by_type(b, **statprms(1, "var")) for b in beta]
-    )  # [(epsilon, num_types, dim_layer) for each layer]
+    )
     mean_evals, var_evals = named_transpose(
         [compute_stats_by_type(ev, **statprms(0, "var")) for ev in eigvals]
-    )  # [(num_types, dim_layer) for each layer]
+    )
 
     print("plotting adversarial success results...")
     figdim = 3
