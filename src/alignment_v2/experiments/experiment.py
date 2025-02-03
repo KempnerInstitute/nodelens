@@ -1,5 +1,3 @@
-# alignment/experiments/experiment.py
-
 import os
 from abc import ABC, abstractmethod
 from argparse import ArgumentParser
@@ -35,7 +33,7 @@ class Experiment(ABC):
             assert self.args.timestamp is not None, "if use_timestamp=True and plotting stored results, must provide a timestamp"
         
         self.register_timestamp()  # Register timestamp of experiment
-        self.run = self.configure_wandb()  # Create a wandb run object (or None depending on args.use_wandb)
+        self.wandb_run = self.configure_wandb()  # <-- Renamed from self.run to self.wandb_run
         self.device = self.args.device
 
     def report(self, init=False, args=False, meta_args=False) -> None:
@@ -95,14 +93,9 @@ class Experiment(ABC):
 
     def get_exp_path(self) -> Path:
         """Method for returning child directories of this experiment"""
-        # exp_path is the base path followed by whatever folders define this particular experiment
-        # (usually things like ['network_name', 'dataset_name', 'test', 'etc'])
         exp_path = Path("/".join(self.prepare_path()))
-
-        # if requested, will also use a timestamp to distinguish this run from others
         if self.args.use_timestamp:
             exp_path = exp_path / self.timestamp
-
         return exp_path
 
     def get_path(self, name, create=True) -> Path:
@@ -139,7 +132,6 @@ class Experiment(ABC):
     def prepare_path(self) -> List[str]:
         """
         Required method for defining a pathname for each experiment.
-
         Must return a list of strings that will be appended to the base path to make an experiment directory.
         See ``get_dir()`` for details.
         """
@@ -225,6 +217,11 @@ class Experiment(ABC):
     def main(self) -> Tuple[Dict, List[torch.nn.Module]]:
         """
         Required method for operating main experiment functions.
+
+        This method should perform any core training and analyses related to the experiment
+        and return a results dictionary and a list of pytorch nn.Modules. The second requirement
+        (torch modules) can probably be relaxed, but doesn't need to yet so let's keep it as is
+        for overall clarity.
         """
         pass
 
@@ -232,6 +229,10 @@ class Experiment(ABC):
     def plot(self, results: Dict) -> None:
         """
         Required method for operating main plotting functions.
+
+        Should accept as input a results dictionary and run plotting functions.
+        If any plots are to be saved, then each plotting function must do so
+        accordingly.
         """
         pass
 
@@ -251,8 +252,9 @@ class Experiment(ABC):
         """standard method for saving and showing plot when it's ready"""
         if not self.args.no_save:
             plt.savefig(str(self.get_path(name)))
-        if self.run is not None:
-            self.run.log({name: wandb.Image(plt)})
+        # Changed below from "if self.run is not None" => "if self.wandb_run is not None"
+        if self.wandb_run is not None:
+            self.wandb_run.log({name: wandb.Image(plt)})
         if not self.args.show_all:
             plt.show()
 
