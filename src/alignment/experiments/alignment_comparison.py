@@ -1,7 +1,10 @@
 import torch
 
 from alignment.experiments.experiment import Experiment
-from alignment.models.registry import get_model, get_model_parameters
+from alignment.models.registry import (get_model,
+                                       get_model_parameters,
+                                       get_transform_parameters)
+from alignment.models.base import AlignmentNetwork
 from alignment import processing
 from alignment import plotting
 
@@ -31,7 +34,7 @@ class AlignmentComparison(Experiment):
         their optimizers and a params dictionary with the experiment parameters associated
         with each network
         """
-        model_constructor = get_model(self.args.model.name)
+        base_model_constructor = get_model(self.args.model.name)
         model_parameters = get_model_parameters(self.args.model.name, self.args.dataset.name)
 
         # get optimizer
@@ -46,11 +49,11 @@ class AlignmentComparison(Experiment):
         if self.args.extra.comparison == "lr":
             lrs = [lr for lr in self.args.extra.lrs for _ in range(self.args.training.replicates)]
             nets = [
-                model_constructor(
+                AlignmentNetwork(base_model_constructor(
                     dropout=self.args.model.dropout,
                     **model_parameters,
-                    ignore_flag=self.args.alignment.ignore_flag,
-                )
+                ),
+                alignment_layer_names=self.args.model.alignment_layers)
                 for _ in lrs
             ]
             nets = [net.to(self.device) for net in nets]
@@ -68,7 +71,7 @@ class AlignmentComparison(Experiment):
             weight_decay_values = [self.args.extra.compare_wd * (reg == "weight_decay") for reg in self.args.extra.regularizers]
             dropouts = [do for do in dropout_values for _ in range(self.args.training.replicates)]
             weight_decays = [wd for wd in weight_decay_values for _ in range(self.args.training.replicates)]
-            nets = [model_constructor(dropout=do, **model_parameters, ignore_flag=self.args.alignment.ignore_flag) for do in dropouts]
+            nets = [AlignmentNetwork(base_model_constructor(dropout=do, **model_parameters), alignment_layer_names=self.args.model.alignment_layers) for do in dropouts]
             nets = [net.to(self.device) for net in nets]
             optimizers = [optim(net.parameters(), lr=self.args.optimizer.lr, weight_decay=wd) for net, wd in zip(nets, weight_decays)]
             prms = {
@@ -94,7 +97,7 @@ class AlignmentComparison(Experiment):
         nets, optimizers, prms = self.create_networks()
 
         # load dataset
-        dataset = self.prepare_dataset(nets[0])
+        dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
 
         # train networks
         train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
