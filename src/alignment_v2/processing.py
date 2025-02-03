@@ -2,10 +2,9 @@ import os
 import torch
 from tqdm import tqdm
 import train
-from utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
 
-def train_networks(exp,nets,opts,dataset,**special_parameters):
-    prms=dict(
+def train_networks(exp, nets, opts, dataset, **special_params):
+    params = dict(
         train_set=True,
         num_epochs=exp.args.training.epochs,
         alignment=not exp.args.alignment.no_alignment,
@@ -13,22 +12,33 @@ def train_networks(exp,nets,opts,dataset,**special_parameters):
         frequency=exp.args.alignment.frequency,
         run=exp.run
     )
-    prms.update(**special_parameters)
+    params.update(special_params)
     if exp.args.checkpointing.use_prev and os.path.isfile(exp.get_checkpoint_path()):
-        nets,opts,res=load_checkpoints(nets,opts,exp.args.device,exp.get_checkpoint_path())
-        for n in nets:
-            n.train()
-        prms["num_complete"]=res["epoch"]+1
-        prms["results"]=res
-        print("Loaded from checkpoint")
+        nets, opts, res = train.load_checkpoints(nets, opts, exp.args.device, exp.get_checkpoint_path())
+        for net in nets:
+            net.train()
+        params["num_complete"] = res["epoch"] + 1
+        params["results"] = res
+        print("Loaded checkpoint")
     if exp.args.checkpointing.save_checkpoints:
-        prms["save_checkpoints"]=(True,exp.args.checkpointing.frequency,exp.get_checkpoint_path(),exp.args.device)
-    print("training...")
-    tr=train.train(nets,opts,dataset,**prms)
-    print("testing...")
-    prms["train_set"]=False
-    te=train.test(nets,dataset,**prms)
-    return tr,te
+        params["save_checkpoints"] = (True, exp.args.checkpointing.frequency, exp.get_checkpoint_path(), exp.args.device)
+    print("Training networks...")
+    train_results = train.train(nets, opts, dataset, **params)
+    print("Testing networks...")
+    params["train_set"] = False
+    test_results = train.test(nets, dataset, **params)
+    return train_results, test_results
+
+def measure_eigenfeatures(exp, nets, dataset, train_set=False):
+    print("Measuring eigenfeatures...")
+    beta, eigvals, eigvecs = [], [], []
+    for net in tqdm(nets):
+        inputs, _ = net._process_collect_activity(dataset, train_set=train_set, with_updates=False, use_training_mode=False)
+        w, v = net.measure_eigenfeatures(inputs, with_updates=False)
+        beta.append((net.get_alignment_weights(flatten=True)[0] / torch.norm(net.get_alignment_weights(flatten=True)[0])))
+        eigvals.append(w)
+        eigvecs.append(v)
+    return {"beta": beta, "eigvals": eigvals, "eigvecs": eigvecs}
 
 def progressive_dropout_experiment(exp,nets,dataset,alignment=None,train_set=False):
     print("targeted dropout...")
