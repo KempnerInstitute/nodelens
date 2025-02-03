@@ -25,6 +25,8 @@ def train(nets, optimizers, dataset, **parameters):
 
     verbose = parameters.get("verbose", True)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     num_nets = len(nets)
     use_train = parameters.get("train_set", True)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
@@ -60,7 +62,10 @@ def train(nets, optimizers, dataset, **parameters):
             results["compare_alignment_bins"] = calign_bins
             results["compare_alignment_expected"] = []
             results["compare_alignment_observed"] = []
-
+            if measure_delta_alignment:
+                results["compare_delta_alignment_observed"] = []
+                
+                
     elif results["loss"].shape[0] < num_steps:
         add_steps = num_steps - results["loss"].shape[0]
         assert (add_steps / (parameters["num_epochs"] - num_complete)) == len(
@@ -98,14 +103,14 @@ def train(nets, optimizers, dataset, **parameters):
             results["accuracy"][cidx] = torch.tensor([dataset.measure_accuracy(output, labels).cpu() for output in outputs])
 
             if idx % alignment_eval_frequency == 0 and measure_alignment:
-                # For each alignment method in 'methods' you could measure them differently.
-                # For simplicity, we'll just call 'measure_alignment' once per net, but you can adapt it.
-                # If you want method-specific logic, you'd do it inside the net or a function.
+                # For each alignment method in 'methods' we should measure them differently.
+                # For simplicity, we'll just call 'measure_alignment' once per net, but we can later adapt it.
+                # If we want method-specific logic, we'd do it inside the net or a function.
                 measured_alignments = []
                 for net in nets:
                     # This is a simplistic approach:
                     alignment_values = net.measure_alignment(images, precomputed=True, method="alignment")
-                    # If you have multiple methods (e.g. "MI_0","RQ"), you'd do some dispatch here.
+                    # If we have multiple methods (e.g. "MI_0","RQ"), we'd do some dispatch here.
                     measured_alignments.append(alignment_values)
                 results["alignment"].append(measured_alignments)
 
@@ -113,10 +118,25 @@ def train(nets, optimizers, dataset, **parameters):
                 c_delta_weights = [net.compare_weights(init_weight) for net, init_weight in zip(nets, results["init_weights"])]
                 results["delta_weights"].append(c_delta_weights)
 
+            # compare true alignment distribution to expected distribution (according to Fiete alignment definition)
             if compare_expected:
-                pass
-                # omitted for brevity, but would mirror the existing logic in the original code
-
+                # Measure distribution of alignment, compare with expected given "Alignment" from Fiete definition
+                if measure_alignment:
+                    c_alignment = results["alignment"][-1]
+                else:
+                    c_alignment = [net.measure_alignment(images, precomputed=True, method="alignment") for net in nets]
+                c_inputs = [net.get_layer_inputs(images, precomputed=True) for net in nets]
+                c_inputs = [net._preprocess_inputs(cin) for net, cin in zip(nets, c_inputs)]
+                c_evals = [[smart_pca(c.T)[0] for c in cin] for cin in c_inputs]
+                c_dist = [[expected_alignment_distribution(ev, valid_rotation=False, bins=calign_bins)[0] for ev in c_eval] for c_eval in c_evals]
+                t_dist = [[torch.histogram(align.cpu(), bins=calign_bins, density=True)[0] for align in c_align] for c_align in c_alignment]
+                results["compare_alignment_expected"].append(c_dist)
+                results["compare_alignment_observed"].append(t_dist)
+                if measure_delta_alignment:
+                    d_alignment = results["delta_alignment"][-1]
+                    d_dist = [[torch.histogram(dalign.cpu(), bins=calign_bins, density=True)[0] for dalign in d_align] for d_align in d_alignment]
+                    results["compare_delta_alignment_observed"].append(d_dist)
+                    
             if run is not None:
                 run.log(
                     {f"losses/loss-{ii}": l.item() for ii, l in enumerate(loss)}

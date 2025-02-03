@@ -126,4 +126,4 @@ if __name__ == "__main__":
     
     
     
-# python alignment/experiments/alignment_experiment.py --config config/config_alignment_stats.yaml
+# python alignment_v2/experiments/alignment_experiment.py --config config/config_alignment_stats.yaml
