@@ -1,26 +1,24 @@
-experiment: "alexnet_alignment_example"
-results_path:   # <-- Add path to where results to be saved/loaded
-no_save: false
-just_plot: false
-save_networks: false
-show_params: false
-show_all: false
-use_timestamp: false
+experiment: "mnist_alignment_example"
+results_path:   ## path to where results to be saved/loaded
+no_save: false   ## if true, skip saving results and plots
+just_plot: false ## If true, skip the experiment’s main() logic, only load previously saved results and call plot_from_existing()
+save_networks: false ## If true, also save trained networks (self.save_networks(...)) after training.
+show_params: false  ## keep the plots open WE CAN REMOVE THIS
+show_all: false     ## ## keep the plots open WE CAN REMOVE THIS
+use_timestamp: false ## If use_timestamp is true, the code stores results in subfolders named by timestamp (an ISO/time string).
 timestamp: null
 
 dataset:
-  name: "ImageNet"
-  path:   # <-- Add path to your dataset
-  #download: false
+  name: "MNIST" # "MNIST", "CIFAR10", "CIFAR100", "ImageNet", etc.
+  path: ## path to dataset
+  #download: false   ## discactive for now
 
 model:
-  name: "AlexNet"
-  dropout: 0
-  # For demonstration, we pick a single layer from AlexNet 'features' to measure alignment.
-  # for all layers, set alignment_layers: null
-  # the null after "features.8" refers to the fact that we don't mention a particular input for this layer and use what it gets
-  alignment_layers:
-    "features.8": null
+  name: "MLP" ## base artitecture, e.g., "MLP", "CNN2P2", etc.
+  dropout: 0 ## Dropout fraction 0 to 1
+  alignment_layers: null # a dict of layer names: source_layer. if null it will be set to all layers. 
+    #"features.8": null    # the null after "features.8" refers to the fact that we don't mention a particular input for this layer and use what it gets
+
 
 optimizer:
   name: "Adam"
@@ -29,14 +27,14 @@ optimizer:
 
 training:
   batch_size: 64
-  epochs: 0
-  replicates: 1
+  epochs: 10
+  replicates: 1 # number of nets to train
 
 alignment:
-  compute_alignment: true
-  measure_weight_deltas: false
-  alignment_eval_frequency: 1
-  methods: ["RQ", "MI_0"]
+  compute_alignment: true   ## calls net.measure_alignment(...) if measure_alignment is true
+  measure_weight_deltas: false ## If true, measure and store changes in weights over training 
+  alignment_eval_frequency: 1  ## How many batches/iterations between alignment measurements.
+  methods: ["RQ", "MI_0"]      ## TO DO
   compute_during_training: false
   compute_during_inference: true
 
@@ -44,15 +42,15 @@ checkpointing:
   use_prev: false
   save_checkpoints: false
   frequency: 1
-  use_wandb: false
+  use_wandb: true
 
 extra:
-  num_drops: 0
+  num_drops: 10
   dropout_by_layer: false
-  comparison: "lr"
-  regularizers: ["none", "dropout", "weight_decay"]
-  lrs: [1e-3, 1e-4]
-  compare_dropout: 0.5
-  compare_wd: 1e-5
-  cutoffs: [1e-2, 1e-3, 1e-4, 0.0]
-  manual_frequency: 5
+  #comparison: "lr" ## for “alignment_comparison” style experiments
+  #regularizers: ["none", "dropout", "weight_decay"]
+  #lrs: [1e-3, 1e-4]
+  #compare_dropout: 0.5
+  #compare_wd: 1e-5
+  #cutoffs: [1e-2, 1e-3, 1e-4, 0.0]
+  #manual_frequency: 5
