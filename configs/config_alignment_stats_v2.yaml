@@ -1,5 +1,5 @@
 experiment: "alexnet_alignment_example"
-results_path: "/n/netscratch/kempner_dev/hsafaai/results/alignment"  # <-- Add path to where results to be saved/loaded
+results_path:   # <-- Add path to where results to be saved/loaded
 no_save: false
 just_plot: false
 save_networks: false
@@ -10,7 +10,7 @@ timestamp: null
 
 dataset:
   name: "ImageNet"
-  path: "/n/holylfs06/LABS/kempner_shared/Lab/data/imagenet_1k"  # <-- Add path to your dataset
+  path:   # <-- Add path to your dataset
   #download: false
 
 model:
@@ -18,6 +18,7 @@ model:
   dropout: 0
   # For demonstration, we pick a single layer from AlexNet 'features' to measure alignment.
   # for all layers, set alignment_layers: null
+  # the null after "features.8" refers to the fact that we don't mention a particular input for this layer and use what it gets
   alignment_layers:
     "features.8": null
 
