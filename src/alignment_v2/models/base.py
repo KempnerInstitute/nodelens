@@ -203,15 +203,44 @@ class AlignmentNetwork(nn.Module):
                 delta_weights.append(cw - iw)
         return delta_weights
 
+    # @torch.no_grad()
+    # def measure_alignment(self, x, precomputed=False, method="alignment", relative=True):
+    #     inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
+    #     preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
+    #     weights = self.get_alignment_weights(flatten=True)
+    #     return [
+    #         alignment(input_, weight, method=method, relative=relative)
+    #         for input_, weight in zip(preprocessed, weights)
+    #     ]
     @torch.no_grad()
     def measure_alignment(self, x, precomputed=False, method="alignment", relative=True):
+        """
+        In old code, this just did RQ. If you want multiple methods from a single call,
+        you can pass a list or single string.
+        """
         inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
         preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
         weights = self.get_alignment_weights(flatten=True)
-        return [
-            alignment(input_, weight, method=method, relative=relative)
-            for input_, weight in zip(preprocessed, weights)
-        ]
+
+        # If method is a string, do the old approach
+        if isinstance(method, str):
+            return [
+                alignment(inp, w, method=method, relative=relative)
+                for inp, w in zip(preprocessed, weights)
+            ]
+        # If method is a list, do multiple metrics
+        results_per_layer = []
+        for inp, w in zip(preprocessed, weights):
+            layer_dict = {}
+            for m in method:
+                if m == "RQ":
+                    val = alignment(inp, w, method="alignment", relative=relative)
+                    layer_dict["RQ"] = val
+                elif m.startswith("MI"):
+                    layer_dict[m] = 0.0  # placeholder
+                # else if other
+            results_per_layer.append(layer_dict)
+        return results_per_layer
 
     @torch.no_grad()
     def measure_alignment_weights(self, x, weights, precomputed=False, method="alignment", relative=True):
