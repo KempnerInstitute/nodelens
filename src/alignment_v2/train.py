@@ -1,5 +1,4 @@
-from copy import copy, deepcopy
-
+from copy import deepcopy
 import torch
 from tqdm import tqdm
 
@@ -11,35 +10,37 @@ from alignment_v2.utils import (
     save_checkpoint,
     smart_pca,
     expected_alignment_distribution,
-    get_dropout_indices,
 )
 
 @train_nets
 def train(nets, optimizers, dataset, **parameters):
-    """method for training network on supervised learning problem"""
+    """
+    method for training network on supervised learning problem
+    """
 
-    if not (isinstance(nets, list)):
+    if not isinstance(nets, list):
         nets = [nets]
-    if not (isinstance(optimizers, list)):
+    if not isinstance(optimizers, list):
         optimizers = [optimizers]
     assert len(nets) == len(optimizers), "nets and optimizers need to be equal length lists"
 
     verbose = parameters.get("verbose", True)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
     num_nets = len(nets)
     use_train = parameters.get("train_set", True)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
     num_steps = len(dataset.train_loader) * parameters["num_epochs"]
 
-    run = parameters.get("run")
+    wandb_run = parameters.get("run", None)
 
     measure_alignment = parameters.get("alignment", True)
-    measure_weight_deltas = parameters.get("measure_weight_deltas", False)
-    alignment_eval_frequency = parameters.get("alignment_eval_frequency", 1)
-    methods = parameters.get("methods", ["RQ"])  # list of alignment methods to compute
+    measure_delta_weights = parameters.get("delta_weights", False)
+    measure_frequency = parameters.get("frequency", 1)
     compare_expected = parameters.get("compare_expected", False)
+
+    manual_shape = parameters.get("manual_shape", False)
+    manual_frequency = parameters.get("manual_frequency", -1)
+    manual_transforms = parameters.get("manual_transforms", None)
+    manual_layers = parameters.get("manual_layers", None)
 
     results = parameters.get("results", False)
     num_complete = parameters.get("num_complete", 0)
@@ -50,30 +51,11 @@ def train(nets, optimizers, dataset, **parameters):
             "loss": torch.zeros((num_steps, num_nets)),
             "accuracy": torch.zeros((num_steps, num_nets)),
         }
-
         if measure_alignment:
             results["alignment"] = []
-
-        if measure_weight_deltas:
+        if measure_delta_weights:
             results["delta_weights"] = []
             results["init_weights"] = [net.get_alignment_weights() for net in nets]
-
-        if compare_expected:
-            calign_bins = torch.linspace(0, 1, 301)
-            results["compare_alignment_bins"] = calign_bins
-            results["compare_alignment_expected"] = []
-            results["compare_alignment_observed"] = []
-            if measure_delta_alignment:
-                results["compare_delta_alignment_observed"] = []
-                
-                
-    elif results["loss"].shape[0] < num_steps:
-        add_steps = num_steps - results["loss"].shape[0]
-        assert (add_steps / (parameters["num_epochs"] - num_complete)) == len(
-            dataset.train_loader
-        ), "Number of new steps needs to multiple of epochs and num minibatches"
-        results["loss"] = torch.vstack((results["loss"], torch.zeros((add_steps, num_nets))))
-        results["accuracy"] = torch.vstack((results["accuracy"], torch.zeros((add_steps, num_nets))))
 
     if num_complete > 0:
         print("resuming training from checkpoint on epoch", num_complete)
@@ -103,49 +85,36 @@ def train(nets, optimizers, dataset, **parameters):
             results["loss"][cidx] = torch.tensor([l.item() for l in loss])
             results["accuracy"][cidx] = torch.tensor([dataset.measure_accuracy(output, labels).cpu() for output in outputs])
 
-            if idx % alignment_eval_frequency == 0 and measure_alignment:
-                # For each alignment method in 'methods' we should measure them differently.
-                # For simplicity, we'll just call 'measure_alignment' once per net, but we can later adapt it.
-                # If we want method-specific logic, we'd do it inside the net or a function.
-                measured_alignments = []
-                for net in nets:
-                    # This is a simplistic approach:
-                    alignment_values = net.measure_alignment(images, precomputed=True, method="alignment")
-                    # If we have multiple methods (e.g. "MI_0","RQ"), we'd do some dispatch here.
-                    measured_alignments.append(alignment_values)
-                results["alignment"].append(measured_alignments)
-
-            if measure_weight_deltas:
-                c_delta_weights = [net.compare_weights(init_weight) for net, init_weight in zip(nets, results["init_weights"])]
-                results["delta_weights"].append(c_delta_weights)
-
-            # compare true alignment distribution to expected distribution (according to Fiete alignment definition)
-            if compare_expected:
-                # Measure distribution of alignment, compare with expected given "Alignment" from Fiete definition
+            if idx % measure_frequency == 0:
                 if measure_alignment:
-                    c_alignment = results["alignment"][-1]
-                else:
-                    c_alignment = [net.measure_alignment(images, precomputed=True, method="alignment") for net in nets]
-                c_inputs = [net.get_layer_inputs(images, precomputed=True) for net in nets]
-                c_inputs = [net._preprocess_inputs(cin) for net, cin in zip(nets, c_inputs)]
-                c_evals = [[smart_pca(c.T)[0] for c in cin] for cin in c_inputs]
-                c_dist = [[expected_alignment_distribution(ev, valid_rotation=False, bins=calign_bins)[0] for ev in c_eval] for c_eval in c_evals]
-                t_dist = [[torch.histogram(align.cpu(), bins=calign_bins, density=True)[0] for align in c_align] for c_align in c_alignment]
-                results["compare_alignment_expected"].append(c_dist)
-                results["compare_alignment_observed"].append(t_dist)
-                if measure_delta_alignment:
-                    d_alignment = results["delta_alignment"][-1]
-                    d_dist = [[torch.histogram(dalign.cpu(), bins=calign_bins, density=True)[0] for dalign in d_align] for d_align in d_alignment]
-                    results["compare_delta_alignment_observed"].append(d_dist)
-                    
-            if run is not None:
-                run.log(
+                    results["alignment"].append([
+                        net.measure_alignment(images, precomputed=True, method="alignment")
+                        for net in nets
+                    ])
+                if measure_delta_weights:
+                    c_delta_weights = [
+                        net.compare_weights(init_weight)
+                        for net, init_weight in zip(nets, results["init_weights"])
+                    ]
+                    results["delta_weights"].append(c_delta_weights)
+
+            if wandb_run is not None:
+                wandb_run.log(
                     {f"losses/loss-{ii}": l.item() for ii, l in enumerate(loss)}
                     | {f"accuracies/accuracy-{ii}": dataset.measure_accuracy(output, labels) for ii, output in enumerate(outputs)}
                     | {"batch": cidx}
                 )
 
-        if save_ckpt & (epoch % freq_ckpt == 0):
+        if manual_shape:
+            if ((epoch + 1) % manual_frequency == 0) and (epoch < parameters["num_epochs"] - 1):
+                for net, transform in zip(nets, manual_transforms):
+                    inputs, _ = net._process_collect_activity(dataset, train_set=False, with_updates=False, use_training_mode=False)
+                    _, eigenvalues, eigenvectors = net.measure_eigenfeatures(inputs, with_updates=False)
+                    eigenvalues = [eigenvalues[ml] for ml in manual_layers]
+                    eigenvectors = [eigenvectors[ml] for ml in manual_layers]
+                    net.shape_eigenfeatures(manual_layers, eigenvalues, eigenvectors, transform)
+
+        if save_ckpt and (epoch % freq_ckpt == 0):
             save_checkpoint(
                 nets,
                 optimizers,
@@ -153,70 +122,57 @@ def train(nets, optimizers, dataset, **parameters):
                 path_ckpt,
             )
 
-    for k in [
-        "alignment",
-        "delta_weights",
-        "avgcorr",
-        "fullcorr",
-        "compare_alignment_expected",
-        "compare_alignment_observed",
-    ]:
-        if k not in results.keys():
-            continue
-        results[k] = condense_values(transpose_list(results[k]))
-
     return results
 
 @torch.no_grad()
 @test_nets
 def test(nets, dataset, **parameters):
-    """method for testing network on supervised learning problem"""
+    """
+    method for testing network on supervised learning problem
+    """
 
-    run = parameters.get("run")
-    if not (isinstance(nets, list)):
-        nets = [nets]
-
+    wandb_run = parameters.get("run", None)
     verbose = parameters.get("verbose", True)
     num_nets = len(nets)
-
     use_test = not parameters.get("train_set", False)
     dataloader = dataset.test_loader if use_test else dataset.train_loader
 
     total_loss = [0 for _ in range(num_nets)]
-    num_correct = [0 for _ in range(num_nets)]
+    total_correct = [0 for _ in range(num_nets)]
     num_batches = 0
 
-    measure_alignment = parameters.get("alignment", False)
-    alignment_eval_frequency = parameters.get("alignment_eval_frequency", 1)
-
-    if measure_alignment:
-        alignment = []
+    measure_alignment = parameters.get("alignment", True)
+    alignment_log = []
 
     batch_loop = tqdm(dataloader) if verbose else dataloader
-    for bidx, batch in enumerate(batch_loop):
+    for batch in batch_loop:
         images, labels = dataset.unwrap_batch(batch)
-        outputs = [net(images, store_hidden=True) for net in nets]
 
+        outputs = [net(images, store_hidden=True) for net in nets]
         for idx, output in enumerate(outputs):
             total_loss[idx] += dataset.measure_loss(output, labels).item()
-            num_correct[idx] += dataset.measure_accuracy(output, labels).item()
-
+            total_correct[idx] += dataset.measure_accuracy(output, labels).item()
         num_batches += 1
 
-        if measure_alignment and (bidx % alignment_eval_frequency == 0):
-            alignment.append([net.measure_alignment(images, precomputed=True, method="alignment") for net in nets])
+        if measure_alignment:
+            alignment_log.append([
+                net.measure_alignment(images, precomputed=True, method="alignment")
+                for net in nets
+            ])
 
     results = {
-        "loss": [loss / num_batches for loss in total_loss],
-        "accuracy": [correct / num_batches for correct in num_correct],
+        "loss": [x / num_batches for x in total_loss],
+        "accuracy": [c / num_batches for c in total_correct],
     }
 
     if measure_alignment:
-        results["alignment"] = condense_values(transpose_list(alignment))
+        results["alignment"] = condense_values(transpose_list(alignment_log))
 
-    if run is not None:
-        run.summary["test_loss"] = torch.mean(torch.tensor(results["loss"]))
-        run.summary["test_accuracy"] = torch.mean(torch.tensor(results["accuracy"]))
+    if wandb_run is not None:
+        # ensure it's a wandb run
+        if hasattr(wandb_run, "summary"):
+            wandb_run.summary["test_loss"] = torch.mean(torch.tensor(results["loss"]))
+            wandb_run.summary["test_accuracy"] = torch.mean(torch.tensor(results["accuracy"]))
 
     return results
 
