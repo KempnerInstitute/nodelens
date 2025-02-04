@@ -64,7 +64,6 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
     measure eigenfeatures for each net
     """
     print("measuring eigenfeatures...")
-    from alignment.core.utils import transpose_list
     beta, eigvals, eigvecs, class_betas = [], [], [], []
     for net in tqdm(nets):
         inputs, labels = net._process_collect_activity(
