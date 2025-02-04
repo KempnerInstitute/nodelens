@@ -90,3 +90,9 @@ class ExperimentConfig(BaseConfig):
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     checkpointing: CheckpointingConfig = field(default_factory=CheckpointingConfig)
     plots: PlotsConfig = field(default_factory=PlotsConfig)
+    
+    
+@dataclass
+class ExtraConfig(BaseConfig):
+    num_drops: int = 9
+    dropout_by_layer: bool = False
