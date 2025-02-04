@@ -70,6 +70,12 @@ class PlotsConfig(BaseConfig):
     show_eigenfeatures: bool = True
     show_eig_dropout: bool = True
 
+    
+@dataclass
+class ExtraConfig(BaseConfig):
+    num_drops: int = 9
+    dropout_by_layer: bool = False
+    
 @dataclass
 class ExperimentConfig(BaseConfig):
     experiment: Optional[str] = None
@@ -90,9 +96,4 @@ class ExperimentConfig(BaseConfig):
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     checkpointing: CheckpointingConfig = field(default_factory=CheckpointingConfig)
     plots: PlotsConfig = field(default_factory=PlotsConfig)
-    
-    
-@dataclass
-class ExtraConfig(BaseConfig):
-    num_drops: int = 9
-    dropout_by_layer: bool = False
+    extra: ExtraConfig = field(default_factory=ExtraConfig)
