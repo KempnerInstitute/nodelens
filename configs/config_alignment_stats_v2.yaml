@@ -11,7 +11,6 @@ timestamp: null
 dataset:
   name: "MNIST" # "MNIST", "CIFAR10", "CIFAR100", "ImageNet", etc.
   path: ## path to dataset
-  #download: false   ## discactive for now
 
 model:
   name: "MLP" ## base artitecture, e.g., "MLP", "CNN2P2", etc.
@@ -26,23 +25,31 @@ optimizer:
   weight_decay: 0
 
 training:
+  do_train: false  # <--- unified training toggle
   batch_size: 64
   epochs: 10
   replicates: 1 # number of nets to train
 
 alignment:
-  compute_alignment: true   ## calls net.measure_alignment(...) if measure_alignment is true
-  measure_weight_deltas: false ## If true, measure and store changes in weights over training 
-  alignment_eval_frequency: 1  ## How many batches/iterations between alignment measurements.
-  methods: ["RQ", "MI_0"]      ## TO DO
+  methods: ["RQ", "MI_0", "MI_1"]  # <--- a list of desired alignment metrics
   compute_during_training: false
   compute_during_inference: true
+  frequency: 1  # how often to compute alignment (mini-batch frequency)
+  # optional advanced flags:
+  measure_weight_deltas: false
 
 checkpointing:
+  use_wandb: true
   use_prev: false
   save_checkpoints: false
   frequency: 1
-  use_wandb: true
+
+plots:
+  # <--- new section that decides which plots to generate
+  show_loss: true
+  show_dropout: true
+  show_eigenfeatures: true
+  show_eig_dropout: true
 
 extra:
   num_drops: 10
