@@ -2,7 +2,9 @@ import torch
 import argparse
 import sys
 
+# Make sure get_dataset is imported from wherever your final dataset code is.
 from alignment_v2.datasets import get_dataset
+
 from alignment_v2.models.registry import get_model, get_transform_parameters
 from alignment_v2 import processing
 from alignment_v2.config import ExperimentConfig
@@ -21,7 +23,7 @@ class GeneralAlignmentExperiment(Experiment):
         elif self.args.optimizer.name == "SGD":
             optim_cls = torch.optim.SGD
         else:
-            raise ValueError(f"optimizer ({self.args.optimizer.name}) not recognized")
+            raise ValueError(f"Unknown optimizer {self.args.optimizer.name}")
 
         nets = []
         for _ in range(self.args.training.replicates):
@@ -31,8 +33,7 @@ class GeneralAlignmentExperiment(Experiment):
                 build=True,
                 dataset=self.args.dataset.name,
                 dropout=self.args.model.dropout,
-            )
-            net.to(self.device)
+            ).to(self.device)
             nets.append(net)
 
         optimizers = [
@@ -40,21 +41,18 @@ class GeneralAlignmentExperiment(Experiment):
             for net in nets
         ]
 
-        prms = {
-            "vals": [self.args.model.name],
-            "name": "network",
-            "dataset": self.args.dataset.name,
-            "dropout": self.args.model.dropout,
-            "lr": self.args.optimizer.lr,
-            "weight_decay": self.args.optimizer.weight_decay,
-        }
+        prms = dict(
+            vals=[self.args.model.name],
+            name="network",
+            dataset=self.args.dataset.name,
+            dropout=self.args.model.dropout,
+            lr=self.args.optimizer.lr,
+            weight_decay=self.args.optimizer.weight_decay,
+        )
         return nets, optimizers, prms
 
     def prepare_dataset(self, transform_parameters):
         ds_params = dict(root=self.args.dataset.path)
-        # no 'download' references
-        # ensure 'get_dataset' is imported from the correct place
-        from alignment_v2.datasets import get_dataset  
         dataset = get_dataset(
             dataset_name=self.args.dataset.name,
             build=True,
@@ -66,43 +64,51 @@ class GeneralAlignmentExperiment(Experiment):
         return dataset
 
     def main(self):
+        # create
         nets, optimizers, prms = self.create_networks()
 
         if self.args.training.do_train:
+            # do training
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
             train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
         else:
-            # skip training: load pretrained or do nothing
-            # e.g. net.load_state_dict(torch.load(...)) if you have local weights
+            # skip training, possibly load pre-trained weights if you have them
+            # user code to load:
+            #   for net in nets: net.load_state_dict(torch.load(...))
+            # Then do test if compute_during_inference is true
             train_results = {}
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
-            # do at least a test pass if alignment.compute_during_inference is True
-            test_results = processing.test_nets(self, nets, dataset)  # if you have a separate test fn
+            test_results = processing.test_networks(self, nets, dataset)  # A hypothetical function
 
-        dropout_results, dropout_parameters = processing.progressive_dropout_experiment(
+        # do progressive dropout
+        dropout_results, dropout_params = processing.progressive_dropout_experiment(
             self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
         )
+
+        # measure eigenfeatures
         eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
-        evec_dropout_results, evec_dropout_parameters = processing.eigenvector_dropout(
+
+        # do eigenvector dropout
+        evec_dropout_results, evec_dropout_params = processing.eigenvector_dropout(
             self, nets, dataset, eigen_results, train_set=False
         )
 
-        results = dict(
-            prms=prms,
-            train_results=train_results,
-            test_results=test_results,
-            dropout_results=dropout_results,
-            dropout_parameters=dropout_parameters,
-            eigen_results=eigen_results,
-            evec_dropout_results=evec_dropout_results,
-            evec_dropout_parameters=evec_dropout_parameters,
-        )
+        results = {
+            "prms": prms,
+            "train_results": train_results,
+            "test_results": test_results,
+            "dropout_results": dropout_results,
+            "dropout_parameters": dropout_params,
+            "eigen_results": eigen_results,
+            "evec_dropout_results": evec_dropout_results,
+            "evec_dropout_parameters": evec_dropout_params,
+        }
         return results, nets
 
     def plot(self, results):
         from alignment_v2.core import plotting
 
-        # now check self.args.plots to see which plots to show
+        # check plots config toggles
         if self.args.plots.show_loss:
             plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
         if self.args.plots.show_dropout:
@@ -129,9 +135,10 @@ class GeneralAlignmentExperiment(Experiment):
 
 
 def cli_main():
-    parser = argparse.ArgumentParser(description="Run a general alignment experiment.")
-    parser.add_argument("--config", type=str, required=True, help="Path to the YAML config")
+    parser = argparse.ArgumentParser(description="General alignment experiment")
+    parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
     args = parser.parse_args(sys.argv[1:])
+
     cfg = ExperimentConfig.load(args.config)
     experiment = GeneralAlignmentExperiment(cfg)
     if cfg.just_plot:
