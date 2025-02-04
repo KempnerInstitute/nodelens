@@ -2,9 +2,7 @@ import torch
 import argparse
 import sys
 
-# Make sure get_dataset is imported from wherever your final dataset code is.
 from alignment_v2.datasets import get_dataset
-
 from alignment_v2.models.registry import get_model, get_transform_parameters
 from alignment_v2 import processing
 from alignment_v2.config import ExperimentConfig
