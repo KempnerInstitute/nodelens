@@ -10,24 +10,19 @@ import torch
 import wandb
 from matplotlib import pyplot as plt
 
-from alignment_v2.datasets import get_dataset # 
-from alignment_v2.utils import compress_directory
-
 class Experiment(ABC):
     def __init__(self, cfg) -> None:
         self.args = cfg
         self.basename = self.get_basename()
         self.basepath = Path(self.args.results_path) / self.basename
 
-        # List of meta-arguments we don't update from older experiments
-        self.meta_args = ["no_save", "just_plot", "save_networks",
-                          "show_params", "show_all", "device"]
+        self.meta_args = ["no_save", "just_plot", "save_networks", "show_params", "show_all", "device"]
 
         if self.args.device is None:
             self.args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         if self.args.use_timestamp and self.args.just_plot:
-            assert self.args.timestamp is not None, "If use_timestamp=True and just_plot=True, must specify a timestamp"
+            assert self.args.timestamp is not None, "if use_timestamp=True and just_plot=True, need a timestamp"
 
         self.register_timestamp()
         self.wandb_run = self.configure_wandb()
@@ -81,7 +76,11 @@ class Experiment(ABC):
     def configure_wandb(self):
         if self.args.checkpointing.use_wandb:
             wandb.login()
-            run = wandb.init(project=self.get_basename(), name="", config=self.args)
+            run = wandb.init(
+                project=self.get_basename(),
+                name="",
+                config=self.args,
+            )
             if str(self.basepath).startswith("/n/home"):
                 os.environ["WANDB_MODE"] = "offline"
             return run
@@ -110,17 +109,14 @@ class Experiment(ABC):
     def _update_args(self, prms):
         if prms.keys() > vars(self.args).keys():
             diff = set(prms.keys()).difference(vars(self.args).keys())
-            raise ValueError(f"Saved parameters contain keys not found: {diff}")
+            raise ValueError(f"Saved parameters contain unknown keys: {diff}")
 
         for ak in vars(self.args):
             if ak in self.meta_args:
                 continue
             if ak in prms and prms[ak] != vars(self.args)[ak]:
-                print(f"Changing arg {ak} from {vars(self.args)[ak]} to saved {prms[ak]}")
+                print(f"Updating arg {ak} from {vars(self.args)[ak]} to {prms[ak]}")
                 setattr(self.args, ak, prms[ak])
-
-    # def save_repo(self):
-    #     compress_directory(self.get_dir() / "frozen_repo.zip")
 
     def save_experiment(self, results):
         torch.save(vars(self.args), self.get_prms_path())
@@ -128,9 +124,9 @@ class Experiment(ABC):
 
     def load_experiment(self, no_results=False):
         if not self.get_prms_path().exists():
-            raise ValueError(f"saved parameters {self.get_prms_path()} not found!")
+            raise ValueError(f"No saved params at: {self.get_prms_path()}")
         if not self.get_results_path().exists():
-            raise ValueError(f"saved results {self.get_results_path()} not found!")
+            raise ValueError(f"No saved results at: {self.get_results_path()}")
 
         prms = torch.load(self.get_prms_path())
         self._update_args(prms)
@@ -139,22 +135,21 @@ class Experiment(ABC):
         return torch.load(self.get_results_path())
 
     def save_networks(self, nets, id=None):
-        name = f"net_{id}_" if id is not None else "net_"
+        name = f"net_{id}_" if id else "net_"
         for idx, net in enumerate(nets):
             cname = name + f"{idx}"
             torch.save(net.state_dict(), self.get_network_path(cname))
 
     def load_networks(self, nets, id=None, check_number=True):
-        name = f"net_{id}_" if id is not None else "net_"
+        name = f"net_{id}_" if id else "net_"
         pattern = self.get_network_path(name + "*").name
         matches = natsorted([match.stem for match in self.get_dir().rglob(pattern)])
         if check_number:
-            msg = (f"Number of detected networks with name signature {name}*.pt "
-                   f"!= # of requested networks ({len(matches)}/{len(nets)})")
+            msg = f"# networks in checkpoint {len(matches)} != needed {len(nets)}"
             assert len(matches) == len(nets), msg
         for idx, match in enumerate(matches):
-            c_state_dict = torch.load(self.get_network_path(match))
-            nets[idx].load_state_dict(c_state_dict)
+            c_state = torch.load(self.get_network_path(match))
+            nets[idx].load_state_dict(c_state)
         return nets
 
     @abstractmethod
@@ -187,9 +182,10 @@ class Experiment(ABC):
 
         if not self.args.just_plot:
             self.plot(results)
+
         return results, nets
 
     def plot_from_existing(self):
         stored = self.load_experiment(no_results=False)
-        print("Loaded existing results from disk. Now plotting.")
+        print("Loaded existing results. Now plotting.")
         self.plot(stored)
