@@ -23,6 +23,7 @@ class BaseConfig:
             return cast(C, om.to_object(conf))
         except OmegaConfBaseException as e:
             raise ValueError(str(e))
+
 @dataclass
 class ModelConfig(BaseConfig):
     name: str = "MLP"
@@ -45,7 +46,7 @@ class TrainingConfig(BaseConfig):
     batch_size: int = 1024
     epochs: int = 10
     replicates: int = 1
-    do_train: bool = True  # <--- single toggle to train or not
+    do_train: bool = True  # single toggle to decide if we do training
 
 @dataclass
 class AlignmentConfig(BaseConfig):
