@@ -117,8 +117,10 @@ def smart_pca(input, centered=True, use_rank=True, correction=True):
         no_batch = False
     _, D, S = input.size()
     if D > S:
+
         if centered:
             input = input - input.mean(dim=2, keepdim=True)
+
         v, w, _ = named_transpose([torch.linalg.svd(inp) for inp in input])
         w = [ww**2 / (S - 1.0 * correction) for ww in w]
         w = [torch.concatenate((ww, torch.zeros(D - S))) for ww in w]
