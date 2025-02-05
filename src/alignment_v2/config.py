@@ -75,7 +75,8 @@ class PlotsConfig(BaseConfig):
 class ExtraConfig(BaseConfig):
     num_drops: int = 9
     dropout_by_layer: bool = False
-    
+    progressive_dropout_on_train: bool = False
+
 @dataclass
 class ExperimentConfig(BaseConfig):
     experiment: Optional[str] = None

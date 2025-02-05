@@ -7,6 +7,7 @@ from alignment_v2.models.registry import get_model, get_transform_parameters
 from alignment_v2 import processing
 from alignment_v2.config import ExperimentConfig
 from alignment_v2.experiments.experiment import Experiment
+from alignment_v2 import plotting
 
 class GeneralAlignmentExperiment(Experiment):
     def get_basename(self):
@@ -70,7 +71,7 @@ class GeneralAlignmentExperiment(Experiment):
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
             train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
         else:
-            # skip training, possibly load pre-trained weights if you have them
+            # skip training, possibly load pre-trained weights if we have them
             # user code to load:
             #   for net in nets: net.load_state_dict(torch.load(...))
             # Then do test if compute_during_inference is true
@@ -84,12 +85,12 @@ class GeneralAlignmentExperiment(Experiment):
         )
 
         # measure eigenfeatures
-        eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
+        #eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
 
         # do eigenvector dropout
-        evec_dropout_results, evec_dropout_params = processing.eigenvector_dropout(
-            self, nets, dataset, eigen_results, train_set=False
-        )
+        #evec_dropout_results, evec_dropout_params = processing.eigenvector_dropout(
+        #    self, nets, dataset, eigen_results, train_set=False
+        #)
 
         results = {
             "prms": prms,
@@ -97,14 +98,13 @@ class GeneralAlignmentExperiment(Experiment):
             "test_results": test_results,
             "dropout_results": dropout_results,
             "dropout_parameters": dropout_params,
-            "eigen_results": eigen_results,
-            "evec_dropout_results": evec_dropout_results,
-            "evec_dropout_parameters": evec_dropout_params,
+        #    "eigen_results": eigen_results,
+        #    "evec_dropout_results": evec_dropout_results,
+        #    "evec_dropout_parameters": evec_dropout_params,
         }
         return results, nets
 
     def plot(self, results):
-        from alignment_v2.core import plotting
 
         # check plots config toggles
         if self.args.plots.show_loss:
@@ -117,16 +117,16 @@ class GeneralAlignmentExperiment(Experiment):
                 results["prms"],
                 dropout_type="nodes",
             )
-        if self.args.plots.show_eigenfeatures:
-            plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
-        if self.args.plots.show_eig_dropout:
-            plotting.plot_dropout_results(
-                self,
-                results["evec_dropout_results"],
-                results["evec_dropout_parameters"],
-                results["prms"],
-                dropout_type="eigenvectors",
-            )
+        # if self.args.plots.show_eigenfeatures:
+        #     plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
+        # if self.args.plots.show_eig_dropout:
+        #     plotting.plot_dropout_results(
+        #         self,
+        #         results["evec_dropout_results"],
+        #         results["evec_dropout_parameters"],
+        #         results["prms"],
+        #         dropout_type="eigenvectors",
+        #     )
 
     def save_results(self, results):
         self.save_experiment(results)

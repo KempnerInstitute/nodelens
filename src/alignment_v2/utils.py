@@ -286,7 +286,6 @@ def compute_stats_by_type(tensor, num_types, dim, method="var"):
     elif method == "std":
         type_dev = torch.std(tensor_by_type, dim=dim + 1)
     elif method == "se":
-        import numpy as np
         type_dev = torch.std(tensor_by_type, dim=dim + 1) / np.sqrt(num_per_type)
     elif method == "range":
         type_dev = ptp(tensor_by_type, dim=dim + 1)

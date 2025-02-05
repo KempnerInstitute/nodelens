@@ -145,7 +145,7 @@ def test(nets, dataset, **parameters):
         outs = [net(images, store_hidden=True) for net in nets]
         for i, o in enumerate(outs):
             total_loss[i] += dataset.measure_loss(o, labels).item()
-            total_acc[i] += dataset.measure_accuracy(o, labels)
+            total_acc[i] += dataset.measure_accuracy(o, labels).item()
         count += 1
 
         if measure_alignment:
@@ -169,3 +169,5 @@ def test(nets, dataset, **parameters):
         wandb_run.summary["test_accuracy"] = torch.mean(torch.tensor(results["accuracy"]))
 
     return results
+
+
