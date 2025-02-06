@@ -1,6 +1,5 @@
 from warnings import warn
 from typing import Optional
-
 import torch
 from torch import nn
 from tqdm import tqdm
@@ -16,6 +15,7 @@ from alignment_v2.utils import (
     smart_pca,
     alignment,
 )
+
 from alignment_v2.models.layers import (
     LAYER_REGISTRY,
     REGISTRY_REQUIREMENTS,
