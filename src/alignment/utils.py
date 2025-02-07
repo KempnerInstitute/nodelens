@@ -50,10 +50,12 @@ def set_net_mode(net, training=True):
     Helper for toggling train/eval mode of a network.
     """
     in_training_mode = net.training
+    # set to training mode or evaluation mode
     if training:
         net.train()
     else:
         net.eval()
+    # return original mode of network
     return in_training_mode
 
 def get_device(obj):
@@ -163,7 +165,8 @@ def smart_pca(input, centered=True, use_rank=True, correction=True):
         # convert singular values to eigenvalues
         w = [ww**2 / (S - 1.0 * correction) for ww in w]
         # append zeros because svd returns w in R**k where k = min(D, S)
-        w = [torch.concatenate((ww, torch.zeros(D - S))) for ww in w]
+        device = w.device
+        w = [torch.concatenate((ww, torch.zeros(D - S, device=device))) for ww in w]
     else:
         # if more samples than dimensions, it's more efficient to run eigh
         bcov = batch_cov(input, centered=centered, correction=correction)
