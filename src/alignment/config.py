@@ -47,11 +47,11 @@ class TrainingConfig(BaseConfig):
 
 @dataclass
 class AlignmentConfig(BaseConfig):
+    do_alignment: bool = True     
     methods: List[str] = field(default_factory=lambda: ["RQ"])
-    compute_during_training: bool = False
-    compute_during_inference: bool = True
+    measure_expected: bool = True
     frequency: int = 1
-    measure_weight_deltas: bool = False
+    bins: int = 50
 
 @dataclass
 class CheckpointingConfig(BaseConfig):
