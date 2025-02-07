@@ -46,6 +46,8 @@ def train(nets, optimizers, dataset, **parameters):
             alignment=[],
             alignment_distribution=[],
             expected_distribution=[],
+            loss=torch.zeros((num_steps, num_nets)),
+            accuracy=torch.zeros((num_steps, num_nets)),
         )
 
     # retrieve train loader
