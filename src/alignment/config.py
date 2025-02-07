@@ -33,18 +33,17 @@ class DatasetConfig(BaseConfig):
     name: str = "MNIST"
     path: Optional[str] = None
 
-@dataclass
-class OptimizerConfig(BaseConfig):
-    name: str = "Adam"
-    lr: float = 1e-3
-    weight_decay: float = 0.0
 
 @dataclass
 class TrainingConfig(BaseConfig):
-    batch_size: int = 1024
-    epochs: int = 10
+    do_train: bool = True       
+    epochs: int = 10            
+    batch_size: int = 128       
+    lr: float = 1e-3            
     replicates: int = 1
-    do_train: bool = True  
+    name: str = "Adam"
+    lr: float = 1e-3
+    weight_decay: float = 0.0
 
 @dataclass
 class AlignmentConfig(BaseConfig):
@@ -89,7 +88,6 @@ class ExperimentConfig(BaseConfig):
 
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     checkpointing: CheckpointingConfig = field(default_factory=CheckpointingConfig)
