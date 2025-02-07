@@ -2,12 +2,12 @@ import torch
 import argparse
 import sys
 
-from alignment_v2.datasets import get_dataset
-from alignment_v2.models.registry import get_model, get_transform_parameters
-from alignment_v2 import processing
-from alignment_v2.config import ExperimentConfig
-from alignment_v2.experiments.experiment import Experiment
-from alignment_v2 import plotting
+from alignment.datasets import get_dataset
+from alignment.models.registry import get_model, get_transform_parameters
+from alignment import processing
+from alignment.config import ExperimentConfig
+from alignment.experiments.experiment import Experiment
+from alignment import plotting
 
 class GeneralAlignmentExperiment(Experiment):
     def get_basename(self):

@@ -25,7 +25,7 @@ from alignment.models.layers import (
     REGISTRY_REQUIREMENTS,
     check_metaparameters,
 )
-from alignment_v2.alignment_metrics import AlignmentMetrics
+from alignment.alignment_metrics import AlignmentMetrics
 
 class AttributeReference:
     """
