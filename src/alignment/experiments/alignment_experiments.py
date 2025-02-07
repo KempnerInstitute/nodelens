@@ -14,15 +14,15 @@ class GeneralAlignmentExperiment(Experiment):
         return "general_alignment_experiment"
 
     def prepare_path(self):
-        return [self.args.model.name, self.args.dataset.name, self.args.optimizer.name]
+        return [self.args.model.name, self.args.dataset.name, self.args.training.name]
 
     def create_networks(self):
-        if self.args.optimizer.name == "Adam":
+        if self.args.training.name == "Adam":
             optim_cls = torch.optim.Adam
-        elif self.args.optimizer.name == "SGD":
+        elif self.args.training.name == "SGD":
             optim_cls = torch.optim.SGD
         else:
-            raise ValueError(f"Unknown optimizer {self.args.optimizer.name}")
+            raise ValueError(f"Unknown optimizer {self.args.training.name}")
 
         nets = []
         for _ in range(self.args.training.replicates):
@@ -36,7 +36,7 @@ class GeneralAlignmentExperiment(Experiment):
             nets.append(net)
 
         optimizers = [
-            optim_cls(net.parameters(), lr=self.args.optimizer.lr, weight_decay=self.args.optimizer.weight_decay)
+            optim_cls(net.parameters(), lr=self.args.training.lr, weight_decay=self.args.training.weight_decay)
             for net in nets
         ]
 
@@ -45,8 +45,8 @@ class GeneralAlignmentExperiment(Experiment):
             name="network",
             dataset=self.args.dataset.name,
             dropout=self.args.model.dropout,
-            lr=self.args.optimizer.lr,
-            weight_decay=self.args.optimizer.weight_decay,
+            lr=self.args.training.lr,
+            weight_decay=self.args.training.weight_decay,
         )
         return nets, optimizers, prms
 
