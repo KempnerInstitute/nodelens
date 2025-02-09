@@ -6,14 +6,12 @@ import os
 import torch
 from tqdm import tqdm
 
-# [UNCHANGED] - same imports as before
 from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack, save_checkpoint
 from alignment.alignment_metrics import AlignmentMetrics
-from alignment import train  # or your local "train" logic, if you have a separate file
+from alignment import train  
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     """
-    (UNCHANGED except for the alignment approach is simplified to do_train/do_alignment)
     Orchestrates training and testing of networks with simpler toggles:
       - do_train = exp.args.training.do_train
       - do_alignment = exp.args.alignment.do_alignment
@@ -22,7 +20,6 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
       - frequency = exp.args.alignment.frequency
     """
 
-    # [UNCHANGED] read toggles from exp
     do_train = exp.args.training.do_train
     do_alignment = exp.args.alignment.do_alignment
     methods = exp.args.alignment.methods
@@ -30,7 +27,6 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     measure_expected = exp.args.alignment.measure_expected
     bins = exp.args.alignment.bins
 
-    # Build parameters dict for internal usage
     params = dict(
         train_set=True,
         num_epochs=exp.args.training.epochs,
@@ -68,14 +64,12 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
             exp.args.device
         )
 
-    # [UNCHANGED] - if do_train
     if do_train:
         print("=== Training networks... ===")
         _train_loop(nets, optimizers, dataset, exp, params, measure_expected, bins)
     else:
         print("=== Skipping training (do_train=False) ===")
 
-    # final test or inference
     print("=== Testing networks... ===")
     _test_loop(nets, dataset, exp, params, measure_expected, bins)
 
