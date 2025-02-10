@@ -202,13 +202,30 @@ def get_dropout_indices(idx_alignment, fraction):
     return idx_high, idx_low, idx_rand
 
 
+
+
+def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
+    """
+    (unchanged) Perform a progressive dropout experiment,
+    dropping nodes (by alignment ranking) in increments.
+    """
+    print("performing targeted dropout...")
+    dropout_params = dict(
+        num_drops=exp.args.extra.num_drops,
+        by_layer=exp.args.extra.dropout_by_layer,
+        train_set=train_set,
+    )
+    dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
+    return dropout_results, dropout_params
+
+
 def measure_eigenfeatures(exp, nets, dataset, train_set=False):
     """
     Gather input activations for each layer across the entire dataset,
-    compute PCA (eigenvalues/eigenvectors) for each layer,
-    and measure how each weight aligns with the eigenvectors.
+    compute PCA, measure how each weight aligns with the eigenvectors.
     """
     print("measuring eigenfeatures...")
+    from tqdm import tqdm
     beta, eigvals, eigvecs, class_betas = [], [], [], []
     for net in tqdm(nets):
         inputs, labels = net._process_collect_activity(
@@ -232,8 +249,7 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
         class_betas=class_betas,
         class_names=class_names,
     )
-
-
+    
 @test_nets
 @torch.no_grad()
 def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
