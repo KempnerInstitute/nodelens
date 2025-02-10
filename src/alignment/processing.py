@@ -74,33 +74,35 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     if not (isinstance(nets, list)):
         nets = [nets]
 
-    n_alignment_idx = nets[0].num_layers()
     if alignment is None:
         # Use the test() function from train.py to gather alignment
         alignment = train.test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
 
-    # Here, alignment is presumably a list of shape (#layers, #someDimension).
-    # Possibly average across batches:
-    # (the user code’s logic may vary, but we keep your structure)
-    # Check if alignment is shape [N], or a dict, etc.
-    # We mimic your approach:
+    # We'll build alignment_layers (list of Tensors), each shape = (1, total_nodes)
     alignment_layers = []
     for layerdata in alignment:
-        # each 'layerdata' might have shape or be a list
-        # your original code: alignment = [torch.mean(align, dim=1) for align in alignment]
-        # so let's do something similar:
-        # WARNING: you must adapt if your actual alignment structure differs
-        # We'll assume each layer entry is a single tensor:
-        alignment_layers.append(torch.mean(layerdata, dim=1))
+        net0_data = layerdata["data"][0]
+        all_nodes = []
+        for layer_dict in net0_data:
+            rqs_ = layer_dict["RQ"].flatten()
+            all_nodes.append(rqs_)
+        flattened = torch.cat(all_nodes, dim=0)
+        alignment_layers.append(flattened.unsqueeze(0))
 
-    # After this we have the sorted alignment
+    # idx_alignment: each entry is shape (1, total_nodes)
     idx_alignment = [torch.argsort(al, dim=1) for al in alignment_layers]
+
+    # number of alignment snapshots
+    num_snapshots = len(idx_alignment)
+
+    by_layer = parameters.get("by_layer", False)
+    # if by_layer=True, we treat each snapshot as a separate "layer" in dropout
+    # else we treat all snapshots as one big layer
+    num_layers = num_snapshots if by_layer else 1
 
     num_nets = len(nets)
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
-    by_layer = parameters.get("by_layer", False)
-    num_layers = n_alignment_idx if by_layer else 1
 
     # accumulators
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
@@ -118,19 +120,24 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1
 
+        # get high/low/random idx for each snapshot
+        # idx_alignment is a list of length num_snapshots
         for dropidx, fraction in enumerate(drop_fraction):
-            # get highest, lowest, random indices
             idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, fraction)
 
             for layer in range(num_layers):
                 if by_layer:
+                    # we drop only the single snapshot
                     drop_high = [idx_high[layer]]
                     drop_low = [idx_low[layer]]
                     drop_rand = [idx_rand[layer]]
                     drop_layer = [layer]
                 else:
-                    drop_high, drop_low, drop_rand = idx_high, idx_low, idx_rand
-                    drop_layer = [ix for ix in range(n_alignment_idx)]
+                    # we drop all snapshots
+                    drop_high = idx_high
+                    drop_low = idx_low
+                    drop_rand = idx_rand
+                    drop_layer = list(range(num_snapshots))
 
                 out_high = [
                     net.forward_targeted_dropout(
@@ -175,7 +182,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         "progdrop_acc_rand": progdrop_acc_rand / num_batches,
         "dropout_fraction": drop_fraction,
         "by_layer": by_layer,
-        "idx_dropout_layers": [ix for ix in range(n_alignment_idx)],
+        "idx_dropout_layers": [ix for ix in range(num_snapshots)],
     }
     return results
 
@@ -186,7 +193,7 @@ def get_dropout_indices(idx_alignment, fraction):
 
     idx_alignment should be a list of the indices of alignment (sorted from lowest to highest)
     where len(idx_alignment)=num_layers_per_network and each element is a tensor such that
-    idx_alignment[0].shape=(num_networks, num_nodes_per_layer)
+    idx_alignment[0].shape=(num_nets, num_nodes_per_layer)
 
     returns a fraction of indices to drop of highest, lowest, and random alignment
     """
@@ -328,7 +335,6 @@ def eigenvector_dropout_experiment(exp, nets, dataset, eigen_results, train_set=
         by_layer=exp.args.extra.dropout_by_layer,
         train_set=train_set,
     )
-    # Now we call the local 'eigenvector_dropout' above:
     evec_dropout_results = eigenvector_dropout(
         nets,
         dataset,
