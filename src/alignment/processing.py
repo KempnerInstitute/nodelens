@@ -6,9 +6,9 @@ import os
 import torch
 from tqdm import tqdm
 
-from utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
-import train  
-from alignment_metrics import AlignmentMetrics
+from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
+import alignment.train  
+from alignment.alignment_metrics import AlignmentMetrics
 
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):

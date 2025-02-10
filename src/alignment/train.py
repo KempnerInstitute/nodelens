@@ -6,8 +6,8 @@ import torch
 from tqdm import tqdm
 from copy import deepcopy
 
-from utils import train_nets, test_nets, save_checkpoint
-from alignment_metrics import AlignmentMetrics
+from alignment.utils import train_nets, test_nets, save_checkpoint
+from alignment.alignment_metrics import AlignmentMetrics
 
 @train_nets
 def train(nets, optimizers, dataset, **parameters):
