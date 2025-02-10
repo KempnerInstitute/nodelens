@@ -22,61 +22,70 @@ def plot_train_results(exp, train_results, test_results, prms):
     print("getting statistics on run data...")
     plot_alignment = "alignment" in train_results
     if plot_alignment:
-        # We'll gather all alignment snapshots from train_results["alignment"].
-        alignment_list = []
+        # Build a dictionary keyed by method.
+        # For each training record, if record["data"] is stored in the "old" format (a list of nets,
+        # each a list (per layer) of dicts with method keys) then compute the mean value per layer.
+        # If record["data"] is a tensor, assume it corresponds to a single method ('RQ').
+        alignment_by_method = {}
         for record in train_results["alignment"]:
-            # Some code stores each alignment record as a dict with keys "data", etc.
-            # Others might store it directly as a Tensor.
-
-            # 1) If the entire record is already a Tensor:
             if isinstance(record, torch.Tensor):
-                # We'll assume shape (num_nets, num_layers, num_nodes) or (1, num_nets, num_layers, num_nodes).
-                # Then do the same logic: squeeze leading dim if present, average across nets => (num_layers, num_nodes).
+                # Assume shape is either (num_nets, num_layers, num_nodes) or (1, num_nets, num_layers, num_nodes)
+                method_key = 'RQ'
                 if record.dim() == 3:
-                    net_avg = record.mean(dim=0)  # shape (num_layers, num_nodes)
+                    net_avg = record.mean(dim=0)  # (num_layers, num_nodes)
                 elif record.dim() == 4:
-                    net_avg = record.squeeze(0).mean(dim=0)  # shape (num_layers, num_nodes)
+                    net_avg = record.squeeze(0).mean(dim=0)
                 else:
-                    raise ValueError(f"Unexpected record Tensor shape: {record.shape}")
-                alignment_list.append(net_avg)
-                continue
-
-            # 2) If the record is a dict, we expect record["data"] to hold either a Tensor or a list of net/layer dicts:
-            if isinstance(record, dict):
+                    raise ValueError(f"Unexpected tensor shape: {record.shape}")
+                for layer_idx in range(net_avg.size(0)):
+                    if method_key not in alignment_by_method:
+                        alignment_by_method[method_key] = {}
+                    if layer_idx not in alignment_by_method[method_key]:
+                        alignment_by_method[method_key][layer_idx] = []
+                    alignment_by_method[method_key][layer_idx].append(torch.mean(net_avg[layer_idx]).item())
+            elif isinstance(record, dict):
                 data_field = record["data"]
-                if isinstance(data_field, torch.Tensor):
-                    # data_field might be shape (num_nets, num_layers, num_nodes) or (1, num_nets, num_layers, num_nodes)
+                if isinstance(data_field, list):
+                    # data_field: list over nets; each element is a list (over layers) of dicts with keys=methods.
+                    for net_data in data_field:
+                        for layer_idx, layer_dict in enumerate(net_data):
+                            for method_key, tensor in layer_dict.items():
+                                if method_key not in alignment_by_method:
+                                    alignment_by_method[method_key] = {}
+                                if layer_idx not in alignment_by_method[method_key]:
+                                    alignment_by_method[method_key][layer_idx] = []
+                                # Compute mean over nodes for this layer for this net.
+                                alignment_by_method[method_key][layer_idx].append(torch.mean(tensor).item())
+                elif isinstance(data_field, torch.Tensor):
+                    # data_field is a tensor; process similarly as above.
+                    method_key = 'RQ'
                     if data_field.dim() == 3:
-                        net_avg = data_field.mean(dim=0)  # => shape (num_layers, num_nodes)
+                        net_avg = data_field.mean(dim=0)
                     elif data_field.dim() == 4:
                         net_avg = data_field.squeeze(0).mean(dim=0)
                     else:
                         raise ValueError(f"Unexpected record['data'] shape: {data_field.shape}")
-                    alignment_list.append(net_avg)
-
-                elif isinstance(data_field, list):
-                    # The old approach: for each net => list of layer_dicts => {"RQ": tensor(...)}, etc.
-                    net_values = []
-                    for net_data in data_field:
-                        layer_vals = []
-                        for layer_dict in net_data:
-                            layer_vals.append(layer_dict["RQ"])
-                        net_tensor = torch.stack(layer_vals, dim=0)  # shape (num_layers, num_nodes)
-                        net_values.append(net_tensor)
-                    net_avg = torch.stack(net_values, dim=0).mean(dim=0)  # => shape (num_layers, num_nodes)
-                    alignment_list.append(net_avg)
+                    for layer_idx in range(net_avg.size(0)):
+                        if method_key not in alignment_by_method:
+                            alignment_by_method[method_key] = {}
+                        if layer_idx not in alignment_by_method[method_key]:
+                            alignment_by_method[method_key][layer_idx] = []
+                        alignment_by_method[method_key][layer_idx].append(torch.mean(net_avg[layer_idx]).item())
                 else:
-                    raise TypeError(
-                        f"record['data'] is neither a torch.Tensor nor a list; got {type(data_field)}"
-                    )
+                    raise TypeError(f"record['data'] has unexpected type {type(data_field)}")
             else:
-                # Fallback: record is neither a dict nor a Tensor
                 raise TypeError(f"train_results['alignment'] has an element of type {type(record)}")
-
-        # Now shape => (#records, num_layers, num_nodes)
-        alignment_tensor = torch.stack(alignment_list, dim=0)
-        # Average across nodes => (num_records, num_layers)
-        alignment = torch.mean(alignment_tensor, dim=2)
+        # Now average across records for each method and each layer.
+        alignment_avg = {}
+        for method_key, layers_dict in alignment_by_method.items():
+            layer_avgs = []
+            for layer_idx in sorted(layers_dict.keys()):
+                vals = torch.tensor(layers_dict[layer_idx])
+                layer_avgs.append(torch.mean(vals))
+            # Result is a tensor of shape (num_layers,)
+            alignment_avg[method_key] = torch.stack(layer_avgs, dim=0)
+        # 'alignment' becomes a dictionary keyed by method.
+        alignment = alignment_avg
 
     cmap = mpl.colormaps["tab10"]
     train_loss_mean, train_loss_se = compute_stats_by_type(train_results["loss"], num_types=num_types, dim=1, method="se")
@@ -144,27 +153,17 @@ def plot_train_results(exp, train_results, test_results, prms):
     exp.plot_ready("train_test_performance")
 
     if plot_alignment:
-        num_align_epochs = alignment.size(0)
-        num_layers = alignment.size(1)
-        fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", sharex=True, squeeze=False)
-        for idx, label in enumerate(labels):
+        # For each method, plot a separate figure.
+        for method_key, align_tensor in alignment.items():
+            num_layers = align_tensor.size(0)
+            fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", sharex=True, squeeze=False)
             for layer in range(num_layers):
-                # Here we do a simple mean across records, if you have multiple replicates or times
-                cmn_val = torch.mean(alignment[:, layer]) * 100
-                cse_val = torch.std(alignment[:, layer]) / np.sqrt(num_align_epochs) * 100
-                ax[0, layer].axhline(cmn_val, color=cmap(idx), label=label)
-                ax[0, layer].fill_between([0, num_align_epochs-1], cmn_val + cse_val, cmn_val - cse_val, color=(cmap(idx), alpha))
-
-        for layer in range(num_layers):
-            ax[0, layer].set_ylim(0, None)
-            ax[0, layer].set_xlim(0, num_align_epochs - 1)
-            ax[0, layer].set_xlabel("Training Snapshot (approx)")
-            ax[0, layer].set_ylabel("Alignment (%)")
-            ax[0, layer].set_title(f"Layer {layer}")
-
-        ax[0, 0].legend(loc="lower right")
-        exp.plot_ready("train_alignment_by_layer")
-
+                val = align_tensor[layer].item() * 100
+                ax[0, layer].axhline(val, color=cmap(0), label=method_key)
+                ax[0, layer].set_xlabel("Training Snapshot (approx)")
+                ax[0, layer].set_ylabel("Alignment (%)")
+                ax[0, layer].set_title(f"Layer {layer} - {method_key}")
+            exp.plot_ready(f"train_alignment_{method_key}")
 
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
     """
@@ -427,7 +426,6 @@ def plot_eigenfeatures(exp, results, prms):
                 ax[idx, layer].legend(loc="upper right", fontsize=6)
 
     exp.plot_ready("class_eigenfeatures")
-
 
 def plot_adversarial_results(exp, eigen_results, adversarial_results, prms):
     """

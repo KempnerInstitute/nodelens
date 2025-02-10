@@ -2,6 +2,7 @@
 # train.py
 # --------------------------------------------
 
+import numpy as np
 import torch
 from tqdm import tqdm
 from copy import deepcopy
@@ -29,12 +30,10 @@ def train(nets, optimizers, dataset, **parameters):
 
     num_epochs = parameters["num_epochs"]
     
-    # If user passed "results": None, we fix it to a dict
     results = parameters.get("results", None)
     if not isinstance(results, dict):
         results = {}
     
-    # Ensure sub-keys exist
     if "alignment" not in results:
         results["alignment"] = []
     if "alignment_distribution" not in results:
@@ -43,11 +42,8 @@ def train(nets, optimizers, dataset, **parameters):
         results["expected_distribution"] = []
 
     # NEW CODE: We need a 2D shape for 'loss', i.e. (#replicates, #epochs).
-    # So we gather them for each replicate net, each epoch.
     num_replicates = len(nets)
     if "loss" not in results:
-        # create an empty tensor of shape (num_replicates, num_epochs)
-        # we'll fill it in after each epoch
         results["loss"] = torch.zeros(num_replicates, num_epochs, dtype=torch.float)
 
     # Extract checkpoint information
@@ -55,7 +51,6 @@ def train(nets, optimizers, dataset, **parameters):
     do_ckpt, ckpt_freq, ckpt_path, dev = save_ckpt_info
     start_epoch = parameters.get("num_complete", 0)
 
-    # retrieve train loader
     use_train = parameters.get("train_set", True)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
 
@@ -64,15 +59,12 @@ def train(nets, optimizers, dataset, **parameters):
         print(f"Starting training loop with epochs={num_epochs}, do_align={do_align}, methods={methods}")
 
     for epoch in range(start_epoch, num_epochs):
-        # We'll track each replicate's total loss to average over the epoch
         replicate_loss_sums = [0.0] * num_replicates
         replicate_loss_counts = [0] * num_replicates
 
         loop = tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False) if verbose else dataloader
         for batch_idx, batch in enumerate(loop):
             images, labels = dataset.unwrap_batch(batch)
-
-            # zero grads / step for each replicate
             for idx_rep, (net, opt) in enumerate(zip(nets, optimizers)):
                 opt.zero_grad()
                 out = net(images, store_hidden=True)
@@ -80,25 +72,20 @@ def train(nets, optimizers, dataset, **parameters):
                 loss_val.backward()
                 opt.step()
 
-                # Accumulate replicate's total loss
                 replicate_loss_sums[idx_rep] += loss_val.item()
                 replicate_loss_counts[idx_rep] += 1
 
             if do_align and (batch_idx % freq == 0):
-                # measure raw alignment for each net, each layer, each method
                 align_data = []
                 for net in nets:
                     layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
                     align_data.append(layer_metrics)
-
-                # store raw alignment
                 results["alignment"].append({
                     "epoch": epoch,
                     "batch": batch_idx,
                     "data": align_data
                 })
 
-                # build histogram from raw alignment
                 dist_data = []
                 for net_layer_list in align_data:
                     layer_dists = []
@@ -116,7 +103,6 @@ def train(nets, optimizers, dataset, **parameters):
                     "data": dist_data
                 })
 
-                # measure random distribution if measure_expected
                 if measure_expected:
                     exp_data = []
                     for net in nets:
@@ -136,16 +122,13 @@ def train(nets, optimizers, dataset, **parameters):
                         "data": exp_data
                     })
 
-        # After this epoch, compute average loss per replicate
         for idx_rep in range(num_replicates):
             if replicate_loss_counts[idx_rep] > 0:
                 avg_loss = replicate_loss_sums[idx_rep] / replicate_loss_counts[idx_rep]
             else:
                 avg_loss = 0.0
-            # store into results["loss"][replicate, epoch]
             results["loss"][idx_rep, epoch] = avg_loss
 
-        # checkpoint
         if do_ckpt and (epoch % ckpt_freq == 0):
             cpy_res = deepcopy(results)
             cpy_res["epoch"] = epoch
@@ -153,6 +136,7 @@ def train(nets, optimizers, dataset, **parameters):
             cpy_res["prms"] = parameters
             save_checkpoint(nets, optimizers, cpy_res, ckpt_path)
 
+    results["loss"] = torch.tensor(results["loss"])
     return results
 
 @test_nets
@@ -174,12 +158,10 @@ def test(nets, dataset, **parameters):
     measure_expected = parameters.get("measure_expected", True)
     bins = parameters.get("bins", 50)
 
-    # If user passed "results": None, fix it:
     results = parameters.get("results", None)
     if not isinstance(results, dict):
         results = {}
 
-    # Ensure sub-keys exist
     if "alignment" not in results:
         results["alignment"] = []
     if "alignment_distribution" not in results:
@@ -187,9 +169,11 @@ def test(nets, dataset, **parameters):
     if "expected_distribution" not in results:
         results["expected_distribution"] = []
 
-    verbose = parameters.get("verbose", True)
+    num_nets = len(nets)
+    test_losses = [[] for _ in range(num_nets)]
+    test_accs = [[] for _ in range(num_nets)]
 
-    # use test loader by default (or train_loader if train_set param is set)
+    verbose = parameters.get("verbose", True)
     use_train = parameters.get("train_set", False)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
 
@@ -199,23 +183,22 @@ def test(nets, dataset, **parameters):
     batch_idx = 0
     for batch in dataloader:
         images, labels = dataset.unwrap_batch(batch)
-
-        # forward pass
-        for net in nets:
+        for i, net in enumerate(nets):
             out = net(images, store_hidden=True)
-
+            loss_val = dataset.measure_loss(out, labels).item()
+            acc_val = dataset.measure_accuracy(out, labels)
+            test_losses[i].append(loss_val)
+            test_accs[i].append(acc_val)
         if do_align and (batch_idx % freq == 0):
             align_data = []
             for net in nets:
                 layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
                 align_data.append(layer_metrics)
-
             results["alignment"].append({
                 "test_batch": batch_idx,
                 "data": align_data
             })
 
-            # build observed distribution
             dist_data = []
             for net_layer_list in align_data:
                 layer_dists = []
@@ -225,15 +208,13 @@ def test(nets, dataset, **parameters):
                         val_cpu = val_tensor.detach().cpu()
                         c, e = torch.histogram(val_cpu, bins=bins, density=True)
                         method_dists[m] = (c, e)
-                layer_dists.append(method_dists)
-            dist_data.append(layer_dists)
-
+                    layer_dists.append(method_dists)
+                dist_data.append(layer_dists)
             results["alignment_distribution"].append({
                 "test_batch": batch_idx,
                 "data": dist_data
             })
 
-            # measure random distribution if measure_expected
             if measure_expected:
                 exp_data = []
                 for net in nets:
@@ -247,12 +228,15 @@ def test(nets, dataset, **parameters):
                             method_exp[m] = (ccounts, cedges)
                         layer_exp_list.append(method_exp)
                 exp_data.append(layer_exp_list)
-
                 results["expected_distribution"].append({
                     "test_batch": batch_idx,
                     "data": exp_data
                 })
-
         batch_idx += 1
+
+    avg_test_losses = torch.tensor([np.mean(loss_list) if len(loss_list) > 0 else 0.0 for loss_list in test_losses], dtype=torch.float)
+    avg_test_accs = torch.tensor([np.mean(acc_list) if len(acc_list) > 0 else 0.0 for acc_list in test_accs], dtype=torch.float)
+    results["loss"] = avg_test_losses
+    results["accuracy"] = avg_test_accs
 
     return results
