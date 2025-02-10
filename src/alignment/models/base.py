@@ -24,7 +24,7 @@ from alignment.models.layers import (
     REGISTRY_REQUIREMENTS,
     check_metaparameters,
 )
-from alignment.alignment_metrics import alignment
+from alignment.alignment_metrics import AlignmentMetrics
 
 class AttributeReference:
     """
@@ -308,15 +308,18 @@ class AlignmentNetwork(nn.Module):
         """
         assert check_iterable(idxs) and check_iterable(layers), "idxs and layers must be iterables"
         assert len(idxs) == len(layers), "idxs and layers must match in length"
-        assert len(layers) == len(set(layers)), "layers must not repeat"
 
         hidden_outputs_dict = {}
         hooks = []
 
         def dropout(name, dropout_idx):
             def dropout_hook(module, input, output):
-                fraction_dropout = len(dropout_idx) / output.shape[1]
-                output[:, dropout_idx] = 0
+                # minimal fix ensuring we don't go out of bounds
+                max_index = output.shape[1]
+                dropout_idx_valid = dropout_idx[dropout_idx < max_index]
+                fraction_dropout = len(dropout_idx_valid) / float(max_index)
+                if dropout_idx_valid.numel() > 0:
+                    output[:, dropout_idx_valid] = 0
                 output = output * (1 - fraction_dropout)
                 hidden_outputs_dict[name] = output
                 return output
@@ -329,7 +332,9 @@ class AlignmentNetwork(nn.Module):
 
         for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
-                dropout_idx = idxs[{val: idx for idx, val in enumerate(layers)}[idx_layer]]
+                # find index in 'layers' for this idx_layer
+                index_for_layer = layers.index(idx_layer)
+                dropout_idx = idxs[index_for_layer]
                 hooks.append(layer.register_forward_hook(dropout(name, dropout_idx)))
             else:
                 hooks.append(layer.register_forward_hook(get_output(name)))
@@ -350,7 +355,6 @@ class AlignmentNetwork(nn.Module):
         """
         assert check_iterable(idxs) and check_iterable(layers), "idxs and layers must be iterables"
         assert len(idxs) == len(layers), "idxs and layers must match in length"
-        assert len(layers) == len(set(layers)), "layers must not repeat"
         assert len(layers) == len(eigenvalues), "eigenvalues mismatch"
         assert len(layers) == len(eigenvectors), "eigenvectors mismatch"
 
@@ -366,12 +370,12 @@ class AlignmentNetwork(nn.Module):
 
         for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
-                idx_to_layer = {val: i for i, val in enumerate(layers)}[idx_layer]
-                dropout_idx = idxs[idx_to_layer]
-                dropout_evec = remove_by_idx(eigenvectors[idx_to_layer].to(device), dropout_idx, 1)
-                dropout_eval = remove_by_idx(eigenvalues[idx_to_layer].to(device), dropout_idx, 0)
+                idx_for_layer = layers.index(idx_layer)
+                dropout_idx = idxs[idx_for_layer]
+                dropout_evec = remove_by_idx(eigenvectors[idx_for_layer].to(device), dropout_idx, 1)
+                dropout_eval = remove_by_idx(eigenvalues[idx_for_layer].to(device), dropout_idx, 0)
                 dropout_correction = torch.sqrt(
-                    torch.sum(eigenvalues[idx_to_layer]) / torch.sum(dropout_eval)
+                    torch.sum(eigenvalues[idx_for_layer]) / torch.sum(dropout_eval)
                 )
                 kwargs = dict(subspace=dropout_evec, correction=dropout_correction)
                 self._forward_subspace(name, layer, hidden_inputs_dict, hooks, org_forward_methods, **kwargs)
@@ -410,9 +414,9 @@ class AlignmentNetwork(nn.Module):
                     if correction is not None:
                         new_input = new_input * correction
                     hidden_inputs_dict[name] = new_input
-                    return new_input
+                    return (new_input,)
                 hidden_inputs_dict[name] = input_[0]
-                return input_[0]
+                return input_
             return modify_input_hook
 
         hooks.append(

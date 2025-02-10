@@ -127,13 +127,11 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 
             for layer in range(num_layers):
                 if by_layer:
-                    # we drop only the single snapshot
                     drop_high = [idx_high[layer]]
                     drop_low = [idx_low[layer]]
                     drop_rand = [idx_rand[layer]]
                     drop_layer = [layer]
                 else:
-                    # we drop all snapshots
                     drop_high = idx_high
                     drop_low = idx_low
                     drop_rand = idx_rand
