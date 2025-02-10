@@ -41,8 +41,14 @@ def train(nets, optimizers, dataset, **parameters):
         results["alignment_distribution"] = []
     if "expected_distribution" not in results:
         results["expected_distribution"] = []
+
+    # NEW CODE: We need a 2D shape for 'loss', i.e. (#replicates, #epochs).
+    # So we gather them for each replicate net, each epoch.
+    num_replicates = len(nets)
     if "loss" not in results:
-        results["loss"] = []
+        # create an empty tensor of shape (num_replicates, num_epochs)
+        # we'll fill it in after each epoch
+        results["loss"] = torch.zeros(num_replicates, num_epochs, dtype=torch.float)
 
     # Extract checkpoint information
     save_ckpt_info = parameters.get("save_checkpoints", (False, 1, "", ""))
@@ -58,42 +64,59 @@ def train(nets, optimizers, dataset, **parameters):
         print(f"Starting training loop with epochs={num_epochs}, do_align={do_align}, methods={methods}")
 
     for epoch in range(start_epoch, num_epochs):
+        # We'll track each replicate's total loss to average over the epoch
+        replicate_loss_sums = [0.0] * num_replicates
+        replicate_loss_counts = [0] * num_replicates
+
         loop = tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False) if verbose else dataloader
-        epoch_loss_sum = 0.0
-        epoch_loss_count = 0
         for batch_idx, batch in enumerate(loop):
             images, labels = dataset.unwrap_batch(batch)
-            for net, opt in zip(nets, optimizers):
+
+            # zero grads / step for each replicate
+            for idx_rep, (net, opt) in enumerate(zip(nets, optimizers)):
                 opt.zero_grad()
                 out = net(images, store_hidden=True)
                 loss_val = dataset.measure_loss(out, labels)
                 loss_val.backward()
                 opt.step()
-            epoch_loss_sum += loss_val.item()
-            epoch_loss_count += 1
+
+                # Accumulate replicate's total loss
+                replicate_loss_sums[idx_rep] += loss_val.item()
+                replicate_loss_counts[idx_rep] += 1
 
             if do_align and (batch_idx % freq == 0):
-                # Compute simplified alignment: for each net, compute average RQ over layers
+                # measure raw alignment for each net, each layer, each method
                 align_data = []
                 for net in nets:
                     layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
-                    net_layer_means = torch.stack([layer_dict["RQ"].mean() for layer_dict in layer_metrics])
-                    align_data.append(net_layer_means)
-                raw_alignments_tensor = torch.stack(align_data)  # shape: (num_nets, num_layers)
-                raw_alignments_tensor = raw_alignments_tensor.unsqueeze(2)  # shape: (num_nets, num_layers, 1)
-                results["alignment"].append(raw_alignments_tensor)
+                    align_data.append(layer_metrics)
 
-                # build histogram from raw alignment (using original detailed data)
-                detailed_align = []
-                for net in nets:
-                    layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
-                    detailed_align.append(layer_metrics)
+                # store raw alignment
+                results["alignment"].append({
+                    "epoch": epoch,
+                    "batch": batch_idx,
+                    "data": align_data
+                })
+
+                # build histogram from raw alignment
+                dist_data = []
+                for net_layer_list in align_data:
+                    layer_dists = []
+                    for layer_dict in net_layer_list:
+                        method_dists = {}
+                        for m, val_tensor in layer_dict.items():
+                            val_cpu = val_tensor.detach().cpu()
+                            c, e = torch.histogram(val_cpu, bins=bins, density=True)
+                            method_dists[m] = (c, e)
+                        layer_dists.append(method_dists)
+                    dist_data.append(layer_dists)
                 results["alignment_distribution"].append({
                     "epoch": epoch,
                     "batch": batch_idx,
-                    "data": detailed_align
+                    "data": dist_data
                 })
 
+                # measure random distribution if measure_expected
                 if measure_expected:
                     exp_data = []
                     for net in nets:
@@ -113,9 +136,16 @@ def train(nets, optimizers, dataset, **parameters):
                         "data": exp_data
                     })
 
-        avg_epoch_loss = epoch_loss_sum / max(epoch_loss_count, 1)
-        results["loss"].append(avg_epoch_loss)
+        # After this epoch, compute average loss per replicate
+        for idx_rep in range(num_replicates):
+            if replicate_loss_counts[idx_rep] > 0:
+                avg_loss = replicate_loss_sums[idx_rep] / replicate_loss_counts[idx_rep]
+            else:
+                avg_loss = 0.0
+            # store into results["loss"][replicate, epoch]
+            results["loss"][idx_rep, epoch] = avg_loss
 
+        # checkpoint
         if do_ckpt and (epoch % ckpt_freq == 0):
             cpy_res = deepcopy(results)
             cpy_res["epoch"] = epoch
@@ -123,7 +153,6 @@ def train(nets, optimizers, dataset, **parameters):
             cpy_res["prms"] = parameters
             save_checkpoint(nets, optimizers, cpy_res, ckpt_path)
 
-    results["loss"] = torch.tensor(results["loss"])
     return results
 
 @test_nets
@@ -145,10 +174,12 @@ def test(nets, dataset, **parameters):
     measure_expected = parameters.get("measure_expected", True)
     bins = parameters.get("bins", 50)
 
+    # If user passed "results": None, fix it:
     results = parameters.get("results", None)
     if not isinstance(results, dict):
         results = {}
 
+    # Ensure sub-keys exist
     if "alignment" not in results:
         results["alignment"] = []
     if "alignment_distribution" not in results:
@@ -158,6 +189,7 @@ def test(nets, dataset, **parameters):
 
     verbose = parameters.get("verbose", True)
 
+    # use test loader by default (or train_loader if train_set param is set)
     use_train = parameters.get("train_set", False)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
 
@@ -168,6 +200,7 @@ def test(nets, dataset, **parameters):
     for batch in dataloader:
         images, labels = dataset.unwrap_batch(batch)
 
+        # forward pass
         for net in nets:
             out = net(images, store_hidden=True)
 
@@ -182,6 +215,7 @@ def test(nets, dataset, **parameters):
                 "data": align_data
             })
 
+            # build observed distribution
             dist_data = []
             for net_layer_list in align_data:
                 layer_dists = []
@@ -191,14 +225,15 @@ def test(nets, dataset, **parameters):
                         val_cpu = val_tensor.detach().cpu()
                         c, e = torch.histogram(val_cpu, bins=bins, density=True)
                         method_dists[m] = (c, e)
-                    layer_dists.append(method_dists)
-                dist_data.append(layer_dists)
+                layer_dists.append(method_dists)
+            dist_data.append(layer_dists)
 
             results["alignment_distribution"].append({
                 "test_batch": batch_idx,
                 "data": dist_data
             })
 
+            # measure random distribution if measure_expected
             if measure_expected:
                 exp_data = []
                 for net in nets:
