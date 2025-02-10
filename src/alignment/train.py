@@ -42,6 +42,10 @@ def train(nets, optimizers, dataset, **parameters):
     if "expected_distribution" not in results:
         results["expected_distribution"] = []
 
+    # NEW CODE: ensure 'loss' key exists, to store train losses
+    if "loss" not in results:
+        results["loss"] = []
+
     # Extract checkpoint information
     save_ckpt_info = parameters.get("save_checkpoints", (False, 1, "", ""))
     do_ckpt, ckpt_freq, ckpt_path, dev = save_ckpt_info
@@ -57,6 +61,11 @@ def train(nets, optimizers, dataset, **parameters):
 
     for epoch in range(start_epoch, num_epochs):
         loop = tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False) if verbose else dataloader
+
+        # NEW CODE: accumulate batch losses each epoch
+        epoch_loss_sum = 0.0
+        epoch_loss_count = 0
+
         for batch_idx, batch in enumerate(loop):
             images, labels = dataset.unwrap_batch(batch)
             # zero grads / step
@@ -66,6 +75,10 @@ def train(nets, optimizers, dataset, **parameters):
                 loss_val = dataset.measure_loss(out, labels)
                 loss_val.backward()
                 opt.step()
+
+            # record the total batch loss
+            epoch_loss_sum += loss_val.item()
+            epoch_loss_count += 1
 
             if do_align and (batch_idx % freq == 0):
                 # measure raw alignment for each net, each layer, each method
@@ -119,6 +132,10 @@ def train(nets, optimizers, dataset, **parameters):
                         "data": exp_data
                     })
 
+        # NEW CODE: after finishing the epoch, compute average epoch loss
+        avg_epoch_loss = epoch_loss_sum / max(epoch_loss_count, 1)
+        results["loss"].append(avg_epoch_loss)
+
         # checkpoint
         if do_ckpt and (epoch % ckpt_freq == 0):
             cpy_res = deepcopy(results)
@@ -126,6 +143,9 @@ def train(nets, optimizers, dataset, **parameters):
             cpy_res["device"] = dev
             cpy_res["prms"] = parameters
             save_checkpoint(nets, optimizers, cpy_res, ckpt_path)
+
+    # NEW CODE: convert the recorded list of loss floats to a tensor
+    results["loss"] = torch.tensor(results["loss"])
 
     return results
 
@@ -199,8 +219,8 @@ def test(nets, dataset, **parameters):
                         val_cpu = val_tensor.detach().cpu()
                         c, e = torch.histogram(val_cpu, bins=bins, density=True)
                         method_dists[m] = (c, e)
-                    layer_dists.append(method_dists)
-                dist_data.append(layer_dists)
+                layer_dists.append(method_dists)
+            dist_data.append(layer_dists)
 
             results["alignment_distribution"].append({
                 "test_batch": batch_idx,
@@ -220,7 +240,7 @@ def test(nets, dataset, **parameters):
                             ccounts, cedges = AlignmentMetrics.measure_expected_distribution(m, w, bins=bins)
                             method_exp[m] = (ccounts, cedges)
                         layer_exp_list.append(method_exp)
-                    exp_data.append(layer_exp_list)
+                exp_data.append(layer_exp_list)
 
                 results["expected_distribution"].append({
                     "test_batch": batch_idx,

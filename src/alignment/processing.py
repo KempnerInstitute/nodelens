@@ -78,33 +78,37 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         # Use the test() function from train.py to gather alignment
         alignment = train.test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
 
-    # We'll build alignment_layers (list of Tensors), each shape = (1, total_nodes)
+    # Key fix: ensure each 'layerdata["data"]' builds a (#nets, #nodes) tensor
+    # rather than just (1, #nodes). This way, dr[idx, :] is valid for net idx.
     alignment_layers = []
     for layerdata in alignment:
-        net0_data = layerdata["data"][0]
-        all_nodes = []
-        for layer_dict in net0_data:
-            rqs_ = layer_dict["RQ"].flatten()
-            all_nodes.append(rqs_)
-        flattened = torch.cat(all_nodes, dim=0)
-        alignment_layers.append(flattened.unsqueeze(0))
+        # layerdata["data"] is a list, one entry per net: e.g. layerdata["data"][net_i]
+        # each net_i entry is a list of dicts [{"RQ": Tensor(...)}, ... for each layer]
+        all_nets_rq = []
+        for net_i_data in layerdata["data"]:
+            # net_i_data is e.g. [ {"RQ": <tensor>}, {"RQ": <tensor>}, ... ]
+            # We'll flatten all those 'RQ' into one vector for net_i
+            net_nodes = []
+            for layer_dict in net_i_data:
+                net_nodes.append(layer_dict["RQ"].flatten())
+            # combine them
+            flattened = torch.cat(net_nodes, dim=0)  # shape (#all_nodes_for_net_i,)
+            all_nets_rq.append(flattened)
+        # Now stack for #nets
+        # shape => (#nets, #all_nodes_for_this_snapshot)
+        stacked = torch.stack(all_nets_rq, dim=0)
+        alignment_layers.append(stacked)
 
-    # idx_alignment: each entry is shape (1, total_nodes)
     idx_alignment = [torch.argsort(al, dim=1) for al in alignment_layers]
 
-    # number of alignment snapshots
     num_snapshots = len(idx_alignment)
-
     by_layer = parameters.get("by_layer", False)
-    # if by_layer=True, we treat each snapshot as a separate "layer" in dropout
-    # else we treat all snapshots as one big layer
     num_layers = num_snapshots if by_layer else 1
 
     num_nets = len(nets)
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
 
-    # accumulators
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers))
@@ -120,40 +124,39 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1
 
-        # get high/low/random idx for each snapshot
-        # idx_alignment is a list of length num_snapshots
         for dropidx, fraction in enumerate(drop_fraction):
             idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, fraction)
 
             for layer in range(num_layers):
                 if by_layer:
-                    drop_high = [idx_high[layer]]
-                    drop_low = [idx_low[layer]]
-                    drop_rand = [idx_rand[layer]]
+                    drop_high_use = [idx_high[layer]]
+                    drop_low_use = [idx_low[layer]]
+                    drop_rand_use = [idx_rand[layer]]
                     drop_layer = [layer]
                 else:
-                    drop_high = idx_high
-                    drop_low = idx_low
-                    drop_rand = idx_rand
+                    drop_high_use = idx_high
+                    drop_low_use = idx_low
+                    drop_rand_use = idx_rand
                     drop_layer = list(range(num_snapshots))
 
+                # now for each net, we pick net_i from these dropout arrays
                 out_high = [
                     net.forward_targeted_dropout(
-                        images, [dr[idx, :] for dr in drop_high], drop_layer
+                        images, [dr[i_net, :] for dr in drop_high_use], drop_layer
                     )[0]
-                    for idx, net in enumerate(nets)
+                    for i_net, net in enumerate(nets)
                 ]
                 out_low = [
                     net.forward_targeted_dropout(
-                        images, [dr[idx, :] for dr in drop_low], drop_layer
+                        images, [dr[i_net, :] for dr in drop_low_use], drop_layer
                     )[0]
-                    for idx, net in enumerate(nets)
+                    for i_net, net in enumerate(nets)
                 ]
                 out_rand = [
                     net.forward_targeted_dropout(
-                        images, [dr[idx, :] for dr in drop_rand], drop_layer
+                        images, [dr[i_net, :] for dr in drop_rand_use], drop_layer
                     )[0]
-                    for idx, net in enumerate(nets)
+                    for i_net, net in enumerate(nets)
                 ]
 
                 loss_high = [dataset.measure_loss(oh, labels).item() for oh in out_high]
@@ -273,23 +276,14 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     by_layer = parameters.get("by_layer", False)
     num_layers = n_alignment_idx if by_layer else 1
 
-    # Example code to build "indices" from eigenvalues, etc.:
-    # (This is just an outline consistent with your code style)
-    # We'll pretend we want to sort eigenvalues from largest to smallest
     idx_eigenvalue = []
     for netidx in range(num_nets):
-        # we assume eigenvectors[netidx] is a list of length n_alignment_idx
-        # each entry is a matrix
-        # to replicate your "argsort" logic, we do:
         layer_idxs = []
         for layer_evecs in eigenvectors[netidx]:
             dim = layer_evecs.size(1)
-            # just an example: reversed order
             layer_idxs.append(torch.arange(dim - 1, -1, -1).unsqueeze(0))
         idx_eigenvalue.append(layer_idxs)
-    # you will want to adapt the above logic to your actual data structure.
 
-    # accumulators
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_low = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers))
@@ -306,18 +300,9 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         num_batches += 1
 
         for dropidx, fraction in enumerate(drop_fraction):
-            # Suppose you define a helper for eigen‐drop indices
-            # or adapt your existing "get_dropout_indices"
             # ...
-            # Then run forward with net.forward_eigenvector_dropout(...)
-
-            # The rest is the same pattern as progressive_dropout:
             pass
 
-    # This function would similarly fill in the results dict
-    # just like progressive_dropout does.
-    # For brevity, we leave the full logic out here.
-    # Return a results dict:
     results = {}
     return results
 
