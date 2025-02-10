@@ -18,14 +18,13 @@ from alignment.utils import (
     set_net_mode,
     get_unfold_params,
     smart_pca,
-    alignment,
 )
 from alignment.models.layers import (
     LAYER_REGISTRY,
     REGISTRY_REQUIREMENTS,
     check_metaparameters,
 )
-from alignment.alignment_metrics import AlignmentMetrics
+from alignment.alignment_metrics import alignment
 
 class AttributeReference:
     """

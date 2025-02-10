@@ -14,7 +14,7 @@ def train(nets, optimizers, dataset, **parameters):
     """
     A single function for supervised training:
 
-      - If 'alignment' in parameters is True, measure alignment
+      - If 'alignment' in parameters is True, measure alignment 
         for each method, including 'delta_alignment'.
       - Build histograms from observed alignment
       - Build random distribution from PCA for each method
@@ -28,7 +28,13 @@ def train(nets, optimizers, dataset, **parameters):
     bins = parameters.get("bins", 50)
 
     num_epochs = parameters["num_epochs"]
-    results = parameters.get("results", {})
+    
+    # If user passed "results": None, we fix it to a dict
+    results = parameters.get("results", None)
+    if not isinstance(results, dict):
+        results = {}
+    
+    # Ensure sub-keys exist
     if "alignment" not in results:
         results["alignment"] = []
     if "alignment_distribution" not in results:
@@ -36,18 +42,12 @@ def train(nets, optimizers, dataset, **parameters):
     if "expected_distribution" not in results:
         results["expected_distribution"] = []
 
+    # Extract checkpoint information
     save_ckpt_info = parameters.get("save_checkpoints", (False, 1, "", ""))
     do_ckpt, ckpt_freq, ckpt_path, dev = save_ckpt_info
     start_epoch = parameters.get("num_complete", 0)
 
-    if not results:
-        # if no dictionary was provided, create one
-        results = dict(
-            alignment=[],
-            alignment_distribution=[],
-            expected_distribution=[],
-        )
-
+    # retrieve train loader
     use_train = parameters.get("train_set", True)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
 
@@ -59,6 +59,7 @@ def train(nets, optimizers, dataset, **parameters):
         loop = tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False) if verbose else dataloader
         for batch_idx, batch in enumerate(loop):
             images, labels = dataset.unwrap_batch(batch)
+            # zero grads / step
             for net, opt in zip(nets, optimizers):
                 opt.zero_grad()
                 out = net(images, store_hidden=True)
@@ -73,6 +74,7 @@ def train(nets, optimizers, dataset, **parameters):
                     layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
                     align_data.append(layer_metrics)
 
+                # store raw alignment
                 results["alignment"].append({
                     "epoch": epoch,
                     "batch": batch_idx,
@@ -133,7 +135,7 @@ def test(nets, dataset, **parameters):
     """
     A single function for a test pass / evaluation:
 
-      - If 'alignment' in parameters is True, measure alignment
+      - If 'alignment' in parameters is True, measure alignment 
         for each method, including 'delta_alignment'.
       - Build histograms for observed alignment
       - Build random distribution from PCA for each method
@@ -146,7 +148,12 @@ def test(nets, dataset, **parameters):
     measure_expected = parameters.get("measure_expected", True)
     bins = parameters.get("bins", 50)
 
-    results = parameters.get("results", {})
+    # If user passed "results": None, fix it:
+    results = parameters.get("results", None)
+    if not isinstance(results, dict):
+        results = {}
+
+    # Ensure sub-keys exist
     if "alignment" not in results:
         results["alignment"] = []
     if "alignment_distribution" not in results:
@@ -167,6 +174,7 @@ def test(nets, dataset, **parameters):
     for batch in dataloader:
         images, labels = dataset.unwrap_batch(batch)
 
+        # forward pass
         for net in nets:
             out = net(images, store_hidden=True)
 
