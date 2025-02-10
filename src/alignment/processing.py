@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 
 from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
-import alignment.train  
+import alignment.train as train
 from alignment.alignment_metrics import AlignmentMetrics
 
 
