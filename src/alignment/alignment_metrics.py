@@ -4,7 +4,7 @@
 
 import torch
 
-from utils import smart_pca, get_device
+from alignment.utils import smart_pca, get_device
 
 class AlignmentMetrics:
     """
