@@ -22,15 +22,34 @@ def plot_train_results(exp, train_results, test_results, prms):
     print("getting statistics on run data...")
     plot_alignment = "alignment" in train_results
     if plot_alignment:
-        # shape: (num_experiments, num_epochs, num_layers, num_nodes)
-        alignment = torch.stack([torch.mean(align, dim=2) for align in train_results["alignment"]])
+        # Extract alignment values from each training record.
+        # Each record in train_results["alignment"] is a dict with keys "epoch", "batch", and "data".
+        # "data" is a list (one per network) of lists (one per layer) of dicts (with key "RQ").
+        alignment_list = []
+        for record in train_results["alignment"]:
+            net_values = []
+            for net_data in record["data"]:
+                layer_vals = []
+                for layer_dict in net_data:
+                    # Extract the "RQ" tensor (per-node alignment values)
+                    layer_vals.append(layer_dict["RQ"])
+                # Stack over layers: shape (num_layers, num_nodes)
+                net_tensor = torch.stack(layer_vals, dim=0)
+                net_values.append(net_tensor)
+            # Average over networks to yield shape (num_layers, num_nodes)
+            net_avg = torch.stack(net_values, dim=0).mean(dim=0)
+            alignment_list.append(net_avg)
+        # Stack over training records: shape (num_records, num_layers, num_nodes)
+        alignment_tensor = torch.stack(alignment_list, dim=0)
+        # Average across nodes (dim=2) to yield (num_records, num_layers)
+        alignment = torch.mean(alignment_tensor, dim=2)
+        
+        # Compute statistics using compute_stats_by_type
+        align_mean, align_se = compute_stats_by_type(alignment, num_types=num_types, dim=1, method="se")
 
     cmap = mpl.colormaps["tab10"]
     train_loss_mean, train_loss_se = compute_stats_by_type(train_results["loss"], num_types=num_types, dim=1, method="se")
     train_acc_mean, train_acc_se = compute_stats_by_type(train_results["accuracy"], num_types=num_types, dim=1, method="se")
-
-    if plot_alignment:
-        align_mean, align_se = compute_stats_by_type(alignment, num_types=num_types, dim=1, method="se")
 
     test_loss_mean, test_loss_se = compute_stats_by_type(torch.tensor(test_results["loss"]), num_types=num_types, dim=0, method="se")
     test_acc_mean, test_acc_se = compute_stats_by_type(torch.tensor(test_results["accuracy"]), num_types=num_types, dim=0, method="se")
@@ -45,7 +64,6 @@ def plot_train_results(exp, train_results, test_results, prms):
     width_ratios = [figdim, figdim / figratio, figdim, figdim / figratio]
 
     fig, ax = plt.subplots(1, 4, figsize=(sum(width_ratios), figdim), width_ratios=width_ratios, layout="constrained")
-
 
     for idx, label in enumerate(labels):
         cmn = train_loss_mean[:, idx]
@@ -69,7 +87,6 @@ def plot_train_results(exp, train_results, test_results, prms):
     ax[1].set_title("Testing")
     ax[1].set_xlim(-0.5, num_types - 0.5)
     ax[1].set_ylim(ylims)
-
 
     for idx, label in enumerate(labels):
         cmn = train_acc_mean[:, idx]
@@ -96,14 +113,14 @@ def plot_train_results(exp, train_results, test_results, prms):
     exp.plot_ready("train_test_performance")
 
     if plot_alignment:
-        num_align_epochs = align_mean.size(2)
-        num_layers = align_mean.size(0)
+        num_align_epochs = alignment.size(0)
+        num_layers = alignment.size(1)
         fig, ax = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", sharex=True, squeeze=False)
         for idx, label in enumerate(labels):
             for layer in range(num_layers):
                 cmn = align_mean[layer, idx] * 100
                 cse = align_se[layer, idx] * 100
-                ax[0, layer].plot(range(num_align_epochs), cmn, color=cmap(idx), label=label)
+                ax[0, layer].plot(range(num_align_epochs), [cmn]*num_align_epochs, color=cmap(idx), label=label)
                 ax[0, layer].fill_between(range(num_align_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
 
         for layer in range(num_layers):
@@ -111,7 +128,6 @@ def plot_train_results(exp, train_results, test_results, prms):
             ax[0, layer].set_xlabel("Training Epoch")
             ax[0, layer].set_ylabel("Alignment (%)")
             ax[0, layer].set_title(f"Layer {layer}")
-
         ax[0, 0].legend(loc="lower right")
         exp.plot_ready("train_alignment_by_layer")
 
@@ -150,88 +166,78 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     acc_se = [acc_se_high, acc_se_low, acc_se_rand]
 
     print("plotting dropout results...")
-    fig, ax = plt.subplots(
-        num_layers,
-        num_types,
-        figsize=(num_types * figdim, num_layers * figdim),
-        sharex=True,
-        sharey=True,
-        layout="constrained",
-        squeeze=False
-    )
-    ax = np.reshape(ax, (num_layers, num_types))
+    xOffset = [-0.2, 0.2]
+    get_x = lambda idx: [xOffset[0] + idx, xOffset[1] + idx]
 
-    names = ["From high", "From low", "Random"]
-    num_exp = len(names)
+    fig, ax = plt.subplots(1, 4, figsize=(num_types * figdim, figdim), layout="constrained")
+    for idx, label in enumerate(labels):
+        cmn = loss_mean[0][:, idx]
+        cse = loss_se[0][:, idx]
+        tmn = loss_mean[1][idx]
+        tse = loss_se[1][idx]
+        ax[0].plot(range(num_types), cmn, color=cmap(idx), label=label)
+        ax[0].fill_between(range(num_types), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
+        ax[1].plot(get_x(idx), [tmn] * 2, color=cmap(idx), label=label, lw=4)
+        ax[1].plot([idx, idx], [tmn - tse, tmn + tse], color=cmap(idx), lw=1.5)
+    ax[0].set_xlabel("Dropout Fraction")
+    ax[0].set_ylabel("Loss")
+    ax[0].set_title("Dropout Loss")
+    ax[0].set_ylim(0, None)
+    ylims = ax[0].get_ylim()
+    ax[1].set_xticks(range(num_types))
+    ax[1].set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax[1].set_ylabel("Loss")
+    ax[1].set_title("Testing Loss")
+    ax[1].set_xlim(-0.5, num_types - 0.5)
+    ax[1].set_ylim(ylims)
 
     for idx, label in enumerate(labels):
-        for layer in range(num_layers):
-            for iexp, name in enumerate(names):
-                cmn = loss_mean[iexp][idx, :, layer]
-                cse = loss_se[iexp][idx, :, layer]
-                ax[layer, idx].plot(
-                    dropout_fraction,
-                    cmn,
-                    color=cmap(iexp),
-                    marker=".",
-                    markersize=msize,
-                    label=name,
-                )
-                ax[layer, idx].fill_between(dropout_fraction, cmn + cse, cmn - cse, color=(cmap(iexp), alpha))
-
-            if layer == 0:
-                ax[layer, idx].set_title(label)
-            if layer == num_layers - 1:
-                ax[layer, idx].set_xlabel("Dropout Fraction")
-                ax[layer, idx].set_xlim(0, 1)
-            if idx == 0:
-                ax[layer, idx].set_ylabel("Loss w/ Dropout")
-
-            if iexp == num_exp - 1:
-                ax[layer, idx].legend(loc="best")
+        cmn = acc_mean[0][:, idx]
+        cse = acc_se[0][:, idx]
+        tmn = acc_mean[1][idx]
+        tse = acc_se[1][idx]
+        ax[2].plot(range(num_types), cmn, color=cmap(idx), label=label)
+        ax[2].fill_between(range(num_types), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
+        ax[3].plot(get_x(idx), [tmn] * 2, color=cmap(idx), label=label, lw=4)
+        ax[3].plot([idx, idx], [tmn - tse, tmn + tse], color=cmap(idx), lw=1.5)
+    ax[2].set_xlabel("Dropout Fraction")
+    ax[2].set_ylabel("Accuracy (%)")
+    ax[2].set_title("Dropout Accuracy")
+    ax[2].set_ylim(0, 100)
+    ax[3].set_xticks(range(num_types))
+    ax[3].set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax[3].set_ylabel("Accuracy (%)")
+    ax[3].set_title("Testing Accuracy")
+    ax[3].set_xlim(-0.5, num_types - 0.5)
+    ax[3].set_ylim(0, 100)
 
     exp.plot_ready("prog_dropout_" + extra_name + "_loss")
 
 
-    fig, ax = plt.subplots(
-        num_layers,
-        num_types,
-        figsize=(num_types * figdim, num_layers * figdim),
-        sharex=True,
-        sharey=True,
-        layout="constrained",
-        squeeze=False
-    )
-    ax = np.reshape(ax, (num_layers, num_types))
-
+    fig, ax = plt.subplots(1, 4, figsize=(num_types * figdim, figdim), layout="constrained")
     for idx, label in enumerate(labels):
-        for layer in range(num_layers):
-            for iexp, name in enumerate(names):
-                cmn = acc_mean[iexp][idx, :, layer]
-                cse = acc_se[iexp][idx, :, layer]
-                ax[layer, idx].plot(
-                    dropout_fraction,
-                    cmn,
-                    color=cmap(iexp),
-                    marker=".",
-                    markersize=msize,
-                    label=name,
-                )
-                ax[layer, idx].fill_between(dropout_fraction, cmn + cse, cmn - cse, color=(cmap(iexp), alpha))
-
-            ax[layer, idx].set_ylim(0, 100)
-            if layer == 0:
-                ax[layer, idx].set_title(label)
-            if layer == num_layers - 1:
-                ax[layer, idx].set_xlabel("Dropout Fraction")
-                ax[layer, idx].set_xlim(0, 1)
-            if idx == 0:
-                ax[layer, idx].set_ylabel("Accuracy w/ Dropout")
-
-            if iexp == num_exp - 1:
-                ax[layer, idx].legend(loc="best")
+        cmn = acc_mean[0][:, idx]
+        cse = acc_se[0][:, idx]
+        tmn = acc_mean[1][idx]
+        tse = acc_se[1][idx]
+        ax[0].plot(range(num_types), cmn, color=cmap(idx), label=label)
+        ax[0].fill_between(range(num_types), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
+        ax[1].plot(get_x(idx), [tmn] * 2, color=cmap(idx), label=label, lw=4)
+        ax[1].plot([idx, idx], [tmn - tse, tmn + tse], color=cmap(idx), lw=1.5)
+    ax[0].set_xlabel("Dropout Fraction")
+    ax[0].set_ylabel("Accuracy (%)")
+    ax[0].set_title("Dropout Accuracy")
+    ax[0].set_ylim(0, 100)
+    ylims = ax[0].get_ylim()
+    ax[1].set_xticks(range(num_types))
+    ax[1].set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax[1].set_ylabel("Accuracy (%)")
+    ax[1].set_title("Testing Accuracy")
+    ax[1].set_xlim(-0.5, num_types - 0.5)
+    ax[1].set_ylim(ylims)
 
     exp.plot_ready("prog_dropout_" + extra_name + "_accuracy")
+
 
 def plot_eigenfeatures(exp, results, prms):
     """
@@ -253,12 +259,10 @@ def plot_eigenfeatures(exp, results, prms):
 
     print("measuring statistics of eigenfeature analyses...")
 
-    # shape wrangling
     beta = [torch.stack(b) for b in transpose_list(beta)]
     eigvals = [torch.stack(ev) for ev in transpose_list(eigvals)]
     class_betas = [torch.stack(cb) for cb in transpose_list(class_betas)]
 
-    # normalize
     beta = [b / b.sum(dim=2, keepdim=True) for b in beta]
     eigvals = [ev / ev.sum(dim=1, keepdim=True) for ev in eigvals]
     class_betas = [cb / cb.sum(dim=2, keepdim=True) for cb in class_betas]
@@ -379,6 +383,7 @@ def plot_eigenfeatures(exp, results, prms):
 
     exp.plot_ready("class_eigenfeatures")
 
+
 def plot_adversarial_results(exp, eigen_results, adversarial_results, prms):
     """
     Visualize adversarial attack results (accuracy vs epsilon) and structure 
@@ -401,7 +406,6 @@ def plot_adversarial_results(exp, eigen_results, adversarial_results, prms):
     eigvals = [torch.stack(ev) for ev in transpose_list(eigvals)]
     beta = [torch.stack(b) for b in beta]
 
-    # normalize
     beta = [b / b.sum(dim=2, keepdim=True) for b in beta]
     eigvals = [ev / ev.sum(dim=1, keepdim=True) for ev in eigvals]
 
@@ -442,7 +446,7 @@ def plot_adversarial_results(exp, eigen_results, adversarial_results, prms):
         ax[0, layer].set_ylabel("Average Component of Pertubation")
         ax[0, layer].set_title(f"Layer {layer}")
         if layer == num_layers - 1:
-            ax[0, layer].legend(loc="best")
+            ax[0, layer].legend(loc="best", fontsize=6)
 
     exp.plot_ready("adversarial_structure")
 
@@ -498,4 +502,4 @@ def plot_rf(rf, width, alignment=None, alignBounds=None, showRFs=None, figSize=5
         ax.set_yticks([])
         ax.set_aspect("equal")
     fig.subplots_adjust(wspace=0.0, hspace=0.0)
-    return fig
+    return figß
