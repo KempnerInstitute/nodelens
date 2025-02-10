@@ -139,8 +139,6 @@ def batch_cov(input, centered=True, correction=True):
         bcov = bcov.squeeze(0)
     return bcov
 
-import torch
-from .utils import batch_cov, eigendecomposition  # or adjust to your actual imports
 
 def smart_pca(input, centered=True, use_rank=True, correction=True):
     """
