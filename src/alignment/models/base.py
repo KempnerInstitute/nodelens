@@ -218,25 +218,65 @@ class AlignmentNetwork(nn.Module):
             weights.append(weight)
         return weights
 
+
+    ############################################################################
+    ### NEW: a CNN-mode-aware approach in `_preprocess_inputs` that reimplements
+    ### your old “unfold” logic. We allow multiple possible transforms. 
+    ############################################################################
     def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True):
         """
-        For convolutional layers, optionally 'unfold' them so that
-        each patch is treated like an individual input vector.
+        handle linear vs conv layers differently based on metaparameters['unfold'] and
+        self.cnn_mode => 'unfold' (old approach), 'flatten', 'gap', etc.
         """
         preprocessed = []
-        for input_, layer in zip(inputs_to_layers, self.alignment_layers):
-            if isinstance(layer, nn.Conv2d):
+        layers_ = self.get_alignment_layers()
+        metaprms_ = self.get_alignment_metaparameters()
+
+        for inp, layer, meta_ in zip(inputs_to_layers, layers_, metaprms_):
+            if not meta_["unfold"]:
+                # typical linear layer => no special transform
+                preprocessed.append(inp)
+                continue
+
+            # if we reach here => it's a conv layer
+            if self.cnn_mode == "unfold":
+                # replicate old approach: use torch.nn.functional.unfold 
+                # with layer.kernel_size, stride, etc.
                 layer_prms = get_unfold_params(layer)
                 unfolded_input = torch.nn.functional.unfold(
-                    input_, layer.kernel_size, **layer_prms
+                    inp, layer.kernel_size, **layer_prms
                 )
+                # shape => (B, C*kH*kW, #patches)
                 if compress_convolutional:
-                    unfolded_input = unfolded_input.transpose(1, 2).contiguous().view(
-                        -1, unfolded_input.size(1)
+                    # => (B, #patches, C*kH*kW) => flatten => (B * #patches, C*kH*kW)
+                    unfolded_input = (
+                        unfolded_input.transpose(1, 2)
+                        .contiguous()
+                        .view(-1, unfolded_input.size(1))
                     )
                 preprocessed.append(unfolded_input)
+
+            elif self.cnn_mode == "flatten":
+                # simpler approach => flatten all dims => shape (B, C*H*W)
+                # if you want to measure alignment ignoring local patch structure
+                preprocessed.append(inp.flatten(start_dim=1))
+
+            elif self.cnn_mode == "gap":
+                # "global average pool" => (B, C), ignoring H/W
+                # if you want each channel as your feature dimension
+                # must do .mean(dim=(2,3)) if 4D
+                if inp.dim() == 4:
+                    inp = inp.mean(dim=(2, 3))  # shape => (B, C)
+                elif inp.dim() > 2:
+                    # fallback, just flatten
+                    inp = inp.flatten(start_dim=1)
+                preprocessed.append(inp)
+
             else:
-                preprocessed.append(input_)
+                raise ValueError(
+                    f"Unknown cnn_mode={self.cnn_mode}. Use 'unfold','flatten','gap'"
+                )
+
         return preprocessed
 
     @torch.no_grad()
