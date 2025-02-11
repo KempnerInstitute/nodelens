@@ -3,7 +3,6 @@
 # --------------------------------------------
 
 import torch
-
 from alignment.utils import smart_pca, get_device
 
 class AlignmentMetrics:
@@ -126,8 +125,20 @@ def alignment(input, weight, method="alignment", relative=True):
     """
     measure alignment (proportion of variance explained)
     by each weight vector in 'weight' for the input's covariance.
+
+    If the input is 4D (batch, channels, H, W), we flatten so input becomes 2D: (batch, features).
+    Then we can call torch.cov(input.T) safely.
+
+    'method' can be 'alignment' or 'similarity'. If 'alignment', uses torch.cov().
+    If 'similarity', uses a correlation matrix approach.
     """
     assert method in ("alignment", "similarity"), "method must be 'alignment' or 'similarity'"
+
+    # Minimal fix for CNN: flatten if input has more than 2 dims
+    if input.dim() > 2:
+        # replicate old approach that just flattens the data
+        input = input.flatten(start_dim=1)  # shape => (batch, C*H*W) if 4D
+
     if method == "alignment":
         cc = torch.cov(input.T)
     else:

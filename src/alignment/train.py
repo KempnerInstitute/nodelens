@@ -260,6 +260,8 @@ def test(nets, dataset, **parameters):
                 })
         batch_idx += 1
 
+    import numpy as np
+
     avg_test_losses = []
     avg_test_accs = []
     for i in range(num_nets):

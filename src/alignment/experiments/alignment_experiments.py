@@ -32,6 +32,10 @@ class GeneralAlignmentExperiment(Experiment):
                 build=True,
                 dataset=self.args.dataset.name,
                 dropout=self.args.model.dropout,
+                # ---------------------------------------------
+                # new line: pass your alignment's cnn_mode here
+                cnn_mode=self.args.alignment.cnn_mode,
+                # ---------------------------------------------
             ).to(self.device)
             nets.append(net)
 
@@ -105,7 +109,6 @@ class GeneralAlignmentExperiment(Experiment):
         return results, nets
 
     def plot(self, results):
-
         # check plots config toggles
         if self.args.plots.show_loss:
             plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
