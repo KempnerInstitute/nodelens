@@ -26,6 +26,12 @@ from alignment.models.layers import (
 )
 from alignment.alignment_metrics import AlignmentMetrics
 
+###############################################################################
+# We import "alignment" from alignment_metrics if needed:
+from alignment.alignment_metrics import alignment
+###############################################################################
+
+
 class AttributeReference:
     """
     Simple reference proxy for parent object attributes 
@@ -40,6 +46,7 @@ class AttributeReference:
         else:
             raise AttributeError(f"parent object (instance of {type(self.parent)}) has no attribute '{name}'")
 
+
 class AlignmentNetwork(nn.Module):
     """
     Base class for alignment-related experiments.
@@ -52,15 +59,30 @@ class AlignmentNetwork(nn.Module):
     #   forward_eigenvector_dropout -> for eigenvector dropout
     #   measure_eigenfeatures, measure_class_eigenfeatures -> gather PCA structure
 
+    The added 'cnn_mode' parameter controls how convolutional layer inputs
+    are reshaped for alignment measurement:
+      - "unfold": the old patch-level approach (Functional.unfold + flatten)
+      - "flatten": naive flatten of (B,C,H,W) -> (B, C*H*W)
+      - "gap": global average pool so shape -> (B, C)
     """
 
-    def __init__(self, base_model: nn.Module, alignment_layer_names: Optional[dict] = None, **kwargs):
+    def __init__(
+        self,
+        base_model: nn.Module,
+        alignment_layer_names: Optional[dict] = None,
+        cnn_mode: str = "unfold",   # <-- NEW parameter
+        **kwargs
+    ):
         super().__init__()
         self.base_model = base_model
         self.alignment_layers = nn.ModuleList()
         self.alignment_names = []
         self.hidden = {}
         self.hooks = {}
+
+        # store the user-requested CNN mode (unfold, flatten, gap, etc.)
+        self.cnn_mode = cnn_mode
+
         self._initialize_layers(alignment_layer_names, **kwargs)
 
     def _initialize_layers(self, alignment_layer_names, **kwargs):
@@ -195,7 +217,10 @@ class AlignmentNetwork(nn.Module):
         layer_inputs = []
         for name in self.alignment_names:
             name_idx = name
-            if self.layer_to_input_names is not None and self.layer_to_input_names[name] is not None:
+            if (
+                self.layer_to_input_names is not None
+                and self.layer_to_input_names[name] is not None
+            ):
                 name_idx = self.layer_to_input_names[name]
             layer_inputs.append(self.hidden[name_idx])
         return layer_inputs
@@ -218,65 +243,53 @@ class AlignmentNetwork(nn.Module):
             weights.append(weight)
         return weights
 
-
     ############################################################################
-    ### NEW: a CNN-mode-aware approach in `_preprocess_inputs` that reimplements
-    ### your old “unfold” logic. We allow multiple possible transforms. 
+    # Modified _preprocess_inputs to handle "cnn_mode" for each convolution layer
+    # You can set self.cnn_mode to "unfold" (old approach), "flatten", or "gap"
     ############################################################################
     def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True):
         """
-        handle linear vs conv layers differently based on metaparameters['unfold'] and
-        self.cnn_mode => 'unfold' (old approach), 'flatten', 'gap', etc.
+        For convolutional layers, we check self.cnn_mode to decide how to reshape:
+          'unfold'  => old approach with torch.nn.functional.unfold
+          'flatten' => naive (B, C, H, W) -> (B, C*H*W)
+          'gap'     => global average pool => (B, C)
+        For linear layers, do nothing special.
         """
         preprocessed = []
-        layers_ = self.get_alignment_layers()
-        metaprms_ = self.get_alignment_metaparameters()
-
-        for inp, layer, meta_ in zip(inputs_to_layers, layers_, metaprms_):
-            if not meta_["unfold"]:
-                # typical linear layer => no special transform
-                preprocessed.append(inp)
-                continue
-
-            # if we reach here => it's a conv layer
-            if self.cnn_mode == "unfold":
-                # replicate old approach: use torch.nn.functional.unfold 
-                # with layer.kernel_size, stride, etc.
-                layer_prms = get_unfold_params(layer)
-                unfolded_input = torch.nn.functional.unfold(
-                    inp, layer.kernel_size, **layer_prms
-                )
-                # shape => (B, C*kH*kW, #patches)
-                if compress_convolutional:
-                    # => (B, #patches, C*kH*kW) => flatten => (B * #patches, C*kH*kW)
-                    unfolded_input = (
-                        unfolded_input.transpose(1, 2)
-                        .contiguous()
-                        .view(-1, unfolded_input.size(1))
+        for input_, layer in zip(inputs_to_layers, self.alignment_layers):
+            if isinstance(layer, nn.Conv2d):
+                if self.cnn_mode == "unfold":
+                    layer_prms = get_unfold_params(layer)
+                    unfolded_input = torch.nn.functional.unfold(
+                        input_, layer.kernel_size, **layer_prms
                     )
-                preprocessed.append(unfolded_input)
+                    if compress_convolutional:
+                        unfolded_input = (
+                            unfolded_input.transpose(1, 2)
+                            .contiguous()
+                            .view(-1, unfolded_input.size(1))
+                        )
+                    preprocessed.append(unfolded_input)
 
-            elif self.cnn_mode == "flatten":
-                # simpler approach => flatten all dims => shape (B, C*H*W)
-                # if you want to measure alignment ignoring local patch structure
-                preprocessed.append(inp.flatten(start_dim=1))
+                elif self.cnn_mode == "flatten":
+                    # simpler flatten => (B, C*H*W)
+                    preprocessed.append(input_.flatten(start_dim=1))
 
-            elif self.cnn_mode == "gap":
-                # "global average pool" => (B, C), ignoring H/W
-                # if you want each channel as your feature dimension
-                # must do .mean(dim=(2,3)) if 4D
-                if inp.dim() == 4:
-                    inp = inp.mean(dim=(2, 3))  # shape => (B, C)
-                elif inp.dim() > 2:
-                    # fallback, just flatten
-                    inp = inp.flatten(start_dim=1)
-                preprocessed.append(inp)
+                elif self.cnn_mode == "gap":
+                    # global average pool => (B, C)
+                    if input_.dim() == 4:
+                        pooled = input_.mean(dim=(2, 3))  # average over H,W
+                    else:
+                        pooled = input_
+                    preprocessed.append(pooled)
 
+                else:
+                    raise ValueError(
+                        f"Unknown cnn_mode={self.cnn_mode}, should be 'unfold', 'flatten', or 'gap'"
+                    )
             else:
-                raise ValueError(
-                    f"Unknown cnn_mode={self.cnn_mode}. Use 'unfold','flatten','gap'"
-                )
-
+                # non-conv => just keep as is
+                preprocessed.append(input_)
         return preprocessed
 
     @torch.no_grad()
@@ -354,7 +367,6 @@ class AlignmentNetwork(nn.Module):
 
         def dropout(name, dropout_idx):
             def dropout_hook(module, input, output):
-                # minimal fix ensuring we don't go out of bounds
                 max_index = output.shape[1]
                 dropout_idx_valid = dropout_idx[dropout_idx < max_index]
                 fraction_dropout = len(dropout_idx_valid) / float(max_index)
@@ -372,7 +384,6 @@ class AlignmentNetwork(nn.Module):
 
         for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
-                # find index in 'layers' for this idx_layer
                 index_for_layer = layers.index(idx_layer)
                 dropout_idx = idxs[index_for_layer]
                 hooks.append(layer.register_forward_hook(dropout(name, dropout_idx)))
@@ -393,6 +404,7 @@ class AlignmentNetwork(nn.Module):
         Similar to forward_targeted_dropout but uses an eigenbasis to remove 
         specific eigenvector components from the input to certain layers.
         """
+        from copy import deepcopy
         assert check_iterable(idxs) and check_iterable(layers), "idxs and layers must be iterables"
         assert len(idxs) == len(layers), "idxs and layers must match in length"
         assert len(layers) == len(eigenvalues), "eigenvalues mismatch"
@@ -437,7 +449,7 @@ class AlignmentNetwork(nn.Module):
         return x, hidden_inputs
 
     def _forward_subspace(self, name, layer, hidden_inputs_dict, hooks, org_forward_methods, subspace=None, correction=None):
-        if isinstance(layer, torch.nn.Conv2d):
+        if isinstance(layer, nn.Conv2d):
             self._forward_subspace_convolutional(name, layer, hidden_inputs_dict, org_forward_methods, subspace=subspace, correction=correction)
         else:
             self._forward_subspace_linear(name, layer, hidden_inputs_dict, hooks, subspace=subspace, correction=correction)
@@ -495,8 +507,6 @@ class AlignmentNetwork(nn.Module):
         """
         measure the eigenvalues/eigenvectors of the input to each alignment layer,
         plus how each weight array (flattened) aligns with these eigenvectors.
-
-        # Preprocess inputs to handle conv -> unfold, etc.
         """
         weights = self.get_alignment_weights(flatten=True)
         inputs = self._preprocess_inputs(inputs, compress_convolutional=True)
@@ -506,7 +516,6 @@ class AlignmentNetwork(nn.Module):
     def measure_class_eigenfeatures(self, inputs, labels, eigenvectors, rms=False, with_updates=True):
         """
         For classification tasks, measure how each class loads on the eigenvectors.
-        If dataset is unbalanced, we may clip to the min # of samples among classes.
         """
         classes = torch.unique(labels)
         num_classes = len(classes)
@@ -570,9 +579,6 @@ class AlignmentNetwork(nn.Module):
         Goes through the entire dataset loader (train or test),
         runs the network, and collects the input to each alignment layer.
         Returns [list of layer_input_tensors], plus the labels.
-
-        # This is used for large-scale analysis (e.g. PCA).
-        # If use_training_mode=False, the net is set to eval() mode for consistent stats.
         """
         device = get_device(self)
         training_mode = set_net_mode(self, training=use_training_mode)
@@ -600,8 +606,6 @@ class AlignmentNetwork(nn.Module):
         """
         modifies the weights in the specified 'idx_layers' 
         by scaling the eigenvectors by some function of 'eigenvalues' (eval_transform).
-
-        # Example usage: 'cutoff' or weighting of big eigenvalues.
         """
         assert all(idx in range(self.num_layers()) for idx in idx_layers), (
             "idx_layers includes invalid layer indices",
