@@ -120,36 +120,31 @@ class AlignmentMetrics:
         else:
             return None, None
 
-
 def alignment(input, weight, method="alignment", relative=True):
     """
     measure alignment (proportion of variance explained)
     by each weight vector in 'weight' for the input's covariance.
-
-    If the input is 4D (batch, channels, H, W), we flatten so input becomes 2D: (batch, features).
-    Then we can call torch.cov(input.T) safely.
-
-    'method' can be 'alignment' or 'similarity'. If 'alignment', uses torch.cov().
-    If 'similarity', uses a correlation matrix approach.
     """
     assert method in ("alignment", "similarity"), "method must be 'alignment' or 'similarity'"
-
-    # Minimal fix for CNN: flatten if input has more than 2 dims
-    if input.dim() > 2:
-        # replicate old approach that just flattens the data
-        input = input.flatten(start_dim=1)  # shape => (batch, C*H*W) if 4D
+    
+    # --- NEW FIX: flatten input if it has more than 2 dims (e.g. 4D CNN input) ---
+    if input.ndim > 2:
+        # flatten everything except batch dimension
+        # so shape becomes (batch, features)
+        input = input.flatten(start_dim=1)
+    # ---------------------------------------------------------------------------
 
     if method == "alignment":
         cc = torch.cov(input.T)
     else:
         cc = smartcorr(input.T)
 
+    print(cc.shape, weight.shape)
     rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
     if relative:
         # proportion of variance explained
         return rq / torch.trace(cc)
     return rq
-
 
 @torch.no_grad()
 def expected_alignment_distribution(eigenvalues, relative=True, valid_rotation=True, with_rotation=True, bins=11, num_tests=100):

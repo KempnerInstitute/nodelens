@@ -84,7 +84,7 @@ def train(nets, optimizers, dataset, **parameters):
 
                 # measure accuracy for this replicate
                 acc_val = dataset.measure_accuracy(out, labels)
-                replicate_acc_sums[idx_rep] += float(acc_val)  # ensure it's a Python float
+                replicate_acc_sums[idx_rep] += float(acc_val)
                 replicate_acc_counts[idx_rep] += 1
 
             # optional alignment logic
@@ -136,6 +136,22 @@ def train(nets, optimizers, dataset, **parameters):
                         "data": exp_data
                     })
 
+                # OPTION A: (Log alignment metrics *per batch*, if desired):
+                # For example, log average alignment "RQ" across all networks
+                # Here we show a minimal example for demonstration:
+                # align_data is a list of shape (#nets) each => list of per-layer metrics
+                # Let's just log the mean RQ of the first layer for demonstration:
+                # (You can adapt to gather any stats you want)
+                if len(align_data) > 0: 
+                    # gather RQ from first net, first layer if it exists
+                    first_net_first_layer = align_data[0][0]
+                    if "RQ" in first_net_first_layer:
+                        rq_values = first_net_first_layer["RQ"]
+                        wandb.log({"train_alignment_RQ_batch": rq_values.mean().item(),
+                                   "epoch": epoch,
+                                   "batch_idx": batch_idx})
+                # end of per-batch alignment logging
+
         # after epoch, average replicate losses & accuracies
         for idx_rep in range(num_replicates):
             if replicate_loss_counts[idx_rep] > 0:
@@ -149,6 +165,20 @@ def train(nets, optimizers, dataset, **parameters):
             else:
                 avg_acc = 0.0
             results["accuracy"][idx_rep, epoch] = avg_acc
+
+        # OPTION B: (Log train/test performance at the end of each epoch):
+        # Suppose you want to log the replicate average across your nets:
+        avg_loss_across_nets = torch.mean(results["loss"][:, epoch])
+        avg_acc_across_nets = torch.mean(results["accuracy"][:, epoch])
+        # Then log them to wandb:
+        wandb.log({
+            "epoch": epoch,
+            "train_loss": avg_loss_across_nets.item(),
+            "train_acc": avg_acc_across_nets.item()
+        })
+
+        # If you also want to measure alignment over entire training set each epoch,
+        # either do so here or rely on the batch logs above.
 
         if do_ckpt and (epoch % ckpt_freq == 0):
             cpy_res = deepcopy(results)
@@ -253,7 +283,7 @@ def test(nets, dataset, **parameters):
                             ccounts, cedges = AlignmentMetrics.measure_expected_distribution(m, w, bins=bins)
                             method_exp[m] = (ccounts, cedges)
                         layer_exp_list.append(method_exp)
-                exp_data.append(layer_exp_list)
+                    exp_data.append(layer_exp_list)
                 results["expected_distribution"].append({
                     "test_batch": batch_idx,
                     "data": exp_data
