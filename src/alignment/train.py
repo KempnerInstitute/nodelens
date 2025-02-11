@@ -29,11 +29,11 @@ def train(nets, optimizers, dataset, **parameters):
     bins = parameters.get("bins", 50)
 
     num_epochs = parameters["num_epochs"]
-    
+
     results = parameters.get("results", None)
     if not isinstance(results, dict):
         results = {}
-    
+
     if "alignment" not in results:
         results["alignment"] = []
     if "alignment_distribution" not in results:
@@ -41,12 +41,14 @@ def train(nets, optimizers, dataset, **parameters):
     if "expected_distribution" not in results:
         results["expected_distribution"] = []
 
-    # NEW CODE: We need a 2D shape for 'loss', i.e. (#replicates, #epochs).
+    # We want a 2D shape for both 'loss' and 'accuracy' => (#replicates, #epochs)
     num_replicates = len(nets)
     if "loss" not in results:
         results["loss"] = torch.zeros(num_replicates, num_epochs, dtype=torch.float)
+    if "accuracy" not in results:
+        results["accuracy"] = torch.zeros(num_replicates, num_epochs, dtype=torch.float)
 
-    # Extract checkpoint information
+    # Extract checkpoint info
     save_ckpt_info = parameters.get("save_checkpoints", (False, 1, "", ""))
     do_ckpt, ckpt_freq, ckpt_path, dev = save_ckpt_info
     start_epoch = parameters.get("num_complete", 0)
@@ -62,6 +64,10 @@ def train(nets, optimizers, dataset, **parameters):
         replicate_loss_sums = [0.0] * num_replicates
         replicate_loss_counts = [0] * num_replicates
 
+        # new lists to accumulate accuracy for each replicate
+        replicate_acc_sums = [0.0] * num_replicates
+        replicate_acc_counts = [0] * num_replicates
+
         loop = tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False) if verbose else dataloader
         for batch_idx, batch in enumerate(loop):
             images, labels = dataset.unwrap_batch(batch)
@@ -72,14 +78,22 @@ def train(nets, optimizers, dataset, **parameters):
                 loss_val.backward()
                 opt.step()
 
+                # accumulate replicate's total loss
                 replicate_loss_sums[idx_rep] += loss_val.item()
                 replicate_loss_counts[idx_rep] += 1
 
+                # measure accuracy for this replicate
+                acc_val = dataset.measure_accuracy(out, labels)
+                replicate_acc_sums[idx_rep] += float(acc_val)  # ensure it's a Python float
+                replicate_acc_counts[idx_rep] += 1
+
+            # optional alignment logic
             if do_align and (batch_idx % freq == 0):
                 align_data = []
                 for net in nets:
                     layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
                     align_data.append(layer_metrics)
+
                 results["alignment"].append({
                     "epoch": epoch,
                     "batch": batch_idx,
@@ -122,12 +136,19 @@ def train(nets, optimizers, dataset, **parameters):
                         "data": exp_data
                     })
 
+        # after epoch, average replicate losses & accuracies
         for idx_rep in range(num_replicates):
             if replicate_loss_counts[idx_rep] > 0:
                 avg_loss = replicate_loss_sums[idx_rep] / replicate_loss_counts[idx_rep]
             else:
                 avg_loss = 0.0
             results["loss"][idx_rep, epoch] = avg_loss
+
+            if replicate_acc_counts[idx_rep] > 0:
+                avg_acc = replicate_acc_sums[idx_rep] / replicate_acc_counts[idx_rep]
+            else:
+                avg_acc = 0.0
+            results["accuracy"][idx_rep, epoch] = avg_acc
 
         if do_ckpt and (epoch % ckpt_freq == 0):
             cpy_res = deepcopy(results)
@@ -136,7 +157,10 @@ def train(nets, optimizers, dataset, **parameters):
             cpy_res["prms"] = parameters
             save_checkpoint(nets, optimizers, cpy_res, ckpt_path)
 
-    results["loss"] = torch.tensor(results["loss"])
+    # ensure they're proper Tensors
+    results["loss"] = results["loss"].clone().detach()
+    results["accuracy"] = results["accuracy"].clone().detach()
+
     return results
 
 @test_nets
@@ -185,15 +209,17 @@ def test(nets, dataset, **parameters):
         images, labels = dataset.unwrap_batch(batch)
         for i, net in enumerate(nets):
             out = net(images, store_hidden=True)
-            loss_val = dataset.measure_loss(out, labels).item()
-            acc_val = dataset.measure_accuracy(out, labels)
+            loss_val = dataset.measure_loss(out, labels).detach().cpu().item()
+            acc_val = dataset.measure_accuracy(out, labels).detach().cpu().item()
             test_losses[i].append(loss_val)
             test_accs[i].append(acc_val)
+
         if do_align and (batch_idx % freq == 0):
             align_data = []
             for net in nets:
                 layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
                 align_data.append(layer_metrics)
+
             results["alignment"].append({
                 "test_batch": batch_idx,
                 "data": align_data
@@ -234,9 +260,19 @@ def test(nets, dataset, **parameters):
                 })
         batch_idx += 1
 
-    avg_test_losses = torch.tensor([np.mean(loss_list) if len(loss_list) > 0 else 0.0 for loss_list in test_losses], dtype=torch.float)
-    avg_test_accs = torch.tensor([np.mean(acc_list) if len(acc_list) > 0 else 0.0 for acc_list in test_accs], dtype=torch.float)
-    results["loss"] = avg_test_losses
-    results["accuracy"] = avg_test_accs
+    avg_test_losses = []
+    avg_test_accs = []
+    for i in range(num_nets):
+        if len(test_losses[i]) > 0:
+            avg_test_losses.append(float(np.mean(test_losses[i])))
+        else:
+            avg_test_losses.append(0.0)
+        if len(test_accs[i]) > 0:
+            avg_test_accs.append(float(np.mean(test_accs[i])))
+        else:
+            avg_test_accs.append(0.0)
+
+    results["loss"] = torch.tensor(avg_test_losses, dtype=torch.float)
+    results["accuracy"] = torch.tensor(avg_test_accs, dtype=torch.float)
 
     return results
