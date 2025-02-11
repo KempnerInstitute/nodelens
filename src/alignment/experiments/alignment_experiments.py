@@ -32,11 +32,8 @@ class GeneralAlignmentExperiment(Experiment):
                 build=True,
                 dataset=self.args.dataset.name,
                 dropout=self.args.model.dropout,
-                # ---------------------------------------------
-                # new line: pass your alignment's cnn_mode here
-                cnn_mode=self.args.alignment.cnn_mode,
-                # ---------------------------------------------
             ).to(self.device)
+            net.cnn_mode = self.args.alignment.cnn_mode
             nets.append(net)
 
         optimizers = [

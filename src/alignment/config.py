@@ -33,13 +33,11 @@ class DatasetConfig(BaseConfig):
     name: str = "MNIST"
     path: Optional[str] = None
 
-
 @dataclass
 class TrainingConfig(BaseConfig):
-    do_train: bool = True       
-    epochs: int = 10            
-    batch_size: int = 128       
-    lr: float = 1e-3            
+    do_train: bool = True
+    epochs: int = 10
+    batch_size: int = 128
     replicates: int = 1
     name: str = "Adam"
     lr: float = 1e-3
@@ -47,7 +45,7 @@ class TrainingConfig(BaseConfig):
 
 @dataclass
 class AlignmentConfig(BaseConfig):
-    do_alignment: bool = True     
+    do_alignment: bool = True
     methods: List[str] = field(default_factory=lambda: ["RQ"])
     measure_expected: bool = True
     frequency: int = 1
