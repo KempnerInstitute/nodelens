@@ -69,14 +69,26 @@ def get_model_parameters(model_name, dataset):
 def get_model(model_name, alignment_layer_names: Optional[dict] = None, build=False, dataset=None, **kwargs):
     if model_name not in MODEL_REGISTRY:
         raise ValueError(f"Model ({model_name}) is not in MODEL_REGISTRY")
-    base_model = MODEL_REGISTRY[model_name]
-    if not build: return base_model
+    base_model_cls = MODEL_REGISTRY[model_name]
+    if not build:
+        return base_model_cls
     
+    # If we know the dataset, auto-merge dataset-specific arguments:
     if dataset is not None:
         dataset_specific_arguments = get_model_parameters(model_name, dataset)
         for key, val in dataset_specific_arguments.items():
             if key not in kwargs:
                 kwargs[key] = val
 
-    base_model = base_model(**kwargs)
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=alignment_layer_names)
+    # Pop cnn_mode from kwargs so we don't pass it into the base model constructor
+    cnn_mode = kwargs.pop("cnn_mode", "unfold")
+
+    # Now instantiate the underlying base model class with the remaining kwargs
+    base_model = base_model_cls(**kwargs)
+
+    # Finally, wrap in AlignmentNetwork, passing the cnn_mode
+    return AlignmentNetwork(
+        base_model=base_model,
+        alignment_layer_names=alignment_layer_names,
+        cnn_mode=cnn_mode
+    )
