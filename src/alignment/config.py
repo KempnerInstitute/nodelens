@@ -52,6 +52,7 @@ class AlignmentConfig(BaseConfig):
     measure_expected: bool = True
     frequency: int = 1
     bins: int = 50
+    cnn_mode: str = "unfold"
 
 @dataclass
 class CheckpointingConfig(BaseConfig):
