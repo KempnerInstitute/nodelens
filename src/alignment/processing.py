@@ -208,7 +208,7 @@ def get_dropout_indices(idx_alignment, fraction):
 
 def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
     """
-    (unchanged) Perform a progressive dropout experiment,
+    Perform a progressive dropout experiment,
     dropping nodes (by alignment ranking) in increments.
     """
     print("performing targeted dropout...")

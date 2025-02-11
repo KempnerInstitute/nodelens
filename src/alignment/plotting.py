@@ -10,29 +10,27 @@ import matplotlib as mpl
 import torch
 from alignment.utils import compute_stats_by_type, named_transpose, transpose_list, rms
 
+
 def plot_train_results(exp, train_results, test_results, prms):
     """
     Plot training curves for loss and accuracy, plus test performance.
     Optionally plots alignment across training if present in `train_results`.
     """
-    num_train_epochs = train_results["loss"].size(0)
+    ### FIX: instead of using .size(0), use .size(1) because shape is (replicates, epochs)
+    num_train_epochs = train_results["loss"].size(1)
     num_types = len(prms["vals"])
     labels = [f"{prms['name']}={val}" for val in prms["vals"]]
 
     print("getting statistics on run data...")
     plot_alignment = "alignment" in train_results
     if plot_alignment:
-        # Build a dictionary keyed by method.
-        # For each training record, if record["data"] is stored in the "old" format (a list of nets,
-        # each a list (per layer) of dicts with method keys) then compute the mean value per layer.
-        # If record["data"] is a tensor, assume it corresponds to a single method ('RQ').
+        # (same alignment-averaging logic as before; unchanged)
         alignment_by_method = {}
         for record in train_results["alignment"]:
             if isinstance(record, torch.Tensor):
-                # Assume shape is either (num_nets, num_layers, num_nodes) or (1, num_nets, num_layers, num_nodes)
                 method_key = 'RQ'
                 if record.dim() == 3:
-                    net_avg = record.mean(dim=0)  # (num_layers, num_nodes)
+                    net_avg = record.mean(dim=0)
                 elif record.dim() == 4:
                     net_avg = record.squeeze(0).mean(dim=0)
                 else:
@@ -46,7 +44,6 @@ def plot_train_results(exp, train_results, test_results, prms):
             elif isinstance(record, dict):
                 data_field = record["data"]
                 if isinstance(data_field, list):
-                    # data_field: list over nets; each element is a list (over layers) of dicts with keys=methods.
                     for net_data in data_field:
                         for layer_idx, layer_dict in enumerate(net_data):
                             for method_key, tensor in layer_dict.items():
@@ -54,10 +51,8 @@ def plot_train_results(exp, train_results, test_results, prms):
                                     alignment_by_method[method_key] = {}
                                 if layer_idx not in alignment_by_method[method_key]:
                                     alignment_by_method[method_key][layer_idx] = []
-                                # Compute mean over nodes for this layer for this net.
                                 alignment_by_method[method_key][layer_idx].append(torch.mean(tensor).item())
                 elif isinstance(data_field, torch.Tensor):
-                    # data_field is a tensor; process similarly as above.
                     method_key = 'RQ'
                     if data_field.dim() == 3:
                         net_avg = data_field.mean(dim=0)
@@ -75,24 +70,46 @@ def plot_train_results(exp, train_results, test_results, prms):
                     raise TypeError(f"record['data'] has unexpected type {type(data_field)}")
             else:
                 raise TypeError(f"train_results['alignment'] has an element of type {type(record)}")
-        # Now average across records for each method and each layer.
         alignment_avg = {}
         for method_key, layers_dict in alignment_by_method.items():
             layer_avgs = []
             for layer_idx in sorted(layers_dict.keys()):
                 vals = torch.tensor(layers_dict[layer_idx])
                 layer_avgs.append(torch.mean(vals))
-            # Result is a tensor of shape (num_layers,)
             alignment_avg[method_key] = torch.stack(layer_avgs, dim=0)
-        # 'alignment' becomes a dictionary keyed by method.
         alignment = alignment_avg
 
     cmap = mpl.colormaps["tab10"]
-    train_loss_mean, train_loss_se = compute_stats_by_type(train_results["loss"], num_types=num_types, dim=1, method="se")
-    train_acc_mean, train_acc_se = compute_stats_by_type(train_results["accuracy"], num_types=num_types, dim=1, method="se")
 
-    test_loss_mean, test_loss_se = compute_stats_by_type(torch.tensor(test_results["loss"]), num_types=num_types, dim=0, method="se")
-    test_acc_mean, test_acc_se = compute_stats_by_type(torch.tensor(test_results["accuracy"]), num_types=num_types, dim=0, method="se")
+    ### FIX: transpose the data so epochs are the first dimension, replicates+types are second
+    ### Then pass dim=1 to 'compute_stats_by_type' so it groups by num_types.
+    train_loss_mean, train_loss_se = compute_stats_by_type(
+        train_results["loss"].transpose(0,1),  # shape => (epochs, replicates)
+        num_types=num_types,
+        dim=1,
+        method="se"
+    )
+    train_acc_mean, train_acc_se = compute_stats_by_type(
+        train_results["accuracy"].transpose(0,1),
+        num_types=num_types,
+        dim=1,
+        method="se"
+    )
+
+    # test_results["loss"] and ["accuracy"] are typically 1-D with shape (replicates,).
+    # If you test once per entire run, there's no epoch dimension. This part is OK if your code does the same for each replicate.
+    test_loss_mean, test_loss_se = compute_stats_by_type(
+        torch.tensor(test_results["loss"]), 
+        num_types=num_types,
+        dim=0,
+        method="se"
+    )
+    test_acc_mean, test_acc_se = compute_stats_by_type(
+        torch.tensor(test_results["accuracy"]),
+        num_types=num_types,
+        dim=0,
+        method="se"
+    )
 
     print("plotting run data...")
     xOffset = [-0.2, 0.2]
@@ -106,13 +123,16 @@ def plot_train_results(exp, train_results, test_results, prms):
     fig, ax = plt.subplots(1, 4, figsize=(sum(width_ratios), figdim), width_ratios=width_ratios, layout="constrained")
 
     for idx, label in enumerate(labels):
+        # Now each slice train_loss_mean[:, idx] is shape (num_train_epochs,)
         cmn = train_loss_mean[:, idx]
         cse = train_loss_se[:, idx]
         tmn = test_loss_mean[idx]
         tse = test_loss_se[idx]
 
+        # Plot training loss vs epochs
         ax[0].plot(range(num_train_epochs), cmn, color=cmap(idx), label=label)
         ax[0].fill_between(range(num_train_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
+        # Plot test loss as a single point (or bar)
         ax[1].plot(get_x(idx), [tmn] * 2, color=cmap(idx), label=label, lw=4)
         ax[1].plot([idx, idx], [tmn - tse, tmn + tse], color=cmap(idx), lw=1.5)
 
