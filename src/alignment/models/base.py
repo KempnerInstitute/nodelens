@@ -25,7 +25,7 @@ from alignment.models.layers import (
     check_metaparameters,
 )
 from alignment.alignment_metrics import AlignmentMetrics
-from alignment.alignment_metrics import alignment  # for old alignment function
+from alignment.alignment_metrics import alignment  
 
 class AttributeReference:
     """
