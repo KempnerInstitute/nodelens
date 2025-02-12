@@ -166,7 +166,6 @@ class AlignmentMetrics:
         else:
             return None, None
 
-
 def alignment(input, weight, method="alignment", relative=True):
     """
     measure alignment by computing RQ = (w^T C w) / (w^T w),
