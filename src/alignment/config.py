@@ -84,7 +84,8 @@ class ExperimentConfig(BaseConfig):
     device: Optional[str] = None
     use_timestamp: bool = False
     timestamp: Optional[str] = None
-
+    ddp_world_size: int = 1
+    
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
