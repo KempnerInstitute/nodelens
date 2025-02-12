@@ -52,6 +52,10 @@ class AlignmentNetwork(nn.Module):
     #   forward_targeted_dropout -> for progressive dropout
     #   forward_eigenvector_dropout -> for eigenvector dropout
     #   measure_eigenfeatures, measure_class_eigenfeatures -> gather PCA structure
+
+    NOTE: The main cause of mat1 & mat2 shape mismatch is if the code is forced to flatten
+    the entire input dimension (784 for MNIST) rather than doing the 'unfold' approach for Conv2d.
+    Make sure cnn_mode="unfold" is set, and that we don't flatten again in alignment_metrics.py.
     """
     def __init__(self, base_model: nn.Module, alignment_layer_names: Optional[dict] = None, cnn_mode="unfold", **kwargs):
         super().__init__()
@@ -174,25 +178,48 @@ class AlignmentNetwork(nn.Module):
             weights.append(weight)
         return weights
 
+
     def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True):
+        """
+        Extended to handle 'patchwise' mode:
+          - If self.cnn_mode == "patchwise", we keep shape [B, inC*kH*kW, outH*outW]
+            so we can do a patchwise alignment measure.
+          - If self.cnn_mode == "unfold", we flatten to [B*outH*outW, inC*kH*kW].
+        """
         preprocessed = []
         for input_, layer in zip(inputs_to_layers, self.alignment_layers):
             if hasattr(layer, "kernel_size") and layer.weight.dim() == 4:
+                layer_prms = get_unfold_params(layer)
+                unfolded_input = torch.nn.functional.unfold(input_, layer.kernel_size, **layer_prms)
                 if self.cnn_mode == "old":
-                    layer_prms = get_unfold_params(layer)
-                    unfolded_input = torch.nn.functional.unfold(input_, layer.kernel_size, **layer_prms)
                     if compress_convolutional:
-                        unfolded_input = unfolded_input.transpose(1, 2).contiguous().view(-1, unfolded_input.size(1))
+                        unfolded_input = (
+                            unfolded_input.transpose(1, 2).contiguous().view(-1, unfolded_input.size(1))
+                        )
                     preprocessed.append(unfolded_input)
+
                 elif self.cnn_mode == "unfold":
-                    layer_prms = get_unfold_params(layer)
-                    unfolded_input = torch.nn.functional.unfold(input_, layer.kernel_size, **layer_prms)
                     if compress_convolutional:
-                        unfolded_input = unfolded_input.transpose(1, 2).contiguous().view(-1, unfolded_input.size(2))
+                        # shape => [B, inC*kH*kW, outH*outW] => [B, outH*outW, F] => flatten => [B*outH*outW, F]
+                        unfolded_input = (
+                            unfolded_input.transpose(1, 2)
+                            .contiguous()
+                            .view(-1, unfolded_input.size(2))
+                        )
+                    preprocessed.append(unfolded_input)
+
+                elif self.cnn_mode == "patchwise":
+                    # Keep shape = [B, F, patches], do NOT flatten
+                    # shape => (B, inC*kH*kW, outH*outW)
+                    if compress_convolutional:
+                        # transpose only, keep 3D => shape [B, F, patches]
+                        unfolded_input = unfolded_input  # we do not flatten
                     preprocessed.append(unfolded_input)
                 else:
+                    # fallback
                     preprocessed.append(input_.flatten(start_dim=1))
             else:
+                # Non-conv layers or unknown => flatten or pass as is
                 preprocessed.append(input_)
         return preprocessed
 
@@ -209,14 +236,27 @@ class AlignmentNetwork(nn.Module):
 
     @torch.no_grad()
     def measure_alignment_methods(self, x, methods, precomputed=False):
+        """
+        If 'cnn_mode' == 'patchwise', we call patchwise_alignment on 3D inputs.
+        Otherwise, we call the standard alignment.
+        """
         inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
         preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
-        weights = self.get_alignment_weights(flatten=True)
+        weights = self.get_alignment_weights(flatten=True)  # shape => [outC, F]
+
         layer_results = []
         for inp, w in zip(preprocessed, weights):
+            # If patchwise => shape [B, F, patches]
+            # else => shape [N, F] or [B, F, patches?].
             metrics_dict = {}
             for m in methods:
-                metrics_dict[m] = AlignmentMetrics.measure(inp, w, method=m)
+                if self.cnn_mode == "patchwise" and inp.ndim == 3:
+                    # call patchwise alignment
+                    val = AlignmentMetrics.patchwise_alignment(inp, w, method=m, weigh_by_var=True)
+                else:
+                    # single global covariance
+                    val = AlignmentMetrics.measure(inp, w, method=m)
+                metrics_dict[m] = val
             layer_results.append(metrics_dict)
         return layer_results
 
@@ -332,7 +372,6 @@ class AlignmentNetwork(nn.Module):
             weight_ = weight_.view(weight_.size(0), -1)
             x = torch.nn.functional.unfold(x, this_layer.kernel_size, **layer_prms)
             if subspace is not None:
-                # -- REPLACEMENT: fix dimension by transposing x to handle batch dimension --
                 x = x.transpose(1, 2)
                 x = torch.matmul(x, subspace.T)
                 x = torch.matmul(x, subspace)
