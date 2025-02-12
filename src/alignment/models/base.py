@@ -27,25 +27,34 @@ from alignment.models.layers import (
 from alignment.alignment_metrics import AlignmentMetrics
 from alignment.alignment_metrics import alignment  
 
-class AttributeReference:
-    """
-    Simple reference proxy for parent object attributes 
-    (useful for DDP).
-    """
-    def __init__(self, parent):
-        self.parent = parent
-
-    def __getattr__(self, name):
-        if hasattr(self.parent, name):
-            return getattr(self.parent, name)
-        else:
-            raise AttributeError(
-                f"parent object (instance of {type(self.parent)}) has no attribute '{name}'"
-            )
-
 class AlignmentNetwork(nn.Module):
     """
-    Base class for alignment experiments. 
+    This is the base class for a neural network used for alignment-related experiments.
+
+    The point of all the wrangling of standard torch workflows in this class is to make
+    it easy to perform all the alignment-related computations for networks with different
+    architectures without having to rewrite similar code over and over again. In this way,
+    the user only needs to pass in a base model, and specify the layers to participate in 
+    alignment computation along with their disired input layer. No need for registration 
+    the model and layers manually.
+
+    The forward method of **AlignmentNetwork** passes the input (*x*) through the base model
+    forward method. If hidden activations are requested, then the output of each layer participated
+    in the alignment computation is saved through setting up forward hooks. The alignment methods 
+    are applied to the hidden activation at the output of corresponding input layer and the weight
+    of layer participate in the experiment.
+
+    Note: some shape wrangling (like that which happens between a convolutional layer and a
+    linear layer are often treated as a nn.Module layer), but these don't require alignment-
+    related processing.
+
+    Note: to maintain the flexiblity of the code, user is resposible to make sure that the requested
+    input layer is feasible for the requested alignment layer and has a compatible output shape for
+    alignment computation on the target layer.
+
+    An target alignment layer should have the following properties:
+    1. Be a child of the nn.Module class with a forward method
+    2. Have processing stage with weights for measuring alignment
     """
 
     def __init__(
@@ -57,17 +66,21 @@ class AlignmentNetwork(nn.Module):
     ):
         super().__init__()
         self.base_model = base_model
-        self.alignment_layers = nn.ModuleList()
+        self.alignment_layers = nn.ModuleList() # a list of all the layers for the alignment computation
         self.alignment_names = []
-        self.hidden = {}
-        self.hooks = {}
-        self.cnn_mode = cnn_mode
+        self.hidden = {} # a parallel list to maintain the output/activation of the input layers aka inputs to the alignment layers
+        self.hooks = {} # a dictionary list to maintain the handle of the forward hooks on input layers
+        self.cnn_mode = cnn_mode  
         self._initialize_layers(alignment_layer_names, **kwargs)
 
     def _initialize_layers(self, alignment_layer_names, **kwargs):
         """
         Gather modules that have a .weight. If alignment_layer_names is None,
         gather all. Otherwise gather only those in the dict.
+        self.alignment_layers will hold the list of layers participating in alignment computation
+        self.alignment_names will hold the names of the self.alignment_layers with the same order
+        and if alignment_layer_names is not None, self.layer_to_input_names will hold a copy of this map from
+        alignment layer names to their input layer names.
         """
         if alignment_layer_names is None:
             self.layer_to_input_names = None
@@ -92,6 +105,11 @@ class AlignmentNetwork(nn.Module):
                     self.layer_to_input_names[name] = alignment_layer_names[name]
 
     def is_classification_layer_included(self):
+        """
+        convenience method to check if the last layer is included in the alignment layers?
+        This check is useful since we don't dropout classification layer
+        # it gets the name of the last layer in network and check if it is in alignment layer names
+        """
         classification_layer_name = [
             name
             for name, layer in self.base_model.named_modules()
@@ -100,6 +118,12 @@ class AlignmentNetwork(nn.Module):
         return classification_layer_name in self.alignment_names
 
     def num_layers(self, all=False):
+        """
+        convenience method for getting the number of layers in network
+        if all=False (default), will get the number of alignment layers
+        if all=True, will get total number of layers in network that has
+        weight attribute and can be used for alignment computation
+        """
         if all:
             return sum(1 for m in self.base_model.modules() if hasattr(m, "weight"))
         return len(self.alignment_layers)
@@ -134,6 +158,11 @@ class AlignmentNetwork(nn.Module):
             hook.remove()
 
     def forward(self, x, store_hidden=False):
+        """
+        standard forward pass of the base_model with option of storing 
+        the activation/output of the corresponding input layers to the 
+        alignment layers using forward hook
+        """
         if store_hidden:
             self.hidden = {}
             self.setup_forward_hooks()
@@ -143,6 +172,9 @@ class AlignmentNetwork(nn.Module):
         return out
 
     def get_dropout(self):
+        """
+        Return list of dropout probability for any dropout layers in network
+        """
         p = []
         for module in self.base_model.modules():
             if isinstance(module, nn.Dropout):
@@ -150,11 +182,20 @@ class AlignmentNetwork(nn.Module):
         return p
 
     def set_dropout(self, p):
+        """
+        Set dropout of all layers in a network
+        Note that this will overwrite whatever was previously used
+        """
         for module in self.base_model.modules():
             if isinstance(module, nn.Dropout):
                 module.p = p
 
     def set_dropout_by_layer(self, p):
+        """
+        Set dropout of each layer in a network independently
+
+        p must be an iterable indicating the probability of dropout for each layer
+        """
         dropout_layers = []
         for module in self.modules():
             if isinstance(module, nn.Dropout):
@@ -185,6 +226,11 @@ class AlignmentNetwork(nn.Module):
 
     @torch.no_grad()
     def get_alignment_weights(self, flatten=False):
+        """
+        convenience method for retrieving registered weights for alignment measurements throughout the network
+
+        if flatten=True, will flatten weights so they have shape (nodes/channels, numel_per_weight)
+        """
         weights = []
         for layer in self.alignment_layers:
             w = layer.weight.data.clone()
