@@ -25,7 +25,7 @@ from alignment.models.layers import (
     check_metaparameters,
 )
 from alignment.alignment_metrics import AlignmentMetrics
-from alignment.alignment_metrics import alignment  # to support old alignment function
+from alignment.alignment_metrics import alignment  # for old alignment function
 
 class AttributeReference:
     """
@@ -39,25 +39,22 @@ class AttributeReference:
         if hasattr(self.parent, name):
             return getattr(self.parent, name)
         else:
-            raise AttributeError(f"parent object (instance of {type(self.parent)}) has no attribute '{name}'")
+            raise AttributeError(
+                f"parent object (instance of {type(self.parent)}) has no attribute '{name}'"
+            )
 
 class AlignmentNetwork(nn.Module):
     """
-    Base class for alignment-related experiments.
-    Wraps a base_model and allows hooking into specific layers for alignment.
-
-    # Key methods:
-    #   measure_alignment_methods -> multi-metric approach
-    #   measure_alignment -> single metric (Rayleigh Quotient)
-    #   forward_targeted_dropout -> for progressive dropout
-    #   forward_eigenvector_dropout -> for eigenvector dropout
-    #   measure_eigenfeatures, measure_class_eigenfeatures -> gather PCA structure
-
-    NOTE: The main cause of mat1 & mat2 shape mismatch is if the code is forced to flatten
-    the entire input dimension (784 for MNIST) rather than doing the 'unfold' approach for Conv2d.
-    Make sure cnn_mode="unfold" is set, and that we don't flatten again in alignment_metrics.py.
+    Base class for alignment experiments. 
     """
-    def __init__(self, base_model: nn.Module, alignment_layer_names: Optional[dict] = None, cnn_mode="unfold", **kwargs):
+
+    def __init__(
+        self,
+        base_model: nn.Module,
+        alignment_layer_names: Optional[dict] = None,
+        cnn_mode="unfold",
+        **kwargs
+    ):
         super().__init__()
         self.base_model = base_model
         self.alignment_layers = nn.ModuleList()
@@ -68,6 +65,10 @@ class AlignmentNetwork(nn.Module):
         self._initialize_layers(alignment_layer_names, **kwargs)
 
     def _initialize_layers(self, alignment_layer_names, **kwargs):
+        """
+        Gather modules that have a .weight. If alignment_layer_names is None,
+        gather all. Otherwise gather only those in the dict.
+        """
         if alignment_layer_names is None:
             self.layer_to_input_names = None
             for name, layer in self.base_model.named_modules():
@@ -80,7 +81,11 @@ class AlignmentNetwork(nn.Module):
             for name, layer in self.base_model.named_modules():
                 if name in alignment_layer_names.keys():
                     if not hasattr(layer, "weight"):
-                        warn(f"Skipping the selected layer {name} ({layer.__class__.__name__}) because it does not have a weight attribute", RuntimeWarning, stacklevel=1)
+                        warn(
+                            f"Skipping layer {name} ({layer.__class__.__name__}) - no weight attribute",
+                            RuntimeWarning,
+                            stacklevel=1
+                        )
                         continue
                     self.alignment_layers.append(layer)
                     self.alignment_names.append(name)
@@ -100,16 +105,22 @@ class AlignmentNetwork(nn.Module):
         return len(self.alignment_layers)
 
     def setup_forward_hooks(self):
+        """
+        For storing hidden states: either input or output, depending on config.
+        """
         def get_activation(name):
             def activation_hook(module, input, output):
                 self.hidden[name] = output
             return activation_hook
+
         def get_input(name):
             def input_hook(module, input, output):
                 self.hidden[name] = input[0]
             return input_hook
+
         if self.layer_to_input_names is None:
             for name, alignment_layer in zip(self.alignment_names, self.alignment_layers):
+                # Store the input to each alignment layer
                 self.hooks[name] = alignment_layer.register_forward_hook(get_input(name))
         else:
             for name, input_layer in self.base_model.named_modules():
@@ -148,12 +159,16 @@ class AlignmentNetwork(nn.Module):
         for module in self.modules():
             if isinstance(module, nn.Dropout):
                 dropout_layers.append(module)
-        assert len(dropout_layers) == len(p), "p must match number of dropout layers"
+        assert len(dropout_layers) == len(p), "p must match dropout layers"
         for layer, drop_prob in zip(dropout_layers, p):
             layer.p = drop_prob
 
     @torch.no_grad()
     def get_layer_inputs(self, x, precomputed=False):
+        """
+        Return the raw input for each alignment layer (untransformed).
+        Typically shape is 4D for conv layers, 2D for linear, etc. 
+        """
         if not precomputed:
             _ = self.forward(x, store_hidden=True)
         layer_inputs = []
@@ -172,55 +187,57 @@ class AlignmentNetwork(nn.Module):
     def get_alignment_weights(self, flatten=False):
         weights = []
         for layer in self.alignment_layers:
-            weight = layer.weight.data.clone()
+            w = layer.weight.data.clone()
             if flatten:
-                weight = weight.flatten(start_dim=1)
-            weights.append(weight)
+                w = w.flatten(start_dim=1)
+            weights.append(w)
         return weights
-
 
     def _preprocess_inputs(self, inputs_to_layers, compress_convolutional=True):
         """
-        Extended to handle 'patchwise' mode:
-          - If self.cnn_mode == "patchwise", we keep shape [B, inC*kH*kW, outH*outW]
-            so we can do a patchwise alignment measure.
-          - If self.cnn_mode == "unfold", we flatten to [B*outH*outW, inC*kH*kW].
+        For each layer:
+          - If it's an nn.Conv2d, do 'unfold' or 'patchwise'
+          - Otherwise, fallback to flatten or keep 2D
         """
         preprocessed = []
         for input_, layer in zip(inputs_to_layers, self.alignment_layers):
-            if hasattr(layer, "kernel_size") and layer.weight.dim() == 4:
+            if isinstance(layer, nn.Conv2d):
+                # We specifically check if it's a Conv2d
                 layer_prms = get_unfold_params(layer)
-                unfolded_input = torch.nn.functional.unfold(input_, layer.kernel_size, **layer_prms)
-                if self.cnn_mode == "old":
-                    if compress_convolutional:
-                        unfolded_input = (
-                            unfolded_input.transpose(1, 2).contiguous().view(-1, unfolded_input.size(1))
-                        )
-                    preprocessed.append(unfolded_input)
+                unfolded = torch.nn.functional.unfold(input_, layer.kernel_size, **layer_prms)
 
-                elif self.cnn_mode == "unfold":
+                if self.cnn_mode == "unfold":
+                    # single-cov approach => shape => [B, F, patches]
+                    # => if compress => [B*patches, F]
                     if compress_convolutional:
-                        # shape => [B, inC*kH*kW, outH*outW] => [B, outH*outW, F] => flatten => [B*outH*outW, F]
-                        unfolded_input = (
-                            unfolded_input.transpose(1, 2)
-                            .contiguous()
-                            .view(-1, unfolded_input.size(2))
-                        )
-                    preprocessed.append(unfolded_input)
+                        unfolded = unfolded.transpose(1, 2).contiguous()
+                        # shape => (B, patches, F)
+                        B, P, F = unfolded.shape
+                        unfolded = unfolded.view(B * P, F)   # => (B*P, F)
+                    preprocessed.append(unfolded)
 
                 elif self.cnn_mode == "patchwise":
-                    # Keep shape = [B, F, patches], do NOT flatten
-                    # shape => (B, inC*kH*kW, outH*outW)
-                    if compress_convolutional:
-                        # transpose only, keep 3D => shape [B, F, patches]
-                        unfolded_input = unfolded_input  # we do not flatten
-                    preprocessed.append(unfolded_input)
+                    # shape => [B, F, patches], do not flatten
+                    preprocessed.append(unfolded)
+
                 else:
-                    # fallback
-                    preprocessed.append(input_.flatten(start_dim=1))
+                    # fallback => flatten entire batch dimension
+                    # e.g. if self.cnn_mode=="old" or something
+                    # or just do input_.flatten(start_dim=1)
+                    if compress_convolutional:
+                        unfolded = unfolded.transpose(1, 2).contiguous()
+                        B, P, F = unfolded.shape
+                        # fallback => flatten => (B*P, F)
+                        unfolded = unfolded.view(B*P, F)
+                    preprocessed.append(unfolded)
+
             else:
-                # Non-conv layers or unknown => flatten or pass as is
+                # Not a Conv2d => e.g. a linear layer or MLP => flatten if needed
+                if input_.dim() > 2:
+                    # e.g. if shape is (B, ???) we flatten
+                    input_ = input_.flatten(start_dim=1)
                 preprocessed.append(input_)
+
         return preprocessed
 
     @torch.no_grad()
@@ -237,49 +254,68 @@ class AlignmentNetwork(nn.Module):
     @torch.no_grad()
     def measure_alignment_methods(self, x, methods, precomputed=False):
         """
-        If 'cnn_mode' == 'patchwise', we call patchwise_alignment on 3D inputs.
-        Otherwise, we call the standard alignment.
+        1) get_layer_inputs => raw (4D for conv)
+        2) _preprocess_inputs => unfold or patchwise => 2D or 3D
+        3) measure alignment
         """
-        inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
-        preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
-        weights = self.get_alignment_weights(flatten=True)  # shape => [outC, F]
+        layer_inputs = self.get_layer_inputs(x, precomputed=precomputed)
+        preprocessed = self._preprocess_inputs(layer_inputs, compress_convolutional=True)
+        weights = self.get_alignment_weights(flatten=True)
 
-        layer_results = []
-        for inp, w in zip(preprocessed, weights):
-            # If patchwise => shape [B, F, patches]
-            # else => shape [N, F] or [B, F, patches?].
+        all_layer_results = []
+        for idx, (inp, w) in enumerate(zip(preprocessed, weights)):
             metrics_dict = {}
             for m in methods:
                 if self.cnn_mode == "patchwise" and inp.ndim == 3:
-                    # call patchwise alignment
                     val = AlignmentMetrics.patchwise_alignment(inp, w, method=m, weigh_by_var=True)
+                elif m == "delta_alignment":
+                    val = AlignmentMetrics.delta_alignment(self, idx, inp)
                 else:
-                    # single global covariance
                     val = AlignmentMetrics.measure(inp, w, method=m)
                 metrics_dict[m] = val
-            layer_results.append(metrics_dict)
-        return layer_results
+            all_layer_results.append(metrics_dict)
+        return all_layer_results
 
     @torch.no_grad()
     def measure_alignment(self, x, precomputed=False, method="alignment", relative=True):
-        inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
-        preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
+        """
+        Single metric approach (RQ by default).
+        """
+        layer_inputs = self.get_layer_inputs(x, precomputed=precomputed)
+        preprocessed = self._preprocess_inputs(layer_inputs, compress_convolutional=True)
         weights = self.get_alignment_weights(flatten=True)
-        return [alignment(inp, w, method=method, relative=relative) for inp, w in zip(preprocessed, weights)]
+
+        outputs = []
+        for inp, w in zip(preprocessed, weights):
+            out = alignment(inp, w, method=method, relative=relative)
+            outputs.append(out)
+        return outputs
 
     @torch.no_grad()
     def measure_alignment_weights(self, x, weights, precomputed=False, method="alignment", relative=True):
-        inputs_to_layers = self.get_layer_inputs(x, precomputed=precomputed)
-        preprocessed = self._preprocess_inputs(inputs_to_layers, compress_convolutional=True)
-        weights = [w.flatten(start_dim=1) for w in weights]
-        return [alignment(input_, weight, method=method, relative=relative) for input_, weight in zip(preprocessed, weights)]
+        """
+        If you want to pass in external weights, do the same unfolding or flattening.
+        """
+        layer_inputs = self.get_layer_inputs(x, precomputed=precomputed)
+        preprocessed = self._preprocess_inputs(layer_inputs, compress_convolutional=True)
+        weights_flat = [w.flatten(start_dim=1) for w in weights]
+        outputs = []
+        for inp, w in zip(preprocessed, weights_flat):
+            out = alignment(inp, w, method=method, relative=relative)
+            outputs.append(out)
+        return outputs
 
     @torch.no_grad()
     def forward_targeted_dropout(self, x, idxs, layers):
-        assert check_iterable(idxs) and check_iterable(layers), "idxs and layers must be iterables"
-        assert len(idxs) == len(layers), "idxs and layers must match in length"
+        """
+        zeroes out certain activation indices in each layer (progressive dropout).
+        """
+        from alignment.utils import check_iterable
+        assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables"
+        assert len(idxs) == len(layers), "idxs/layers must match"
         hidden_outputs_dict = {}
         hooks = []
+
         def dropout(name, dropout_idx):
             def dropout_hook(module, input, output):
                 max_index = output.shape[1]
@@ -291,86 +327,107 @@ class AlignmentNetwork(nn.Module):
                 hidden_outputs_dict[name] = output
                 return output
             return dropout_hook
+
         def get_output(name):
             def output_hook(module, input, output):
                 hidden_outputs_dict[name] = output
             return output_hook
+
         for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
-                index_for_layer = layers.index(idx_layer)
-                dropout_idx = idxs[index_for_layer]
-                hooks.append(layer.register_forward_hook(dropout(name, dropout_idx)))
+                i_lyr = layers.index(idx_layer)
+                d_idx = idxs[i_lyr]
+                hooks.append(layer.register_forward_hook(dropout(name, d_idx)))
             else:
                 hooks.append(layer.register_forward_hook(get_output(name)))
+
         x = self.base_model(x)
         for hook in hooks:
             hook.remove()
         assert self.num_layers() == len(hidden_outputs_dict), "mismatch in alignment layers vs. outputs"
-        hidden_outputs = [hidden_outputs_dict[name] for name in self.alignment_names]
+        hidden_outputs = [hidden_outputs_dict[nm] for nm in self.alignment_names]
         return x, hidden_outputs
 
     @torch.no_grad()
     def forward_eigenvector_dropout(self, x, eigenvalues, eigenvectors, idxs, layers):
-        assert check_iterable(idxs) and check_iterable(layers), "idxs and layers must be iterables"
-        assert len(idxs) == len(layers), "idxs and layers must match in length"
+        """
+        remove entire eigenvectors in layer input subspace
+        """
+        from alignment.utils import check_iterable
+        device = get_device(x)
+        assert check_iterable(idxs) and check_iterable(layers), "idxs/layers must be iterables"
+        assert len(idxs) == len(layers), "idxs/layers mismatch"
         assert len(layers) == len(eigenvalues), "eigenvalues mismatch"
         assert len(layers) == len(eigenvectors), "eigenvectors mismatch"
-        device = get_device(x)
+
         hidden_inputs_dict = {}
         hooks = []
         org_forward_methods = {}
+
         def get_input(name):
             def input_hook(module, input, output):
                 hidden_inputs_dict[name] = input
             return input_hook
-        for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
+
+        for idx_layer, (nm, lyr) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
-                idx_for_layer = layers.index(idx_layer)
-                dropout_idx = idxs[idx_for_layer]
-                dropout_evec = remove_by_idx(eigenvectors[idx_for_layer].to(device), dropout_idx, 1)
-                dropout_eval = remove_by_idx(eigenvalues[idx_for_layer].to(device), dropout_idx, 0)
-                dropout_correction = torch.sqrt(torch.sum(eigenvalues[idx_for_layer]) / torch.sum(dropout_eval))
-                kwargs = dict(subspace=dropout_evec, correction=dropout_correction)
-                self._forward_subspace(name, layer, hidden_inputs_dict, hooks, org_forward_methods, **kwargs)
+                i_lyr = layers.index(idx_layer)
+                d_idx = idxs[i_lyr]
+                dropout_evec = remove_by_idx(eigenvectors[i_lyr].to(device), d_idx, 1)
+                dropout_eval = remove_by_idx(eigenvalues[i_lyr].to(device), d_idx, 0)
+                corr = torch.sqrt(torch.sum(eigenvalues[i_lyr]) / torch.sum(dropout_eval))
+                kwargs = dict(subspace=dropout_evec, correction=corr)
+                self._forward_subspace(nm, lyr, hidden_inputs_dict, hooks, org_forward_methods, **kwargs)
             else:
-                hooks.append(layer.register_backward_hook(get_input(name)))
+                hooks.append(lyr.register_backward_hook(get_input(nm)))
+
         x = self.base_model(x)
-        for hook in hooks:
-            hook.remove()
-        for name, layer_ in zip(self.alignment_names, self.alignment_layers):
-            if name in org_forward_methods:
-                layer_.forward = org_forward_methods[name]
-        assert self.num_layers() == len(hidden_inputs_dict), f"number of inputs {len(hidden_inputs_dict)} vs alignment layers {self.num_layers()}"
-        hidden_inputs = [hidden_inputs_dict[name] for name in self.alignment_names]
-        return x, hidden_inputs
+        for hk in hooks:
+            hk.remove()
+        for nm, lyr_ in zip(self.alignment_names, self.alignment_layers):
+            if nm in org_forward_methods:
+                lyr_.forward = org_forward_methods[nm]
+        assert self.num_layers() == len(hidden_inputs_dict), "mismatch in alignment layers vs. outputs"
+        hidden_outputs = [hidden_inputs_dict[n] for n in self.alignment_names]
+        return x, hidden_outputs
 
     def _forward_subspace(self, name, layer, hidden_inputs_dict, hooks, org_forward_methods, subspace=None, correction=None):
-        if isinstance(layer, torch.nn.Conv2d):
-            self._forward_subspace_convolutional(name, layer, hidden_inputs_dict, org_forward_methods, subspace=subspace, correction=correction)
+        if isinstance(layer, nn.Conv2d):
+            self._forward_subspace_convolutional(name, layer, hidden_inputs_dict, org_forward_methods, subspace, correction)
         else:
-            self._forward_subspace_linear(name, layer, hidden_inputs_dict, hooks, subspace=subspace, correction=correction)
+            self._forward_subspace_linear(name, layer, hidden_inputs_dict, hooks, subspace, correction)
 
     def _forward_subspace_linear(self, name, layer, hidden_inputs_dict, hooks, subspace=None, correction=None):
-        def subsapace_linear(name, hidden_inputs_dict, subspace, correction):
-            def modify_input_hook(module, input_):
-                if subspace is not None:
-                    new_input = torch.matmul(torch.matmul(input_[0], subspace), subspace.T)
-                    if correction is not None:
-                        new_input = new_input * correction
-                    hidden_inputs_dict[name] = new_input
+        """
+        hooking the linear input => multiply by subspace
+        """
+        def subsapace_linear(_name, hidden_dict, subsp, corr):
+            def modify_input_hook(module, in_):
+                if subsp is not None:
+                    new_input = torch.matmul(torch.matmul(in_[0], subsp), subsp.T)
+                    if corr is not None:
+                        new_input = new_input * corr
+                    hidden_dict[_name] = new_input
                     return (new_input,)
-                hidden_inputs_dict[name] = input_[0]
-                return input_
+                hidden_dict[_name] = in_[0]
+                return in_
             return modify_input_hook
-        hooks.append(layer.register_forward_pre_hook(subsapace_linear(name, hidden_inputs_dict, subspace, correction)))
+
+        hooks.append(
+            layer.register_forward_pre_hook(
+                subsapace_linear(name, hidden_inputs_dict, subspace, correction)
+            )
+        )
 
     def _forward_subspace_convolutional(self, name, layer, hidden_inputs_dict, org_forward_methods, subspace=None, correction=None):
-        def _conv_with_subspace(this_layer, x):
-            h_max, w_max = get_maximum_strides(x.size(2), x.size(3), this_layer)
-            layer_prms = get_unfold_params(this_layer)
-            weight_ = this_layer.weight.data
-            weight_ = weight_.view(weight_.size(0), -1)
-            x = torch.nn.functional.unfold(x, this_layer.kernel_size, **layer_prms)
+        """
+        Overwrite the layer's forward to do unfold -> project -> fold -> conv
+        """
+        def _conv_with_subspace(conv_layer, x):
+            h_max, w_max = get_maximum_strides(x.size(2), x.size(3), conv_layer)
+            layer_prms = get_unfold_params(conv_layer)
+            weight_ = conv_layer.weight.data.view(conv_layer.weight.size(0), -1)
+            x = torch.nn.functional.unfold(x, conv_layer.kernel_size, **layer_prms)
             if subspace is not None:
                 x = x.transpose(1, 2)
                 x = torch.matmul(x, subspace.T)
@@ -378,102 +435,36 @@ class AlignmentNetwork(nn.Module):
                 x = x.transpose(1, 2)
                 if correction is not None:
                     x = x * correction
-            input_to_conv = x.clone()
-            hidden_inputs_dict[name] = input_to_conv
+            hidden_inputs_dict[name] = x.clone()
             x = torch.matmul(weight_, x).view(x.size(0), weight_.size(0), h_max, w_max)
-            x = x + this_layer.bias.view(-1, 1, 1)
+            x = x + conv_layer.bias.view(-1, 1, 1)
             return x
+
         if subspace is not None:
             org_forward_methods[name] = layer.forward
             layer.forward = _conv_with_subspace.__get__(layer, nn.Module)
 
     @torch.no_grad()
     def measure_eigenfeatures(self, inputs, with_updates=True, centered=True):
-        weights = self.get_alignment_weights(flatten=True)
-        inputs = self._preprocess_inputs(inputs, compress_convolutional=True)
-        return self._measure_layer_eigenfeatures(inputs, weights, centered=centered, with_updates=with_updates)
+        """
+        For each alignment layer, gather inputs, unfold if conv, measure PCA, etc.
+        """
+        w_flat = self.get_alignment_weights(flatten=True)
+        inp_list = self._preprocess_inputs(self.get_layer_inputs(inputs, precomputed=False), compress_convolutional=True)
+        return self._measure_layer_eigenfeatures(inp_list, w_flat, centered, with_updates)
 
     @torch.no_grad()
-    def measure_class_eigenfeatures(self, inputs, labels, eigenvectors, rms=False, with_updates=True):
-        classes = torch.unique(labels)
-        num_classes = len(classes)
-        idx_to_class = [torch.where(labels == c)[0] for c in classes]
-        num_per_class = [len(ix) for ix in idx_to_class]
-        min_per_class = min(num_per_class)
-        if any(npc > min_per_class for npc in num_per_class):
-            max_per_class = max(num_per_class)
-            if (max_per_class / min_per_class) > 2:
-                warn(f"Number of elements to each class is unequal (min={min_per_class}, max={max_per_class}). Clipping examples.", RuntimeWarning, stacklevel=1)
-            idx_to_class = [ix[:min_per_class] for ix in idx_to_class]
-        idx_to_class = torch.stack(idx_to_class).unsqueeze(1)
-        beta_activity = []
-        inputs = self._preprocess_inputs(inputs, compress_convolutional=False)
-        for inp, evec, layer in zip(inputs, eigenvectors, self.get_alignment_layers()):
-            if isinstance(layer, nn.Conv2d):
-                print("measure_class_eigenfeatures has not integrated new convolutional approach")
-                stride_var = torch.var(inp, dim=1, keepdim=True)
-                projection = torch.matmul(evec.T, inp)
-                projection = weighted_average(projection, stride_var, dim=2)
-                beta_activity.append(projection.T.unsqueeze(0))
-            else:
-                beta_activity.append((inp @ evec).T.unsqueeze(0))
-        beta_by_class = []
-        for betas in beta_activity:
-            expanded_betas = betas.expand(num_classes, -1, -1)
-            gathered = torch.gather(expanded_betas, 2, idx_to_class.expand(-1, betas.size(1), -1))
-            beta_by_class.append(gathered)
-        if rms:
-            beta_by_class = [torch.sqrt(torch.mean(beta**2, dim=2)) for beta in beta_by_class]
-        return beta_by_class
-
     def _measure_layer_eigenfeatures(self, inputs, weights, centered=True, with_updates=True):
         from tqdm import tqdm
-        beta, eigenvalues, eigenvectors = [], [], []
+        beta, eigvals, eigvecs = [], [], []
         zipped = enumerate(zip(inputs, weights))
-        iterate = tqdm(zipped) if with_updates else zipped
-        for ii, (inp, wght) in iterate:
+        loop = tqdm(zipped) if with_updates else zipped
+        for ii, (inp, wght) in loop:
+            # shape => (N, F)
+            # do PCA => shape => (F,F)
             w, v = smart_pca(inp.T, centered=centered)
             wght = wght / torch.norm(wght, dim=1, keepdim=True)
             beta.append(wght.cpu() @ v)
-            eigenvalues.append(w)
-            eigenvectors.append(v)
-        return beta, eigenvalues, eigenvectors
-
-    def _process_collect_activity(self, dataset, train_set=True, with_updates=True, use_training_mode=False):
-        device = get_device(self)
-        training_mode = set_net_mode(self, training=use_training_mode)
-        allinputs = []
-        alllabels = []
-        dataloader = dataset.train_loader if train_set else dataset.test_loader
-        dataloop = tqdm(dataloader) if with_updates else dataloader
-        for batch in dataloop:
-            input_, labels = dataset.unwrap_batch(batch, device=device)
-            layer_inputs = [input_.cpu() for input_ in self.get_layer_inputs(input_, precomputed=False)]
-            allinputs.append(layer_inputs)
-            alllabels.append(labels.cpu())
-        set_net_mode(self, training=training_mode)
-        inputs = [torch.cat([inp[layer] for inp in allinputs], dim=0) for layer in range(self.num_layers())]
-        labels = torch.cat(alllabels, dim=0)
-        return inputs, labels
-
-    @torch.no_grad()
-    def shape_eigenfeatures(self, idx_layers, eigenvalues, eigenvectors, eval_transform):
-        assert all(idx in range(self.num_layers()) for idx in idx_layers), ("idx_layers includes invalid layer indices", f"(provided: {idx_layers}, valid: {list(range(self.num_layers()))})")
-        assert len(idx_layers) == len(eigenvalues), "mismatch in length of idx_layers/eigenvalues"
-        assert len(idx_layers) == len(eigenvectors), "mismatch in length of idx_layers/eigenvectors"
-        device = get_device(self)
-        eigenvalues = [ev.to(device) for ev in eigenvalues]
-        eigenvectors = [evc.to(device) for evc in eigenvectors]
-        weight_shape = [self.get_alignment_weights()[idx].shape for idx in idx_layers]
-        weights = [self.get_alignment_weights(flatten=True)[idx] for idx in idx_layers]
-        norms = [torch.norm(w, dim=1, keepdim=True) for w in weights]
-        weights = [w / torch.norm(w, dim=1, keepdim=True) for w in weights]
-        for idx, evals, evecs, wght, nw, shp in zip(idx_layers, eigenvalues, eigenvectors, weights, norms, weight_shape):
-            eval_keep_fraction = eval_transform(evals)
-            assert type(eval_keep_fraction) == type(evals) and eval_keep_fraction.shape == evals.shape, "eval_transform returned evals with wrong shape/type"
-            proj_matrix = evecs @ torch.diag(eval_keep_fraction) @ evecs.T
-            shaped = wght @ proj_matrix
-            shaped = shaped / torch.norm(shaped, dim=1, keepdim=True)
-            shaped = shaped * nw
-            shaped = torch.reshape(shaped, shp)
-            self.get_alignment_layers()[idx].weight.data = shaped
+            eigvals.append(w)
+            eigvecs.append(v)
+        return beta, eigvals, eigvecs

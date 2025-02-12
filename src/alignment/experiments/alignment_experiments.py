@@ -35,6 +35,9 @@ class GeneralAlignmentExperiment(Experiment):
             ).to(self.device)
             net.cnn_mode = self.args.alignment.cnn_mode
             nets.append(net)
+            for name, layer in net.base_model.named_modules():
+                if hasattr(layer, "weight"):
+                    print(name, layer.weight.shape)
 
         optimizers = [
             optim_cls(net.parameters(), lr=self.args.training.lr, weight_decay=self.args.training.weight_decay)

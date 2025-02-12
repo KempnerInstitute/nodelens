@@ -8,10 +8,7 @@ from alignment.utils import smart_pca, get_device
 class AlignmentMetrics:
     """
     Provides static methods for various alignment metrics,
-    including 'delta_alignment', but NOT 'delta_weights'.
-
-    We also provide optional post-processing helpers if you like,
-    but here we mostly keep them out to let processing code do histograms etc.
+    including 'delta_alignment'.
     """
 
     @staticmethod
@@ -40,9 +37,9 @@ class AlignmentMetrics:
     @staticmethod
     def delta_alignment(net, layer_idx, layer_input):
         """
-        (ADDED or CHANGED) - alignment of (W_current - W_init) with the input's covariance.
+        alignment of (W_current - W_init) with the input's covariance.
         This references net._init_weights for the initial weight.
-        If net._init_weights is absent, it returns zeros.
+        If net._init_weights is absent, returns zeros.
         """
         if not hasattr(net, "_init_weights"):
             weight_diff = torch.zeros_like(net.get_alignment_weights()[layer_idx])
@@ -67,7 +64,7 @@ class AlignmentMetrics:
             return AlignmentMetrics.MI_1(input_, weight_)
         else:
             raise ValueError(f"Unknown alignment method {method}")
-        
+
     @staticmethod
     def patchwise_alignment(inp, w, method="RQ", weigh_by_var=True):
         """
@@ -76,15 +73,8 @@ class AlignmentMetrics:
          - w shape: [outC, F], the flattened filter weights.
          - We compute alignment for each patch’s (B,F) input. 
          - Weighted by patch-level variance across the batch dimension.
-
-        Returns a single alignment value per filter: shape [outC].
         """
         B, F, P = inp.shape
-        # measure variance across B for each patch => shape (F, P)
-        # or if we prefer just one scalar per patch, do var across F AND B. 
-        # But typically we do var across B for each feature dimension, then sum as "information content".
-        # We'll do var across the batch dimension for each feature => shape (F, P).
-        # Then sum over F to get a single patch variance => shape (P,)
         var_patches = torch.var(inp, dim=0, keepdim=False)  # => (F, P)
         patchwise_var = var_patches.sum(dim=0)              # => shape (P,)
 
@@ -92,13 +82,9 @@ class AlignmentMetrics:
         all_patch_vars = []
 
         for p in range(P):
-            # shape => [B, F]
-            patch_data = inp[:, :, p]
-
-            # We'll measure covariance => shape (F, F)
-            cc = torch.cov(patch_data.T)
-            # alignment => shape (outC,)
-            num_ = torch.sum(torch.matmul(w, cc) * w, dim=1)   # sum_{f} [w_{:,f} * (cc @ w_{:,f})]
+            patch_data = inp[:, :, p]     # shape => [B, F]
+            cc = torch.cov(patch_data.T)  # shape (F, F)
+            num_ = torch.sum(torch.matmul(w, cc) * w, dim=1)
             denom_ = torch.sum(w*w, dim=1)
 
             patch_rq = num_ / denom_
@@ -106,7 +92,7 @@ class AlignmentMetrics:
                 patch_rq = patch_rq / torch.trace(cc)
             patch_weight = patchwise_var[p] if weigh_by_var else 1.0
 
-            all_patch_vals.append(patch_rq * patch_weight)  # shape (outC,)
+            all_patch_vals.append(patch_rq * patch_weight)
             all_patch_vars.append(patch_weight)
 
         total_weight = torch.stack(all_patch_vars).sum()
@@ -122,20 +108,31 @@ class AlignmentMetrics:
     def measure_methods(net, images, methods, precomputed=True):
         """
         For each layer in 'net', produce a dict {method -> tensor}.
+        1) get_layer_inputs
+        2) preprocess => unfold or patchwise
+        3) flatten weights
+        4) measure alignment or patchwise alignment
         """
-        layer_inputs = net.get_layer_inputs(images, precomputed=precomputed)
+        # 1) Get raw inputs
+        raw_inputs = net.get_layer_inputs(images, precomputed=precomputed)
+        # 2) Unfold or flatten them
+        preprocessed = net._preprocess_inputs(raw_inputs, compress_convolutional=True)
+        # 3) Flatten weights
         layer_weights = net.get_alignment_weights(flatten=True)
 
         results_per_layer = []
-        for layer_idx, (inp, wgt) in enumerate(zip(layer_inputs, layer_weights)):
+        for layer_idx, (inp, wgt) in enumerate(zip(preprocessed, layer_weights)):
             layer_dict = {}
             for m in methods:
-                if m in ("RQ", "MI_0", "MI_1"):
-                    val = AlignmentMetrics.measure(inp, wgt, method=m)
-                elif m == "delta_alignment":
+                if m == "delta_alignment":
                     val = AlignmentMetrics.delta_alignment(net, layer_idx, inp)
                 else:
-                    raise ValueError(f"Unknown method {m}")
+                    # if net says "patchwise" & input is 3D => do patchwise
+                    if net.cnn_mode == "patchwise" and inp.ndim == 3:
+                        val = AlignmentMetrics.patchwise_alignment(inp, wgt, method=m, weigh_by_var=True)
+                    else:
+                        # single-cov
+                        val = AlignmentMetrics.measure(inp, wgt, method=m)
                 layer_dict[m] = val
             results_per_layer.append(layer_dict)
 
@@ -165,7 +162,6 @@ class AlignmentMetrics:
             )
             return counts, edges
         elif method in ["MI_0", "MI_1", "delta_alignment"]:
-            # For delta_alignment we do not define a random distribution
             return None, None
         else:
             return None, None
@@ -177,26 +173,25 @@ def alignment(input, weight, method="alignment", relative=True):
     optionally normalized by trace(C).
 
     - input shape can be (N, F) for single-cov approach,
-      or (B, F, patches) if you do "patchwise" in a separate function.
+      or (B, F, patches) if you do patchwise in patchwise_alignment.
     - weight shape (outC, F).
     """
     if input.ndim == 2:
-        if method == "alignment":
-            cc = torch.cov(input.T)  # shape => (F, F)
-        else:
-            cc = smartcorr(input.T)
-        # alignment => shape (outC,)
+        # standard single-cov approach
+        cc = torch.cov(input.T)
         numerator = torch.sum(torch.matmul(weight, cc) * weight, dim=1)
-        denominator = torch.sum(weight*weight, dim=1)
-        rq = numerator / denominator
+        denom = torch.sum(weight * weight, dim=1)
+        rq = numerator / denom
         if method == "alignment" and relative:
             rq = rq / torch.trace(cc)
         return rq
     else:
-        # if user calls this but input has 3 dims, we can either:
-        # (A) flatten anyway => mismatch risk, or
-        # (B) raise an error:
-        raise ValueError(f"alignment() got {input.ndim}-D data. For patchwise CNN, call patchwise_alignment instead.")
+        # user should call patchwise_alignment or do proper flatten
+        raise ValueError(
+            f"alignment() got {input.ndim}-D data. For patchwise CNN, call patchwise_alignment(...). "
+            "For single-cov, ensure input is 2D via net._preprocess_inputs(...)."
+        )
+
 
 @torch.no_grad()
 def expected_alignment_distribution(eigenvalues, relative=True, valid_rotation=True, with_rotation=True, bins=11, num_tests=100):
@@ -232,15 +227,6 @@ def expected_alignment_distribution(eigenvalues, relative=True, valid_rotation=T
 
     counts, bin_edges = np.histogram(align_np, bins=bins, density=True)
     centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    return torch.tensor(counts, dtype=torch.float), torch.tensor(bin_edges, dtype=torch.float), torch.tensor(centers, dtype=torch.float)
-
-
-def smartcorr(input):
-    """
-    Wraps torch.corrcoef but zeros out rows/cols that have zero variance.
-    """
-    idx_zeros = torch.var(input, dim=1) == 0
-    cc = torch.corrcoef(input)
-    cc[idx_zeros, :] = 0
-    cc[:, idx_zeros] = 0
-    return cc
+    return (torch.tensor(counts, dtype=torch.float),
+            torch.tensor(bin_edges, dtype=torch.float),
+            torch.tensor(centers, dtype=torch.float))
