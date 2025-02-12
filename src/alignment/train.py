@@ -126,6 +126,8 @@ def train(nets, optimizers, dataset, **parameters):
                         layer_inps = net.get_layer_inputs(images, precomputed=True)
                         layer_exp_list = []
                         for inp in layer_inps:
+                            if inp.ndim == 4:
+                                inp = inp.flatten(start_dim=1)
                             w, _ = AlignmentMetrics.compute_eigenvalues(inp)
                             method_exp = {}
                             for m in methods:
