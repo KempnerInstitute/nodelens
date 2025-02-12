@@ -67,6 +67,56 @@ class AlignmentMetrics:
             return AlignmentMetrics.MI_1(input_, weight_)
         else:
             raise ValueError(f"Unknown alignment method {method}")
+        
+    @staticmethod
+    def patchwise_alignment(inp, w, method="RQ", weigh_by_var=True):
+        """
+        'Patchwise' alignment for CNN. 
+         - inp shape: [B, F, patches], e.g. B=mini-batch, F=inC*kH*kW, patches=outH*outW
+         - w shape: [outC, F], the flattened filter weights.
+         - We compute alignment for each patch’s (B,F) input. 
+         - Weighted by patch-level variance across the batch dimension.
+
+        Returns a single alignment value per filter: shape [outC].
+        """
+        B, F, P = inp.shape
+        # measure variance across B for each patch => shape (F, P)
+        # or if we prefer just one scalar per patch, do var across F AND B. 
+        # But typically we do var across B for each feature dimension, then sum as "information content".
+        # We'll do var across the batch dimension for each feature => shape (F, P).
+        # Then sum over F to get a single patch variance => shape (P,)
+        var_patches = torch.var(inp, dim=0, keepdim=False)  # => (F, P)
+        patchwise_var = var_patches.sum(dim=0)              # => shape (P,)
+
+        all_patch_vals = []
+        all_patch_vars = []
+
+        for p in range(P):
+            # shape => [B, F]
+            patch_data = inp[:, :, p]
+
+            # We'll measure covariance => shape (F, F)
+            cc = torch.cov(patch_data.T)
+            # alignment => shape (outC,)
+            num_ = torch.sum(torch.matmul(w, cc) * w, dim=1)   # sum_{f} [w_{:,f} * (cc @ w_{:,f})]
+            denom_ = torch.sum(w*w, dim=1)
+
+            patch_rq = num_ / denom_
+            if method == "RQ":
+                patch_rq = patch_rq / torch.trace(cc)
+            patch_weight = patchwise_var[p] if weigh_by_var else 1.0
+
+            all_patch_vals.append(patch_rq * patch_weight)  # shape (outC,)
+            all_patch_vars.append(patch_weight)
+
+        total_weight = torch.stack(all_patch_vars).sum()
+        sum_rq = torch.stack(all_patch_vals, dim=0).sum(dim=0)  # shape => (outC,)
+
+        if total_weight > 0:
+            final_rq = sum_rq / total_weight
+        else:
+            final_rq = sum_rq * 0
+        return final_rq  # shape => (outC,)
 
     @staticmethod
     def measure_methods(net, images, methods, precomputed=True):
@@ -120,31 +170,33 @@ class AlignmentMetrics:
         else:
             return None, None
 
+
 def alignment(input, weight, method="alignment", relative=True):
     """
-    measure alignment (proportion of variance explained)
-    by each weight vector in 'weight' for the input's covariance.
+    measure alignment by computing RQ = (w^T C w) / (w^T w),
+    optionally normalized by trace(C).
+
+    - input shape can be (N, F) for single-cov approach,
+      or (B, F, patches) if you do "patchwise" in a separate function.
+    - weight shape (outC, F).
     """
-    assert method in ("alignment", "similarity"), "method must be 'alignment' or 'similarity'"
-    
-    # --- NEW FIX: flatten input if it has more than 2 dims (e.g. 4D CNN input) ---
-    if input.ndim > 2:
-        # flatten everything except batch dimension
-        # so shape becomes (batch, features)
-        input = input.flatten(start_dim=1)
-    # ---------------------------------------------------------------------------
-
-    if method == "alignment":
-        cc = torch.cov(input.T)
+    if input.ndim == 2:
+        if method == "alignment":
+            cc = torch.cov(input.T)  # shape => (F, F)
+        else:
+            cc = smartcorr(input.T)
+        # alignment => shape (outC,)
+        numerator = torch.sum(torch.matmul(weight, cc) * weight, dim=1)
+        denominator = torch.sum(weight*weight, dim=1)
+        rq = numerator / denominator
+        if method == "alignment" and relative:
+            rq = rq / torch.trace(cc)
+        return rq
     else:
-        cc = smartcorr(input.T)
-
-    print(cc.shape, weight.shape)
-    rq = torch.sum(torch.matmul(weight, cc) * weight, axis=1) / torch.sum(weight * weight, axis=1)
-    if relative:
-        # proportion of variance explained
-        return rq / torch.trace(cc)
-    return rq
+        # if user calls this but input has 3 dims, we can either:
+        # (A) flatten anyway => mismatch risk, or
+        # (B) raise an error:
+        raise ValueError(f"alignment() got {input.ndim}-D data. For patchwise CNN, call patchwise_alignment instead.")
 
 @torch.no_grad()
 def expected_alignment_distribution(eigenvalues, relative=True, valid_rotation=True, with_rotation=True, bins=11, num_tests=100):
