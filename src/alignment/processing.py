@@ -62,6 +62,32 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     return train_results, test_results
 
 
+def test_networks(exp, nets, dataset):
+    """
+    A simple wrapper to test networks when do_train=False.
+
+    Calls train.test(...) behind the scenes with alignment parameters from exp.args.
+    """
+    do_align = exp.args.alignment.do_alignment
+    methods = exp.args.alignment.methods
+    freq = exp.args.alignment.frequency
+
+    # build param dict for train.test
+    test_params = dict(
+        train_set=False,
+        alignment=do_align,
+        methods=methods,
+        frequency=freq,
+        measure_expected=exp.args.alignment.measure_expected,
+        bins=exp.args.alignment.bins,
+        results=None,
+        verbose=True
+    )
+    print("testing networks (no training)...")
+    test_results = train.test(nets, dataset, **test_params)
+    return test_results
+
+
 @test_nets
 @torch.no_grad()
 def progressive_dropout(nets, dataset, alignment=None, **parameters):
@@ -185,12 +211,6 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 def get_dropout_indices(idx_alignment, fraction):
     """
     convenience method for getting a fraction of dropout indices from each layer
-
-    idx_alignment should be a list of the indices of alignment (sorted from lowest to highest)
-    where len(idx_alignment)=num_layers_per_network and each element is a tensor such that
-    idx_alignment[0].shape=(num_nets, num_nodes_per_layer)
-
-    returns a fraction of indices to drop of highest, lowest, and random alignment
     """
     num_nets = idx_alignment[0].size(0)
     num_nodes = [idx.size(1) for idx in idx_alignment]
@@ -202,8 +222,6 @@ def get_dropout_indices(idx_alignment, fraction):
         for nodes, drop in zip(num_nodes, num_drop)
     ]
     return idx_high, idx_low, idx_rand
-
-
 
 
 def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
@@ -251,7 +269,8 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
         class_betas=class_betas,
         class_names=class_names,
     )
-    
+
+
 @test_nets
 @torch.no_grad()
 def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
@@ -294,15 +313,10 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         num_batches += 1
 
         for dropidx, fraction in enumerate(drop_fraction):
-            # Suppose you define a helper for eigen‐drop indices
-            # or adapt your existing "get_dropout_indices"
-            # ...
-            # Then run forward with net.forward_eigenvector_dropout(...)
-            pass
+            pass  # user can implement the logic for dropping eigenvectors
 
     results = {}
     return results
-
 
 def eigenvector_dropout_experiment(exp, nets, dataset, eigen_results, train_set=False):
     """
