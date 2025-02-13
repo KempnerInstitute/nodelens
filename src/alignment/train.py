@@ -91,7 +91,7 @@ def train(nets, optimizers, dataset, **parameters):
                 replicate_acc_counts[idx_rep] += 1
 
             # optional alignment logic
-            if do_align and (batch_idx % freq == 0):
+            if do_align and (batch_idx % freq == 0) and 1==2:
                 align_data = []
                 for net in nets:
                     layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)

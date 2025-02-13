@@ -76,25 +76,27 @@ class GeneralAlignmentExperiment(Experiment):
             train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
         else:
             # skip training, possibly load pre-trained weights if we have them
-            # user code to load:
-            #   for net in nets: net.load_state_dict(torch.load(...))
-            # Then do test if compute_during_inference is true
             train_results = {}
+
+            # Example: if user wants a pretrained AlexNet from torchvision:
+            if self.args.model.name == "AlexNet":
+                import torchvision.models as tvm
+                from torchvision.models import AlexNet_Weights
+                # use the official pretrained weight
+                pretrained_torchvision_alexnet = tvm.alexnet(weights=AlexNet_Weights.IMAGENET1K_V1).to(self.device)
+                # now you'd want to copy weights into your existing net or just reassign nets[0], etc.
+                # This is just an example snippet:
+                nets[0].base_model.load_state_dict(pretrained_torchvision_alexnet.state_dict())
+                nets[0].eval()
+
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
-            test_results = processing.test_networks(self, nets, dataset)  # A hypothetical function
+            # Now call the new function 'processing.test_networks(...)'
+            test_results = processing.test_networks(self, nets, dataset)
 
         # do progressive dropout
         dropout_results, dropout_params = processing.progressive_dropout_experiment(
             self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
         )
-
-        # measure eigenfeatures
-        #eigen_results = processing.measure_eigenfeatures(self, nets, dataset, train_set=False)
-
-        # do eigenvector dropout
-        #evec_dropout_results, evec_dropout_params = processing.eigenvector_dropout(
-        #    self, nets, dataset, eigen_results, train_set=False
-        #)
 
         results = {
             "prms": prms,
@@ -102,14 +104,10 @@ class GeneralAlignmentExperiment(Experiment):
             "test_results": test_results,
             "dropout_results": dropout_results,
             "dropout_parameters": dropout_params,
-        #    "eigen_results": eigen_results,
-        #    "evec_dropout_results": evec_dropout_results,
-        #    "evec_dropout_parameters": evec_dropout_params,
         }
         return results, nets
 
     def plot(self, results):
-        # check plots config toggles
         if self.args.plots.show_loss:
             plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
         if self.args.plots.show_dropout:
@@ -120,16 +118,6 @@ class GeneralAlignmentExperiment(Experiment):
                 results["prms"],
                 dropout_type="nodes",
             )
-        # if self.args.plots.show_eigenfeatures:
-        #     plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
-        # if self.args.plots.show_eig_dropout:
-        #     plotting.plot_dropout_results(
-        #         self,
-        #         results["evec_dropout_results"],
-        #         results["evec_dropout_parameters"],
-        #         results["prms"],
-        #         dropout_type="eigenvectors",
-        #     )
 
     def save_results(self, results):
         self.save_experiment(results)
