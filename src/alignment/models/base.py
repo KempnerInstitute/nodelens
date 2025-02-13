@@ -244,6 +244,16 @@ class AlignmentNetwork(nn.Module):
         For each layer:
           - If it's an nn.Conv2d, do 'unfold' or 'patchwise'
           - Otherwise, fallback to flatten or keep 2D
+          
+        helper method for processing inputs to layers as needed for certain alignment operations
+
+        Operations by layer type
+        ------------------------
+        linear layer:
+            will leave inputs to layers unchanged if input to a feedforward layer
+        convolutional layer:
+            if compress_convolutional=True, will unfold inputs to (batch * num_strides, conv_weight_dim)
+            otherwise, will unfold inputs to (batch, conv_weight_dim, num_strides)
         """
         preprocessed = []
         for input_, layer in zip(inputs_to_layers, self.alignment_layers):
@@ -256,10 +266,14 @@ class AlignmentNetwork(nn.Module):
                     # single-cov approach => shape => [B, F, patches]
                     # => if compress => [B*patches, F]
                     if compress_convolutional:
-                        unfolded = unfolded.transpose(1, 2).contiguous()
+                        #u = unfolded
+                        #unfolded = unfolded.transpose(1, 2).contiguous()
+                        #print('new: ',unfolded.shape)
+                        unfolded = unfolded.transpose(1, 2).contiguous().view(-1, unfolded.size(1))
+                        #print('old: ',unfolded_input.shape)
                         # shape => (B, patches, F)
-                        B, P, F = unfolded.shape
-                        unfolded = unfolded.view(B * P, F)   # => (B*P, F)
+                        #B, P, F = unfolded.shape
+                        #unfolded = unfolded.view(B * P, F)   # => (B*P, F)
                     preprocessed.append(unfolded)
 
                 elif self.cnn_mode == "patchwise":
@@ -278,9 +292,7 @@ class AlignmentNetwork(nn.Module):
                     preprocessed.append(unfolded)
 
             else:
-                # Not a Conv2d => e.g. a linear layer or MLP => flatten if needed
                 if input_.dim() > 2:
-                    # e.g. if shape is (B, ???) we flatten
                     input_ = input_.flatten(start_dim=1)
                 preprocessed.append(input_)
 
