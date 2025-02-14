@@ -28,8 +28,10 @@ def no_grad(no_grad=True):
 def test_nets(func):
     @wraps(func)
     def wrapper(nets, *args, **kwargs):
+        # get original training mode and set to eval
         in_training_mode = [set_net_mode(net, training=False) for net in nets]
         func_outputs = func(nets, *args, **kwargs)
+        # return networks to whatever mode they used to be in
         for train_mode, net in zip(in_training_mode, nets):
             set_net_mode(net, training=train_mode)
         return func_outputs
@@ -38,8 +40,10 @@ def test_nets(func):
 def train_nets(func):
     @wraps(func)
     def wrapper(nets, *args, **kwargs):
+        # get original training mode and set to train
         in_training_mode = [set_net_mode(net, training=True) for net in nets]
         func_outputs = func(nets, *args, **kwargs)
+        # return networks to whatever mode they used to be in
         for train_mode, net in zip(in_training_mode, nets):
             set_net_mode(net, training=train_mode)
         return func_outputs
@@ -138,6 +142,55 @@ def batch_cov(input, centered=True, correction=True):
     if no_batch:
         bcov = bcov.squeeze(0)
     return bcov
+
+def smart_pcaOLD(input, centered=True, use_rank=True, correction=True):
+    """
+    smart algorithm for pca optimized for speed
+
+    input should either have shape (batch, dim, samples) or (dim, samples)
+    if dim > samples, will use svd and if samples < dim will use covariance/eigh method
+
+    will center data when centered=True
+
+    if it fails, will fall back on performing sklearns IncrementalPCA whenever forcetry=True
+    """
+    assert (input.ndim == 2) or (input.ndim == 3), "input should be a matrix or batched matrices"
+    assert isinstance(correction, bool), "correction should be a boolean"
+
+    if input.ndim == 2:
+        no_batch = True
+        input = input.unsqueeze(0)  # create batch dimension for uniform code
+    else:
+        no_batch = False
+
+    _, D, S = input.size()
+    if D > S:
+        # subtract mean if doing centered covariance
+        if centered:
+            input = input - input.mean(dim=2, keepdim=True)
+        # if more dimensions than samples, it's more efficient to run svd
+        v, w, _ = named_transpose([torch.linalg.svd(inp) for inp in input])
+        # convert singular values to eigenvalues
+        w = [ww**2 / (S - 1.0 * correction) for ww in w]
+        # append zeros because svd returns w in R**k where k = min(D, S)
+        w = [torch.concatenate((ww, torch.zeros(D - S))) for ww in w]
+
+    else:
+        # if more samples than dimensions, it's more efficient to run eigh
+        bcov = batch_cov(input, centered=centered, correction=correction)
+        w, v = named_transpose([eigendecomposition(C, use_rank=use_rank) for C in bcov])
+
+    # return to stacked tensor across batch dimension
+    w = torch.stack(w)
+    v = torch.stack(v)
+
+    # if no batch originally provided, squeeze out batch dimension
+    if no_batch:
+        w = w.squeeze(0)
+        v = v.squeeze(0)
+
+    # return eigenvalues and eigenvectors
+    return w, v
 
 def smart_pca(input, centered=True, use_rank=True, correction=True):
     """
@@ -277,10 +330,6 @@ def fast_rank(input):
     if input.size(-2) < input.size(-1):
         input = torch.transpose(input, -2, -1)
     return int(torch.linalg.matrix_rank(input))
-
-# The next line was causing a conflict/circular import or missing module,
-# so we comment it out rather than removing any comment:
-# from alignment.core.utils import check_iterable
 
 def get_maximum_strides(h_input, w_input, layer):
     """
@@ -438,32 +487,39 @@ def compute_stats_by_type(tensor, num_types, dim, method="var"):
         raise ValueError(f"Method ({method}) not recognized.")
     return type_means, type_dev
 
+
 def weighted_average(data, weights, dim, keepdim=False, ignore_nan=False):
     """
-    Weighted average of 'data' along dimension 'dim', 
-    with weighting from 'weights'.
-    
+    take the weighted average of **data** on a certain dimension with **weights**
+
     weights should be a nonnegative vector that broadcasts into data
     avg = sum_i(data_i * weight_i, dim) / sum_i(weight_i, dim)
 
-    # If ignore_nan=True, NaN positions in 'data' are masked out 
-    # by setting weights to NaN in those positions.
+    if ignore_nan=True, (default=False), will ignore nans in weighted average
     """
-    # NOTE: The line below caused errors (non-existent or circular reference),
-    # so we commented it out. We rely on the local check_iterable defined above.
-    # from alignment.core.utils import check_iterable
+    assert data.ndim == weights.ndim, "data and weights must have same number of dimensions"
+    assert torch.all(weights[~torch.isnan(weights)] >= 0), "weights must be nonnegative"
 
     for d in dim if check_iterable(dim) else [dim]:
-        assert data.size(d) == weights.size(d), "size mismatch in dim"
+        assert data.size(d) == weights.size(
+            d
+        ), f"data and weights must have same size in averaging dimensions (data.size({d})={data.size(d)}, (weight.size({d})={weights.size(d)}))"
 
-    sum_fn = torch.nansum if ignore_nan else torch.sum
+    # use normal sum if not ignore nan, otherwise use nansum
+    sum = torch.nansum if ignore_nan else torch.sum
+
+    # make sure nans are in the same place in weights and data for accurate division by total weight
     if ignore_nan:
         weights = weights.expand(data.size())
         weights = torch.masked_fill(weights, torch.isnan(data), torch.nan)
 
-    numerator = sum_fn(data * weights, dim=dim, keepdim=keepdim)
-    denominator = sum_fn(weights, dim=dim, keepdim=keepdim)
+    # numerator & denominator of weighted average
+    numerator = sum(data * weights, dim=dim, keepdim=keepdim)
+    denominator = sum(weights, dim=dim, keepdim=keepdim)
+
+    # return weighted average
     return numerator / denominator
+
 
 def fgsm_attack(image, epsilon, data_grad, transform, sign):
     """update an image with fast-gradient sign method"""

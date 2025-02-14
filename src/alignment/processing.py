@@ -337,3 +337,29 @@ def eigenvector_dropout_experiment(exp, nets, dataset, eigen_results, train_set=
         **evec_params
     )
     return evec_dropout_results, evec_params
+
+
+
+def evaluate_pretrained_model(net, dataset):
+    """
+    Measure test accuracy of a loaded pretrained model on 'dataset.test_loader'.
+    'net' should already be on the correct device and in eval mode.
+    """
+    net.eval()  # ensure we're in eval mode (no dropout, etc.)
+    device = next(net.parameters()).device
+
+    total_correct = 0
+    total_samples = 0
+
+    # Turn off gradient calculations
+    with torch.no_grad():
+        for batch in dataset.test_loader:
+            images, labels = dataset.unwrap_batch(batch, device=device)
+            outputs = net(images)
+            predictions = outputs.argmax(dim=1)
+            total_correct += (predictions == labels).sum().item()
+            total_samples += labels.size(0)
+
+    accuracy = 100.0 * total_correct / total_samples if total_samples > 0 else 0.0
+    print(f"Pretrained Model Accuracy: {accuracy:.2f}%")
+    return accuracy
