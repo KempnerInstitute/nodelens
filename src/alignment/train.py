@@ -15,10 +15,9 @@ def train(nets, optimizers, dataset, **parameters):
     """
     A single function for supervised training:
 
-      - If 'alignment' in parameters is True, measure alignment 
-        for each method, including 'delta_alignment'.
+      - If 'alignment' in parameters is True, measure alignment for each method
       - Build histograms from observed alignment
-      - Build random distribution from PCA for each method
+      - Build random distribution for each method
 
     This returns the updated 'results' dictionary.
     """
