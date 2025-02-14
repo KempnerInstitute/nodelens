@@ -8,6 +8,7 @@ from alignment import processing
 from alignment.config import ExperimentConfig
 from alignment.experiments.experiment import Experiment
 from alignment import plotting
+from alignment.processing import evaluate_pretrained_model
 
 class GeneralAlignmentExperiment(Experiment):
     def get_basename(self):
@@ -90,6 +91,12 @@ class GeneralAlignmentExperiment(Experiment):
                 nets[0].eval()
 
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
+            
+            print("Evaluating downloaded pretrained weights for baseline accuracy...")
+            acc = evaluate_pretrained_model(nets[0], dataset)
+            print("accuracy:", acc)
+
+                    
             # Now call the new function 'processing.test_networks(...)'
             test_results = processing.test_networks(self, nets, dataset)
 
