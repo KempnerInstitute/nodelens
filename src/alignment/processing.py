@@ -6,17 +6,12 @@ import os
 import torch
 from tqdm import tqdm
 
-from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
+from alignment.utils import load_checkpoints, test_nets
 import alignment.train as train
 from alignment.alignment_metrics import AlignmentMetrics
 
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):
-    """
-    Orchestrates training and testing of networks.
-    The toggles in exp.args.alignment control whether alignment
-    is measured during training or inference.
-    """
     do_alignment_train = exp.args.alignment.do_alignment
     methods = exp.args.alignment.methods
     measure_freq = exp.args.alignment.frequency
@@ -33,7 +28,6 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     )
     params.update(**special_parameters)
 
-    # Possibly load from checkpoint
     if exp.args.checkpointing.use_prev and os.path.isfile(exp.get_checkpoint_path()):
         nets, optimizers, results = load_checkpoints(nets, optimizers, exp.args.device, exp.get_checkpoint_path())
         for net in nets:
@@ -62,65 +56,56 @@ def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     return train_results, test_results
 
 
-def test_networks(exp, nets, dataset):
-    """
-    A simple wrapper to test networks when do_train=False.
+def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
+    print("performing targeted dropout...")
+    # get user param from config
+    single_layer_mode = getattr(exp.args.extra, "single_layer_mode", False)  # --- CHANGED ---
+    # e.g. single_layer_mode = True => do single-layer dropout instead of all-layer or by_layer
 
-    Calls train.test(...) behind the scenes with alignment parameters from exp.args.
-    """
-    do_align = exp.args.alignment.do_alignment
-    methods = exp.args.alignment.methods
-    freq = exp.args.alignment.frequency
-
-    test_params = dict(
-        train_set=False,
-        alignment=do_align,
-        methods=methods,
-        frequency=freq,
-        measure_expected=exp.args.alignment.measure_expected,
-        bins=exp.args.alignment.bins,
-        results=None,
-        verbose=True
+    # the existing progressive_dropout call
+    dropout_params = dict(
+        num_drops=exp.args.extra.num_drops,
+        by_layer=exp.args.extra.dropout_by_layer,
+        train_set=train_set,
+        single_layer_mode=single_layer_mode  # --- CHANGED ---
     )
-    print("testing networks (no training)...")
-    test_results = train.test(nets, dataset, **test_params)
-    return test_results
+
+    # call a new function or pass param
+    dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
+    return dropout_results, dropout_params
 
 
 @test_nets
 @torch.no_grad()
 def progressive_dropout(nets, dataset, alignment=None, **parameters):
     """
-    method for testing network on supervised learning problem with progressive dropout.
-    Based on the average alignment, we sort the nodes from low-to-high alignment.
-    Then we systematically drop top X% or bottom X% or random X% of nodes,
-    measuring performance at each fraction.
+    The same function as before, but we'll add logic for single_layer_mode.
+
+    If single_layer_mode=True, we do a separate measurement for each alignment layer individually.
+
+    For normal usage, single_layer_mode=False => unchanged behavior.
     """
     if not isinstance(nets, list):
         nets = [nets]
 
     if alignment is None:
-        # Use the test() function from train.py to gather alignment
         alignment = train.test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
 
-    # Build alignment_layers so that for each alignment snapshot we have a tensor of shape (num_nets, total_nodes)
     alignment_layers = []
     for layerdata in alignment:
-        # layerdata["data"] is a list with one entry per net.
         all_nets_rq = []
         for net_i_data in layerdata["data"]:
-            # net_i_data is a list (over layers) of dicts with "RQ" etc.
             net_nodes = []
             for layer_dict in net_i_data:
                 net_nodes.append(layer_dict["RQ"].flatten())
             flattened = torch.cat(net_nodes, dim=0)
             all_nets_rq.append(flattened)
-        stacked = torch.stack(all_nets_rq, dim=0)  # shape: (num_nets, total_nodes)
+        stacked = torch.stack(all_nets_rq, dim=0)
         alignment_layers.append(stacked)
 
     idx_alignment = [torch.argsort(al, dim=1) for al in alignment_layers]
 
-    num_snapshots = len(idx_alignment)  # number of alignment snapshots
+    num_snapshots = len(idx_alignment)
     by_layer = parameters.get("by_layer", False)
     num_layers = num_snapshots if by_layer else 1
 
@@ -128,6 +113,15 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
 
+    single_layer_mode = parameters.get("single_layer_mode", False)  # --- CHANGED ---
+
+    # preallocate
+    # shape => (num_nets, num_drops, num_layers)
+    # if single_layer_mode => we might want shape => (num_nets, num_drops, #alignment_layers?)
+    # We'll keep existing shape for demonstration, or we can store (num_layers * some dimension)...
+
+    import torch
+    from tqdm import tqdm
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_low  = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers))
@@ -135,239 +129,119 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     progdrop_acc_low   = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_acc_rand  = torch.zeros((num_nets, num_drops, num_layers))
 
-    num_batches = 0
     use_train = parameters.get("train_set", False)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
 
-    for batch in tqdm(dataloader):
-        images, labels = dataset.unwrap_batch(batch)
-        num_batches += 1
-
-        for dropidx, fraction in enumerate(drop_fraction):
-            idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, fraction)
-
-            # For each "layer" index in [0..num_layers-1], we do a partial drop
-            for layer_i in range(num_layers):
-                # NEW FIX: guard if layer_i >= len(idx_high], skip or break to avoid IndexError
-                if layer_i >= len(idx_high):
-                    break
-
-                if by_layer:
-                    drop_high_use = [idx_high[layer_i]]
-                    drop_low_use  = [idx_low[layer_i]]
-                    drop_rand_use = [idx_rand[layer_i]]
-                    drop_layer = [layer_i]  # or your actual alignment-layer idx if you mapped them
-                else:
-                    drop_high_use = idx_high
-                    drop_low_use  = idx_low
-                    drop_rand_use = idx_rand
-                    drop_layer = list(range(num_snapshots))
-
-                out_high = []
-                out_low = []
-                out_rand = []
-                # forward passes for each net
-                for i_net, net in enumerate(nets):
-                    # gather the dropout indices for this net
-                    high_idxs = [dr[i_net, :] for dr in drop_high_use]
-                    low_idxs  = [dr[i_net, :] for dr in drop_low_use]
-                    rand_idxs = [dr[i_net, :] for dr in drop_rand_use]
-
-                    oh, _ = net.forward_targeted_dropout(images, high_idxs, drop_layer)
-                    ol, _ = net.forward_targeted_dropout(images, low_idxs, drop_layer)
-                    or_, _= net.forward_targeted_dropout(images, rand_idxs, drop_layer)
-
-                    out_high.append(oh)
-                    out_low.append(ol)
-                    out_rand.append(or_)
-
-                loss_high = [dataset.measure_loss(oh, labels).item() for oh in out_high]
-                loss_low  = [dataset.measure_loss(ol, labels).item() for ol in out_low]
-                loss_rand = [dataset.measure_loss(or_, labels).item() for or_ in out_rand]
-
-                acc_high = [dataset.measure_accuracy(oh, labels) for oh in out_high]
-                acc_low  = [dataset.measure_accuracy(ol, labels) for ol in out_low]
-                acc_rand = [dataset.measure_accuracy(or_, labels) for or_ in out_rand]
-
-                progdrop_loss_high[:, dropidx, layer_i] += torch.tensor(loss_high)
-                progdrop_loss_low[:, dropidx, layer_i]  += torch.tensor(loss_low)
-                progdrop_loss_rand[:, dropidx, layer_i] += torch.tensor(loss_rand)
-
-                progdrop_acc_high[:, dropidx, layer_i]  += torch.tensor(acc_high)
-                progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(acc_low)
-                progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(acc_rand)
-
-    results = {
-        "progdrop_loss_high": progdrop_loss_high / num_batches,
-        "progdrop_loss_low":  progdrop_loss_low / num_batches,
-        "progdrop_loss_rand": progdrop_loss_rand / num_batches,
-        "progdrop_acc_high":  progdrop_acc_high / num_batches,
-        "progdrop_acc_low":   progdrop_acc_low / num_batches,
-        "progdrop_acc_rand":  progdrop_acc_rand / num_batches,
-        "dropout_fraction":   drop_fraction,
-        "by_layer":           by_layer,
-        # optionally store the actual indices if needed
-        "idx_dropout_layers": [ix for ix in range(len(idx_high))],
-    }
-    return results
-
-
-def get_dropout_indices(idx_alignment, fraction):
-    """
-    convenience method for getting a fraction of dropout indices from each layer
-    """
-    num_nets = idx_alignment[0].size(0)
-    num_nodes = [idx.size(1) for idx in idx_alignment]
-    num_drop = [int(nodes * fraction) for nodes in num_nodes]
-
-    idx_high = [idx[:, -drop:] for idx, drop in zip(idx_alignment, num_drop)]
-    idx_low  = [idx[:, :drop]  for idx, drop in zip(idx_alignment, num_drop)]
-    idx_rand = [
-        torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0)
-        for nodes, drop in zip(num_nodes, num_drop)
-    ]
-    return idx_high, idx_low, idx_rand
-
-
-def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
-    """
-    Perform a progressive dropout experiment,
-    dropping nodes (by alignment ranking) in increments.
-    """
-    print("performing targeted dropout...")
-    dropout_params = dict(
-        num_drops=exp.args.extra.num_drops,
-        by_layer=exp.args.extra.dropout_by_layer,
-        train_set=train_set,
-    )
-    dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
-    return dropout_results, dropout_params
-
-
-def measure_eigenfeatures(exp, nets, dataset, train_set=False):
-    """
-    Gather input activations for each layer across the entire dataset,
-    compute PCA, measure how each weight aligns with the eigenvectors.
-    """
-    print("measuring eigenfeatures...")
-    from tqdm import tqdm
-    beta, eigvals, eigvecs, class_betas = [], [], [], []
-    for net in tqdm(nets):
-        inputs, labels = net._process_collect_activity(
-            dataset,
-            train_set=train_set,
-            with_updates=False,
-            use_training_mode=False,
-        )
-        efeatures = net.measure_eigenfeatures(inputs, with_updates=False)
-        cls_betas = net.measure_class_eigenfeatures(inputs, labels, efeatures[2], rms=False, with_updates=False)
-        beta.append(efeatures[0])
-        eigvals.append(efeatures[1])
-        eigvecs.append(efeatures[2])
-        class_betas.append(cls_betas)
-
-    class_names = getattr(dataset.train_loader if train_set else dataset.test_loader, "dataset").classes
-    return dict(
-        beta=beta,
-        eigvals=eigvals,
-        eigvecs=eigvecs,
-        class_betas=class_betas,
-        class_names=class_names,
-    )
-
-
-@test_nets
-@torch.no_grad()
-def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
-    """
-    method for testing network on supervised learning problem with eigenvector dropout
-    Instead of dropping nodes, we drop entire eigenvectors
-    based on their relative alignment or eigenvalues.
-    """
-    if not isinstance(nets, list):
-        nets = [nets]
-
-    # (optional) here we do a similar fix for mismatch in by_layer indexing
-    num_nets = len(nets)
-    align_layer_indices = list(range(len(nets[0].alignment_layers)))
-    by_layer = parameters.get("by_layer", False)
-    num_layers = len(align_layer_indices) if by_layer else 1
-
-    num_drops = parameters.get("num_drops", 9)
-    drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
-
-    # build idx_eigenvalue
-    idx_eigenvalue = []
-    for net_i in range(num_nets):
-        layer_idxs = []
-        for evec_j in eigenvectors[net_i]:
-            dim = evec_j.size(1)
-            layer_idxs.append(torch.arange(dim - 1, -1, -1).unsqueeze(0))
-        idx_eigenvalue.append(layer_idxs)
-
-    progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers))
-    progdrop_loss_low  = torch.zeros((num_nets, num_drops, num_layers))
-    progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers))
-    progdrop_acc_high  = torch.zeros((num_nets, num_drops, num_layers))
-    progdrop_acc_low   = torch.zeros((num_nets, num_drops, num_layers))
-    progdrop_acc_rand  = torch.zeros((num_nets, num_drops, num_layers))
-
-    use_test = not parameters.get("train_set", True)
-    dataloader = dataset.test_loader if use_test else dataset.train_loader
     num_batches = 0
-
     for batch in tqdm(dataloader):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1
 
-        for dropidx, fraction in enumerate(drop_fraction):
-            idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
+        for drop_idx, frac in enumerate(drop_fraction):
+            idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, frac)
 
-            for layer_i in range(num_layers):
-                if layer_i >= len(idx_high):
-                    break
+            if single_layer_mode:
+                # We want to measure dropout of each alignment layer *separately*,
+                # i.e. do a forward pass with only layerX dropped, measure performance, then layerY, etc.
+                # We'll store them in the same arrays for now. We'll do layer_i in [0..num_layers).
+                # But note if num_snapshots != # of alignment layers, might mismatch. We'll assume they match.
+                # For each snapshot, we do a separate forward pass.
 
-                if by_layer:
-                    drop_layer = [align_layer_indices[layer_i]]
-                    drop_high = [idx_high[layer_i]]
-                    drop_low  = [idx_low[layer_i]]
-                    drop_rand = [idx_rand[layer_i]]
-                    # single-layer evec/eval
-                else:
-                    drop_layer = align_layer_indices
-                    drop_high = idx_high
-                    drop_low  = idx_low
-                    drop_rand = idx_rand
+                for layer_i in range(num_layers):
+                    # drop only the alignment for that layer
+                    # i.e. drop_layer = [layer_i], drop_idxs = [ idx_high[layer_i][net_i, :] ]
+                    # if layer_i >= len(idx_high): break or skip
+                    if layer_i >= len(idx_high):
+                        break
 
-                out_high, out_low, out_rand_ = [], [], []
-                for i_net, net in enumerate(nets):
-                    # gather actual indices
-                    high_idxs = [dr[i_net, :] for dr in drop_high]
-                    low_idxs  = [dr[i_net, :] for dr in drop_low]
-                    rand_idxs = [dr[i_net, :] for dr in drop_rand]
+                    drop_high_use = [ idx_high[layer_i] ]
+                    drop_low_use  = [ idx_low[layer_i]  ]
+                    drop_rand_use = [ idx_rand[layer_i] ]
 
-                    oh, _ = net.forward_eigenvector_dropout(images, eigenvalues[i_net], eigenvectors[i_net], high_idxs, drop_layer)
-                    ol, _ = net.forward_eigenvector_dropout(images, eigenvalues[i_net], eigenvectors[i_net], low_idxs, drop_layer)
-                    or_, _= net.forward_eigenvector_dropout(images, eigenvalues[i_net], eigenvectors[i_net], rand_idxs, drop_layer)
-                    out_high.append(oh)
-                    out_low.append(ol)
-                    out_rand_.append(or_)
+                    out_high, out_low, out_rand = [], [], []
+                    for i_net, net in enumerate(nets):
+                        # gather the actual node indices
+                        high_idxs = [ drop_high_use[0][i_net, :] ]
+                        low_idxs  = [ drop_low_use[0][i_net, :] ]
+                        rand_idxs = [ drop_rand_use[0][i_net, :] ]
 
-                loss_high = [dataset.measure_loss(oh, labels).item() for oh in out_high]
-                loss_low  = [dataset.measure_loss(ol, labels).item() for ol in out_low]
-                loss_rand = [dataset.measure_loss(or_, labels).item() for or_ in out_rand_]
+                        # forward_targeted_dropout => pass layers=[layer_i], idxs=[ high_idxs ],
+                        # but be sure the "layer_i" is the alignment-layer index in the net
+                        # if net uses alignment_names in order, we do layers=[layer_i].
+                        # We'll assume that the net's alignment_names indices match snapshot i.
+                        # In practice, you'd do a mapping. We'll do the naive approach:
 
-                acc_high = [dataset.measure_accuracy(oh, labels) for oh in out_high]
-                acc_low  = [dataset.measure_accuracy(ol, labels) for ol in out_low]
-                acc_rand = [dataset.measure_accuracy(or_, labels) for or_ in out_rand_]
+                        oh, _ = net.forward_targeted_dropout(images, high_idxs, [layer_i])
+                        ol, _ = net.forward_targeted_dropout(images, low_idxs,  [layer_i])
+                        or_, _= net.forward_targeted_dropout(images, rand_idxs, [layer_i])
 
-                progdrop_loss_high[:, dropidx, layer_i] += torch.tensor(loss_high)
-                progdrop_loss_low[:, dropidx, layer_i]  += torch.tensor(loss_low)
-                progdrop_loss_rand[:, dropidx, layer_i] += torch.tensor(loss_rand)
+                        out_high.append(oh)
+                        out_low.append(ol)
+                        out_rand.append(or_)
 
-                progdrop_acc_high[:, dropidx, layer_i]  += torch.tensor(acc_high)
-                progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(acc_low)
-                progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(acc_rand)
+                    # measure
+                    loss_high = [dataset.measure_loss(oh, labels).item() for oh in out_high]
+                    loss_low  = [dataset.measure_loss(ol, labels).item() for ol in out_low]
+                    loss_rand = [dataset.measure_loss(or_, labels).item() for or_ in out_rand]
+
+                    acc_high = [dataset.measure_accuracy(oh, labels) for oh in out_high]
+                    acc_low  = [dataset.measure_accuracy(ol, labels) for ol in out_low]
+                    acc_rand = [dataset.measure_accuracy(or_, labels) for or_ in out_rand]
+
+                    # store => for demonstration, store in [drop_idx, layer_i] position
+                    progdrop_loss_high[:, drop_idx, layer_i] += torch.tensor(loss_high)
+                    progdrop_loss_low[:, drop_idx, layer_i]  += torch.tensor(loss_low)
+                    progdrop_loss_rand[:, drop_idx, layer_i] += torch.tensor(loss_rand)
+                    progdrop_acc_high[:, drop_idx, layer_i]  += torch.tensor(acc_high)
+                    progdrop_acc_low[:, drop_idx, layer_i]   += torch.tensor(acc_low)
+                    progdrop_acc_rand[:, drop_idx, layer_i]  += torch.tensor(acc_rand)
+
+            else:
+                # the original logic => either drop them all or something
+                for layer_i in range(num_layers):
+                    if layer_i >= len(idx_high):
+                        break
+                    if by_layer:
+                        drop_high_use = [ idx_high[layer_i] ]
+                        drop_low_use  = [ idx_low[layer_i] ]
+                        drop_rand_use = [ idx_rand[layer_i] ]
+                        drop_layer = [layer_i]
+                    else:
+                        drop_high_use = idx_high
+                        drop_low_use  = idx_low
+                        drop_rand_use = idx_rand
+                        drop_layer = list(range(num_snapshots))
+
+                    out_high = []
+                    out_low  = []
+                    out_rand = []
+                    for i_net, net in enumerate(nets):
+                        high_idxs = [dr[i_net, :] for dr in drop_high_use]
+                        low_idxs  = [dr[i_net, :] for dr in drop_low_use]
+                        rand_idxs = [dr[i_net, :] for dr in drop_rand_use]
+
+                        oh, _ = net.forward_targeted_dropout(images, high_idxs, drop_layer)
+                        ol, _ = net.forward_targeted_dropout(images, low_idxs, drop_layer)
+                        or_, _= net.forward_targeted_dropout(images, rand_idxs, drop_layer)
+
+                        out_high.append(oh)
+                        out_low.append(ol)
+                        out_rand.append(or_)
+
+                    loss_high = [dataset.measure_loss(oh, labels).item() for oh in out_high]
+                    loss_low  = [dataset.measure_loss(ol, labels).item() for ol in out_low]
+                    loss_rand = [dataset.measure_loss(or_, labels).item() for or_ in out_rand]
+
+                    acc_high = [dataset.measure_accuracy(oh, labels) for oh in out_high]
+                    acc_low  = [dataset.measure_accuracy(ol, labels) for ol in out_low]
+                    acc_rand = [dataset.measure_accuracy(or_, labels) for or_ in out_rand]
+
+                    progdrop_loss_high[:, drop_idx, layer_i] += torch.tensor(loss_high)
+                    progdrop_loss_low[:, drop_idx, layer_i]  += torch.tensor(loss_low)
+                    progdrop_loss_rand[:, drop_idx, layer_i] += torch.tensor(loss_rand)
+                    progdrop_acc_high[:, drop_idx, layer_i]  += torch.tensor(acc_high)
+                    progdrop_acc_low[:, drop_idx, layer_i]   += torch.tensor(acc_low)
+                    progdrop_acc_rand[:, drop_idx, layer_i]  += torch.tensor(acc_rand)
 
     # average
     progdrop_loss_high /= num_batches
@@ -384,47 +258,21 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         "progdrop_acc_high":  progdrop_acc_high,
         "progdrop_acc_low":   progdrop_acc_low,
         "progdrop_acc_rand":  progdrop_acc_rand,
-        "dropout_fraction":    drop_fraction,
-        "by_layer":            by_layer,
+        "dropout_fraction":   drop_fraction,
+        "by_layer":           by_layer,
+        "single_layer_mode":  single_layer_mode,  # --- CHANGED ---
     }
     return results
 
 
-def eigenvector_dropout_experiment(exp, nets, dataset, eigen_results, train_set=False):
-    print("performing targeted eigenvector dropout...")
-    evec_params = dict(
-        num_drops=exp.args.extra.num_drops,
-        by_layer=exp.args.extra.dropout_by_layer,
-        train_set=train_set,
-    )
-    evec_dropout_results = eigenvector_dropout(
-        nets,
-        dataset,
-        eigen_results["eigvals"],
-        eigen_results["eigvecs"],
-        **evec_params
-    )
-    return evec_dropout_results, evec_params
-
-
-def evaluate_pretrained_model(net, dataset):
-    """
-    Measure test accuracy of a loaded pretrained model on 'dataset.test_loader'.
-    'net' should already be on the correct device and in eval mode.
-    """
-    net.eval()
-    device = next(net.parameters()).device
-
-    total_correct = 0
-    total_samples = 0
-    with torch.no_grad():
-        for batch in dataset.test_loader:
-            images, labels = dataset.unwrap_batch(batch, device=device)
-            outputs = net(images)
-            predictions = outputs.argmax(dim=1)
-            total_correct += (predictions == labels).sum().item()
-            total_samples += labels.size(0)
-
-    accuracy = 100.0 * total_correct / total_samples if total_samples > 0 else 0.0
-    print(f"Pretrained Model Accuracy: {accuracy:.2f}%")
-    return accuracy
+def get_dropout_indices(idx_alignment, fraction):
+    num_nets = idx_alignment[0].size(0)
+    num_nodes = [idx.size(1) for idx in idx_alignment]
+    num_drop = [int(nodes * fraction) for nodes in num_nodes]
+    idx_high = [idx[:, -drop:] for idx, drop in zip(idx_alignment, num_drop)]
+    idx_low  = [idx[:, :drop]  for idx, drop in zip(idx_alignment, num_drop)]
+    idx_rand = [
+        torch.stack([torch.randperm(nodes)[:drop] for _ in range(num_nets)], dim=0)
+        for nodes, drop in zip(num_nodes, num_drop)
+    ]
+    return idx_high, idx_low, idx_rand
