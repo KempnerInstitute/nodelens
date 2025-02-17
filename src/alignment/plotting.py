@@ -228,19 +228,18 @@ def plot_train_results(exp, train_results, test_results, prms):
                 ax2[0, layer].set_title(f"Layer {layer} - {method_key}")
             exp.plot_ready(f"train_alignment_{method_key}")
 
-
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
     """
-    Visualize progressive dropout experiment results (loss & accuracy),
+    Visualize progressive dropout experiment results (loss & accuracy)
     comparing dropout from highest alignment, lowest alignment, or random nodes.
 
-    We have two major enhancements:
-      1) Even if by_layer=False, do NOT lump all layers into one dimension—show each 
-         (layer × snapshot) dimension. (So effectively, each dimension on the Y-axis 
-         could be "layer or snapshot".)
-      2) The subplot title clarifies which dimension is being plotted. If we can 
-         match it to an actual alignment layer name, we do so. Otherwise, we say 
-         "Snapshot i". Also we show the final epoch from 'train_results' if it exists.
+    We assume the shape of each dropout array is (N, D, E, L):
+      - N: # replicates (networks)
+      - D: # of dropout fractions
+      - E: # of epochs or snapshots
+      - L: # of layers
+
+    We'll produce subplots of size (E x L) for each metric (loss, accuracy).
     """
 
     import torch
@@ -256,174 +255,183 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     msize = 10
     figdim = 3
 
-    # Grab the arrays from 'dropout_results'
-    # shape => (num_nets, num_drops, num_dimensions)
-    # where 'num_dimensions' typically is #=number_of_layers if by_layer, 
-    # or #=some combined dimension (#snapshots) otherwise
-    progdrop_loss_high = dropout_results["progdrop_loss_high"]  # shape: (N, drops, D)
-    progdrop_loss_low  = dropout_results["progdrop_loss_low"]
-    progdrop_loss_rand = dropout_results["progdrop_loss_rand"]
-    progdrop_acc_high  = dropout_results["progdrop_acc_high"]
-    progdrop_acc_low   = dropout_results["progdrop_acc_low"]
-    progdrop_acc_rand  = dropout_results["progdrop_acc_rand"]
+    loss_high = dropout_results["progdrop_loss_high"]  # (N, D, E, L)
+    loss_low  = dropout_results["progdrop_loss_low"]
+    loss_rand = dropout_results["progdrop_loss_rand"]
+    acc_high  = dropout_results["progdrop_acc_high"]
+    acc_low   = dropout_results["progdrop_acc_low"]
+    acc_rand  = dropout_results["progdrop_acc_rand"]
 
-    dropout_fraction = dropout_results["dropout_fraction"]
+    dropout_fraction = dropout_results["dropout_fraction"]  # shape => (D,)
     by_layer = dropout_results["by_layer"]
     extra_name = "by_layer" if by_layer else "all_layers"
     extra_name += dropout_type
 
-    # Gather final epoch from train_results if possible
-    final_epoch = None
-    if (
-        "train_results" in exp.__dict__
-        and "loss" in exp.train_results
-        and exp.train_results["loss"].dim() == 2
-    ):
-        # shape => (replicates, epochs)
-        final_epoch = exp.train_results["loss"].size(1) - 1
-    else:
-        # fallback: if user only wants to read from exp.args
-        if hasattr(exp.args, "training") and hasattr(exp.args.training, "epochs"):
-            final_epoch = exp.args.training.epochs - 1
+    # shape => (N, D, E, L)
+    # We'll measure stats over N => shape => (num_types, D, E, L) after compute_stats_by_type
+    # so final shape => (num_types, D, E, L).
+    print("Computing dropout stats...")
 
-    # If the code is inside alignment_experiments, you might not have exp.nets directly,
-    # but if you do:
-    layer_names = None
-    if hasattr(exp, "nets") and exp.nets and hasattr(exp.nets[0], "alignment_names"):
-        layer_names = exp.nets[0].alignment_names
-    # However, 'num_dimensions' might be > len(layer_names) if you have combined 
-    # snapshots. We'll handle that below.
+    # shape => (num_types, D, E, L)
+    mean_loss_high, se_loss_high = compute_stats_by_type(loss_high, num_types=num_types, dim=0, method="se")
+    mean_loss_low,  se_loss_low  = compute_stats_by_type(loss_low,  num_types=num_types, dim=0, method="se")
+    mean_loss_rand, se_loss_rand= compute_stats_by_type(loss_rand, num_types=num_types, dim=0, method="se")
 
-    # measure stats
-    print("measuring statistics on dropout analysis...")
-    loss_mean_high, loss_se_high = compute_stats_by_type(progdrop_loss_high, num_types=num_types, dim=0, method="se")
-    loss_mean_low,  loss_se_low  = compute_stats_by_type(progdrop_loss_low,  num_types=num_types, dim=0, method="se")
-    loss_mean_rand, loss_se_rand = compute_stats_by_type(progdrop_loss_rand, num_types=num_types, dim=0, method="se")
+    mean_acc_high,  se_acc_high = compute_stats_by_type(acc_high,  num_types=num_types, dim=0, method="se")
+    mean_acc_low,   se_acc_low  = compute_stats_by_type(acc_low,   num_types=num_types, dim=0, method="se")
+    mean_acc_rand,  se_acc_rand= compute_stats_by_type(acc_rand,   num_types=num_types, dim=0, method="se")
 
-    acc_mean_high, acc_se_high = compute_stats_by_type(progdrop_acc_high, num_types=num_types, dim=0, method="se")
-    acc_mean_low,  acc_se_low  = compute_stats_by_type(progdrop_acc_low,  num_types=num_types, dim=0, method="se")
-    acc_mean_rand, acc_se_rand = compute_stats_by_type(progdrop_acc_rand, num_types=num_types, dim=0, method="se")
+    # Now shape => (num_types, D, E, L). We'll parse out E, L:
+    _, _, num_epochs, num_layers = mean_loss_high.shape
 
-    # Now: shape => (num_types, num_drops, num_dimensions)
-    # We want to get 'num_dimensions' => e.g. number of layers or #snapshots or #=layer×snapshot
-    num_dimensions = loss_mean_high.shape[2]
+    # We'll produce (num_epochs x num_layers) subplots for each metric.
+    # But we also have 'num_types' separate lines in each subplot (one per val).
+    # For each subplot => we have 3 lines: from high/low/rand
 
-    loss_mean = [loss_mean_high, loss_mean_low, loss_mean_rand]
-    loss_se   = [loss_se_high,  loss_se_low,  loss_se_rand]
-    acc_mean  = [acc_mean_high, acc_mean_low, acc_mean_rand]
-    acc_se    = [acc_se_high,   acc_se_low,   acc_se_rand]
-
-    # 1) Plot the Loss
-    fig, ax = plt.subplots(
-        num_dimensions,
-        num_types,
-        figsize=(num_types * figdim, num_dimensions * figdim),
+    # 1) Plot Loss
+    fig_loss, ax_loss = plt.subplots(
+        num_epochs, num_layers,
+        figsize=(num_layers * figdim, num_epochs * figdim),
         sharex=True,
         sharey=True,
         layout="constrained",
         squeeze=False
     )
-    ax = np.reshape(ax, (num_dimensions, num_types))
+    ax_loss = np.reshape(ax_loss, (num_epochs, num_layers))
 
-    names = ["From high", "From low", "Random"]
+    lines = ["From high", "From low", "Random"]
+    print("Plotting dropout: loss...")
 
-    print("plotting dropout results (loss)...")
-    for idx_type, label in enumerate(labels):
-        for dimension_i in range(num_dimensions):
-            # Build a better title:
-            if layer_names and dimension_i < len(layer_names):
-                layer_str = layer_names[dimension_i]
+    # Try to get alignment layer names from the first net if available
+    layer_names = None
+    try:
+        layer_names = exp.nets[0].alignment_names
+    except:
+        pass
+
+    # We'll do outer loops over epochs & layers => (row=epoch, col=layer).
+    for eidx in range(num_epochs):
+        for lidx in range(num_layers):
+            # Build a custom title
+            # If we have layer_names & the index is valid, use it.
+            # Otherwise say "Layer lidx".
+            if layer_names and lidx < len(layer_names):
+                layer_str = layer_names[lidx]
             else:
-                layer_str = f"Dimension {dimension_i}"
+                layer_str = f"Layer {lidx}"
 
-            # If final_epoch is not None:
-            if final_epoch is not None:
-                custom_title = f"{label}\n{layer_str} (Epoch={final_epoch})"
-            else:
-                custom_title = f"{label}\n{layer_str}"
+            # We'll call it "Epoch eidx" for the epoch dimension
+            # But you can rename if you prefer e.g. "Snapshot eidx"
+            subplot_title = f"Epoch {eidx}, {layer_str}"
 
-            # We have 3 lines (From high, from low, from random)
-            for iexp, dropout_kind in enumerate(names):
-                cmn = loss_mean[iexp][idx_type, :, dimension_i]
-                cse = loss_se[iexp][idx_type, :, dimension_i]
-                ax[dimension_i, idx_type].plot(
-                    dropout_fraction, cmn,
-                    color=cmap(iexp),
-                    marker=".",
-                    markersize=msize,
-                    label=dropout_kind
-                )
-                ax[dimension_i, idx_type].fill_between(
-                    dropout_fraction,
-                    cmn + cse,
-                    cmn - cse,
-                    color=(cmap(iexp), alpha)
-                )
+            # We'll plot each 'val' in labels => (num_types)
+            # Each type has 3 lines => from high/low/rand
+            # We'll have e.g. mean_loss_high.shape => (num_types, D, E, L)
+            # We'll do a loop over each type => index=ty
+            for ty in range(num_types):
+                label_str = labels[ty]
+                # We can combine them into the title or keep separate.
+                # We'll just do multiple lines in one axis for different models.
 
-            ax[dimension_i, idx_type].set_title(custom_title)
-            if dimension_i == num_dimensions - 1:
-                ax[dimension_i, idx_type].set_xlabel("Dropout Fraction")
-                ax[dimension_i, idx_type].set_xlim(0, 1)
-            if idx_type == 0:
-                ax[dimension_i, idx_type].set_ylabel("Loss w/ Dropout")
-            ax[dimension_i, idx_type].legend(loc="best")
+                # Actually, we have 3 lines => from high, from low, from random
+                # So let's do a small inner loop
+                for i_line, line_name in enumerate(lines):
+                    if line_name == "From high":
+                        cmn = mean_loss_high[ty, :, eidx, lidx]  # shape => (D,) across dropout fractions
+                        cse = se_loss_high[ty, :, eidx, lidx]
+                    elif line_name == "From low":
+                        cmn = mean_loss_low[ty, :, eidx, lidx]
+                        cse = se_loss_low[ty, :, eidx, lidx]
+                    else: # "Random"
+                        cmn = mean_loss_rand[ty, :, eidx, lidx]
+                        cse = se_loss_rand[ty, :, eidx, lidx]
+
+                    ax_loss[eidx, lidx].plot(
+                        dropout_fraction,
+                        cmn,
+                        color=cmap(i_line),  # pick color by the line index
+                        marker=".",
+                        markersize=msize,
+                        label=f"{label_str} ({line_name})"
+                    )
+                    ax_loss[eidx, lidx].fill_between(
+                        dropout_fraction,
+                        cmn + cse,
+                        cmn - cse,
+                        color=(cmap(i_line), alpha)
+                    )
+
+            # Title, etc.
+            ax_loss[eidx, lidx].set_title(subplot_title)
+            if eidx == num_epochs - 1:
+                ax_loss[eidx, lidx].set_xlabel("Dropout Fraction")
+                ax_loss[eidx, lidx].set_xlim(0, 1)
+            if lidx == 0:
+                ax_loss[eidx, lidx].set_ylabel("Loss w/ Dropout")
+            ax_loss[eidx, lidx].legend(loc="best")
 
     exp.plot_ready("prog_dropout_" + extra_name + "_loss")
 
-    # 2) Plot the Accuracy
-    fig, ax = plt.subplots(
-        num_dimensions,
-        num_types,
-        figsize=(num_types * figdim, num_dimensions * figdim),
+    # 2) Plot Accuracy
+    fig_acc, ax_acc = plt.subplots(
+        num_epochs, num_layers,
+        figsize=(num_layers * figdim, num_epochs * figdim),
         sharex=True,
         sharey=True,
         layout="constrained",
         squeeze=False
     )
-    ax = np.reshape(ax, (num_dimensions, num_types))
+    ax_acc = np.reshape(ax_acc, (num_epochs, num_layers))
 
-    print("plotting dropout results (accuracy)...")
-    for idx_type, label in enumerate(labels):
-        for dimension_i in range(num_dimensions):
-            if layer_names and dimension_i < len(layer_names):
-                layer_str = layer_names[dimension_i]
+    print("Plotting dropout: accuracy...")
+    for eidx in range(num_epochs):
+        for lidx in range(num_layers):
+            if layer_names and lidx < len(layer_names):
+                layer_str = layer_names[lidx]
             else:
-                layer_str = f"Dimension {dimension_i}"
+                layer_str = f"Layer {lidx}"
 
-            if final_epoch is not None:
-                custom_title = f"{label}\n{layer_str} (Epoch={final_epoch})"
-            else:
-                custom_title = f"{label}\n{layer_str}"
+            subplot_title = f"Epoch {eidx}, {layer_str}"
 
-            for iexp, dropout_kind in enumerate(names):
-                cmn = acc_mean[iexp][idx_type, :, dimension_i]
-                cse = acc_se[iexp][idx_type, :, dimension_i]
-                ax[dimension_i, idx_type].plot(
-                    dropout_fraction, cmn,
-                    color=cmap(iexp),
-                    marker=".",
-                    markersize=msize,
-                    label=dropout_kind
-                )
-                ax[dimension_i, idx_type].fill_between(
-                    dropout_fraction,
-                    cmn + cse,
-                    cmn - cse,
-                    color=(cmap(iexp), alpha)
-                )
+            for ty in range(num_types):
+                label_str = labels[ty]
+                for i_line, line_name in enumerate(lines):
+                    if line_name == "From high":
+                        cmn = mean_acc_high[ty, :, eidx, lidx]
+                        cse = se_acc_high[ty, :, eidx, lidx]
+                    elif line_name == "From low":
+                        cmn = mean_acc_low[ty, :, eidx, lidx]
+                        cse = se_acc_low[ty, :, eidx, lidx]
+                    else:  # random
+                        cmn = mean_acc_rand[ty, :, eidx, lidx]
+                        cse = se_acc_rand[ty, :, eidx, lidx]
 
-            ax[dimension_i, idx_type].set_ylim(0, 100)
-            ax[dimension_i, idx_type].set_title(custom_title)
-            if dimension_i == num_dimensions - 1:
-                ax[dimension_i, idx_type].set_xlabel("Dropout Fraction")
-                ax[dimension_i, idx_type].set_xlim(0, 1)
-            if idx_type == 0:
-                ax[dimension_i, idx_type].set_ylabel("Accuracy w/ Dropout")
+                    ax_acc[eidx, lidx].plot(
+                        dropout_fraction,
+                        cmn,
+                        color=cmap(i_line),
+                        marker=".",
+                        markersize=msize,
+                        label=f"{label_str} ({line_name})"
+                    )
+                    ax_acc[eidx, lidx].fill_between(
+                        dropout_fraction,
+                        cmn + cse,
+                        cmn - cse,
+                        color=(cmap(i_line), alpha)
+                    )
 
-            ax[dimension_i, idx_type].legend(loc="best")
+            ax_acc[eidx, lidx].set_ylim(0, 100)
+            ax_acc[eidx, lidx].set_title(subplot_title)
+            if eidx == num_epochs - 1:
+                ax_acc[eidx, lidx].set_xlabel("Dropout Fraction")
+                ax_acc[eidx, lidx].set_xlim(0, 1)
+            if lidx == 0:
+                ax_acc[eidx, lidx].set_ylabel("Accuracy w/ Dropout")
+
+            ax_acc[eidx, lidx].legend(loc="best")
 
     exp.plot_ready("prog_dropout_" + extra_name + "_accuracy")
-
 def plot_eigenfeatures(exp, results, prms):
     """
     method for plotting results related to eigen-analysis (beta, eigenvalues, class_betas).
