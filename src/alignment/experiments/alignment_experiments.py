@@ -36,6 +36,7 @@ class GeneralAlignmentExperiment(Experiment):
             ).to(self.device)
             net.cnn_mode = self.args.alignment.cnn_mode
             nets.append(net)
+
             for name, layer in net.base_model.named_modules():
                 if hasattr(layer, "weight"):
                     print(name, layer.weight.shape)
@@ -70,7 +71,7 @@ class GeneralAlignmentExperiment(Experiment):
     def main(self):
         # create
         nets, optimizers, prms = self.create_networks()
-            
+
         if self.args.training.do_train:
             # do training
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
@@ -91,12 +92,11 @@ class GeneralAlignmentExperiment(Experiment):
                 nets[0].eval()
 
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
-            
+
             print("Evaluating downloaded pretrained weights for baseline accuracy...")
             acc = evaluate_pretrained_model(nets[0], dataset)
             print("accuracy:", acc)
 
-                    
             # Now call the new function 'processing.test_networks(...)'
             test_results = processing.test_networks(self, nets, dataset)
 
@@ -112,6 +112,12 @@ class GeneralAlignmentExperiment(Experiment):
             "dropout_results": dropout_results,
             "dropout_parameters": dropout_params,
         }
+
+        # --- ADDED ---
+        # Store the alignment layer names from the first net so we can label them in the plot:
+        if len(nets) > 0:
+            results["alignment_names"] = nets[0].alignment_names
+
         return results, nets
 
     def plot(self, results):
