@@ -72,7 +72,6 @@ def test_networks(exp, nets, dataset):
     methods = exp.args.alignment.methods
     freq = exp.args.alignment.frequency
 
-    # build param dict for train.test
     test_params = dict(
         train_set=False,
         alignment=do_align,
@@ -96,10 +95,6 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     Based on the average alignment, we sort the nodes from low-to-high alignment.
     Then we systematically drop top X% or bottom X% or random X% of nodes,
     measuring performance at each fraction.
-
-    # If by_layer=True, we do NOT lump all layers into one big vector for each snapshot.
-    # Instead, we keep each layer separate. The final plot then has (#snapshots) sub-lists,
-    # each with (#layers) data for each net, or vice versa.
     """
     if not isinstance(nets, list):
         nets = [nets]
@@ -108,73 +103,39 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         # Use the test() function from train.py to gather alignment
         alignment = train.test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
 
-    # Build alignment_layers so that for each snapshot we have data that is either:
-    # - (lumped) a single vector for all layers (if by_layer=False)
-    # - (separate) a list of layer-level vectors (if by_layer=True)
-    by_layer = parameters.get("by_layer", False)
-
+    # Build alignment_layers so that for each alignment snapshot we have a tensor of shape (num_nets, total_nodes)
     alignment_layers = []
-    for snapshot_data in alignment:
-        # snapshot_data["data"] is a list of length = num_nets
-        # each entry is 'net_i_data': a list (over layers) of dicts with e.g. {"RQ": <tensor>}
-        # e.g. net_i_data[layer_idx]["RQ"] => shape (some # of nodes)
-
+    for layerdata in alignment:
+        # layerdata["data"] is a list with one entry per net.
         all_nets_rq = []
-        for net_i_data in snapshot_data["data"]:
-            if not by_layer:
-                # old logic lumps all layers into one big vector
-                net_nodes = []
-                for layer_dict in net_i_data:
-                    net_nodes.append(layer_dict["RQ"].flatten())
-                flattened = torch.cat(net_nodes, dim=0)  # shape => (sum_of_nodes_across_layers,)
-                # so we store a single list entry for this net => [flattened]
-                all_nets_rq.append([flattened])
-            else:
-                # by_layer=True => keep each layer separate
-                # net_i_data is a list of length = #layers, each has "RQ"
-                # so we store them as a list of shape (#layers) 
-                # each entry shape => e.g. (num_nodes_this_layer,)
-                # no cat across layers:
-                net_nodes_by_layer = []
-                for layer_dict in net_i_data:
-                    net_nodes_by_layer.append(layer_dict["RQ"].flatten())
-                # store that list
-                all_nets_rq.append(net_nodes_by_layer)
+        for net_i_data in layerdata["data"]:
+            # net_i_data is a list (over layers) of dicts with "RQ" etc.
+            net_nodes = []
+            for layer_dict in net_i_data:
+                net_nodes.append(layer_dict["RQ"].flatten())
+            flattened = torch.cat(net_nodes, dim=0)
+            all_nets_rq.append(flattened)
+        stacked = torch.stack(all_nets_rq, dim=0)  # shape: (num_nets, total_nodes)
+        alignment_layers.append(stacked)
 
-        alignment_layers.append(all_nets_rq)
-        # shape => alignment_layers[snapshot][net_idx][ (1) or (#layers) ][...]
+    idx_alignment = [torch.argsort(al, dim=1) for al in alignment_layers]
 
-    # Now we have alignment_layers with shape:
-    # if by_layer=False => alignment_layers[snapshot][net_idx][0] is the big vector
-    # if by_layer=True  => alignment_layers[snapshot][net_idx][layer_idx] is that layer's vector
+    num_snapshots = len(idx_alignment)  # number of alignment snapshots
+    by_layer = parameters.get("by_layer", False)
+    num_layers = num_snapshots if by_layer else 1
 
-    num_snapshots = len(alignment_layers)
     num_nets = len(nets)
-
-    # If by_layer=False, there's effectively 1 "merged layer" per snapshot => we'll do old approach
-    # If by_layer=True, there's #=(actual number of layers) "mini-layers" per snapshot
-    # We need to figure out how many "layer-lists" are in net 0 for each snapshot:
-    sample_net_0 = alignment_layers[0][0]  # e.g. net_0_data for snapshot=0
-    num_layers_per_net = len(sample_net_0)
-
-    # The code expects "snapshots" to be the dimension for 'by_layer'. We'll do the old usage:
-    # if by_layer=True => we'll interpret each "layer index" as the dimension over which we iterate
-    # Actually we want #=num_layers_per_net sub-lists if we do by_layer
-    # We'll define effective_num_layers = num_snapshots if by_layer=False, else num_layers_per_net
-    if by_layer:
-        effective_num_layers = num_layers_per_net
-    else:
-        effective_num_layers = num_snapshots
-
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
 
-    progdrop_loss_high = torch.zeros((num_nets, num_drops, effective_num_layers))
-    progdrop_loss_low  = torch.zeros((num_nets, num_drops, effective_num_layers))
-    progdrop_loss_rand = torch.zeros((num_nets, num_drops, effective_num_layers))
-    progdrop_acc_high  = torch.zeros((num_nets, num_drops, effective_num_layers))
-    progdrop_acc_low   = torch.zeros((num_nets, num_drops, effective_num_layers))
-    progdrop_acc_rand  = torch.zeros((num_nets, num_drops, effective_num_layers))
+    # Aggregators are on CPU by default, so keep them on device="cpu".
+    # [DEVICE FIX ADDED] => specify device="cpu"
+    progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
+    progdrop_loss_low  = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
+    progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
+    progdrop_acc_high  = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
+    progdrop_acc_low   = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
+    progdrop_acc_rand  = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
 
     num_batches = 0
     use_train = parameters.get("train_set", False)
@@ -185,162 +146,97 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         num_batches += 1
 
         for dropidx, fraction in enumerate(drop_fraction):
-            # We define a helper that picks out the RQ vectors for each net for a given "dimension"
-            # If by_layer=False => dimension is snapshot_idx
-            # If by_layer=True  => dimension is layer_idx
+            idx_high, idx_low, idx_rand = get_dropout_indices(idx_alignment, fraction)
 
-            if by_layer:
-                # We'll do: for each layer_i in [0..num_layers_per_net), gather the nodes from each snapshot?
-                # But the user specifically wants "by_layer" => do not lump across layers, but we also
-                # need to pick which snapshot to use? Typically we do all snapshots or the last?
-                # The old code used a concept that each "snapshot" was effectively a layer index.
-                # We'll replicate that approach but now each "snapshot" actually has #=num_layers for each net.
-                # So we do for layer_i in range(num_layers_per_net)...
-
-                for layer_i in range(effective_num_layers):
-                    # gather RQ for each net from alignment_layers => which snapshot do we pick?
-                    # The old code uses 'layer_i' as the snapshot index. Let's do that:
-                    # That means "layer_i" is a snapshot index => from the old code's perspective
-                    # but now we actually want the real 'layer_i' among the #layers
-                    # => we pick snapshot=0 (or a single snapshot?), or do we combine them?
-
-                    # If you want to do a single snapshot: you might do snapshot=0 always
-                    # or if you want to do all snapshots => you'd get #= num_snapshots * num_layers subplots
-                    # The user specifically said "I don't want to lump layers if by_layer=True." 
-                    # Usually we'd do for s in range(num_snapshots)...
-
-                    # For demonstration, we'll do the old "layer_i in [0..num_snapshots)" approach. 
-                    # We'll mention that if you want #= (snapshot × layer), you'd do a double-nested loop.
-                    # We'll keep the code consistent with old approach though:
-                    if layer_i >= num_snapshots:
-                        # skip if we run out of snapshots
-                        break
-
-                    # So "layer_i" is actually the snapshot index in the old sense:
-                    # alignment_layers[layer_i] => shape => [net_idx][list_of_layers]
-                    # We'll then unify all sub-layers? That lumps them again... contradictory. 
-                    # Let's do a simpler approach: we do a 2D loop? 
-                    # We'll just do the original code's approach: treat each snapshot as the 'row', ignoring actual layer dimension.
-
-                    pass # we keep old approach below
-            else:
-                # old approach: each snapshot is a "layer" index. We'll gather lumps from alignment_layers[snapshot]
-                pass
-
-            # We'll replicate the old approach, but if by_layer=True, we do each real layer separately:
-            # => We'll define a loop over dimension=range(effective_num_layers)
-            for dimension_i in range(effective_num_layers):
-                # dimension_i => snapshot index if by_layer=False
-                # dimension_i => real layer index if by_layer=True
+            # For each "layer" index in [0..num_layers-1], we do a partial drop
+            for layer_i in range(num_layers):
+                if layer_i >= len(idx_high):
+                    break
 
                 if by_layer:
-                    # dimension_i is the real layer index,
-                    # so let's pick a single snapshot (e.g. snapshot=0) 
-                    # or we do all snapshots combined => the old code used dimension_i as the snapshot index though
-                    # We'll keep the same structure: dimension_i is the snapshot in the old code,
-                    # so we must check dimension_i < num_snapshots
-                    if dimension_i >= num_snapshots:
-                        break
-
-                    # Now we gather for each net the RQ for layer=all. That lumps? Actually let's do it properly:
-                    # alignment_layers[dimension_i][net_i][layer_idx]
-                    # but which layer_idx do we want? We want 'all'? That lumps again.
-                    # We want "the real layer index" -> The user wants no lumps. 
-                    # So let's define a separate second loop:
-                    # Because the user specifically wants "not to lump layers," we must do partial dropout for each "layer_idx" within that snapshot dimension_i.
-
-                    # For demonstration, let's pick the layer index = dimension_i from the old code:
-                    # Then for each net_i, the RQ is alignment_layers[dimension_i][net_i][dimension_i]. 
-                    # That might be out of range if #= num_layers < dimension_i. So we do min check:
-                    net_rq_vecs = []
-                    for i_net in range(num_nets):
-                        net_lay_list = alignment_layers[dimension_i][i_net]  # => list of size num_layers_per_net
-                        # ensure dimension_i < len(net_lay_list)
-                        if dimension_i < len(net_lay_list):
-                            net_rq_vecs.append(net_lay_list[dimension_i])
-                        else:
-                            # empty
-                            net_rq_vecs.append(torch.empty(0, dtype=torch.float, device=images.device))
+                    drop_high_use = [idx_high[layer_i]]
+                    drop_low_use  = [idx_low[layer_i]]
+                    drop_rand_use = [idx_rand[layer_i]]
+                    drop_layer = [layer_i]  # or your actual alignment-layer idx if you mapped them
                 else:
-                    # old approach: dimension_i is the snapshot index
-                    # alignment_layers[dimension_i][net_i][0] => the big flattened vector
-                    if dimension_i >= len(alignment_layers):
-                        break
-                    net_rq_vecs = []
-                    for i_net in range(num_nets):
-                        net_rq_vecs.append(alignment_layers[dimension_i][i_net][0])
+                    drop_high_use = idx_high
+                    drop_low_use  = idx_low
+                    drop_rand_use = idx_rand
+                    drop_layer = list(range(num_snapshots))
 
-                # net_rq_vecs => list of length num_nets, each a 1D vector of alignment
-                # now we do the actual progressive dropout: pick "high" or "low" indices from each net
-                # We combine them into one big shape => shape (num_nets, X?), or do net by net?
-                # The old code merges them?
+                out_high = []
+                out_low = []
+                out_rand = []
 
-                # We'll replicate the old logic but *per dimension_i*:
-                # Step: sort them => but we want to do the "lowest" fraction or "highest" fraction. We'll do a function:
-                # We do not have that code at this level. So let's define a function get_dropout_indices(...) for net_rq_vecs?
-                # Actually the old code does something like idx_alignment. We'll do it inline:
+                for i_net, net in enumerate(nets):
+                    high_idxs = [dr[i_net, :] for dr in drop_high_use]
+                    low_idxs  = [dr[i_net, :] for dr in drop_low_use]
+                    rand_idxs = [dr[i_net, :] for dr in drop_rand_use]
 
-                # first we cat for each net => we do torch.argsort(rq). But the user might want node-based or net-based?
-                # We'll keep net by net. 
-                # Then we do fraction => we pick top fraction or bottom fraction. 
-                # For clarity, let's do each net separately:
+                    oh, _ = net.forward_targeted_dropout(images, high_idxs, drop_layer)
+                    ol, _ = net.forward_targeted_dropout(images, low_idxs, drop_layer)
+                    or_, _= net.forward_targeted_dropout(images, rand_idxs, drop_layer)
 
-                for i_net in range(num_nets):
-                    rq_vec = net_rq_vecs[i_net]
-                    # handle empty
-                    if rq_vec.numel() == 0:
-                        # can't drop anything, skip
-                        continue
-                    sorted_idx = torch.argsort(rq_vec)
-                    num_nodes = rq_vec.size(0)
-                    drop_num = int(num_nodes * fraction)
-                    # bottom
-                    idx_low = sorted_idx[:drop_num]
-                    # top
-                    idx_high = sorted_idx[-drop_num:] if drop_num>0 else []
-                    # random
-                    idx_rand = torch.randperm(num_nodes)[:drop_num].to(rq_vec.device)
+                    out_high.append(oh)
+                    out_low.append(ol)
+                    out_rand.append(or_)
 
-                    # do forward_targeted_dropout for each
-                    # We'll pass [idx_low], [dimension_i] if we are ignoring multi-layers?
-                    # or we do net.forward_targeted_dropout(...) for each dimension?
-                    # The old code lumps them in a single pass. Here we do it net by net:
+                # measure loss
+                # [DEVICE FIX ADDED] => convert to CPU floats
+                loss_high = []
+                for oh in out_high:
+                    lv = dataset.measure_loss(oh, labels)
+                    lv = float(lv.detach().cpu())
+                    loss_high.append(lv)
+                loss_low = []
+                for ol in out_low:
+                    lv = dataset.measure_loss(ol, labels)
+                    lv = float(lv.detach().cpu())
+                    loss_low.append(lv)
+                loss_rand = []
+                for or_ in out_rand:
+                    lv = dataset.measure_loss(or_, labels)
+                    lv = float(lv.detach().cpu())
+                    loss_rand.append(lv)
 
-                    oh, _ = nets[i_net].forward_targeted_dropout(images, [idx_high], [dimension_i])
-                    ol, _ = nets[i_net].forward_targeted_dropout(images, [idx_low],  [dimension_i])
-                    or_, _= nets[i_net].forward_targeted_dropout(images, [idx_rand], [dimension_i])
+                # measure accuracy
+                # [DEVICE FIX ADDED] => convert to CPU floats
+                acc_high = []
+                for oh in out_high:
+                    av = dataset.measure_accuracy(oh, labels)
+                    av = float(av.detach().cpu())
+                    acc_high.append(av)
+                acc_low = []
+                for ol in out_low:
+                    av = dataset.measure_accuracy(ol, labels)
+                    av = float(av.detach().cpu())
+                    acc_low.append(av)
+                acc_rand = []
+                for or_ in out_rand:
+                    av = dataset.measure_accuracy(or_, labels)
+                    av = float(av.detach().cpu())
+                    acc_rand.append(av)
 
-                    loss_high = dataset.measure_loss(oh, labels).item()
-                    loss_low  = dataset.measure_loss(ol, labels).item()
-                    loss_rand = dataset.measure_loss(or_, labels).item()
-                    acc_high = dataset.measure_accuracy(oh, labels)
-                    acc_low  = dataset.measure_accuracy(ol, labels)
-                    acc_rand = dataset.measure_accuracy(or_, labels)
+                # aggregator add => must remain CPU
+                progdrop_loss_high[:, dropidx, layer_i] += torch.tensor(loss_high, device="cpu")
+                progdrop_loss_low[:, dropidx, layer_i]  += torch.tensor(loss_low,  device="cpu")
+                progdrop_loss_rand[:, dropidx, layer_i] += torch.tensor(loss_rand, device="cpu")
 
-                    progdrop_loss_high[i_net, dropidx, dimension_i] += loss_high
-                    progdrop_loss_low[i_net,  dropidx, dimension_i] += loss_low
-                    progdrop_loss_rand[i_net,dropidx, dimension_i] += loss_rand
-                    progdrop_acc_high[i_net, dropidx, dimension_i] += acc_high
-                    progdrop_acc_low[i_net,  dropidx, dimension_i] += acc_low
-                    progdrop_acc_rand[i_net, dropidx, dimension_i]+= acc_rand
-
-    # after going through entire dataloader
-    progdrop_loss_high /= num_batches
-    progdrop_loss_low  /= num_batches
-    progdrop_loss_rand /= num_batches
-    progdrop_acc_high  /= num_batches
-    progdrop_acc_low   /= num_batches
-    progdrop_acc_rand  /= num_batches
+                progdrop_acc_high[:, dropidx, layer_i]  += torch.tensor(acc_high, device="cpu")
+                progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(acc_low,  device="cpu")
+                progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(acc_rand, device="cpu")
 
     results = {
-        "progdrop_loss_high": progdrop_loss_high,
-        "progdrop_loss_low":  progdrop_loss_low,
-        "progdrop_loss_rand": progdrop_loss_rand,
-        "progdrop_acc_high":  progdrop_acc_high,
-        "progdrop_acc_low":   progdrop_acc_low,
-        "progdrop_acc_rand":  progdrop_acc_rand,
+        "progdrop_loss_high": progdrop_loss_high / num_batches,
+        "progdrop_loss_low":  progdrop_loss_low / num_batches,
+        "progdrop_loss_rand": progdrop_loss_rand / num_batches,
+        "progdrop_acc_high":  progdrop_acc_high / num_batches,
+        "progdrop_acc_low":   progdrop_acc_low / num_batches,
+        "progdrop_acc_rand":  progdrop_acc_rand / num_batches,
         "dropout_fraction":   drop_fraction,
         "by_layer":           by_layer,
+        # optionally store the actual indices if needed
+        "idx_dropout_layers": [ix for ix in range(len(idx_high))],
     }
     return results
 
@@ -348,7 +244,6 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 def get_dropout_indices(idx_alignment, fraction):
     """
     convenience method for getting a fraction of dropout indices from each layer
-    (unused now in the new approach, but we keep it to not remove any code)
     """
     num_nets = idx_alignment[0].size(0)
     num_nodes = [idx.size(1) for idx in idx_alignment]
@@ -375,11 +270,6 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
         train_set=train_set,
     )
     dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
-    # Optionally we can store the alignment_names if we want to label subplots
-    if "alignment_names" in exp.__dict__ and exp.alignment_names is not None:
-        dropout_results["alignment_names"] = exp.alignment_names
-    elif hasattr(exp, "alignment_names"):
-        dropout_results["alignment_names"] = exp.alignment_names
     return dropout_results, dropout_params
 
 
@@ -426,20 +316,21 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     if not isinstance(nets, list):
         nets = [nets]
 
-    # number of alignment layers from the first net
-    n_alignment_idx = nets[0].num_layers()
+    # (optional) here we do a similar fix for mismatch in by_layer indexing
     num_nets = len(nets)
+    align_layer_indices = list(range(len(nets[0].alignment_layers)))
+    by_layer = parameters.get("by_layer", False)
+    num_layers = len(align_layer_indices) if by_layer else 1
+
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
-    by_layer = parameters.get("by_layer", False)
-    num_layers = n_alignment_idx if by_layer else 1
 
-    # Build an index in descending order for each net/layer => shape (1, dim)
+    # build idx_eigenvalue
     idx_eigenvalue = []
     for net_i in range(num_nets):
         layer_idxs = []
         for evec_j in eigenvectors[net_i]:
-            dim = evec_j.size(1)  # evec_j => shape (dim, dim)
+            dim = evec_j.size(1)
             layer_idxs.append(torch.arange(dim - 1, -1, -1).unsqueeze(0))
         idx_eigenvalue.append(layer_idxs)
 
@@ -450,19 +341,101 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     progdrop_acc_low   = torch.zeros((num_nets, num_drops, num_layers))
     progdrop_acc_rand  = torch.zeros((num_nets, num_drops, num_layers))
 
-    num_batches = 0
     use_test = not parameters.get("train_set", True)
     dataloader = dataset.test_loader if use_test else dataset.train_loader
+    num_batches = 0
 
     for batch in tqdm(dataloader):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1
 
         for dropidx, fraction in enumerate(drop_fraction):
-            # same approach as progressive_dropout but for eigenvectors
-            pass
+            idx_high, idx_low, idx_rand = get_dropout_indices(idx_eigenvalue, fraction)
 
-    results = {}
+            for layer_i in range(num_layers):
+                if layer_i >= len(idx_high):
+                    break
+
+                if by_layer:
+                    drop_layer = [align_layer_indices[layer_i]]
+                    drop_high = [idx_high[layer_i]]
+                    drop_low  = [idx_low[layer_i]]
+                    drop_rand = [idx_rand[layer_i]]
+                else:
+                    drop_layer = align_layer_indices
+                    drop_high = idx_high
+                    drop_low  = idx_low
+                    drop_rand = idx_rand
+
+                out_high, out_low, out_rand_ = [], [], []
+                for i_net, net in enumerate(nets):
+                    high_idxs = [dr[i_net, :] for dr in drop_high]
+                    low_idxs  = [dr[i_net, :] for dr in drop_low]
+                    rand_idxs = [dr[i_net, :] for dr in drop_rand]
+
+                    oh, _ = net.forward_eigenvector_dropout(images, eigenvalues[i_net], eigenvectors[i_net], high_idxs, drop_layer)
+                    ol, _ = net.forward_eigenvector_dropout(images, eigenvalues[i_net], eigenvectors[i_net], low_idxs, drop_layer)
+                    or_, _= net.forward_eigenvector_dropout(images, eigenvalues[i_net], eigenvectors[i_net], rand_idxs, drop_layer)
+                    out_high.append(oh)
+                    out_low.append(ol)
+                    out_rand_.append(or_)
+
+                loss_high = []
+                for oh in out_high:
+                    lv = dataset.measure_loss(oh, labels)
+                    lv = float(lv.detach().cpu())  # [DEVICE FIX ADDED]
+                    loss_high.append(lv)
+                loss_low = []
+                for ol in out_low:
+                    lv = dataset.measure_loss(ol, labels)
+                    lv = float(lv.detach().cpu())
+                    loss_low.append(lv)
+                loss_rand = []
+                for or__ in out_rand_:
+                    lv = dataset.measure_loss(or__, labels)
+                    lv = float(lv.detach().cpu())
+                    loss_rand.append(lv)
+
+                acc_high = []
+                for oh in out_high:
+                    av = dataset.measure_accuracy(oh, labels)
+                    av = float(av.detach().cpu())
+                    acc_high.append(av)
+                acc_low = []
+                for ol in out_low:
+                    av = dataset.measure_accuracy(ol, labels)
+                    av = float(av.detach().cpu())
+                    acc_low.append(av)
+                acc_rand = []
+                for or__ in out_rand_:
+                    av = dataset.measure_accuracy(or__, labels)
+                    av = float(av.detach().cpu())
+                    acc_rand.append(av)
+
+                progdrop_loss_high[:, dropidx, layer_i] += torch.tensor(loss_high)
+                progdrop_loss_low[:, dropidx, layer_i]  += torch.tensor(loss_low)
+                progdrop_loss_rand[:, dropidx, layer_i] += torch.tensor(loss_rand)
+                progdrop_acc_high[:, dropidx, layer_i]  += torch.tensor(acc_high)
+                progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(acc_low)
+                progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(acc_rand)
+
+    progdrop_loss_high /= num_batches
+    progdrop_loss_low  /= num_batches
+    progdrop_loss_rand /= num_batches
+    progdrop_acc_high  /= num_batches
+    progdrop_acc_low   /= num_batches
+    progdrop_acc_rand  /= num_batches
+
+    results = {
+        "progdrop_loss_high": progdrop_loss_high,
+        "progdrop_loss_low":  progdrop_loss_low,
+        "progdrop_loss_rand": progdrop_loss_rand,
+        "progdrop_acc_high":  progdrop_acc_high,
+        "progdrop_acc_low":   progdrop_acc_low,
+        "progdrop_acc_rand":  progdrop_acc_rand,
+        "dropout_fraction":    drop_fraction,
+        "by_layer":            by_layer,
+    }
     return results
 
 
@@ -492,13 +465,11 @@ def evaluate_pretrained_model(net, dataset):
     Measure test accuracy of a loaded pretrained model on 'dataset.test_loader'.
     'net' should already be on the correct device and in eval mode.
     """
-    net.eval()  # ensure we're in eval mode (no dropout, etc.)
+    net.eval()
     device = next(net.parameters()).device
 
     total_correct = 0
     total_samples = 0
-
-    # Turn off gradient calculations
     with torch.no_grad():
         for batch in dataset.test_loader:
             images, labels = dataset.unwrap_batch(batch, device=device)
