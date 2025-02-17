@@ -112,7 +112,7 @@ class GeneralAlignmentExperiment(Experiment):
             "dropout_parameters": dropout_params,
         }
 
-        # Stash alignment layer names (if any) in results so the plotting can label them:
+        # Optionally store alignment layer names for labeling
         if len(nets) > 0:
             results["alignment_names"] = nets[0].alignment_names
 
