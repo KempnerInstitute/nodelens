@@ -231,7 +231,6 @@ def plot_train_results(exp, train_results, test_results, prms):
             exp.plot_ready(f"train_alignment_{method_key}")
 
 
-
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
     """
     Visualize progressive dropout experiment results (loss & accuracy),
@@ -280,21 +279,18 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     names = ["From high", "From low", "Random"]
     num_exp = len(names)
 
-    # --- ADDED ---
-    # If we stored alignment_names in 'results', we can retrieve them
+    # --- FIX FOR TYPEERROR ---
+    # We check if exp.__dict__.get("args") is a dict before using "in".
     alignment_names = None
     if "alignment_names" in dropout_results:
         alignment_names = dropout_results["alignment_names"]
     elif "alignment_names" in prms:
         alignment_names = prms["alignment_names"]
-    elif "alignment_names" in exp.__dict__.get("args", {}):
-        alignment_names = exp.args.alignment_layers  # fallback, if relevant
-
-    # If not in dropout_results, check results in case we saved it there
-    # We can do:
-    if alignment_names is None and hasattr(exp, "results"):
-        alignment_names = exp.results.get("alignment_names", None)
-    # or skip if not found
+    else:
+        argobj = exp.__dict__.get("args", None)
+        if isinstance(argobj, dict) and ("alignment_names" in argobj):
+            alignment_names = exp.args.alignment_layers
+        # if it's not a dict, skip
 
     for idx, label in enumerate(labels):
         for layer in range(num_layers):
@@ -317,8 +313,6 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
                 ax[layer, idx].set_xlabel("Dropout Fraction")
                 ax[layer, idx].set_xlim(0, 1)
             if idx == 0:
-                # Label left y-axis
-                # Attempt to label layer name if available
                 lab = "Loss w/ Dropout"
                 if alignment_names is not None and layer < len(alignment_names):
                     lab = f"{alignment_names[layer]}: Loss"
@@ -363,7 +357,6 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
                 ax[layer, idx].set_xlabel("Dropout Fraction")
                 ax[layer, idx].set_xlim(0, 1)
             if idx == 0:
-                # Label left y-axis
                 lab = "Accuracy w/ Dropout"
                 if alignment_names is not None and layer < len(alignment_names):
                     lab = f"{alignment_names[layer]}: Accuracy"

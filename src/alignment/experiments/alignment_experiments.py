@@ -36,7 +36,6 @@ class GeneralAlignmentExperiment(Experiment):
             ).to(self.device)
             net.cnn_mode = self.args.alignment.cnn_mode
             nets.append(net)
-
             for name, layer in net.base_model.named_modules():
                 if hasattr(layer, "weight"):
                     print(name, layer.weight.shape)
@@ -113,8 +112,7 @@ class GeneralAlignmentExperiment(Experiment):
             "dropout_parameters": dropout_params,
         }
 
-        # --- ADDED ---
-        # Store the alignment layer names from the first net so we can label them in the plot:
+        # Stash alignment layer names (if any) in results so the plotting can label them:
         if len(nets) > 0:
             results["alignment_names"] = nets[0].alignment_names
 
