@@ -71,6 +71,7 @@ class ExtraConfig(BaseConfig):
     num_drops: int = 9
     dropout_by_layer: bool = False
     progressive_dropout_on_train: bool = False
+    single_layer_mode: bool = False
 
 @dataclass
 class ExperimentConfig(BaseConfig):
