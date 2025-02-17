@@ -182,8 +182,8 @@ def plot_train_results(exp, train_results, test_results, prms):
         ylims = ax[0].get_ylim()
         ax[1].set_ylim(ylims)
     ax[1].set_ylabel("Loss")
-    ax[1].set_xlim(-0.5, num_types - 0.5)
-    ax[1].set_xticks(range(num_types))
+    ax[1].set_xlim(-0.5, len(labels) - 0.5)
+    ax[1].set_xticks(range(len(labels)))
     ax[1].set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
 
     # -----------
@@ -209,8 +209,8 @@ def plot_train_results(exp, train_results, test_results, prms):
     if train_acc_mean is not None:
         ax[2].set_ylim(0, 100)
         ax[3].set_ylim(0, 100)
-    ax[3].set_xlim(-0.5, num_types - 0.5)
-    ax[3].set_xticks(range(num_types))
+    ax[3].set_xlim(-0.5, len(labels) - 0.5)
+    ax[3].set_xticks(range(len(labels)))
     ax[3].set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
     
     exp.plot_ready("train_test_performance")
@@ -229,9 +229,9 @@ def plot_train_results(exp, train_results, test_results, prms):
                 ax2[0, layer].set_ylabel("Alignment (%)")
                 ax2[0, layer].set_title(f"Layer {layer} - {method_key}")
             exp.plot_ready(f"train_alignment_{method_key}")
-            
-            
-            
+
+
+
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
     """
     Visualize progressive dropout experiment results (loss & accuracy),
@@ -253,17 +253,17 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
     print("measuring statistics on dropout analysis...")
     loss_mean_high, loss_se_high = compute_stats_by_type(dropout_results["progdrop_loss_high"], num_types=num_types, dim=0, method="se")
-    loss_mean_low, loss_se_low = compute_stats_by_type(dropout_results["progdrop_loss_low"], num_types=num_types, dim=0, method="se")
+    loss_mean_low,  loss_se_low  = compute_stats_by_type(dropout_results["progdrop_loss_low"],  num_types=num_types, dim=0, method="se")
     loss_mean_rand, loss_se_rand = compute_stats_by_type(dropout_results["progdrop_loss_rand"], num_types=num_types, dim=0, method="se")
 
-    acc_mean_high, acc_se_high = compute_stats_by_type(dropout_results["progdrop_acc_high"], num_types=num_types, dim=0, method="se")
-    acc_mean_low, acc_se_low = compute_stats_by_type(dropout_results["progdrop_acc_low"], num_types=num_types, dim=0, method="se")
-    acc_mean_rand, acc_se_rand = compute_stats_by_type(dropout_results["progdrop_acc_rand"], num_types=num_types, dim=0, method="se")
+    acc_mean_high,  acc_se_high  = compute_stats_by_type(dropout_results["progdrop_acc_high"], num_types=num_types, dim=0, method="se")
+    acc_mean_low,   acc_se_low   = compute_stats_by_type(dropout_results["progdrop_acc_low"],  num_types=num_types, dim=0, method="se")
+    acc_mean_rand,  acc_se_rand  = compute_stats_by_type(dropout_results["progdrop_acc_rand"], num_types=num_types, dim=0, method="se")
 
     loss_mean = [loss_mean_high, loss_mean_low, loss_mean_rand]
-    loss_se = [loss_se_high, loss_se_low, loss_se_rand]
-    acc_mean = [acc_mean_high, acc_mean_low, acc_mean_rand]
-    acc_se = [acc_se_high, acc_se_low, acc_se_rand]
+    loss_se   = [loss_se_high,  loss_se_low,   loss_se_rand]
+    acc_mean  = [acc_mean_high, acc_mean_low,  acc_mean_rand]
+    acc_se    = [acc_se_high,   acc_se_low,    acc_se_rand]
 
     print("plotting dropout results...")
     fig, ax = plt.subplots(
@@ -279,6 +279,22 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
 
     names = ["From high", "From low", "Random"]
     num_exp = len(names)
+
+    # --- ADDED ---
+    # If we stored alignment_names in 'results', we can retrieve them
+    alignment_names = None
+    if "alignment_names" in dropout_results:
+        alignment_names = dropout_results["alignment_names"]
+    elif "alignment_names" in prms:
+        alignment_names = prms["alignment_names"]
+    elif "alignment_names" in exp.__dict__.get("args", {}):
+        alignment_names = exp.args.alignment_layers  # fallback, if relevant
+
+    # If not in dropout_results, check results in case we saved it there
+    # We can do:
+    if alignment_names is None and hasattr(exp, "results"):
+        alignment_names = exp.results.get("alignment_names", None)
+    # or skip if not found
 
     for idx, label in enumerate(labels):
         for layer in range(num_layers):
@@ -301,7 +317,12 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
                 ax[layer, idx].set_xlabel("Dropout Fraction")
                 ax[layer, idx].set_xlim(0, 1)
             if idx == 0:
-                ax[layer, idx].set_ylabel("Loss w/ Dropout")
+                # Label left y-axis
+                # Attempt to label layer name if available
+                lab = "Loss w/ Dropout"
+                if alignment_names is not None and layer < len(alignment_names):
+                    lab = f"{alignment_names[layer]}: Loss"
+                ax[layer, idx].set_ylabel(lab)
 
             if iexp == num_exp - 1:
                 ax[layer, idx].legend(loc="best")
@@ -342,7 +363,11 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
                 ax[layer, idx].set_xlabel("Dropout Fraction")
                 ax[layer, idx].set_xlim(0, 1)
             if idx == 0:
-                ax[layer, idx].set_ylabel("Accuracy w/ Dropout")
+                # Label left y-axis
+                lab = "Accuracy w/ Dropout"
+                if alignment_names is not None and layer < len(alignment_names):
+                    lab = f"{alignment_names[layer]}: Accuracy"
+                ax[layer, idx].set_ylabel(lab)
 
             if iexp == num_exp - 1:
                 ax[layer, idx].legend(loc="best")
