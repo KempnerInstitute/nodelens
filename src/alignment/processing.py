@@ -111,6 +111,8 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             nets, dataset, alignment=True, methods=["RQ"], **parameters
         )["alignment"]
 
+    print_alignment_structure(alignment)
+    
     # Build alignment_layers so that for each alignment snapshot we have
     # a tensor of shape (num_nets, total_nodes).
     alignment_layers = []
@@ -491,3 +493,47 @@ def evaluate_pretrained_model(net, dataset):
     accuracy = 100.0 * total_correct / total_samples if total_samples > 0 else 0.0
     print(f"Pretrained Model Accuracy: {accuracy:.2f}%")
     return accuracy
+
+
+
+
+def print_alignment_structure(alignment):
+    """
+    Recursively print out the structure of the `alignment` variable:
+      - how many snapshots
+      - how many networks in each snapshot
+      - how many layers
+      - shape of each alignment method (e.g. "RQ") tensor
+    """
+    if not isinstance(alignment, list):
+        print("alignment is not a list. It's a", type(alignment))
+        return
+
+    print(f"alignment is a list of length {len(alignment)}")
+    for i, snapshot in enumerate(alignment):
+        print(f"\n--- Snapshot {i} ---")
+        if not isinstance(snapshot, dict):
+            print("  snapshot is type:", type(snapshot))
+            continue
+        print("  snapshot keys:", snapshot.keys())  # e.g. ["epoch","batch","data",...]
+
+        # check if there's "data"
+        data = snapshot.get("data", None)
+        if data is None:
+            print("  no 'data' key in snapshot")
+            continue
+
+        print(f"  'data' is a list of length {len(data)} => one entry per network")
+        for net_idx, net_data in enumerate(data):
+            print(f"    For network {net_idx}, net_data is a {type(net_data)} with length {len(net_data)}")
+
+            # net_data is typically a list of dicts, one dict per alignment layer
+            for layer_idx, layer_dict in enumerate(net_data):
+                print(f"      Layer {layer_idx}: has keys {list(layer_dict.keys())}")
+                # each key is usually a method name (e.g. "RQ","MI_0"), and the value is a tensor
+
+                for method_name, val in layer_dict.items():
+                    if isinstance(val, torch.Tensor):
+                        print(f"        {method_name}: shape={val.shape}")
+                    else:
+                        print(f"        {method_name}: type={type(val)} value={val}")
