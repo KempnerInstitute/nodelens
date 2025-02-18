@@ -98,7 +98,7 @@ def train(nets, optimizers, dataset, **parameters):
             # -------------
             # measure alignment if do_align is true
             # -------------
-            if do_align and (batch_idx % freq == 0) and 1 == 2:
+            if do_align and (batch_idx % freq == 0):
                 # compute alignment on the current batch
                 align_data = []
                 for net in nets:
