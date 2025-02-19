@@ -67,7 +67,7 @@ class ExtraConfig(BaseConfig):
     dropout_by_layer: bool = False
     progressive_dropout_on_train: bool = False
     single_layer_mode: bool = False
->>>    aggregate_alignment: bool = False
+    aggregate_alignment: bool = False
 
 @dataclass
 class ExperimentConfig(BaseConfig):
