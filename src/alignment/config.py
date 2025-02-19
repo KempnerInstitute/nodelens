@@ -1,7 +1,3 @@
-# --------------------------------------------
-# config.py
-# --------------------------------------------
-
 from os import PathLike
 from dataclasses import dataclass, field
 from typing import (cast, List, Union, Type, TypeVar, Optional)
@@ -67,11 +63,11 @@ class PlotsConfig(BaseConfig):
 
 @dataclass
 class ExtraConfig(BaseConfig):
-    num_drops: int = 20
-    dropout_by_layer: bool = True
+    num_drops: int = 9
+    dropout_by_layer: bool = False
     progressive_dropout_on_train: bool = False
     single_layer_mode: bool = False
-    aggregate_alignment: bool = True
+>>>    aggregate_alignment: bool = False
 
 @dataclass
 class ExperimentConfig(BaseConfig):
