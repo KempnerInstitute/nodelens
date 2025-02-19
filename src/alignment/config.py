@@ -13,7 +13,6 @@ C = TypeVar("C", bound="BaseConfig")
 class BaseConfig:
     @classmethod
     def load(cls: Type[C], path: Union[str, PathLike]) -> C:
-        """Load from YAML file via OmegaConf"""
         schema = om.structured(cls)
         try:
             raw = om.load(str(path))
@@ -68,10 +67,11 @@ class PlotsConfig(BaseConfig):
 
 @dataclass
 class ExtraConfig(BaseConfig):
-    num_drops: int = 9
-    dropout_by_layer: bool = False
+    num_drops: int = 20
+    dropout_by_layer: bool = True
     progressive_dropout_on_train: bool = False
     single_layer_mode: bool = False
+    aggregate_alignment: bool = True
 
 @dataclass
 class ExperimentConfig(BaseConfig):
