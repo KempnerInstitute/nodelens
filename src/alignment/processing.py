@@ -4,76 +4,19 @@ from tqdm import tqdm
 
 from alignment.utils import load_checkpoints, test_nets
 from alignment.alignment_metrics import AlignmentMetrics
-from alignment.train import train, test
+
 
 def parse_alignment_to_tensor(alignment_list, aggregate=True, by_layer=False):
     if len(alignment_list) == 0:
         raise ValueError("parse_alignment_to_tensor: empty alignment_list")
-    all_records_tensors = []
-    if by_layer:
-        # return a 3D shape => (#records, #layers, #nets * #nodes_per_layer)
-        # we collect each layer separately, so each layer is a "snapshot"
-        layer_tensors_list = []
-        max_layers = 0
-        for record in alignment_list:
-            netwise_layers = []
-            for net_i_data in record["data"]:
-                layer_list = []
-                for layer_dict in net_i_data:
-                    if "RQ" not in layer_dict:
-                        raise ValueError("Expected 'RQ' in layer_dict")
-                    layer_list.append(layer_dict["RQ"].flatten())
-                netwise_layers.append(layer_list)
-            max_layers = max(max_layers, len(netwise_layers[0]))
-            layer_tensors_list.append(netwise_layers)
-        # shape => (#records, #nets, #layers, ?)
-        # unify them
-        rec_level = []
-        for rec_idx, rec_data in enumerate(layer_tensors_list):
-            # rec_data => list of #nets, each is a list of #layers
-            # we want shape => (#layers, #nets, total_nodes_this_layer)
-            # first find how many layers from the first net
-            rec_layers = []
-            num_nets = len(rec_data)
-            for layer_i in range(max_layers):
-                per_net = []
-                for net_idx in range(num_nets):
-                    net_layers = rec_data[net_idx]
-                    if layer_i < len(net_layers):
-                        per_net.append(net_layers[layer_i])
-                    else:
-                        per_net.append(torch.zeros(0))
-                # cat each net's flattened RQ
-                per_net_cat = []
-                for item in per_net:
-                    per_net_cat.append(item)
-                per_net_cat = torch.stack(per_net_cat, dim=0)
-                rec_layers.append(per_net_cat)
-            rec_level.append(rec_layers)
-        # shape => (#records, #layers, #nets, #nodes?)
-        # we keep it that way
-        # if aggregate => average on #records
-        # we want final => (#layers, #nets, #nodes)
-        rec_level_tsr = []
-        for rec_idx, rec_data in enumerate(rec_level):
-            # rec_data => list of #layers => each is (#nets, #nodes_layer)
-            rec_data_stack = []
-            for layer in rec_data:
-                rec_data_stack.append(layer)
-            rec_level_tsr.append(rec_data_stack)
-        # now rec_level_tsr => (#records, #layers, (#nets, #nodes))
-        # stack
-        # shape => (#records, #layers, #nets, #nodes)
-        out_list = []
-        for rec_data_stack in rec_level_tsr:
-            out_list.append(torch.stack(rec_data_stack, dim=0))
-        bigstack = torch.stack(out_list, dim=0)
-        if aggregate:
-            # shape => (#records, #layers, #nets, #nodes)
-            return bigstack.mean(dim=0)
-        else:
-            return bigstack.mean(dim=0)
-    else:
+
+    # if by_layer=False => return shape (#nets, total_nodes)
+    # if by_layer=True  => return shape (#layers, #nets, nodes_per_layer_for_that_layer)
+    # we must ensure each record has the same #layers & same #nodes per layer if we want to stack.
+    # if any mismatch occurs, we pad or unify.
+
+    if not by_layer:
+        all_records_tensors = []
         for record in alignment_list:
             netwise_tensors = []
             for net_i_data in record["data"]:
@@ -82,14 +25,83 @@ def parse_alignment_to_tensor(alignment_list, aggregate=True, by_layer=False):
                     if "RQ" not in layer_dict:
                         raise ValueError("Expected 'RQ' in layer_dict")
                     node_tensors.append(layer_dict["RQ"].flatten())
+                # cat all layers => shape (#nodes_total)
                 netwise_tensors.append(torch.cat(node_tensors, dim=0))
+            # stack across nets => shape (#nets, #nodes_total)
             netwise_tsr = torch.stack(netwise_tensors, dim=0)
             all_records_tensors.append(netwise_tsr)
+        # shape => (#records, #nets, #nodes_total)
         bigstack = torch.stack(all_records_tensors, dim=0)
+        # average if aggregator => final shape (#nets, #nodes_total)
         if aggregate:
             return bigstack.mean(dim=0)
         else:
+            # or just take the mean anyway so we have a single snapshot
             return bigstack.mean(dim=0)
+    else:
+        # by_layer=True => produce shape => (#layers, #nets, #nodes_per_layer)
+        # each record can have multiple layers; we must ensure the same #layers across records
+        # also each net must have the same #layers. We'll find the max #layers and zero-pad if needed.
+        all_records = []  # each entry => list of shape (#layers, #nets, #nodes_layer)
+
+        max_layers_found = 0
+        for record in alignment_list:
+            # record["data"] => list of #nets
+            # each net => list of layer_dicts => { "RQ": <Tensor(#nodes_layer,)> }
+            # first find how many layers => from the first net
+            max_layers_found = max(max_layers_found, len(record["data"][0]))
+
+        # now parse each record
+        for record in alignment_list:
+            # build shape => (#layers, #nets, variable #nodes?) => we can't stack directly unless each layer's #nodes match across nets
+            net_list = record["data"]
+            num_nets = len(net_list)
+            # net_list[i] => list of layer_dict for net i
+            # we unify so each net has 'max_layers_found' layers (pad if missing)
+            rec_layers = []
+            for layer_idx in range(max_layers_found):
+                # gather each net's RQ for this layer
+                netwise = []
+                for net_idx in range(num_nets):
+                    net_layers = net_list[net_idx]
+                    if layer_idx < len(net_layers):
+                        layer_dict = net_layers[layer_idx]
+                        if "RQ" not in layer_dict:
+                            raise ValueError("Expected 'RQ' in layer_dict")
+                        netwise.append(layer_dict["RQ"].flatten())
+                    else:
+                        # pad with zero if layer is missing
+                        netwise.append(torch.zeros(0))
+                # netwise => list of length #nets, each => shape (#nodes_layer_i,)
+                # we can find max #nodes among them and pad
+                max_nodes_layer = 0
+                for item in netwise:
+                    max_nodes_layer = max(max_nodes_layer, item.numel())
+                # pad each net to max_nodes_layer
+                padded_nets = []
+                for item in netwise:
+                    if item.numel() < max_nodes_layer:
+                        pad_size = max_nodes_layer - item.numel()
+                        item_padded = torch.cat([item, torch.zeros(pad_size, dtype=item.dtype, device=item.device)], dim=0)
+                        padded_nets.append(item_padded)
+                    else:
+                        padded_nets.append(item)
+                # shape => (#nets, max_nodes_layer)
+                layer_tsr = torch.stack(padded_nets, dim=0)
+                rec_layers.append(layer_tsr)
+            # now rec_layers => list of length max_layers_found => each => (#nets, max_nodes_layer)
+            # stack => shape => (#layers, #nets, max_nodes_layer)
+            rec_layers_tsr = torch.stack(rec_layers, dim=0)
+            all_records.append(rec_layers_tsr)
+
+        # shape => (#records, #layers, #nets, max_nodes_layer)
+        bigstack = torch.stack(all_records, dim=0)
+        if aggregate:
+            # => (#layers, #nets, max_nodes_layer)
+            return bigstack.mean(dim=0)
+        else:
+            return bigstack.mean(dim=0)
+
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     do_alignment_train = exp.args.alignment.do_alignment
@@ -164,30 +176,27 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     aggregator = parameters.get("aggregate_alignment", False)
     by_layer = parameters.get("by_layer", False)
     parsed = parse_alignment_to_tensor(alignment, aggregate=aggregator, by_layer=by_layer)
-    if by_layer:
-        # shape => (#layers, #nets, #nodes)
-        num_layers, num_nets, num_nodes = parsed.shape
-        num_snapshots = num_layers
+
+    if not by_layer:
+        # shape => (#nets, #nodes_total)
+        idx_alignment = [torch.argsort(parsed, dim=1)]
+        num_snapshots = 1
+        num_nets_ = parsed.shape[0]
+    else:
+        # shape => (#layers, #nets, max_nodes_layer)
+        num_layers, num_nets_, max_nodes_layer = parsed.shape
         idx_alignment = []
         for layer_i in range(num_layers):
             idx_alignment.append(torch.argsort(parsed[layer_i], dim=1))
-    else:
-        # shape => (#nets, #nodes)
-        num_snapshots = 1
-        idx_alignment = [torch.argsort(parsed, dim=1)]
+        num_snapshots = num_layers
+
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     use_train = parameters.get("train_set", False)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
     print("Progressive Dropout:")
-    progdrop_loss_high = []
-    progdrop_loss_low = []
-    progdrop_loss_rand = []
-    progdrop_acc_high = []
-    progdrop_acc_low = []
-    progdrop_acc_rand = []
+
     if by_layer:
-        num_nets_ = parsed.shape[1]
         progdrop_loss_high = torch.zeros((num_nets_, num_drops, num_layers), device="cpu")
         progdrop_loss_low  = torch.zeros((num_nets_, num_drops, num_layers), device="cpu")
         progdrop_loss_rand = torch.zeros((num_nets_, num_drops, num_layers), device="cpu")
@@ -195,46 +204,44 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         progdrop_acc_low   = torch.zeros((num_nets_, num_drops, num_layers), device="cpu")
         progdrop_acc_rand  = torch.zeros((num_nets_, num_drops, num_layers), device="cpu")
     else:
-        num_nets_ = parsed.shape[0]
         progdrop_loss_high = torch.zeros((num_nets_, num_drops, 1), device="cpu")
         progdrop_loss_low  = torch.zeros((num_nets_, num_drops, 1), device="cpu")
         progdrop_loss_rand = torch.zeros((num_nets_, num_drops, 1), device="cpu")
         progdrop_acc_high  = torch.zeros((num_nets_, num_drops, 1), device="cpu")
         progdrop_acc_low   = torch.zeros((num_nets_, num_drops, 1), device="cpu")
         progdrop_acc_rand  = torch.zeros((num_nets_, num_drops, 1), device="cpu")
+
     num_batches = 0
     for batch in tqdm(dataloader):
         images, labels = dataset.unwrap_batch(batch)
         num_batches += 1
+
         for dropidx, fraction in enumerate(drop_fraction):
-            drop_num = None
             if by_layer:
-                drop_high_list, drop_low_list, drop_rand_list = [], [], []
                 for layer_i in range(num_layers):
-                    device_of_idx = idx_alignment[layer_i].device
-                    num_nodes = idx_alignment[layer_i].size(1)
-                    dn = int(num_nodes * fraction)
-                    if dn > 0:
-                        hi = torch.index_select(idx_alignment[layer_i], dim=1, index=torch.arange(num_nodes - dn, num_nodes, device=device_of_idx))
-                        lo = torch.index_select(idx_alignment[layer_i], dim=1, index=torch.arange(dn, device=device_of_idx))
+                    layer_idx_sorted = idx_alignment[layer_i]
+                    device_of_idx = layer_idx_sorted.device
+                    node_count = layer_idx_sorted.size(1)
+                    drop_num = int(node_count * fraction)
+                    if drop_num > 0:
+                        hi = torch.index_select(layer_idx_sorted, dim=1,
+                            index=torch.arange(node_count - drop_num, node_count, device=device_of_idx))
+                        lo = torch.index_select(layer_idx_sorted, dim=1,
+                            index=torch.arange(drop_num, device=device_of_idx))
                         rr = []
                         for i_net in range(num_nets_):
-                            perm = torch.randperm(num_nodes, device=device_of_idx)
-                            rr.append(perm[:dn])
+                            perm = torch.randperm(node_count, device=device_of_idx)
+                            rr.append(perm[:drop_num])
                         rr = torch.stack(rr, dim=0)
                     else:
-                        hi = idx_alignment[layer_i][:, :0]
-                        lo = idx_alignment[layer_i][:, :0]
-                        rr = idx_alignment[layer_i][:, :0]
-                    drop_high_list.append(hi)
-                    drop_low_list.append(lo)
-                    drop_rand_list.append(rr)
-                for layer_i in range(num_layers):
+                        hi = layer_idx_sorted[:, :0]
+                        lo = layer_idx_sorted[:, :0]
+                        rr = layer_idx_sorted[:, :0]
                     out_high, out_low, out_rand_ = [], [], []
                     for i_net, net in enumerate(nets):
-                        oh, _ = net.forward_targeted_dropout(images, [drop_high_list[layer_i][i_net]], [layer_i])
-                        ol, _ = net.forward_targeted_dropout(images, [drop_low_list[layer_i][i_net]], [layer_i])
-                        or_, _= net.forward_targeted_dropout(images, [drop_rand_list[layer_i][i_net]], [layer_i])
+                        oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [layer_i])
+                        ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], [layer_i])
+                        or_, _= net.forward_targeted_dropout(images, [rr[i_net]], [layer_i])
                         out_high.append(oh)
                         out_low.append(ol)
                         out_rand_.append(or_)
@@ -260,21 +267,24 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(al, device="cpu")
                     progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(ar, device="cpu")
             else:
-                device_of_idx = idx_alignment[0].device
-                num_nodes = idx_alignment[0].size(1)
-                dn = int(num_nodes * fraction)
-                if dn > 0:
-                    hi = torch.index_select(idx_alignment[0], dim=1, index=torch.arange(num_nodes - dn, num_nodes, device=device_of_idx))
-                    lo = torch.index_select(idx_alignment[0], dim=1, index=torch.arange(dn, device=device_of_idx))
+                layer_idx_sorted = idx_alignment[0]
+                device_of_idx = layer_idx_sorted.device
+                node_count = layer_idx_sorted.size(1)
+                drop_num = int(node_count * fraction)
+                if drop_num > 0:
+                    hi = torch.index_select(layer_idx_sorted, dim=1,
+                        index=torch.arange(node_count - drop_num, node_count, device=device_of_idx))
+                    lo = torch.index_select(layer_idx_sorted, dim=1,
+                        index=torch.arange(drop_num, device=device_of_idx))
                     rr = []
                     for i_net in range(num_nets_):
-                        perm = torch.randperm(num_nodes, device=device_of_idx)
-                        rr.append(perm[:dn])
+                        perm = torch.randperm(node_count, device=device_of_idx)
+                        rr.append(perm[:drop_num])
                     rr = torch.stack(rr, dim=0)
                 else:
-                    hi = idx_alignment[0][:, :0]
-                    lo = idx_alignment[0][:, :0]
-                    rr = idx_alignment[0][:, :0]
+                    hi = layer_idx_sorted[:, :0]
+                    lo = layer_idx_sorted[:, :0]
+                    rr = layer_idx_sorted[:, :0]
                 out_high, out_low, out_rand_ = [], [], []
                 for i_net, net in enumerate(nets):
                     oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [0])
@@ -304,20 +314,14 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                 progdrop_acc_high[:, dropidx, 0]  += torch.tensor(ah, device="cpu")
                 progdrop_acc_low[:, dropidx, 0]   += torch.tensor(al, device="cpu")
                 progdrop_acc_rand[:, dropidx, 0]  += torch.tensor(ar, device="cpu")
-    if by_layer:
-        progdrop_loss_high /= num_batches
-        progdrop_loss_low  /= num_batches
-        progdrop_loss_rand /= num_batches
-        progdrop_acc_high  /= num_batches
-        progdrop_acc_low   /= num_batches
-        progdrop_acc_rand  /= num_batches
-    else:
-        progdrop_loss_high /= num_batches
-        progdrop_loss_low  /= num_batches
-        progdrop_loss_rand /= num_batches
-        progdrop_acc_high  /= num_batches
-        progdrop_acc_low   /= num_batches
-        progdrop_acc_rand  /= num_batches
+
+    progdrop_loss_high /= num_batches
+    progdrop_loss_low  /= num_batches
+    progdrop_loss_rand /= num_batches
+    progdrop_acc_high  /= num_batches
+    progdrop_acc_low   /= num_batches
+    progdrop_acc_rand  /= num_batches
+
     results = {
         "progdrop_loss_high": progdrop_loss_high,
         "progdrop_loss_low":  progdrop_loss_low,
