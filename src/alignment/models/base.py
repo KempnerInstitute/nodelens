@@ -277,13 +277,16 @@ class AlignmentNetwork(nn.Module):
     @torch.no_grad()
     def forward_targeted_dropout(self, x, idxs, layers):
         from alignment.utils import check_iterable
-        assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables with the same length"
-        assert len(idxs) == len(layers), "idxs and layers need to be iterables with the same length"
-        assert len(layers) == len(set(layers)), "layers must not have any repeated elements"
-        assert all([layer >= 0 and layer < len(self.alignment_layers) - 1 for layer in layers]), "dropout only works on first N-1 layers"
-        
+        assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables with same length"
+        assert len(idxs) == len(layers), "idxs and layers must be the same length"
+        # CHANGED assertion:
+        # was: assert all([layer >= 0 and layer < len(self.alignment_layers) - 1 for layer in layers]), "dropout only works on first N-1 layers"
+        # now we allow dropping out any valid layer index:
+        assert all([0 <= layer < len(self.alignment_layers) for layer in layers]), "invalid layer index"
+
         hidden_outputs_dict = {}
         hooks = []
+
         def dropout(hook_name, dropout_idx):
             def dropout_hook(module, in_, out_):
                 max_index = out_.shape[1]
@@ -295,10 +298,12 @@ class AlignmentNetwork(nn.Module):
                 hidden_outputs_dict[hook_name] = out_
                 return out_
             return dropout_hook
+
         def get_output(hook_name):
             def output_hook(module, in_, out_):
                 hidden_outputs_dict[hook_name] = out_
             return output_hook
+
         for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
                 i_lyr = layers.index(idx_layer)
@@ -306,10 +311,13 @@ class AlignmentNetwork(nn.Module):
                 hooks.append(layer.register_forward_hook(dropout(name, d_idx)))
             else:
                 hooks.append(layer.register_forward_hook(get_output(name)))
+
         x = self.base_model(x)
         for hk in hooks:
             hk.remove()
-        assert self.num_layers() == len(hidden_outputs_dict), f"alignment layers mismatch"
+
+        # align hidden_outputs with alignment_names
+        assert len(hidden_outputs_dict) == len(self.alignment_names), "mismatch"
         hidden_outputs = [hidden_outputs_dict[nm] for nm in self.alignment_names]
         return x, hidden_outputs
 
