@@ -20,6 +20,12 @@ def plot_train_results(exp, train_results, test_results, prms):
     we skip the training curve plot. We can still show test performance if present.
     """
 
+    import torch
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib as mpl
+    from alignment.utils import compute_stats_by_type
+
     # If do_train was false, we might not have train_results["loss"] or train_results["accuracy"].
     # We'll do a check:
     has_train_loss = "loss" in train_results and train_results["loss"].dim() == 2
@@ -28,7 +34,7 @@ def plot_train_results(exp, train_results, test_results, prms):
     # In normal training, shape is (num_replicates, num_epochs)
     # If missing, we can skip them. We'll define num_train_epochs = 0 if missing
     if has_train_loss:
-        num_train_epochs = train_results["loss"].size(1)  ### This is the number of epochs
+        num_train_epochs = train_results["loss"].size(1)
     else:
         num_train_epochs = 0
 
@@ -39,11 +45,8 @@ def plot_train_results(exp, train_results, test_results, prms):
     plot_alignment = "alignment" in train_results
     alignment = None
     if plot_alignment:
-        # Build a dictionary keyed by method
         alignment_by_method = {}
         for record in train_results["alignment"]:
-            # same logic as before for building alignment_by_method
-            # unchanged except for skipping code if  do_train was false
             if isinstance(record, torch.Tensor):
                 method_key = 'RQ'
                 if record.dim() == 3:
@@ -63,13 +66,25 @@ def plot_train_results(exp, train_results, test_results, prms):
                 data_field = record["data"]
                 if isinstance(data_field, list):
                     for net_data in data_field:
-                        for layer_idx, layer_dict in enumerate(net_data):
-                            for method_key, tensor in layer_dict.items():
-                                if method_key not in alignment_by_method:
-                                    alignment_by_method[method_key] = {}
-                                if layer_idx not in alignment_by_method[method_key]:
-                                    alignment_by_method[method_key][layer_idx] = []
-                                alignment_by_method[method_key][layer_idx].append(torch.mean(tensor).item())
+                        for layer_idx, layer_list in enumerate(net_data):
+                            # FIX: layer_list was a list, so we iterate over it before calling .items()
+                            if isinstance(layer_list, dict):
+                                for method_key, tensor in layer_list.items():
+                                    if method_key not in alignment_by_method:
+                                        alignment_by_method[method_key] = {}
+                                    if layer_idx not in alignment_by_method[method_key]:
+                                        alignment_by_method[method_key][layer_idx] = []
+                                    alignment_by_method[method_key][layer_idx].append(torch.mean(tensor).item())
+                            elif isinstance(layer_list, list):
+                                for sub_dict in layer_list:
+                                    for method_key, tensor in sub_dict.items():
+                                        if method_key not in alignment_by_method:
+                                            alignment_by_method[method_key] = {}
+                                        if layer_idx not in alignment_by_method[method_key]:
+                                            alignment_by_method[method_key][layer_idx] = []
+                                        alignment_by_method[method_key][layer_idx].append(torch.mean(tensor).item())
+                            else:
+                                raise TypeError(f"layer_idx={layer_idx} has unexpected type {type(layer_list)}")
                 elif isinstance(data_field, torch.Tensor):
                     method_key = 'RQ'
                     if data_field.dim() == 3:
@@ -89,7 +104,6 @@ def plot_train_results(exp, train_results, test_results, prms):
             else:
                 raise TypeError(f"train_results['alignment'] has an element of type {type(record)}")
 
-        # Now average across records for each method and each layer.
         alignment_avg = {}
         for method_key, layers_dict in alignment_by_method.items():
             layer_avgs = []
@@ -101,12 +115,9 @@ def plot_train_results(exp, train_results, test_results, prms):
 
     cmap = mpl.colormaps["tab10"]
 
-    # If we do have training loss/accuracy, let's do the normal stats
     if has_train_loss:
-        # shape is (replicates, epochs)
-        # We'll transpose to (epochs, replicates) => shape (E,R)
         train_loss_mean, train_loss_se = compute_stats_by_type(
-            train_results["loss"].transpose(0,1),  
+            train_results["loss"].transpose(0,1),
             num_types=num_types,
             dim=1,
             method="se"
@@ -124,8 +135,6 @@ def plot_train_results(exp, train_results, test_results, prms):
     else:
         train_acc_mean, train_acc_se = None, None
 
-    # test_results["loss"] and ["accuracy"] should be shape (replicates,).
-    # If only one pass of test, that's fine. We'll produce a single point for each replicate
     test_loss_mean, test_loss_se = None, None
     test_acc_mean, test_acc_se = None, None
     if ("loss" in test_results) and (test_results["loss"].dim() == 1):
@@ -151,12 +160,8 @@ def plot_train_results(exp, train_results, test_results, prms):
     figdim = 3
     figratio = 2
     width_ratios = [figdim, figdim / figratio, figdim, figdim / figratio]
-
     fig, ax = plt.subplots(1, 4, figsize=(sum(width_ratios), figdim), width_ratios=width_ratios, layout="constrained")
 
-    # -----------
-    # Left two panels: training loss & test loss
-    # -----------
     for idx, label in enumerate(labels):
         if train_loss_mean is not None:
             cmn = train_loss_mean[:, idx].cpu()
@@ -167,7 +172,7 @@ def plot_train_results(exp, train_results, test_results, prms):
         if test_loss_mean is not None:
             tmn = test_loss_mean[idx].cpu().item()
             tse = test_loss_se[idx].cpu().item()
-            ax[1].plot(get_x(idx), [tmn] * 2, color=cmap(idx), label=label, lw=4)
+            ax[1].plot(get_x(idx), [tmn]*2, color=cmap(idx), label=label, lw=4)
             ax[1].plot([idx, idx], [tmn - tse, tmn + tse], color=cmap(idx), lw=1.5)
 
     ax[0].set_xlabel("Training Epoch")
@@ -184,9 +189,6 @@ def plot_train_results(exp, train_results, test_results, prms):
     ax[1].set_xticks(range(num_types))
     ax[1].set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
 
-    # -----------
-    # Right two panels: training acc & test acc
-    # -----------
     for idx, label in enumerate(labels):
         if train_acc_mean is not None:
             cmn = train_acc_mean[:, idx].cpu()
@@ -210,12 +212,9 @@ def plot_train_results(exp, train_results, test_results, prms):
     ax[3].set_xlim(-0.5, num_types - 0.5)
     ax[3].set_xticks(range(num_types))
     ax[3].set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
-    
+
     exp.plot_ready("train_test_performance")
 
-    # -----------
-    # If alignment data is present, plot it
-    # -----------
     if plot_alignment and alignment is not None:
         for method_key, align_tensor in alignment.items():
             num_layers = align_tensor.size(0)
@@ -228,7 +227,7 @@ def plot_train_results(exp, train_results, test_results, prms):
                 ax2[0, layer].set_title(f"Layer {layer} - {method_key}")
             exp.plot_ready(f"train_alignment_{method_key}")
             
-            
+                        
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
     """
     Plot progressive dropout results (loss & accuracy).
