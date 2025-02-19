@@ -6,16 +6,25 @@ from alignment.utils import load_checkpoints, test_nets
 from alignment.alignment_metrics import AlignmentMetrics
 from alignment.train import train, test
 
+
 def parse_alignment_to_tensor(alignment_list, aggregate=True, by_layer=False):
+    """
+    Convert a list of alignment records (each with "data" => per-net/per-layer Tensors) into
+    a unified Tensor for dropout. If by_layer=False => (num_nets, total_nodes).
+    If by_layer=True => (num_layers, num_nets, global_max_nodes).
+
+    We do heavy zero-padding if by_layer=True and different layers have different # of nodes.
+
+    alignment_list is typically results["alignment"], a list of dicts:
+      [ { "epoch":..., "batch":..., "data":[ [ { "RQ":...}, ...], [ { "RQ":...}, ...], ... ] }, ... ]
+    """
     if len(alignment_list) == 0:
         raise ValueError("parse_alignment_to_tensor: empty alignment_list")
 
-    # if by_layer=False => return shape (#nets, total_nodes)
-    # if by_layer=True  => return shape (#layers, #nets, nodes_per_layer_for_that_layer)
-    # we must ensure each record has the same #layers & same #nodes per layer if we want to stack.
-    # if any mismatch occurs, we pad or unify.
-
     if not by_layer:
+        # Same as before: cat all layers for each net => shape (#nets, total_nodes)
+        # Then we can stack across multiple records => (#records, #nets, total_nodes)
+        # and optionally average if aggregate=True
         all_records_tensors = []
         for record in alignment_list:
             netwise_tensors = []
@@ -25,82 +34,72 @@ def parse_alignment_to_tensor(alignment_list, aggregate=True, by_layer=False):
                     if "RQ" not in layer_dict:
                         raise ValueError("Expected 'RQ' in layer_dict")
                     node_tensors.append(layer_dict["RQ"].flatten())
-                # cat all layers => shape (#nodes_total)
-                netwise_tensors.append(torch.cat(node_tensors, dim=0))
-            # stack across nets => shape (#nets, #nodes_total)
-            netwise_tsr = torch.stack(netwise_tensors, dim=0)
+                # cat => shape (sum_of_layer_nodes,)
+                netwise_tensors.append(torch.cat(node_tensors, dim=0))  # (total_nodes,)
+            netwise_tsr = torch.stack(netwise_tensors, dim=0)  # (#nets, total_nodes)
             all_records_tensors.append(netwise_tsr)
-        # shape => (#records, #nets, #nodes_total)
-        bigstack = torch.stack(all_records_tensors, dim=0)
-        # average if aggregator => final shape (#nets, #nodes_total)
+        bigstack = torch.stack(all_records_tensors, dim=0)     # (#records, #nets, total_nodes)
         if aggregate:
-            return bigstack.mean(dim=0)
+            return bigstack.mean(dim=0)                       # => (#nets, total_nodes)
         else:
-            # or just take the mean anyway so we have a single snapshot
-            return bigstack.mean(dim=0)
+            return bigstack.mean(dim=0)                       # or just pick last record, etc.
     else:
-        # by_layer=True => produce shape => (#layers, #nets, #nodes_per_layer)
-        # each record can have multiple layers; we must ensure the same #layers across records
-        # also each net must have the same #layers. We'll find the max #layers and zero-pad if needed.
-        all_records = []  # each entry => list of shape (#layers, #nets, #nodes_layer)
+        # by_layer=True => each layer can have a different # of nodes. We unify all records.
+        # We pick the global max # nodes among *all layers, all records* to allow stacking.
 
+        # 1) Find max number of layers overall:
         max_layers_found = 0
-        for record in alignment_list:
-            # record["data"] => list of #nets
-            # each net => list of layer_dicts => { "RQ": <Tensor(#nodes_layer,)> }
-            # first find how many layers => from the first net
-            max_layers_found = max(max_layers_found, len(record["data"][0]))
+        # 2) Find global_max_nodes => single int for ALL layers:
+        global_max_nodes = 0
 
-        # now parse each record
         for record in alignment_list:
-            # build shape => (#layers, #nets, variable #nodes?) => we can't stack directly unless each layer's #nodes match across nets
+            net_list = record["data"]  # shape => (#nets)
+            for net_i_data in net_list:
+                # net_i_data => list of layer_dicts
+                num_layers_net = len(net_i_data)
+                max_layers_found = max(max_layers_found, num_layers_net)
+                # check node counts
+                for layer_idx, layer_dict in enumerate(net_i_data):
+                    if "RQ" not in layer_dict:
+                        raise ValueError("Expected 'RQ' in layer_dict")
+                    ncount = layer_dict["RQ"].numel()
+                    if ncount > global_max_nodes:
+                        global_max_nodes = ncount
+
+        # 3) Build array => for each record => shape (#layers= max_layers_found, #nets, global_max_nodes)
+        all_record_arrays = []
+        for record in alignment_list:
             net_list = record["data"]
             num_nets = len(net_list)
-            # net_list[i] => list of layer_dict for net i
-            # we unify so each net has 'max_layers_found' layers (pad if missing)
-            rec_layers = []
-            for layer_idx in range(max_layers_found):
-                # gather each net's RQ for this layer
-                netwise = []
-                for net_idx in range(num_nets):
-                    net_layers = net_list[net_idx]
-                    if layer_idx < len(net_layers):
-                        layer_dict = net_layers[layer_idx]
-                        if "RQ" not in layer_dict:
-                            raise ValueError("Expected 'RQ' in layer_dict")
-                        netwise.append(layer_dict["RQ"].flatten())
+            # for this record, build a list => each layer => (#nets, global_max_nodes) => zero-padded
+            layer_arrays = []
+            for layer_i in range(max_layers_found):
+                # gather each net's data for layer_i
+                net_arrays = []
+                for net_i_data in net_list:
+                    if layer_i < len(net_i_data):
+                        lay_dict = net_i_data[layer_i]
+                        rq_vals = lay_dict["RQ"].flatten()
                     else:
-                        # pad with zero if layer is missing
-                        netwise.append(torch.zeros(0))
-                # netwise => list of length #nets, each => shape (#nodes_layer_i,)
-                # we can find max #nodes among them and pad
-                max_nodes_layer = 0
-                for item in netwise:
-                    max_nodes_layer = max(max_nodes_layer, item.numel())
-                # pad each net to max_nodes_layer
-                padded_nets = []
-                for item in netwise:
-                    if item.numel() < max_nodes_layer:
-                        pad_size = max_nodes_layer - item.numel()
-                        item_padded = torch.cat([item, torch.zeros(pad_size, dtype=item.dtype, device=item.device)], dim=0)
-                        padded_nets.append(item_padded)
-                    else:
-                        padded_nets.append(item)
-                # shape => (#nets, max_nodes_layer)
-                layer_tsr = torch.stack(padded_nets, dim=0)
-                rec_layers.append(layer_tsr)
-            # now rec_layers => list of length max_layers_found => each => (#nets, max_nodes_layer)
-            # stack => shape => (#layers, #nets, max_nodes_layer)
-            rec_layers_tsr = torch.stack(rec_layers, dim=0)
-            all_records.append(rec_layers_tsr)
+                        rq_vals = torch.zeros(0)
+                    node_count = rq_vals.numel()
+                    if node_count < global_max_nodes:
+                        pad_size = global_max_nodes - node_count
+                        rq_vals = torch.cat([rq_vals, torch.zeros(pad_size, dtype=rq_vals.dtype, device=rq_vals.device)], dim=0)
+                    net_arrays.append(rq_vals)  # shape => (global_max_nodes,)
+                layer_tensor = torch.stack(net_arrays, dim=0)  # (#nets, global_max_nodes)
+                layer_arrays.append(layer_tensor)
+            # stack => (#layers_found, #nets, global_max_nodes)
+            record_3d = torch.stack(layer_arrays, dim=0)  
+            all_record_arrays.append(record_3d)
 
-        # shape => (#records, #layers, #nets, max_nodes_layer)
-        bigstack = torch.stack(all_records, dim=0)
+        # shape => (#records, max_layers_found, #nets, global_max_nodes)
+        bigstack = torch.stack(all_record_arrays, dim=0)
         if aggregate:
-            # => (#layers, #nets, max_nodes_layer)
-            return bigstack.mean(dim=0)
+            final_3d = bigstack.mean(dim=0)  # => (max_layers_found, #nets, global_max_nodes)
         else:
-            return bigstack.mean(dim=0)
+            final_3d = bigstack.mean(dim=0)
+        return final_3d
 
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):
@@ -178,13 +177,11 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     parsed = parse_alignment_to_tensor(alignment, aggregate=aggregator, by_layer=by_layer)
 
     if not by_layer:
-        # shape => (#nets, #nodes_total)
         idx_alignment = [torch.argsort(parsed, dim=1)]
         num_snapshots = 1
         num_nets_ = parsed.shape[0]
     else:
-        # shape => (#layers, #nets, max_nodes_layer)
-        num_layers, num_nets_, max_nodes_layer = parsed.shape
+        num_layers, num_nets_, global_max_nodes = parsed.shape
         idx_alignment = []
         for layer_i in range(num_layers):
             idx_alignment.append(torch.argsort(parsed[layer_i], dim=1))
@@ -218,25 +215,26 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 
         for dropidx, fraction in enumerate(drop_fraction):
             if by_layer:
-                for layer_i in range(num_layers):
+                for layer_i in range(num_snapshots):
                     layer_idx_sorted = idx_alignment[layer_i]
-                    device_of_idx = layer_idx_sorted.device
+                    dev = layer_idx_sorted.device
                     node_count = layer_idx_sorted.size(1)
-                    drop_num = int(node_count * fraction)
-                    if drop_num > 0:
+                    dn = int(node_count * fraction)
+                    if dn > 0:
                         hi = torch.index_select(layer_idx_sorted, dim=1,
-                            index=torch.arange(node_count - drop_num, node_count, device=device_of_idx))
+                              index=torch.arange(node_count - dn, node_count, device=dev))
                         lo = torch.index_select(layer_idx_sorted, dim=1,
-                            index=torch.arange(drop_num, device=device_of_idx))
+                              index=torch.arange(dn, device=dev))
                         rr = []
                         for i_net in range(num_nets_):
-                            perm = torch.randperm(node_count, device=device_of_idx)
-                            rr.append(perm[:drop_num])
+                            perm = torch.randperm(node_count, device=dev)
+                            rr.append(perm[:dn])
                         rr = torch.stack(rr, dim=0)
                     else:
                         hi = layer_idx_sorted[:, :0]
                         lo = layer_idx_sorted[:, :0]
                         rr = layer_idx_sorted[:, :0]
+
                     out_high, out_low, out_rand_ = [], [], []
                     for i_net, net in enumerate(nets):
                         oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [layer_i])
@@ -267,24 +265,24 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(al, device="cpu")
                     progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(ar, device="cpu")
             else:
-                layer_idx_sorted = idx_alignment[0]
-                device_of_idx = layer_idx_sorted.device
-                node_count = layer_idx_sorted.size(1)
-                drop_num = int(node_count * fraction)
-                if drop_num > 0:
-                    hi = torch.index_select(layer_idx_sorted, dim=1,
-                        index=torch.arange(node_count - drop_num, node_count, device=device_of_idx))
-                    lo = torch.index_select(layer_idx_sorted, dim=1,
-                        index=torch.arange(drop_num, device=device_of_idx))
+                dev = idx_alignment[0].device
+                node_count = idx_alignment[0].size(1)
+                dn = int(node_count * fraction)
+                if dn > 0:
+                    hi = torch.index_select(idx_alignment[0], dim=1,
+                         index=torch.arange(node_count - dn, node_count, device=dev))
+                    lo = torch.index_select(idx_alignment[0], dim=1,
+                         index=torch.arange(dn, device=dev))
                     rr = []
                     for i_net in range(num_nets_):
-                        perm = torch.randperm(node_count, device=device_of_idx)
-                        rr.append(perm[:drop_num])
+                        perm = torch.randperm(node_count, device=dev)
+                        rr.append(perm[:dn])
                     rr = torch.stack(rr, dim=0)
                 else:
-                    hi = layer_idx_sorted[:, :0]
-                    lo = layer_idx_sorted[:, :0]
-                    rr = layer_idx_sorted[:, :0]
+                    hi = idx_alignment[0][:, :0]
+                    lo = idx_alignment[0][:, :0]
+                    rr = idx_alignment[0][:, :0]
+
                 out_high, out_low, out_rand_ = [], [], []
                 for i_net, net in enumerate(nets):
                     oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [0])
