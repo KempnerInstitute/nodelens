@@ -1,12 +1,8 @@
-# --------------------------------------------
-# processing.py
-# --------------------------------------------
-
 import os
 import torch
 from tqdm import tqdm
 
-from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
+from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack, condense_values
 import alignment.train as train
 from alignment.alignment_metrics import AlignmentMetrics
 
@@ -80,38 +76,29 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         nets = [nets]
     if alignment is None:
         alignment = train.test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
-    aggregate_alignment = parameters.get("aggregate_alignment", True)
-    if aggregate_alignment:
-        last_snapshot = alignment[-1]["data"]
-        num_layers = len(last_snapshot[0])
-        aggregated = []
-        for layer in range(num_layers):
-            layer_vals = [net_data[layer]["RQ"] for net_data in last_snapshot]
-            aggregated.append(torch.stack(layer_vals, dim=0))
-        alignment = aggregated
-    else:
-        all_snapshots = [snap["data"] for snap in alignment]
-        num_layers = len(all_snapshots[0][0])
-        aggregated = []
-        for layer in range(num_layers):
-            vals = []
-            for snap in all_snapshots:
-                layer_vals = [net_data[layer]["RQ"] for net_data in snap]
-                vals.append(torch.stack(layer_vals, dim=0))
-            aggregated.append(torch.mean(torch.stack(vals, dim=0), dim=0))
-        alignment = aggregated
-    idx_alignment = [torch.argsort(al, dim=1) for al in alignment]
-    idx_dropout_layers = nets[0].get_alignment_layer_indices()
-    classification_layer = nets[0].num_layers(all=True) - 1
-    if classification_layer in idx_dropout_layers:
-        idx_dropout_layers.pop(-1)
-        idx_alignment = idx_alignment[:-1]
-        num_layers = len(idx_dropout_layers)
+>>>    if parameters.get("aggregate_alignment", False):
+>>>        alignment = [{"data": alignment}]
+    alignment_layers = []
+    for layerdata in alignment:
+        all_nets_rq = []
+        for net_i_data in layerdata["data"]:
+            net_nodes = []
+            for layer_dict in net_i_data:
+                net_nodes.append(layer_dict["RQ"].flatten())
+            flattened = torch.cat(net_nodes, dim=0)
+            all_nets_rq.append(flattened)
+        stacked = torch.stack(all_nets_rq, dim=0)
+        alignment_layers.append(stacked)
+    idx_alignment = []
+    for snap_tensor in alignment_layers:
+        idx_sorted = torch.argsort(snap_tensor, dim=1)
+        idx_alignment.append(idx_sorted)
+    num_snapshots = len(idx_alignment)
+    by_layer = parameters.get("by_layer", False)
+    num_layers = num_snapshots if by_layer else 1
     num_nets = len(nets)
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
-    by_layer = parameters.get("by_layer", False)
-    num_layers = len(idx_dropout_layers) if by_layer else 1
     progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
     progdrop_loss_low  = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
     progdrop_loss_rand = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
@@ -199,7 +186,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(al, device="cpu")
                     progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(ar, device="cpu")
             else:
-                drop_layer = list(range(len(idx_high_list)))
+                drop_layer = list(range(num_snapshots))
                 out_high = []
                 out_low = []
                 out_rand = []
@@ -207,7 +194,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     h_idxs = []
                     l_idxs = []
                     r_idxs = []
-                    for snap_i in range(len(idx_high_list)):
+                    for snap_i in range(num_snapshots):
                         h_idxs.append(idx_high_list[snap_i][i_net, :])
                         l_idxs.append(idx_low_list[snap_i][i_net, :])
                         r_idxs.append(idx_rand_list[snap_i][i_net, :])
@@ -239,24 +226,24 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                 progdrop_acc_high[:, dropidx, layer_i]  += torch.tensor(ah, device="cpu")
                 progdrop_acc_low[:, dropidx, layer_i]   += torch.tensor(al, device="cpu")
                 progdrop_acc_rand[:, dropidx, layer_i]  += torch.tensor(ar, device="cpu")
-    progdrop_loss_high /= num_batches
-    progdrop_loss_low  /= num_batches
-    progdrop_loss_rand /= num_batches
-    progdrop_acc_high  /= num_batches
-    progdrop_acc_low   /= num_batches
-    progdrop_acc_rand  /= num_batches
-
-    results = {
-        "progdrop_loss_high": progdrop_loss_high,
-        "progdrop_loss_low":  progdrop_loss_low,
-        "progdrop_loss_rand": progdrop_loss_rand,
-        "progdrop_acc_high":  progdrop_acc_high,
-        "progdrop_acc_low":   progdrop_acc_low,
-        "progdrop_acc_rand":  progdrop_acc_rand,
-        "dropout_fraction":   drop_fraction,
-        "by_layer":           by_layer,
-    }
-    return results
+        progdrop_loss_high /= num_batches
+        progdrop_loss_low  /= num_batches
+        progdrop_loss_rand /= num_batches
+        progdrop_acc_high  /= num_batches
+        progdrop_acc_low   /= num_batches
+        progdrop_acc_rand  /= num_batches
+        results = {
+            "progdrop_loss_high": progdrop_loss_high,
+            "progdrop_loss_low":  progdrop_loss_low,
+            "progdrop_loss_rand": progdrop_loss_rand,
+            "progdrop_acc_high":  progdrop_acc_high,
+            "progdrop_acc_low":   progdrop_acc_low,
+            "progdrop_acc_rand":  progdrop_acc_rand,
+            "dropout_fraction":   drop_fraction,
+            "by_layer":           by_layer,
+            "idx_dropout_layers": list(range(num_snapshots)),
+        }
+        return results
 
 def get_dropout_indices(idx_alignment, fraction):
     idx_high_list = []
@@ -297,6 +284,7 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
         num_drops=exp.args.extra.num_drops,
         by_layer=exp.args.extra.dropout_by_layer,
         train_set=train_set,
+        aggregate_alignment=exp.args.extra.aggregate_alignment
     )
     dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
     return dropout_results, dropout_params
@@ -445,7 +433,6 @@ def eigenvector_dropout_experiment(exp, nets, dataset, eigen_results, train_set=
 def evaluate_pretrained_model(net, dataset):
     net.eval()
     device = next(net.parameters()).device
-
     total_correct = 0
     total_samples = 0
     with torch.no_grad():
@@ -455,7 +442,6 @@ def evaluate_pretrained_model(net, dataset):
             predictions = outputs.argmax(dim=1)
             total_correct += (predictions == labels).sum().item()
             total_samples += labels.size(0)
-
     accuracy = 100.0 * total_correct / total_samples if total_samples > 0 else 0.0
     print(f"Pretrained Model Accuracy: {accuracy:.2f}%")
     return accuracy

@@ -24,7 +24,6 @@ class GeneralAlignmentExperiment(Experiment):
             optim_cls = torch.optim.SGD
         else:
             raise ValueError(f"Unknown optimizer {self.args.training.name}")
-
         nets = []
         for _ in range(self.args.training.replicates):
             net = get_model(
@@ -39,12 +38,10 @@ class GeneralAlignmentExperiment(Experiment):
             for name, layer in net.base_model.named_modules():
                 if hasattr(layer, "weight"):
                     print(name, layer.weight.shape)
-
         optimizers = [
             optim_cls(net.parameters(), lr=self.args.training.lr, weight_decay=self.args.training.weight_decay)
             for net in nets
         ]
-
         prms = dict(
             vals=[self.args.model.name],
             name="network",
@@ -69,7 +66,6 @@ class GeneralAlignmentExperiment(Experiment):
 
     def main(self):
         nets, optimizers, prms = self.create_networks()
-
         if self.args.training.do_train:
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
             train_results, test_results = processing.train_networks(self, nets, optimizers, dataset)
@@ -81,17 +77,14 @@ class GeneralAlignmentExperiment(Experiment):
                 pretrained_torchvision_alexnet = tvm.alexnet(weights=AlexNet_Weights.IMAGENET1K_V1).to(self.device)
                 nets[0].base_model.load_state_dict(pretrained_torchvision_alexnet.state_dict())
                 nets[0].eval()
-
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
             print("Evaluating downloaded pretrained weights for baseline accuracy...")
             acc = evaluate_pretrained_model(nets[0], dataset)
             print("accuracy:", acc)
             test_results = processing.test_networks(self, nets, dataset)
-
         dropout_results, dropout_params = processing.progressive_dropout_experiment(
             self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
         )
-
         results = {
             "prms": prms,
             "train_results": train_results,
@@ -99,10 +92,8 @@ class GeneralAlignmentExperiment(Experiment):
             "dropout_results": dropout_results,
             "dropout_parameters": dropout_params,
         }
-
         if len(nets) > 0:
             results["alignment_names"] = nets[0].alignment_names
-
         return results, nets
 
     def plot(self, results):
@@ -124,7 +115,6 @@ def cli_main():
     parser = argparse.ArgumentParser(description="General alignment experiment")
     parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
     args = parser.parse_args(sys.argv[1:])
-
     cfg = ExperimentConfig.load(args.config)
     experiment = GeneralAlignmentExperiment(cfg)
     if cfg.just_plot:
@@ -133,6 +123,5 @@ def cli_main():
         results, nets = experiment.run()
         if not cfg.no_save:
             experiment.save_results(results)
-
 if __name__ == "__main__":
     cli_main()

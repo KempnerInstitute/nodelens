@@ -608,3 +608,16 @@ def compress_directory(output_path, directory_path=None):
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file, name in zip(files_to_copy, archive_names):
             zipf.write(file, arcname=name)
+            
+            
+def condense_values(al_list):
+    data_list = [item["data"] for item in al_list]
+    aggregated = []
+    for net_i in range(len(data_list[0])):
+        net_snapshots = [d[net_i] for d in data_list]
+        net_layers = []
+        for layer_i in range(len(net_snapshots[0])):
+            layer_values = [snap[layer_i] for snap in net_snapshots]
+            net_layers.append(torch.stack(layer_values, dim=0).mean(dim=0))
+        aggregated.append(net_layers)
+    return aggregated
