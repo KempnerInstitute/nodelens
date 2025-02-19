@@ -2,8 +2,29 @@ import os
 import torch
 from tqdm import tqdm
 
-from alignment.utils import load_checkpoints, test_nets, transpose_list, fgsm_attack
+from alignment.utils import load_checkpoints, test_nets
 from alignment.alignment_metrics import AlignmentMetrics
+
+def parse_alignment_to_tensor(alignment_list, aggregate=True):
+    if len(alignment_list) == 0:
+        raise ValueError("parse_alignment_to_tensor: empty alignment_list")
+    all_records_tensors = []
+    for record in alignment_list:
+        netwise_tensors = []
+        for net_i_data in record["data"]:
+            node_tensors = []
+            for layer_dict in net_i_data:
+                if "RQ" not in layer_dict:
+                    raise ValueError("Expected 'RQ' in layer_dict")
+                node_tensors.append(layer_dict["RQ"].flatten())
+            netwise_tensors.append(torch.cat(node_tensors, dim=0))
+        netwise_tsr = torch.stack(netwise_tensors, dim=0)
+        all_records_tensors.append(netwise_tsr)
+    bigstack = torch.stack(all_records_tensors, dim=0)
+    if aggregate:
+        return bigstack.mean(dim=0)
+    else:
+        return bigstack.mean(dim=0)
 
 def train_networks(exp, nets, optimizers, dataset, **special_parameters):
     do_alignment_train = exp.args.alignment.do_alignment
@@ -75,27 +96,10 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         nets = [nets]
     if alignment is None:
         alignment = test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
-    if parameters.get("aggregate_alignment", False):
-        aggregated_alignment = alignment
-        idx_alignment = [torch.argsort(aggregated_alignment, dim=1)]
-        num_snapshots = 1
-    else:
-        alignment_layers = []
-        for layerdata in alignment:
-            all_nets_rq = []
-            for net_i_data in layerdata["data"]:
-                net_nodes = []
-                for layer_dict in net_i_data:
-                    net_nodes.append(layer_dict["RQ"].flatten())
-                flattened = torch.cat(net_nodes, dim=0)
-                all_nets_rq.append(flattened)
-            stacked = torch.stack(all_nets_rq, dim=0)
-            alignment_layers.append(stacked)
-        idx_alignment = []
-        for snap_tensor in alignment_layers:
-            idx_sorted = torch.argsort(snap_tensor, dim=1)
-            idx_alignment.append(idx_sorted)
-        num_snapshots = len(idx_alignment)
+    aggregator = parameters.get("aggregate_alignment", False)
+    aggregated_tsr = parse_alignment_to_tensor(alignment, aggregate=aggregator)
+    idx_alignment = [torch.argsort(aggregated_tsr, dim=1)]
+    num_snapshots = 1
     by_layer = parameters.get("by_layer", False)
     num_layers = num_snapshots if by_layer else 1
     num_nets = len(nets)
@@ -116,31 +120,26 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         num_batches += 1
         for dropidx, fraction in enumerate(drop_fraction):
             idx_high_list, idx_low_list, idx_rand_list = [], [], []
-            for snap_idx, idx_sorted in enumerate(idx_alignment):
-                device_of_idx = idx_sorted.device
-                num_nodes = idx_sorted.size(1)
-                drop_num = int(num_nodes * fraction)
-                if drop_num > 0:
-                    high_idx = torch.index_select(idx_sorted, dim=1, index=torch.arange(num_nodes - drop_num, num_nodes, device=device_of_idx))
-                    low_idx = torch.index_select(idx_sorted, dim=1, index=torch.arange(drop_num, device=device_of_idx))
-                else:
-                    high_idx = idx_sorted[:, :0]
-                    low_idx = idx_sorted[:, :0]
-                if drop_num > 0:
-                    rand_idx = []
-                    for i_net in range(num_nets):
-                        perm = torch.randperm(num_nodes, device=device_of_idx)
-                        rand_idx.append(perm[:drop_num])
-                    rand_idx = torch.stack(rand_idx, dim=0)
-                else:
-                    rand_idx = idx_sorted[:, :0]
-                idx_high_list.append(high_idx)
-                idx_low_list.append(low_idx)
-                idx_rand_list.append(rand_idx)
+            device_of_idx = idx_alignment[0].device
+            num_nodes = idx_alignment[0].size(1)
+            drop_num = int(num_nodes * fraction)
+            if drop_num > 0:
+                high_idx = torch.index_select(idx_alignment[0], dim=1, index=torch.arange(num_nodes - drop_num, num_nodes, device=device_of_idx))
+                low_idx = torch.index_select(idx_alignment[0], dim=1, index=torch.arange(drop_num, device=device_of_idx))
+                rand_idx = []
+                for i_net in range(num_nets):
+                    perm = torch.randperm(num_nodes, device=device_of_idx)
+                    rand_idx.append(perm[:drop_num])
+                rand_idx = torch.stack(rand_idx, dim=0)
+            else:
+                high_idx = idx_alignment[0][:, :0]
+                low_idx = idx_alignment[0][:, :0]
+                rand_idx = idx_alignment[0][:, :0]
+            idx_high_list.append(high_idx)
+            idx_low_list.append(low_idx)
+            idx_rand_list.append(rand_idx)
             if by_layer:
                 for layer_i in range(num_layers):
-                    if layer_i >= len(idx_high_list):
-                        break
                     drop_high_use = [idx_high_list[layer_i]]
                     drop_low_use  = [idx_low_list[layer_i]]
                     drop_rand_use = [idx_rand_list[layer_i]]
@@ -185,13 +184,9 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                 out_low = []
                 out_rand = []
                 for i_net, net in enumerate(nets):
-                    h_idxs = []
-                    l_idxs = []
-                    r_idxs = []
-                    for snap_i in range(num_snapshots):
-                        h_idxs.append(idx_high_list[snap_i][i_net, :])
-                        l_idxs.append(idx_low_list[snap_i][i_net, :])
-                        r_idxs.append(idx_rand_list[snap_i][i_net, :])
+                    h_idxs = [idx_high_list[snap_i][i_net, :] for snap_i in range(num_snapshots)]
+                    l_idxs = [idx_low_list[snap_i][i_net, :] for snap_i in range(num_snapshots)]
+                    r_idxs = [idx_rand_list[snap_i][i_net, :] for snap_i in range(num_snapshots)]
                     oh, _ = net.forward_targeted_dropout(images, h_idxs, drop_layer)
                     ol, _ = net.forward_targeted_dropout(images, l_idxs, drop_layer)
                     or_, _ = net.forward_targeted_dropout(images, r_idxs, drop_layer)
@@ -284,7 +279,6 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
     return dropout_results, dropout_params
 
 def measure_eigenfeatures(exp, nets, dataset, train_set=False):
-    print("measuring eigenfeatures...")
     from tqdm import tqdm
     beta, eigvals, eigvecs, class_betas = [], [], [], []
     for net in tqdm(nets):
@@ -312,9 +306,9 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
 @test_nets
 @torch.no_grad()
 def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
+    num_nets = len(nets) if isinstance(nets, list) else 1
     if not isinstance(nets, list):
         nets = [nets]
-    num_nets = len(nets)
     align_layer_indices = list(range(len(nets[0].alignment_layers)))
     by_layer = parameters.get("by_layer", False)
     num_layers = len(align_layer_indices) if by_layer else 1
@@ -352,7 +346,7 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
                 else:
                     drop_layer = align_layer_indices
                     drop_high = idx_high
-                    drop_low = idx_low
+                    drop_low  = idx_low
                     drop_rand = idx_rand
                 out_high, out_low, out_rand_ = [], [], []
                 for i_net, net in enumerate(nets):
@@ -409,7 +403,6 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     return results
 
 def eigenvector_dropout_experiment(exp, nets, dataset, eigen_results, train_set=False):
-    print("performing targeted eigenvector dropout...")
     evec_params = dict(
         num_drops=exp.args.extra.num_drops,
         by_layer=exp.args.extra.dropout_by_layer,
@@ -439,105 +432,3 @@ def evaluate_pretrained_model(net, dataset):
     accuracy = 100.0 * total_correct / total_samples if total_samples > 0 else 0.0
     print(f"Pretrained Model Accuracy: {accuracy:.2f}%")
     return accuracy
-
-def train(nets, optimizers, dataset, train_set=True, num_epochs=10,
-          alignment=False, methods=None, frequency=1,
-          measure_expected=False, results=None, verbose=True,
-          num_complete=0, save_checkpoints=None, **kwargs):
-    if methods is None:
-        methods = ["RQ"]
-    if results is None:
-        results = {}
-    if "loss" not in results:
-        results["loss"] = []
-    if "accuracy" not in results:
-        results["accuracy"] = []
-    if alignment and "alignment" not in results:
-        results["alignment"] = []
-
-    device = dataset.device
-    loader = dataset.train_loader if train_set else dataset.test_loader
-
-    for epoch in range(num_complete, num_epochs):
-        epoch_losses = []
-        epoch_accs = []
-        for i_net, net in enumerate(nets):
-            net.train()
-
-        for batch_idx, batch in enumerate(loader):
-            inputs, targets = dataset.unwrap_batch(batch, device=device)
-            for i_net, net in enumerate(nets):
-                optimizers[i_net].zero_grad()
-                outputs = net(inputs)
-                loss = dataset.measure_loss(outputs, targets)
-                loss.backward()
-                optimizers[i_net].step()
-                epoch_losses.append(loss.item())
-                with torch.no_grad():
-                    acc = dataset.measure_accuracy(outputs, targets)
-                epoch_accs.append(acc.item())
-
-        mean_loss = torch.tensor(epoch_losses).mean()
-        mean_acc = torch.tensor(epoch_accs).mean()
-        results["loss"].append(mean_loss)
-        results["accuracy"].append(mean_acc)
-
-        if alignment and ((epoch + 1) % frequency == 0):
-            align_data = test(nets, dataset, train_set=train_set, alignment=True, methods=methods)
-            if "alignment" not in results:
-                results["alignment"] = []
-            results["alignment"].append(align_data["alignment"])
-
-        if save_checkpoints is not None:
-            save_ckpt, freq_ckpt, path_ckpt, dev_ckpt = save_checkpoints
-            if save_ckpt and ((epoch + 1) % freq_ckpt == 0):
-                cdict = dict(epoch=epoch, train_set=train_set)
-                cdict.update(results)
-                load_checkpoints(nets, optimizers, dev_ckpt, None)
-                from alignment.utils import save_checkpoint
-                save_checkpoint(nets, optimizers, cdict, path_ckpt)
-
-        if verbose:
-            print(f"Epoch {epoch+1}/{num_epochs} => loss={mean_loss:.4f}, acc={mean_acc:.2f}")
-
-    results["loss"] = torch.tensor(results["loss"])
-    results["accuracy"] = torch.tensor(results["accuracy"])
-    return results
-
-@test_nets
-@torch.no_grad()
-def test(nets, dataset, train_set=False, alignment=False, methods=None,
-         frequency=1, measure_expected=False, bins=50, results=None,
-         verbose=True, **kwargs):
-    if methods is None:
-        methods = ["RQ"]
-    if results is None:
-        results = {}
-    device = dataset.device
-    loader = dataset.train_loader if train_set else dataset.test_loader
-
-    total_correct = torch.zeros(len(nets))
-    total_samples = 0
-    with torch.no_grad():
-        for batch_idx, batch in enumerate(loader):
-            inputs, targets = dataset.unwrap_batch(batch, device=device)
-            total_samples += targets.size(0)
-            for i_net, net in enumerate(nets):
-                outputs = net(inputs)
-                pred = outputs.argmax(dim=1)
-                total_correct[i_net] += (pred == targets).sum()
-
-    results["accuracy"] = total_correct * 100.0 / float(total_samples)
-
-    if alignment:
-        netdata_list = []
-        for net in nets:
-            adata = net.measure_alignment_methods(inputs, methods=methods, precomputed=False)
-            netdata_list.append(adata)
-        snapshot_info = {}
-        snapshot_info["data"] = netdata_list
-        results["alignment"] = [snapshot_info]
-
-    if verbose:
-        print("Test => accuracy:", results["accuracy"])
-    return results

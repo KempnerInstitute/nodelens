@@ -124,7 +124,7 @@ def plot_train_results(exp, train_results, test_results, prms):
     else:
         train_acc_mean, train_acc_se = None, None
 
-    # test_results["loss"] and ["accuracy"] should be shape (replicates,). 
+    # test_results["loss"] and ["accuracy"] should be shape (replicates,).
     # If only one pass of test, that's fine. We'll produce a single point for each replicate
     test_loss_mean, test_loss_se = None, None
     test_acc_mean, test_acc_se = None, None
@@ -159,14 +159,14 @@ def plot_train_results(exp, train_results, test_results, prms):
     # -----------
     for idx, label in enumerate(labels):
         if train_loss_mean is not None:
-            cmn = train_loss_mean[:, idx]  # shape => (num_train_epochs,)
-            cse = train_loss_se[:, idx]
+            cmn = train_loss_mean[:, idx].cpu()
+            cse = train_loss_se[:, idx].cpu()
             ax[0].plot(range(num_train_epochs), cmn, color=cmap(idx), label=label)
             ax[0].fill_between(range(num_train_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
 
         if test_loss_mean is not None:
-            tmn = test_loss_mean[idx]
-            tse = test_loss_se[idx]
+            tmn = test_loss_mean[idx].cpu().item()
+            tse = test_loss_se[idx].cpu().item()
             ax[1].plot(get_x(idx), [tmn] * 2, color=cmap(idx), label=label, lw=4)
             ax[1].plot([idx, idx], [tmn - tse, tmn + tse], color=cmap(idx), lw=1.5)
 
@@ -189,14 +189,14 @@ def plot_train_results(exp, train_results, test_results, prms):
     # -----------
     for idx, label in enumerate(labels):
         if train_acc_mean is not None:
-            cmn = train_acc_mean[:, idx]
-            cse = train_acc_se[:, idx]
+            cmn = train_acc_mean[:, idx].cpu()
+            cse = train_acc_se[:, idx].cpu()
             ax[2].plot(range(num_train_epochs), cmn, color=cmap(idx), label=label)
             ax[2].fill_between(range(num_train_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
 
         if test_acc_mean is not None:
-            tmn = test_acc_mean[idx]
-            tse = test_acc_se[idx]
+            tmn = test_acc_mean[idx].cpu().item()
+            tse = test_acc_se[idx].cpu().item()
             ax[3].plot(get_x(idx), [tmn]*2, color=cmap(idx), label=label, lw=4)
             ax[3].plot([idx, idx], [tmn - tse, tmn + tse], color=cmap(idx), lw=1.5)
 
@@ -221,13 +221,14 @@ def plot_train_results(exp, train_results, test_results, prms):
             num_layers = align_tensor.size(0)
             fig2, ax2 = plt.subplots(1, num_layers, figsize=(num_layers * figdim, figdim), layout="constrained", sharex=True, squeeze=False)
             for layer in range(num_layers):
-                val = align_tensor[layer].item() * 100
+                val = align_tensor[layer].cpu().item() * 100
                 ax2[0, layer].axhline(val, color=cmap(0), label=method_key)
                 ax2[0, layer].set_xlabel("Snapshots")
                 ax2[0, layer].set_ylabel("Alignment (%)")
                 ax2[0, layer].set_title(f"Layer {layer} - {method_key}")
             exp.plot_ready(f"train_alignment_{method_key}")
-
+            
+            
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
     """
     Plot progressive dropout results (loss & accuracy).
