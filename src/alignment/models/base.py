@@ -280,7 +280,8 @@ class AlignmentNetwork(nn.Module):
         assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables with the same length"
         assert len(idxs) == len(layers), "idxs and layers need to be iterables with the same length"
         assert len(layers) == len(set(layers)), "layers must not have any repeated elements"
-        assert all([layer >= 0 and layer < len(self.layers) - 1 for layer in layers]), "dropout only works on first N-1 layers"
+        assert all([layer >= 0 and layer < len(self.alignment_layers) - 1 for layer in layers]), "dropout only works on first N-1 layers"
+        
         hidden_outputs_dict = {}
         hooks = []
         def dropout(hook_name, dropout_idx):
