@@ -76,8 +76,8 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         nets = [nets]
     if alignment is None:
         alignment = train.test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
->>>    if parameters.get("aggregate_alignment", False):
->>>        alignment = [{"data": alignment}]
+    if parameters.get("aggregate_alignment", False):
+        alignment = [{"data": alignment}]
     alignment_layers = []
     for layerdata in alignment:
         all_nets_rq = []
