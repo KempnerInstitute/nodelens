@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 from alignment.utils import load_checkpoints, test_nets
 from alignment.alignment_metrics import AlignmentMetrics
-from alignment.training import train, test
+from alignment.train import train, test
 
 def parse_alignment_to_tensor(alignment_list, aggregate=True):
     if len(alignment_list) == 0:
