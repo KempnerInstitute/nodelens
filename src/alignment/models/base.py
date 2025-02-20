@@ -1,5 +1,3 @@
-# base.py
-
 from warnings import warn
 from typing import Optional, Union, List
 
@@ -235,7 +233,8 @@ class AlignmentNetwork(nn.Module):
 
     @torch.no_grad()
     def measure_alignment_methods(self, x, methods, precomputed=False):
-        layer_inputs = self.get_layer_inputs(x, precomputed=precomputed)
+        # force precomputed=False so hooking always runs
+        layer_inputs = self.get_layer_inputs(x, precomputed=False)
         preprocessed = self._preprocess_inputs(layer_inputs, compress_convolutional=True)
         weights = self.get_alignment_weights(flatten=True)
         all_layer_results = []
@@ -254,7 +253,7 @@ class AlignmentNetwork(nn.Module):
 
     @torch.no_grad()
     def measure_alignment(self, x, precomputed=False, method="alignment", relative=True):
-        layer_inputs = self.get_layer_inputs(x, precomputed=precomputed)
+        layer_inputs = self.get_layer_inputs(x, precomputed=False)
         preprocessed = self._preprocess_inputs(layer_inputs, compress_convolutional=True)
         weights = self.get_alignment_weights(flatten=True)
         outputs = []
@@ -265,7 +264,7 @@ class AlignmentNetwork(nn.Module):
 
     @torch.no_grad()
     def measure_alignment_weights(self, x, weights, precomputed=False, method="alignment", relative=True):
-        layer_inputs = self.get_layer_inputs(x, precomputed=precomputed)
+        layer_inputs = self.get_layer_inputs(x, precomputed=False)
         preprocessed = self._preprocess_inputs(layer_inputs, compress_convolutional=True)
         weights_flat = [w.flatten(start_dim=1) for w in weights]
         outputs = []
@@ -316,7 +315,7 @@ class AlignmentNetwork(nn.Module):
         from alignment.utils import check_iterable
         device = get_device(x)
         assert check_iterable(idxs) and check_iterable(layers), "idxs/layers must be iterables with the same length"
-        assert len(idxs) == len(layers), "idxs and layers need to be iterables with the same length"
+        assert len(idxs) == len(layers), "idxs and layers must be the same length"
         assert len(layers) == len(eigenvalues), "list of eigenvalues must have same length as list of layers"
         assert len(layers) == len(eigenvectors), "list of eigenvectors must have same length as list of layers"
         hidden_inputs_dict = {}
@@ -333,7 +332,6 @@ class AlignmentNetwork(nn.Module):
                 drop_evec = remove_by_idx(eigenvectors[i_lyr].to(device), remove_idx, 1)
                 drop_eval = remove_by_idx(eigenvalues[i_lyr].to(device), remove_idx, 0)
                 corr = torch.sqrt(torch.sum(eigenvalues[i_lyr]) / torch.sum(drop_eval))
-                pass
             else:
                 hooks.append(lyr.register_backward_hook(get_input(nm)))
         x = self.base_model(x)
