@@ -711,3 +711,120 @@ def plot_rf(rf, width, alignment=None, alignBounds=None, showRFs=None, figSize=5
         ax.set_aspect("equal")
     fig.subplots_adjust(wspace=0.0, hspace=0.0)
     return fig
+
+
+
+
+def plot_grad_alignment_correlation(results):
+    """
+    Plots the correlation between gradient norms and alignment values over epochs.
+    Expects `results["grad_alignment_corr"]` to be a list of records, each record like:
+       {
+         "epoch": int,
+         "batch": int,
+         "net": int,
+         "corr": {layer_name -> correlation_float or None}
+       }
+    Also can plot correlation vs alignment changes between epochs if available.
+    """
+
+    if "grad_alignment_corr" not in results:
+        print("No grad_alignment_corr found in results")
+        return
+
+    layer_corr_data = {}
+    for record in results["grad_alignment_corr"]:
+        ep = record["epoch"]
+        for layer_name, corr_val in record["corr"].items():
+            if corr_val is None:
+                continue
+            if layer_name not in layer_corr_data:
+                layer_corr_data[layer_name] = []
+            layer_corr_data[layer_name].append((ep, corr_val))
+
+    fig, ax = plt.subplots(len(layer_corr_data), 1, figsize=(6, 3 * len(layer_corr_data)), sharex=True)
+    if not isinstance(ax, np.ndarray):
+        ax = [ax]
+
+    sorted_layers = sorted(layer_corr_data.keys())
+    for i, layer_name in enumerate(sorted_layers):
+        data = layer_corr_data[layer_name]
+        data.sort(key=lambda x: x[0])  # sort by epoch
+        epochs = [d[0] for d in data]
+        corrs  = [d[1] for d in data]
+        ax[i].plot(epochs, corrs, marker="o", label=layer_name)
+        ax[i].set_ylabel("Grad-Norm vs Alignment Corr")
+        ax[i].set_title(f"Layer: {layer_name}")
+        ax[i].legend(loc="best")
+
+    ax[-1].set_xlabel("Epoch")
+    fig.tight_layout()
+    plt.show()
+
+def plot_alignment_change_correlation(results):
+    """
+    Example: If you have stored alignment changes across epochs,
+    you could measure correlation of 'alignment at epoch e' vs 'alignment at epoch e+1'
+    and plot it. This function is just a placeholder for demonstrating how.
+    Adjust logic for your actual data structure.
+    """
+
+    if "alignment" not in results:
+        print("No alignment key in results")
+        return
+
+    # Here we assume results["alignment"] is a list of dicts: {"epoch":..., "data":[ for each net ] }
+    # Each "data" entry is list-of-layers => alignment array shaped (out_features,) for method=RQ
+    # We gather alignment across epochs, then compute alignment change.
+    # This is pseudo-code; adapt to your actual structure.
+
+    epoch_alignments = {}
+    for rec in results["alignment"]:
+        ep = rec["epoch"]
+        if isinstance(ep, int):
+            # Suppose rec["data"] => list-of-nets => each net => list-of-layers => dict {method->(out_features,)}
+            # We'll just pick the first net for demonstration
+            net0_data = rec["data"][0]
+            # net0_data is list-of-layers => net0_data[layer_idx] = {"RQ": tensor(...)}
+            # We'll pick RQ. Combine them if needed
+            layer_vals = []
+            for layer_dict in net0_data:
+                if "RQ" in layer_dict:
+                    arr = layer_dict["RQ"].detach().cpu()
+                    layer_vals.append(arr)
+            if layer_vals:
+                # cat them for a big 1D vector
+                cat_vals = torch.cat(layer_vals, dim=0)
+                epoch_alignments[ep] = cat_vals
+
+    # Now measure correlation between epoch e and epoch e+1
+    sorted_eps = sorted(epoch_alignments.keys())
+    if len(sorted_eps) < 2:
+        print("Not enough epochs to measure alignment change correlation")
+        return
+
+    corrs = []
+    xvals = []
+    for i in range(len(sorted_eps) - 1):
+        e1 = sorted_eps[i]
+        e2 = sorted_eps[i+1]
+        a1 = epoch_alignments[e1]
+        a2 = epoch_alignments[e2]
+        if a1.shape == a2.shape:
+            stack = torch.stack([a1, a2], dim=0)
+            cc = torch.corrcoef(stack)
+            cval = cc[0, 1].item()
+            corrs.append(cval)
+            xvals.append((e1+e2)/2)
+        else:
+            corrs.append(float("nan"))
+            xvals.append((e1+e2)/2)
+
+    plt.figure(figsize=(6,4))
+    plt.plot(xvals, corrs, marker="o", label="Alignment Change Corr")
+    plt.xlabel("Midpoint of epoch e to e+1")
+    plt.ylabel("Correlation( alignment(e), alignment(e+1) )")
+    plt.title("Alignment Change Correlation Over Epochs")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
