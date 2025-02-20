@@ -6,7 +6,6 @@ slurm-*.out
 
 # cluster jobs
 jobs/
-
 # VSCODE
 .vscode/
 
