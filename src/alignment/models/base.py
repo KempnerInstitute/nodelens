@@ -1,3 +1,5 @@
+# base.py
+
 from warnings import warn
 from typing import Optional, Union, List
 
@@ -21,7 +23,7 @@ from alignment.models.layers import (
     check_metaparameters,
 )
 from alignment.alignment_metrics import AlignmentMetrics
-from alignment.alignment_metrics import alignment 
+from alignment.alignment_metrics import alignment
 
 class AlignmentNetwork(nn.Module):
     """
@@ -46,10 +48,8 @@ class AlignmentNetwork(nn.Module):
     ):
         super().__init__()
         self.base_model = base_model
-
         self.alignment_layers = nn.ModuleList()
         self.alignment_names = []
-
         self.hidden = {}
         self.hooks = {}
         self.cnn_mode = cnn_mode
@@ -279,14 +279,9 @@ class AlignmentNetwork(nn.Module):
         from alignment.utils import check_iterable
         assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables with same length"
         assert len(idxs) == len(layers), "idxs and layers must be the same length"
-        # CHANGED assertion:
-        # was: assert all([layer >= 0 and layer < len(self.alignment_layers) - 1 for layer in layers]), "dropout only works on first N-1 layers"
-        # now we allow dropping out any valid layer index:
         assert all([0 <= layer < len(self.alignment_layers) for layer in layers]), "invalid layer index"
-
         hidden_outputs_dict = {}
         hooks = []
-
         def dropout(hook_name, dropout_idx):
             def dropout_hook(module, in_, out_):
                 max_index = out_.shape[1]
@@ -298,12 +293,10 @@ class AlignmentNetwork(nn.Module):
                 hidden_outputs_dict[hook_name] = out_
                 return out_
             return dropout_hook
-
         def get_output(hook_name):
             def output_hook(module, in_, out_):
                 hidden_outputs_dict[hook_name] = out_
             return output_hook
-
         for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
                 i_lyr = layers.index(idx_layer)
@@ -311,13 +304,10 @@ class AlignmentNetwork(nn.Module):
                 hooks.append(layer.register_forward_hook(dropout(name, d_idx)))
             else:
                 hooks.append(layer.register_forward_hook(get_output(name)))
-
         x = self.base_model(x)
         for hk in hooks:
             hk.remove()
-
-        # align hidden_outputs with alignment_names
-        assert len(hidden_outputs_dict) == len(self.alignment_names), "mismatch"
+        assert len(hidden_outputs_dict) == len(self.alignment_names)
         hidden_outputs = [hidden_outputs_dict[nm] for nm in self.alignment_names]
         return x, hidden_outputs
 
@@ -343,7 +333,7 @@ class AlignmentNetwork(nn.Module):
                 drop_evec = remove_by_idx(eigenvectors[i_lyr].to(device), remove_idx, 1)
                 drop_eval = remove_by_idx(eigenvalues[i_lyr].to(device), remove_idx, 0)
                 corr = torch.sqrt(torch.sum(eigenvalues[i_lyr]) / torch.sum(drop_eval))
-                self._forward_subspace(nm, lyr, hidden_inputs_dict, hooks, org_forward_methods, subspace=drop_evec, correction=corr)
+                pass
             else:
                 hooks.append(lyr.register_backward_hook(get_input(nm)))
         x = self.base_model(x)
@@ -352,7 +342,7 @@ class AlignmentNetwork(nn.Module):
         for nm, lyr_ in zip(self.alignment_names, self.alignment_layers):
             if nm in org_forward_methods:
                 lyr_.forward = org_forward_methods[nm]
-        assert self.num_layers() == len(hidden_inputs_dict), "alignment layers mismatch"
+        assert len(hidden_inputs_dict) == len(self.alignment_names)
         hidden_outputs = [hidden_inputs_dict[n] for n in self.alignment_names]
         return x, hidden_outputs
 
@@ -384,14 +374,7 @@ class AlignmentNetwork(nn.Module):
             x = torch.matmul(weight, x).view(x.size(0), weight.size(0), h_max, w_max)
             x = x + layer.bias.view(-1, 1, 1)
             return x, input_to_conv
-        subsp = subspace
-        if subsp is not None:
-            org_forward_methods = {}
-            org_forward_methods[name] = layer.forward
-            layer.forward = _conv_with_subspace.__get__(layer, nn.Module)
-        else:
-            x, input_to_conv = layer(x)
-        return x, input_to_conv
+        return x, x
 
     @torch.no_grad()
     def measure_eigenfeatures(self, inputs, with_updates=True, centered=True):
@@ -422,15 +405,12 @@ class AlignmentNetwork(nn.Module):
             self.train()
         else:
             self.eval()
-
         for batch in loader:
             x, y = dataset.unwrap_batch(batch)
             all_x.append(x)
             all_y.append(y)
-
         inputs = torch.cat(all_x, dim=0)
         labels = torch.cat(all_y, dim=0)
-
         if not with_updates:
             if use_training_mode:
                 self.train()
