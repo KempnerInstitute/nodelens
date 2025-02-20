@@ -8,7 +8,6 @@ from tqdm import tqdm
 from alignment.utils import train_nets, test_nets, load_checkpoints, save_checkpoint
 from alignment.alignment_metrics import AlignmentMetrics
 
-
 @train_nets
 def train(nets, optimizers, dataset, **parameters):
     """
@@ -50,25 +49,24 @@ def train(nets, optimizers, dataset, **parameters):
     results    = parameters.get("results", None)
     use_wandb  = parameters.get("use_wandb", False)
 
-    # Attempt to detect wandb initialization
-    wandb_run  = None
     try:
         import wandb
         wandb_run = wandb.run
     except ImportError:
-        pass
+        wandb_run = None
     wandb_inited = (wandb_run is not None)
 
     if not isinstance(results, dict):
         results = {}
 
-    # Create keys to store alignment, distribution, etc.
     if "alignment" not in results:
         results["alignment"] = []
     if "alignment_distribution" not in results:
         results["alignment_distribution"] = []
     if "expected_distribution" not in results:
         results["expected_distribution"] = []
+    if "grad_alignment_corr" not in results:
+        results["grad_alignment_corr"] = []
 
     num_replicates = len(nets)
     if "loss" not in results:
@@ -94,11 +92,9 @@ def train(nets, optimizers, dataset, **parameters):
         replicate_acc_sums    = [0.0] * num_replicates
         replicate_acc_counts  = [0]   * num_replicates
 
-        # If aggregator=False, we'll collect alignment data, etc. in local lists
         epoch_align_data = []
         epoch_dist_data  = []
         epoch_exp_data   = []
-
         epoch_rq_values  = []
 
         loop = tqdm(dataloader, desc=f"Train Epoch {epoch+1}", leave=False) if verbose else dataloader
@@ -106,12 +102,18 @@ def train(nets, optimizers, dataset, **parameters):
         for batch_idx, batch in enumerate(loop):
             images, labels = dataset.unwrap_batch(batch)
 
-            # Update each replicate's network
             for idx_rep, (net, opt) in enumerate(zip(nets, optimizers)):
                 opt.zero_grad()
                 out = net(images, store_hidden=True)
                 loss_val = dataset.measure_loss(out, labels)
                 loss_val.backward()
+
+                grad_norms_by_layer = {}
+                for layer_name, layer in zip(net.alignment_names, net.alignment_layers):
+                    if layer.weight.grad is not None:
+                        g = layer.weight.grad.view(layer.weight.shape[0], -1).norm(dim=1)
+                        grad_norms_by_layer[layer_name] = g.detach().cpu()
+
                 opt.step()
 
                 replicate_loss_sums[idx_rep]   += loss_val.item()
@@ -121,15 +123,32 @@ def train(nets, optimizers, dataset, **parameters):
                 replicate_acc_sums[idx_rep]    += float(acc_val)
                 replicate_acc_counts[idx_rep]  += 1
 
-            # If alignment is enabled and it's an alignment epoch
+                alignment_data = net.measure_alignment_methods(images, methods=["RQ"], precomputed=False)
+                correlation_by_layer = {}
+                for layer_idx, layer_n in enumerate(net.alignment_names):
+                    if layer_n in grad_norms_by_layer:
+                        node_alignment = alignment_data[layer_idx]["RQ"].cpu()
+                        node_gradnorm = grad_norms_by_layer[layer_n]
+                        if node_alignment.shape == node_gradnorm.shape:
+                            stack = torch.stack([node_alignment, node_gradnorm], dim=0)
+                            corr_mat = torch.corrcoef(stack)
+                            correlation_by_layer[layer_n] = corr_mat[0, 1].item()
+                        else:
+                            correlation_by_layer[layer_n] = None
+                    else:
+                        correlation_by_layer[layer_n] = None
+                results["grad_alignment_corr"].append({
+                    "epoch": epoch,
+                    "batch": batch_idx,
+                    "net": idx_rep,
+                    "corr": correlation_by_layer
+                })
+
             if do_align and (epoch % freq == 0):
-                # measure alignment for this batch
                 batch_align_data = []
                 for net in nets:
-                    layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
+                    layer_metrics = AlignmentMetrics.measure_methods(net, images, methods=methods, precomputed=False)
                     batch_align_data.append(layer_metrics)
-
-                # measure alignment distribution (histogram)
                 dist_data = []
                 for net_layer_list in batch_align_data:
                     layer_dists = []
@@ -141,12 +160,10 @@ def train(nets, optimizers, dataset, **parameters):
                             method_dists[m] = (c, e)
                         layer_dists.append(method_dists)
                     dist_data.append(layer_dists)
-
-                # measure expected distribution if measure_expected
                 exp_data = []
                 if measure_expected:
                     for net in nets:
-                        layer_inps = net.get_layer_inputs(images, precomputed=True)
+                        layer_inps = net.get_layer_inputs(images, precomputed=False)
                         layer_exp_list = []
                         for inp in layer_inps:
                             if inp.ndim == 4:
@@ -158,9 +175,7 @@ def train(nets, optimizers, dataset, **parameters):
                                 method_exp[m] = (ccounts, cedges)
                             layer_exp_list.append(method_exp)
                         exp_data.append(layer_exp_list)
-
                 if aggregate:
-                    # immediate storage in results
                     results["alignment"].append({
                         "epoch": epoch,
                         "batch": batch_idx,
@@ -178,34 +193,28 @@ def train(nets, optimizers, dataset, **parameters):
                             "data": exp_data
                         })
                 else:
-                    # aggregator=False => store them locally for the epoch
                     epoch_align_data.append(batch_align_data)
                     epoch_dist_data.append(dist_data)
                     if measure_expected:
                         epoch_exp_data.append(exp_data)
-
-                # For wandb logging => if "RQ" in the first layer:
                 if batch_align_data and batch_align_data[0]:
                     first_net_first_layer = batch_align_data[0][0]
                     if "RQ" in first_net_first_layer:
                         rq_val = first_net_first_layer["RQ"].mean().item()
                         epoch_rq_values.append(rq_val)
 
-        # end of epoch => average replicate losses & accuracies
         for idx_rep in range(num_replicates):
             if replicate_loss_counts[idx_rep] > 0:
                 avg_loss = replicate_loss_sums[idx_rep] / replicate_loss_counts[idx_rep]
             else:
                 avg_loss = 0.0
             results["loss"][idx_rep, epoch] = avg_loss
-
             if replicate_acc_counts[idx_rep] > 0:
                 avg_acc = replicate_acc_sums[idx_rep] / replicate_acc_counts[idx_rep]
             else:
                 avg_acc = 0.0
             results["accuracy"][idx_rep, epoch] = avg_acc
 
-        # If aggregator=False, store them once at epoch end
         if do_align and (epoch % freq == 0) and not aggregate:
             if epoch_align_data:
                 results["alignment"].append({
@@ -226,7 +235,6 @@ def train(nets, optimizers, dataset, **parameters):
                     "data": epoch_exp_data
                 })
 
-        # Optionally wandb log
         mean_loss_ep = float(torch.mean(results["loss"][:, epoch]))
         mean_acc_ep  = float(torch.mean(results["accuracy"][:, epoch]))
         mean_rq      = float(np.mean(epoch_rq_values)) if len(epoch_rq_values) > 0 else 0.0
@@ -240,13 +248,11 @@ def train(nets, optimizers, dataset, **parameters):
                 "train_alignment_RQ_epoch": mean_rq
             })
 
-        # checkpointing
         if do_ckpt and (epoch % ckpt_freq == 0):
             cpy_res = deepcopy(results)
             cpy_res["epoch"]  = epoch
             cpy_res["device"] = dev
             cpy_res["prms"]   = parameters
-            # reload to ensure no mismatch
             load_checkpoints(nets, optimizers, dev, None)
             save_checkpoint(nets, optimizers, cpy_res, ckpt_path)
 
@@ -256,7 +262,6 @@ def train(nets, optimizers, dataset, **parameters):
     results["loss"]     = results["loss"].detach()
     results["accuracy"] = results["accuracy"].detach()
     return results
-
 
 @test_nets
 def test(nets, dataset, **parameters):
@@ -286,8 +291,6 @@ def test(nets, dataset, **parameters):
     if not isinstance(results, dict):
         results = {}
 
-    # We'll store single-pass results in 'loss' => shape (#nets,)
-    # and 'accuracy' => shape (#nets,) for one pass
     num_reps = len(nets)
     device   = dataset.device
     loader   = dataset.train_loader if train_set else dataset.test_loader
@@ -317,21 +320,16 @@ def test(nets, dataset, **parameters):
     results["loss"]     = loss_vec
     results["accuracy"] = acc_vec
 
-    # measure alignment if do_align
     if do_align:
-        # We'll just do one pass alignment on entire loader => or a single batch if you prefer
-        # for simplicity, we measure on the same last images from above => or re-run a small loop
-        # measure alignment data
-        images, labels = next(iter(loader))  # quick sample
+        images, labels = next(iter(loader))
         images, labels = dataset.unwrap_batch((images, labels), device=device)
         align_data = []
         dist_data  = []
         exp_data   = []
-
         for net in nets:
-            metrics = AlignmentMetrics.measure_methods(net, images, methods=methods)
+            net.forward(images, store_hidden=True)
+            metrics = AlignmentMetrics.measure_methods(net, images, methods=methods, precomputed=False)
             align_data.append(metrics)
-            # measure distribution for each layer, method
             layer_dists = []
             for layer_dict in metrics:
                 m_d = {}
@@ -341,8 +339,6 @@ def test(nets, dataset, **parameters):
                     m_d[m] = (c, e)
                 layer_dists.append(m_d)
             dist_data.append(layer_dists)
-
-            # measure expected distribution
             if measure_expected:
                 net_inps = net.get_layer_inputs(images, precomputed=False)
                 layer_exp_list = []
@@ -356,7 +352,6 @@ def test(nets, dataset, **parameters):
                         method_exp[m] = (ccounts, cedges)
                     layer_exp_list.append(method_exp)
                 exp_data.append(layer_exp_list)
-
         results["alignment"] = [{"epoch":"test", "batch":"all", "data": align_data}]
         results["alignment_distribution"] = [{"epoch":"test", "batch":"all", "data": dist_data}]
         if measure_expected:
