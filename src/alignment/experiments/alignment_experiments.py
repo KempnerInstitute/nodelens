@@ -118,6 +118,26 @@ class GeneralAlignmentExperiment(Experiment):
                 dropout_type="nodes",
             )
 
+        fig1 = plotting.plot_grad_alignment_correlation(results, return_fig=True)
+        fig2 = plotting.plot_alignment_change_correlation(results, return_fig=True)
+
+        if fig1 is not None:
+            import matplotlib.pyplot as plt
+            plt.figure(fig1.number)  
+            if self.args.checkpointing.use_wandb:
+                import wandb
+                wandb.log({"grad_alignment_corr_plot": wandb.Image(fig1)})
+            else:
+                fig1.show()
+        if fig2 is not None:
+            import matplotlib.pyplot as plt
+            plt.figure(fig2.number)
+            if self.args.checkpointing.use_wandb:
+                import wandb
+                wandb.log({"alignment_change_corr_plot": wandb.Image(fig2)})
+            else:
+                fig2.show()
+
     def save_results(self, results):
         self.save_experiment(results)
 
