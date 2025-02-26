@@ -83,23 +83,42 @@ class GeneralAlignmentExperiment(Experiment):
                 pretrained_torchvision_alexnet = tvm.alexnet(weights=AlexNet_Weights.IMAGENET1K_V1).to(self.device)
                 nets[0].base_model.load_state_dict(pretrained_torchvision_alexnet.state_dict())
                 nets[0].eval()
+
             dataset = self.prepare_dataset(get_transform_parameters(self.args.model.name, self.args.dataset.name))
             print("Evaluating downloaded pretrained weights for baseline accuracy...")
             acc = evaluate_pretrained_model(nets[0], dataset)
             print("accuracy:", acc)
             test_results = processing.test_networks(self, nets, dataset)
 
-        dropout_results, dropout_params = processing.progressive_dropout_experiment(
-            self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
-        )
-
+        # Combine top-level results dict
         results = {
             "prms": prms,
             "train_results": train_results,
-            "test_results": test_results,
-            "dropout_results": dropout_results,
-            "dropout_parameters": dropout_params,
+            "test_results": test_results
         }
+
+        # If train_results or test_results have alignment/grad_alignment_corr => merge them
+        if "alignment" in train_results:
+            results["alignment"] = train_results["alignment"]
+        if "alignment_distribution" in train_results:
+            results["alignment_distribution"] = train_results["alignment_distribution"]
+        if "expected_distribution" in train_results:
+            results["expected_distribution"] = train_results["expected_distribution"]
+        if "grad_alignment_corr" in train_results:
+            results["grad_alignment_corr"] = train_results["grad_alignment_corr"]
+
+        if "alignment" in test_results:
+            # If you want to store the test alignment as well, put them in a separate key or merge
+            results["alignment_test"] = test_results["alignment"]
+        if "grad_alignment_corr" in test_results:
+            results["grad_alignment_corr_test"] = test_results["grad_alignment_corr"]
+
+        # Now do progressive_dropout
+        dropout_results, dropout_params = processing.progressive_dropout_experiment(
+            self, nets, dataset, alignment=test_results.get("alignment", None), train_set=False
+        )
+        results["dropout_results"] = dropout_results
+        results["dropout_parameters"] = dropout_params
 
         if len(nets) > 0:
             results["alignment_names"] = nets[0].alignment_names
@@ -108,7 +127,10 @@ class GeneralAlignmentExperiment(Experiment):
 
     def plot(self, results):
         if self.args.plots.show_loss:
-            plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
+            plotting.plot_train_results(self, 
+                                        results["train_results"], 
+                                        results["test_results"], 
+                                        results["prms"])
         if self.args.plots.show_dropout:
             plotting.plot_dropout_results(
                 self,
@@ -117,26 +139,17 @@ class GeneralAlignmentExperiment(Experiment):
                 results["prms"],
                 dropout_type="nodes",
             )
+        if "grad_alignment_corr" in results:
+            # plotting.plot_grad_alignment_correlation(self, results["grad_alignment_corr"])
+            pass
+        else:
+            print("No grad_alignment_corr found in results")
 
-        fig1 = plotting.plot_grad_alignment_correlation(results, return_fig=True)
-        fig2 = plotting.plot_alignment_change_correlation(results, return_fig=True)
-
-        if fig1 is not None:
-            import matplotlib.pyplot as plt
-            plt.figure(fig1.number)  
-            if self.args.checkpointing.use_wandb:
-                import wandb
-                wandb.log({"grad_alignment_corr_plot": wandb.Image(fig1)})
-            else:
-                fig1.show()
-        if fig2 is not None:
-            import matplotlib.pyplot as plt
-            plt.figure(fig2.number)
-            if self.args.checkpointing.use_wandb:
-                import wandb
-                wandb.log({"alignment_change_corr_plot": wandb.Image(fig2)})
-            else:
-                fig2.show()
+        if "alignment" not in results:
+            print("No alignment key in results")
+        else:
+            # plotting or other usage
+            pass
 
     def save_results(self, results):
         self.save_experiment(results)
