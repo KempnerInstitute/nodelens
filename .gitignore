@@ -11,7 +11,7 @@ jobs/
 
 # WANDB
 wandb/
-notebooks/*
+notebooks/
 notebooks/data/*
 notebooks/.ipynb_checkpoints/*
 
