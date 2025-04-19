@@ -21,7 +21,7 @@ wandb/
 __pycache__/
 *.py[cod]
 *$py.class
-
+notebooks/data/*
 # C extensions
 *.so
 
