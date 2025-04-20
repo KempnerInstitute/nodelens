@@ -8,6 +8,12 @@ slurm-*.out
 *.pth
 
 notebook/data/*
+# Large dataset files
+notebooks/data/*.tar.gz
+notebooks/data/*.zip
+notebooks/data/cifar-10-python.tar.gz
+notebooks/data/cifar-10-batches-py/
+notebooks/data/mnist/
 # cluster jobs
 jobs/
 
