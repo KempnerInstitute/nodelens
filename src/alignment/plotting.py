@@ -166,8 +166,10 @@ def plot_train_results(exp, train_results, test_results, prms):
         if train_loss_mean is not None:
             cmn = train_loss_mean[:, idx].cpu()
             cse = train_loss_se[:, idx].cpu()
-            ax[0].plot(range(num_train_epochs), cmn, color=cmap(idx), label=label)
-            ax[0].fill_between(range(num_train_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
+            # Use 1-based epoch numbering for the x-axis
+            epochs = [i+1 for i in range(num_train_epochs)]
+            ax[0].plot(epochs, cmn, color=cmap(idx), label=label)
+            ax[0].fill_between(epochs, cmn + cse, cmn - cse, color=(cmap(idx), alpha))
 
         if test_loss_mean is not None:
             tmn = test_loss_mean[idx].cpu().item()
@@ -182,6 +184,12 @@ def plot_train_results(exp, train_results, test_results, prms):
 
     if train_loss_mean is not None:
         ax[0].set_ylim(0, None)
+        # Set x-axis limits to show full range of epochs, with a minimum range
+        if num_train_epochs > 1:
+            ax[0].set_xlim(1, num_train_epochs)
+        else:
+            # For single epoch case, add some padding
+            ax[0].set_xlim(0.5, 1.5)
         ylims = ax[0].get_ylim()
         ax[1].set_ylim(ylims)
     ax[1].set_ylabel("Loss")
@@ -193,8 +201,10 @@ def plot_train_results(exp, train_results, test_results, prms):
         if train_acc_mean is not None:
             cmn = train_acc_mean[:, idx].cpu()
             cse = train_acc_se[:, idx].cpu()
-            ax[2].plot(range(num_train_epochs), cmn, color=cmap(idx), label=label)
-            ax[2].fill_between(range(num_train_epochs), cmn + cse, cmn - cse, color=(cmap(idx), alpha))
+            # Use 1-based epoch numbering for the x-axis (same as loss plot)
+            epochs = [i+1 for i in range(num_train_epochs)]
+            ax[2].plot(epochs, cmn, color=cmap(idx), label=label)
+            ax[2].fill_between(epochs, cmn + cse, cmn - cse, color=(cmap(idx), alpha))
 
         if test_acc_mean is not None:
             tmn = test_acc_mean[idx].cpu().item()
@@ -208,6 +218,12 @@ def plot_train_results(exp, train_results, test_results, prms):
     ax[3].set_title("Testing")
     if train_acc_mean is not None:
         ax[2].set_ylim(0, 100)
+        # Set x-axis limits to show full range of epochs, with a minimum range
+        if num_train_epochs > 1:
+            ax[2].set_xlim(1, num_train_epochs)
+        else:
+            # For single epoch case, add some padding
+            ax[2].set_xlim(0.5, 1.5)
         ax[3].set_ylim(0, 100)
     ax[3].set_xlim(-0.5, num_types - 0.5)
     ax[3].set_xticks(range(num_types))

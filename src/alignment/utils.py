@@ -311,6 +311,10 @@ def sklearn_pca(input, use_rank=True, rank=None):
 
     returns w, v where w is eigenvalues and v is eigenvectors sorted from highest to lowest
     """
+    # Move tensor to CPU if it's on GPU
+    if input.is_cuda:
+        input = input.cpu()
+        
     num_samples, num_features = input.shape
     rank = None if not use_rank else (rank if rank is not None else fast_rank(input))
     ipca = IncrementalPCA(n_components=rank).fit(input)
@@ -327,6 +331,10 @@ def sklearn_pca(input, use_rank=True, rank=None):
 
 def fast_rank(input):
     """uses transpose to speed up rank computation, otherwise normal"""
+    # Move tensor to CPU if it's on GPU
+    if input.is_cuda:
+        input = input.cpu()
+        
     if input.size(-2) < input.size(-1):
         input = torch.transpose(input, -2, -1)
     return int(torch.linalg.matrix_rank(input))
