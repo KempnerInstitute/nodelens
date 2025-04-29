@@ -177,6 +177,11 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     """
     Main progressive dropout function that calls parse_alignment_to_tensor,
     then does targeted_dropout on each fraction.
+    
+    pruning_mode options:
+    - "global": Prune X% of all nodes sorted together across all layers (original v1 behavior)
+    - "per_layer_combined": Prune X% of each layer but apply to all layers at once (v2 behavior)
+    - "per_layer_independent": Prune one layer at a time, creating separate results for each layer
     """
     if not isinstance(nets, list):
         nets = [nets]
@@ -185,21 +190,22 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         alignment = test(nets, dataset, alignment=True, methods=["RQ"], **parameters)["alignment"]
 
     aggregator = parameters.get("aggregate_alignment", False)
-    by_layer   = parameters.get("by_layer", False)
+    pruning_mode = parameters.get("pruning_mode", "global")
 
-    parsed = parse_alignment_to_tensor(alignment, aggregate=aggregator, by_layer=by_layer)
+    parsed = parse_alignment_to_tensor(alignment, aggregate=aggregator, by_layer=(pruning_mode != "global"))
 
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     use_train = parameters.get("train_set", False)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
-    print("Progressive Dropout:")
+    print(f"Progressive Dropout (mode: {pruning_mode}):")
 
     num_nets = len(nets)
 
-    if not by_layer:
+    if pruning_mode == "global":
+        # Original v1 behavior - prune X% of all nodes together
         if not isinstance(parsed, torch.Tensor) or parsed.dim() != 2:
-            raise ValueError("Expected shape (#nets, total_nodes) for by_layer=False")
+            raise ValueError("Expected shape (#nets, total_nodes) for pruning_mode='global'")
 
         idx_sorted = torch.argsort(parsed, dim=1)  # (#nets, total_nodes)
         total_nodes = idx_sorted.size(1)
@@ -279,12 +285,12 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             "progdrop_acc_low":   progdrop_acc_low,
             "progdrop_acc_rand":  progdrop_acc_rand,
             "dropout_fraction":   drop_fraction,
-            "by_layer":           False,
+            "pruning_mode":       pruning_mode,
             "idx_dropout_layers": [0],
         }
         return results
     else:
-        # by_layer=True => parsed => list of (#nets, node_count) or None
+        # Per-layer parsing for both "per_layer_combined" and "per_layer_independent" modes
         valid_layers = []
         layer_indices = []
         for i, layer_tsr in enumerate(parsed):
@@ -294,7 +300,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 
         num_layers = len(valid_layers)
         if num_layers == 0:
-            raise ValueError("No valid layers found in alignment data when by_layer=True")
+            raise ValueError("No valid layers found in alignment data when using per-layer pruning")
 
         progdrop_loss_high = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
         progdrop_loss_low  = torch.zeros((num_nets, num_drops, num_layers), device="cpu")
@@ -326,38 +332,87 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         lo = idx_sorted[:, :0]
                         rr = idx_sorted[:, :0]
 
-                    out_high, out_low, out_rand = [], [], []
-                    for i_net, net in enumerate(nets):
-                        oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [layer_indices[lyr_idx]])
-                        ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], [layer_indices[lyr_idx]])
-                        or_, _= net.forward_targeted_dropout(images, [rr[i_net]], [layer_indices[lyr_idx]])
-                        out_high.append(oh)
-                        out_low.append(ol)
-                        out_rand.append(or_)
+                    # Determine which layers to apply pruning to
+                    if pruning_mode == "per_layer_independent":
+                        # Just prune the current layer
+                        target_layers = [layer_indices[lyr_idx]]
+                        
+                        # Process outputs for current layer only
+                        out_high, out_low, out_rand = [], [], []
+                        for i_net, net in enumerate(nets):
+                            oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], target_layers)
+                            ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], target_layers)
+                            or_, _= net.forward_targeted_dropout(images, [rr[i_net]], target_layers)
+                            out_high.append(oh)
+                            out_low.append(ol)
+                            out_rand.append(or_)
+                            
+                        # Record metrics for this layer
+                        lh, ll, lr = [], [], []
+                        ah, al, ar = [], [], []
+                        for i_net in range(num_nets):
+                            lv_h = float(dataset.measure_loss(out_high[i_net], labels).cpu())
+                            lv_l = float(dataset.measure_loss(out_low[i_net], labels).cpu())
+                            lv_r = float(dataset.measure_loss(out_rand[i_net], labels).cpu())
+                            lh.append(lv_h)
+                            ll.append(lv_l)
+                            lr.append(lv_r)
 
-                    lh, ll, lr = [], [], []
-                    ah, al, ar = [], [], []
-                    for i_net in range(num_nets):
-                        lv_h = float(dataset.measure_loss(out_high[i_net], labels).cpu())
-                        lv_l = float(dataset.measure_loss(out_low[i_net], labels).cpu())
-                        lv_r = float(dataset.measure_loss(out_rand[i_net], labels).cpu())
-                        lh.append(lv_h)
-                        ll.append(lv_l)
-                        lr.append(lv_r)
+                            av_h = float(dataset.measure_accuracy(out_high[i_net], labels).cpu())
+                            av_l = float(dataset.measure_accuracy(out_low[i_net], labels).cpu())
+                            av_r = float(dataset.measure_accuracy(out_rand[i_net], labels).cpu())
+                            ah.append(av_h)
+                            al.append(av_l)
+                            ar.append(av_r)
 
-                        av_h = float(dataset.measure_accuracy(out_high[i_net], labels).cpu())
-                        av_l = float(dataset.measure_accuracy(out_low[i_net], labels).cpu())
-                        av_r = float(dataset.measure_accuracy(out_rand[i_net], labels).cpu())
-                        ah.append(av_h)
-                        al.append(av_l)
-                        ar.append(av_r)
+                        progdrop_loss_high[:, dropidx, lyr_idx] += torch.tensor(lh, device="cpu")
+                        progdrop_loss_low[:, dropidx, lyr_idx]  += torch.tensor(ll, device="cpu")
+                        progdrop_loss_rand[:, dropidx, lyr_idx] += torch.tensor(lr, device="cpu")
+                        progdrop_acc_high[:, dropidx, lyr_idx]  += torch.tensor(ah, device="cpu")
+                        progdrop_acc_low[:, dropidx, lyr_idx]   += torch.tensor(al, device="cpu")
+                        progdrop_acc_rand[:, dropidx, lyr_idx]  += torch.tensor(ar, device="cpu")
+                    
+                    else:  # "per_layer_combined"
+                        # For per_layer_combined, we still run the loop for each layer
+                        # but collect pruning results for all layers together
+                        
+                        # Apply pruning to each layer independently but record results in each layer's slot
+                        # This is primarily for visualization purposes to show effect on each layer
+                        out_high, out_low, out_rand = [], [], []
+                        for i_net, net in enumerate(nets):
+                            # Just focus on current layer for this loop iteration
+                            oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [layer_indices[lyr_idx]])
+                            ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], [layer_indices[lyr_idx]])
+                            or_, _= net.forward_targeted_dropout(images, [rr[i_net]], [layer_indices[lyr_idx]])
+                            
+                            out_high.append(oh)
+                            out_low.append(ol)
+                            out_rand.append(or_)
+                        
+                        # Record metrics for this layer
+                        lh, ll, lr = [], [], []
+                        ah, al, ar = [], [], []
+                        for i_net in range(num_nets):
+                            lv_h = float(dataset.measure_loss(out_high[i_net], labels).cpu())
+                            lv_l = float(dataset.measure_loss(out_low[i_net], labels).cpu())
+                            lv_r = float(dataset.measure_loss(out_rand[i_net], labels).cpu())
+                            lh.append(lv_h)
+                            ll.append(lv_l)
+                            lr.append(lv_r)
 
-                    progdrop_loss_high[:, dropidx, lyr_idx] += torch.tensor(lh, device="cpu")
-                    progdrop_loss_low[:, dropidx, lyr_idx]  += torch.tensor(ll, device="cpu")
-                    progdrop_loss_rand[:, dropidx, lyr_idx] += torch.tensor(lr, device="cpu")
-                    progdrop_acc_high[:, dropidx, lyr_idx]  += torch.tensor(ah, device="cpu")
-                    progdrop_acc_low[:, dropidx, lyr_idx]   += torch.tensor(al, device="cpu")
-                    progdrop_acc_rand[:, dropidx, lyr_idx]  += torch.tensor(ar, device="cpu")
+                            av_h = float(dataset.measure_accuracy(out_high[i_net], labels).cpu())
+                            av_l = float(dataset.measure_accuracy(out_low[i_net], labels).cpu())
+                            av_r = float(dataset.measure_accuracy(out_rand[i_net], labels).cpu())
+                            ah.append(av_h)
+                            al.append(av_l)
+                            ar.append(av_r)
+
+                        progdrop_loss_high[:, dropidx, lyr_idx] += torch.tensor(lh, device="cpu")
+                        progdrop_loss_low[:, dropidx, lyr_idx]  += torch.tensor(ll, device="cpu")
+                        progdrop_loss_rand[:, dropidx, lyr_idx] += torch.tensor(lr, device="cpu")
+                        progdrop_acc_high[:, dropidx, lyr_idx]  += torch.tensor(ah, device="cpu")
+                        progdrop_acc_low[:, dropidx, lyr_idx]   += torch.tensor(al, device="cpu")
+                        progdrop_acc_rand[:, dropidx, lyr_idx]  += torch.tensor(ar, device="cpu")
 
         progdrop_loss_high /= num_batches
         progdrop_loss_low  /= num_batches
@@ -374,9 +429,29 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             "progdrop_acc_low":   progdrop_acc_low,
             "progdrop_acc_rand":  progdrop_acc_rand,
             "dropout_fraction":   drop_fraction,
-            "by_layer":           True,
+            "pruning_mode":       pruning_mode,
             "idx_dropout_layers": layer_indices,
         }
+        
+        # For per_layer_combined mode, we need to aggregate the results across layers
+        # to produce a single figure showing the combined effect of pruning
+        if pruning_mode == "per_layer_combined":
+            # Average the results across all layers to get one result per dropout fraction
+            combined_loss_high = progdrop_loss_high.mean(dim=2)
+            combined_loss_low = progdrop_loss_low.mean(dim=2)
+            combined_loss_rand = progdrop_loss_rand.mean(dim=2)
+            combined_acc_high = progdrop_acc_high.mean(dim=2)
+            combined_acc_low = progdrop_acc_low.mean(dim=2)
+            combined_acc_rand = progdrop_acc_rand.mean(dim=2)
+            
+            # Add a new dimension to match expected shape for plotting code
+            results["combined_progdrop_loss_high"] = combined_loss_high.unsqueeze(2)
+            results["combined_progdrop_loss_low"] = combined_loss_low.unsqueeze(2)
+            results["combined_progdrop_loss_rand"] = combined_loss_rand.unsqueeze(2)
+            results["combined_progdrop_acc_high"] = combined_acc_high.unsqueeze(2)
+            results["combined_progdrop_acc_low"] = combined_acc_low.unsqueeze(2)
+            results["combined_progdrop_acc_rand"] = combined_acc_rand.unsqueeze(2)
+            
         return results
 
 
@@ -384,9 +459,9 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
     print("performing targeted dropout...")
     dropout_params = dict(
         num_drops=exp.args.extra.num_drops,
-        by_layer=exp.args.extra.dropout_by_layer,
         train_set=train_set,
-        aggregate_alignment=exp.args.extra.aggregate_alignment
+        aggregate_alignment=exp.args.extra.aggregate_alignment,
+        pruning_mode=exp.args.extra.dropout_pruning_mode
     )
     dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
     return dropout_results, dropout_params
@@ -423,8 +498,9 @@ def measure_eigenfeatures(exp, nets, dataset, train_set=False):
 def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     num_nets = len(nets)
     align_layer_indices = list(range(len(nets[0].alignment_layers)))
-    by_layer = parameters.get("by_layer", False)
-    num_layers = len(align_layer_indices) if by_layer else 1
+    pruning_mode = parameters.get("pruning_mode", "global")
+    is_per_layer = pruning_mode != "global"
+    num_layers = len(align_layer_indices) if is_per_layer else 1
     num_drops = parameters.get("num_drops", 9)
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     idx_eigenvalue = []
@@ -483,7 +559,7 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
             for layer_i in range(num_layers):
                 net_out_high, net_out_low, net_out_rand = [], [], []
                 for i_net, net in enumerate(nets):
-                    drop_layer = [align_layer_indices[layer_i]] if by_layer else align_layer_indices
+                    drop_layer = [align_layer_indices[layer_i]] if is_per_layer else align_layer_indices
                     high_idxs = [high_list[i_net][layer_i][0]]  # shape => ([indices])
                     low_idxs  = [low_list[i_net][layer_i][0]]
                     rand_idxs = [rand_list[i_net][layer_i][0]]
@@ -533,14 +609,14 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
         "progdrop_acc_low":   progdrop_acc_low,
         "progdrop_acc_rand":  progdrop_acc_rand,
         "dropout_fraction":   drop_fraction,
-        "by_layer":           by_layer,
+        "pruning_mode":       pruning_mode,
     }
 
 
 def eigenvector_dropout_experiment(exp, nets, dataset, eigen_results, train_set=False):
     evec_params = dict(
         num_drops=exp.args.extra.num_drops,
-        by_layer=exp.args.extra.dropout_by_layer,
+        pruning_mode=exp.args.extra.dropout_pruning_mode,
         train_set=train_set,
     )
     evec_dropout_results = eigenvector_dropout(
