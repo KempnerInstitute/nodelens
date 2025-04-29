@@ -211,6 +211,8 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         if not isinstance(parsed, torch.Tensor) or parsed.dim() != 2:
             raise ValueError("Expected shape (#nets, total_nodes) for pruning_mode='global'")
 
+        # IMPORTANT: We sort the alignment values (RQ) in ascending order
+        # So idx_sorted[:, 0] has the index of the lowest RQ and idx_sorted[:, -1] has the highest RQ
         idx_sorted = torch.argsort(parsed, dim=1)  # (#nets, total_nodes)
         total_nodes = idx_sorted.size(1)
 
@@ -229,17 +231,20 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             for dropidx, fraction in enumerate(drop_fraction):
                 dn = int(total_nodes * fraction)
                 if dn > 0:
-                    hi = idx_sorted[:, total_nodes - dn : total_nodes]
-                    lo = idx_sorted[:, :dn]
-                    rr = []
+                    # nodes_to_drop_low: Prune lowest RQ nodes (first dn values in sorted order)
+                    # nodes_to_drop_high: Prune highest RQ nodes (last dn values in sorted order)
+                    # Variable names reflect which nodes are being DROPPED (zeroed out)
+                    nodes_to_drop_low = idx_sorted[:, :dn]
+                    nodes_to_drop_high = idx_sorted[:, total_nodes-dn:]
+                    nodes_to_drop_rand = []
                     for i_net in range(num_nets):
                         perm = torch.randperm(total_nodes, device=idx_sorted.device)
-                        rr.append(perm[:dn])
-                    rr = torch.stack(rr, dim=0)
+                        nodes_to_drop_rand.append(perm[:dn])
+                    nodes_to_drop_rand = torch.stack(nodes_to_drop_rand, dim=0)
                 else:
-                    hi = idx_sorted[:, :0]
-                    lo = idx_sorted[:, :0]
-                    rr = idx_sorted[:, :0]
+                    nodes_to_drop_high = idx_sorted[:, :0]
+                    nodes_to_drop_low = idx_sorted[:, :0]
+                    nodes_to_drop_rand = idx_sorted[:, :0]
 
                 # Default layer index for targeting - this will be adjusted if excluding classification layer
                 target_layer_idx = 0
@@ -251,17 +256,22 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         # Skip the classification layer's pruning
                         # For global pruning, we don't directly handle this, as weights are already concatenated
                         pass
-                        
-                    oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [target_layer_idx])
-                    ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], [target_layer_idx])
-                    or_, _= net.forward_targeted_dropout(images, [rr[i_net]], [target_layer_idx])
-                    out_high.append(oh)
-                    out_low.append(ol)
+                    
+                    # Forward pass with pruning:
+                    # out_low = output when DROPPING LOW alignment nodes (keeping HIGH alignment nodes)
+                    # out_high = output when DROPPING HIGH alignment nodes (keeping LOW alignment nodes)
+                    # Better variable names would be "output_after_dropping_low_nodes", etc.
+                    ol, _ = net.forward_targeted_dropout(images, [nodes_to_drop_low[i_net]], [target_layer_idx])
+                    oh, _ = net.forward_targeted_dropout(images, [nodes_to_drop_high[i_net]], [target_layer_idx])
+                    or_, _= net.forward_targeted_dropout(images, [nodes_to_drop_rand[i_net]], [target_layer_idx])
+                    out_low.append(ol)    # Networks with LOW alignment nodes removed
+                    out_high.append(oh)   # Networks with HIGH alignment nodes removed
                     out_rand.append(or_)
 
                 lh, ll, lr = [], [], []
                 ah, al, ar = [], [], []
                 for i_net in range(num_nets):
+                    # Losses after pruning (high = after pruning high nodes, etc.)
                     lv_h = float(dataset.measure_loss(out_high[i_net], labels).cpu())
                     lv_l = float(dataset.measure_loss(out_low[i_net], labels).cpu())
                     lv_r = float(dataset.measure_loss(out_rand[i_net], labels).cpu())
@@ -269,6 +279,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     ll.append(lv_l)
                     lr.append(lv_r)
 
+                    # Accuracy after pruning
                     av_h = float(dataset.measure_accuracy(out_high[i_net], labels).cpu())
                     av_l = float(dataset.measure_accuracy(out_low[i_net], labels).cpu())
                     av_r = float(dataset.measure_accuracy(out_rand[i_net], labels).cpu())
@@ -338,17 +349,20 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     node_count = idx_sorted.size(1)
                     dn = int(node_count * fraction)
                     if dn > 0:
-                        hi = idx_sorted[:, node_count - dn : node_count]
-                        lo = idx_sorted[:, :dn]
-                        rr = []
+                        # nodes_to_drop_low: Prune lowest RQ nodes (first dn values in sorted order)
+                        # nodes_to_drop_high: Prune highest RQ nodes (last dn values in sorted order)
+                        # Variable names reflect which nodes are being DROPPED (zeroed out)
+                        nodes_to_drop_low = idx_sorted[:, :dn]
+                        nodes_to_drop_high = idx_sorted[:, node_count-dn:]
+                        nodes_to_drop_rand = []
                         for i_net in range(num_nets):
                             perm = torch.randperm(node_count, device=idx_sorted.device)
-                            rr.append(perm[:dn])
-                        rr = torch.stack(rr, dim=0)
+                            nodes_to_drop_rand.append(perm[:dn])
+                        nodes_to_drop_rand = torch.stack(nodes_to_drop_rand, dim=0)
                     else:
-                        hi = idx_sorted[:, :0]
-                        lo = idx_sorted[:, :0]
-                        rr = idx_sorted[:, :0]
+                        nodes_to_drop_high = idx_sorted[:, :0]
+                        nodes_to_drop_low = idx_sorted[:, :0]
+                        nodes_to_drop_rand = idx_sorted[:, :0]
 
                     # Determine which layers to apply pruning to
                     if pruning_mode == "per_layer_independent":
@@ -358,17 +372,21 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         # Process outputs for current layer only
                         out_high, out_low, out_rand = [], [], []
                         for i_net, net in enumerate(nets):
-                            oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], target_layers)
-                            ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], target_layers)
-                            or_, _= net.forward_targeted_dropout(images, [rr[i_net]], target_layers)
-                            out_high.append(oh)
-                            out_low.append(ol)
+                            # Forward pass with pruning:
+                            # out_low = output when DROPPING LOW alignment nodes (keeping HIGH alignment nodes)
+                            # out_high = output when DROPPING HIGH alignment nodes (keeping LOW alignment nodes)
+                            ol, _ = net.forward_targeted_dropout(images, [nodes_to_drop_low[i_net]], target_layers)
+                            oh, _ = net.forward_targeted_dropout(images, [nodes_to_drop_high[i_net]], target_layers)
+                            or_, _= net.forward_targeted_dropout(images, [nodes_to_drop_rand[i_net]], target_layers)
+                            out_low.append(ol)    # Networks with LOW alignment nodes removed
+                            out_high.append(oh)   # Networks with HIGH alignment nodes removed
                             out_rand.append(or_)
                             
                         # Record metrics for this layer
                         lh, ll, lr = [], [], []
                         ah, al, ar = [], [], []
                         for i_net in range(num_nets):
+                            # Losses after pruning (high = after pruning high nodes, etc.)
                             lv_h = float(dataset.measure_loss(out_high[i_net], labels).cpu())
                             lv_l = float(dataset.measure_loss(out_low[i_net], labels).cpu())
                             lv_r = float(dataset.measure_loss(out_rand[i_net], labels).cpu())
@@ -376,6 +394,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             ll.append(lv_l)
                             lr.append(lv_r)
 
+                            # Accuracy after pruning
                             av_h = float(dataset.measure_accuracy(out_high[i_net], labels).cpu())
                             av_l = float(dataset.measure_accuracy(out_low[i_net], labels).cpu())
                             av_r = float(dataset.measure_accuracy(out_rand[i_net], labels).cpu())
@@ -398,19 +417,22 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         # This is primarily for visualization purposes to show effect on each layer
                         out_high, out_low, out_rand = [], [], []
                         for i_net, net in enumerate(nets):
-                            # Just focus on current layer for this loop iteration
-                            oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [layer_indices[lyr_idx]])
-                            ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], [layer_indices[lyr_idx]])
-                            or_, _= net.forward_targeted_dropout(images, [rr[i_net]], [layer_indices[lyr_idx]])
+                            # Forward pass with pruning for current layer:
+                            # out_low = output when DROPPING LOW alignment nodes (keeping HIGH alignment nodes)
+                            # out_high = output when DROPPING HIGH alignment nodes (keeping LOW alignment nodes)
+                            ol, _ = net.forward_targeted_dropout(images, [nodes_to_drop_low[i_net]], [layer_indices[lyr_idx]])
+                            oh, _ = net.forward_targeted_dropout(images, [nodes_to_drop_high[i_net]], [layer_indices[lyr_idx]])
+                            or_, _= net.forward_targeted_dropout(images, [nodes_to_drop_rand[i_net]], [layer_indices[lyr_idx]])
                             
-                            out_high.append(oh)
-                            out_low.append(ol)
+                            out_low.append(ol)    # Networks with LOW alignment nodes removed
+                            out_high.append(oh)   # Networks with HIGH alignment nodes removed
                             out_rand.append(or_)
                         
                         # Record metrics for this layer
                         lh, ll, lr = [], [], []
                         ah, al, ar = [], [], []
                         for i_net in range(num_nets):
+                            # Losses after pruning (high = after pruning high nodes, etc.)
                             lv_h = float(dataset.measure_loss(out_high[i_net], labels).cpu())
                             lv_l = float(dataset.measure_loss(out_low[i_net], labels).cpu())
                             lv_r = float(dataset.measure_loss(out_rand[i_net], labels).cpu())
@@ -418,6 +440,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             ll.append(lv_l)
                             lr.append(lv_r)
 
+                            # Accuracy after pruning
                             av_h = float(dataset.measure_accuracy(out_high[i_net], labels).cpu())
                             av_l = float(dataset.measure_accuracy(out_low[i_net], labels).cpu())
                             av_r = float(dataset.measure_accuracy(out_rand[i_net], labels).cpu())

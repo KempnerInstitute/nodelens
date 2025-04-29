@@ -49,6 +49,7 @@ class AlignmentConfig(BaseConfig):
     frequency: int = 1
     bins: int = 50
     cnn_mode: str = "unfold"
+    scale_by_norm: bool = False  # If True, scales covariance matrices by their norm before RQ calculation
 
 @dataclass
 class CheckpointingConfig(BaseConfig):
@@ -71,6 +72,7 @@ class ExtraConfig(BaseConfig):
     single_layer_mode: bool = False
     aggregate_alignment: bool = False
     dropout_pruning_mode: str = "global"  # "global", "per_layer_combined", or "per_layer_independent"
+    exclude_classification_layer: bool = False  # If True, excludes the classification layer from pruning
 
 @dataclass
 class ExperimentConfig(BaseConfig):
@@ -110,3 +112,4 @@ class ExtraArgs:
     aggregate_alignment: bool = False
     num_drops: int = 9
     dropout_pruning_mode: str = "global"  # "global", "per_layer_combined", or "per_layer_independent"
+    exclude_classification_layer: bool = False  # If True, excludes the classification layer from pruning
