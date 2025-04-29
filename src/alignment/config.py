@@ -67,10 +67,10 @@ class PlotsConfig(BaseConfig):
 @dataclass
 class ExtraConfig(BaseConfig):
     num_drops: int = 9
-    dropout_by_layer: bool = False
     progressive_dropout_on_train: bool = False
     single_layer_mode: bool = False
     aggregate_alignment: bool = False
+    dropout_pruning_mode: str = "global"  # "global", "per_layer_combined", or "per_layer_independent"
 
 @dataclass
 class ExperimentConfig(BaseConfig):
@@ -93,3 +93,20 @@ class ExperimentConfig(BaseConfig):
     checkpointing: CheckpointingConfig = field(default_factory=CheckpointingConfig)
     plots: PlotsConfig = field(default_factory=PlotsConfig)
     extra: ExtraConfig = field(default_factory=ExtraConfig)
+
+@dataclass
+class ExperimentArgs:
+    """Experiment arguments."""
+    dataclass_fields = []
+
+    exp_name: str
+    name: str
+    device: str = "cpu"
+
+
+@dataclass
+class ExtraArgs:
+    """Arguments for various experiments."""
+    aggregate_alignment: bool = False
+    num_drops: int = 9
+    dropout_pruning_mode: str = "global"  # "global", "per_layer_combined", or "per_layer_independent"

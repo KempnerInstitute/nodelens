@@ -1,0 +1,75 @@
+# Pruning Modes Configuration Sample
+
+# This config demonstrates the three different pruning modes available:
+# 1. "global": Concatenate all nodes and prune X% across all layers (original v1)
+# 2. "per_layer_combined": Prune X% from each layer separately, but all at once (v2-like)
+# 3. "per_layer_independent": Prune X% from only one layer at a time (new option)
+
+experiment:
+  name: pruning_modes_comparison
+  type: alignment_stats
+
+dataset:
+  name: MNIST
+  batch_size: 200
+  test_batch_size: 200
+
+model:
+  network: MLP  
+  input_dim: 784
+  hidden_dim: [512, 256, 128, 64]
+  output_dim: 10
+  activation: ReLU
+  dropout: 0.2
+  
+alignment:
+  methods:
+    - "RQ"
+  frequency: 10
+  measure_expected: true
+  do_alignment: true
+  bins: 21
+
+training:
+  epochs: 50
+  lr: 0.001
+  optimizer: Adam
+  criterion: CrossEntropyLoss
+  device: cuda:0
+
+checkpointing:
+  use_prev: false
+  save_checkpoints: false
+  frequency: 10
+
+extra:
+  # Choose one of the three pruning modes:
+  
+  # Option 1: Global Pruning (Original v1) 
+  # Concatenates all nodes from all layers and prunes the lowest X% across all nodes
+  dropout_pruning_mode: "global"
+  
+  # Option 2: Per-Layer Combined (v2-like)
+  # Prunes X% from each layer separately, but all at once
+  # dropout_pruning_mode: "per_layer_combined"
+  
+  # Option 3: Per-Layer Independent (new)
+  # Prunes X% from only one layer at a time, generating separate results per layer
+  # dropout_pruning_mode: "per_layer_independent"
+  
+  aggregate_alignment: false
+  num_drops: 9
+
+# Alternative configs you can uncomment to use:
+
+# Config for "per_layer_combined" mode (v2 behavior)
+# extra:
+#   dropout_pruning_mode: "per_layer_combined"
+#   aggregate_alignment: false 
+#   num_drops: 9
+
+# Config for "per_layer_independent" mode
+# extra:
+#   dropout_pruning_mode: "per_layer_independent"
+#   aggregate_alignment: false
+#   num_drops: 9 

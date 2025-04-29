@@ -246,27 +246,10 @@ def plot_train_results(exp, train_results, test_results, prms):
                         
 def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout_type="nodes"):
     """
-    Plot progressive dropout results (loss & accuracy).
-    
-    We allow for either 3D or 4D shapes in the final arrays:
-      - 3D => (num_types, D, L)
-      - 4D => (num_types, D, E, L)
-    where:
-      num_types = number of distinct model conditions in prms["vals"]
-      D = number of dropout fractions tested
-      E = number of epochs or snapshots
-      L = number of layers.
-
-    If it's 3D, we treat E=1. If it's 4D, we treat E as the third dimension.
-
-    We'll produce subplots of shape (E × L).
+    Plot progressive dropout results for nodes (or other types).
     """
-
-    import torch
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import matplotlib as mpl
-    from alignment.utils import compute_stats_by_type
+    if not exp.args.plots.show_dropout:
+        return
 
     num_types = len(prms["vals"])
     labels = [f"{prms['name']}={val}" for val in prms["vals"]]
@@ -284,8 +267,21 @@ def plot_dropout_results(exp, dropout_results, dropout_parameters, prms, dropout
     acc_rand  = dropout_results["progdrop_acc_rand"]
 
     dropout_fraction = dropout_results["dropout_fraction"]  # shape => (D,)
-    by_layer = dropout_results["by_layer"]
-    extra_name = ("by_layer" if by_layer else "all_layers") + dropout_type
+    pruning_mode = dropout_results.get("pruning_mode", "global")  # Use pruning_mode instead of by_layer
+    is_per_layer = pruning_mode != "global"  # Check if using per-layer modes
+    extra_name = (pruning_mode + "_" if pruning_mode else "") + dropout_type
+    
+    # For per_layer_combined mode, use the combined results to create a single figure
+    if pruning_mode == "per_layer_combined" and "combined_progdrop_loss_high" in dropout_results:
+        print("Using combined results for per_layer_combined mode...")
+        loss_high = dropout_results["combined_progdrop_loss_high"]
+        loss_low = dropout_results["combined_progdrop_loss_low"]
+        loss_rand = dropout_results["combined_progdrop_loss_rand"]
+        acc_high = dropout_results["combined_progdrop_acc_high"]
+        acc_low = dropout_results["combined_progdrop_acc_low"]
+        acc_rand = dropout_results["combined_progdrop_acc_rand"]
+        is_per_layer = False  # Treat as a global figure with single layer results
+        extra_name = "per_layer_combined_aggregated_" + dropout_type
 
     print("Computing dropout stats over replicate dimension...")
     # shape => (N, D, E?, L?) => We do `dim=0` to average across replicates
