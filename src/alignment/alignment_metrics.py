@@ -12,20 +12,20 @@ class AlignmentMetrics:
     """
 
     @staticmethod
-    def RQ(input_, weight_):
+    def RQ(input_, weight_, scale_by_norm=False):
         """
         Rayleigh Quotient alignment measure:
         proportion of variance in `input_` explained by each row of `weight_`.
         """
-        return alignment(input_, weight_, method="alignment", relative=True)
+        return alignment(input_, weight_, method="alignment", relative=True, scale_by_norm=scale_by_norm)
 
     @staticmethod
-    def MI_0(input_, weight_):
+    def MI_0(input_, weight_, scale_by_norm=False):
         """
         Placeholder for mutual information approach - version 0
         (currently reuses alignment(...) as a stand-in).
         """
-        return alignment(input_, weight_, method="alignment", relative=True)
+        return alignment(input_, weight_, method="alignment", relative=True, scale_by_norm=scale_by_norm)
 
     @staticmethod
     def MI_1(input_, weight_):
@@ -35,7 +35,7 @@ class AlignmentMetrics:
         return torch.tensor(0.0)
 
     @staticmethod
-    def delta_alignment(net, layer_idx, layer_input):
+    def delta_alignment(net, layer_idx, layer_input, scale_by_norm=False):
         """
         alignment of (W_current - W_init) with the input's covariance.
         This references net._init_weights for the initial weight.
@@ -49,17 +49,17 @@ class AlignmentMetrics:
             weight_diff = current_w - init_w
 
         weight_diff = weight_diff.flatten(start_dim=1)
-        return alignment(layer_input, weight_diff, method="alignment", relative=True)
+        return alignment(layer_input, weight_diff, method="alignment", relative=True, scale_by_norm=scale_by_norm)
 
     @staticmethod
-    def measure(input_, weight_, method="RQ"):
+    def measure(input_, weight_, method="RQ", scale_by_norm=False):
         """
         For a single method and a single layer's (input_, weight_).
         """
         if method == "RQ":
-            return AlignmentMetrics.RQ(input_, weight_)
+            return AlignmentMetrics.RQ(input_, weight_, scale_by_norm=scale_by_norm)
         elif method == "MI_0":
-            return AlignmentMetrics.MI_0(input_, weight_)
+            return AlignmentMetrics.MI_0(input_, weight_, scale_by_norm=scale_by_norm)
         elif method == "MI_1":
             return AlignmentMetrics.MI_1(input_, weight_)
         else:
@@ -71,7 +71,7 @@ class AlignmentMetrics:
         'Patchwise' alignment for CNN. 
          - inp shape: [B, F, patches], e.g. B=mini-batch, F=inC*kH*kW, patches=outH*outW
          - w shape: [outC, F], the flattened filter weights.
-         - We compute alignment for each patch’s (B,F) input. 
+         - We compute alignment for each patch's (B,F) input. 
          - Weighted by patch-level variance across the batch dimension.
         """
         B, F, P = inp.shape
@@ -105,13 +105,16 @@ class AlignmentMetrics:
         return final_rq  # shape => (outC,)
 
     @staticmethod
-    def measure_methods(net, images, methods, precomputed=True):
+    def measure_methods(net, images, methods, precomputed=True, scale_by_norm=False):
         """
         For each layer in 'net', produce a dict {method -> tensor}.
         1) get_layer_inputs
         2) preprocess => unfold or patchwise
         3) flatten weights
         4) measure alignment or patchwise alignment
+        
+        Parameters:
+        - scale_by_norm: if True, scales covariance matrices by their norm before computing RQ
         """
         # 1) Get raw inputs
         raw_inputs = net.get_layer_inputs(images, precomputed=precomputed)
@@ -125,14 +128,14 @@ class AlignmentMetrics:
             layer_dict = {}
             for m in methods:
                 if m == "delta_alignment":
-                    val = AlignmentMetrics.delta_alignment(net, layer_idx, inp)
+                    val = AlignmentMetrics.delta_alignment(net, layer_idx, inp, scale_by_norm=scale_by_norm)
                 else:
                     # if net says "patchwise" & input is 3D => do patchwise
                     if net.cnn_mode == "patchwise" and inp.ndim == 3:
                         val = AlignmentMetrics.patchwise_alignment(inp, wgt, method=m, weigh_by_var=True)
                     else:
                         # single-cov
-                        val = AlignmentMetrics.measure(inp, wgt, method=m)
+                        val = AlignmentMetrics.measure(inp, wgt, method=m, scale_by_norm=scale_by_norm)
                 layer_dict[m] = val
             results_per_layer.append(layer_dict)
 
@@ -166,7 +169,7 @@ class AlignmentMetrics:
         else:
             return None, None
 
-def alignment(input, weight, method="alignment", relative=True):
+def alignment(input, weight, method="alignment", relative=True, scale_by_norm=False):
     """
     measure alignment by computing RQ = (w^T C w) / (w^T w),
     optionally normalized by trace(C).
@@ -174,10 +177,19 @@ def alignment(input, weight, method="alignment", relative=True):
     - input shape can be (N, F) for single-cov approach,
       or (B, F, patches) if you do patchwise in patchwise_alignment.
     - weight shape (outC, F).
+    - scale_by_norm: if True, scales the covariance matrix by its Frobenius norm
+                     before computing RQ (similar to "similarity" in alignment_v2)
     """
     if input.ndim == 2:
         # standard single-cov approach
         cc = torch.cov(input.T)
+        
+        # Scale covariance by its norm if requested (like "similarity" in v2)
+        if scale_by_norm:
+            cc_norm = torch.norm(cc)
+            if cc_norm > 0:
+                cc = cc / cc_norm
+                
         numerator = torch.sum(torch.matmul(weight, cc) * weight, dim=1)
         denom = torch.sum(weight * weight, dim=1)
         rq = numerator / denom
