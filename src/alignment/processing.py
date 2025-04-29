@@ -182,6 +182,9 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     - "global": Prune X% of all nodes sorted together across all layers (original v1 behavior)
     - "per_layer_combined": Prune X% of each layer but apply to all layers at once (v2 behavior)
     - "per_layer_independent": Prune one layer at a time, creating separate results for each layer
+    
+    Parameters:
+    - exclude_classification_layer: If True, excludes the final classification layer from pruning
     """
     if not isinstance(nets, list):
         nets = [nets]
@@ -191,6 +194,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 
     aggregator = parameters.get("aggregate_alignment", False)
     pruning_mode = parameters.get("pruning_mode", "global")
+    exclude_classification_layer = parameters.get("exclude_classification_layer", False)
 
     parsed = parse_alignment_to_tensor(alignment, aggregate=aggregator, by_layer=(pruning_mode != "global"))
 
@@ -237,11 +241,20 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     lo = idx_sorted[:, :0]
                     rr = idx_sorted[:, :0]
 
+                # Default layer index for targeting - this will be adjusted if excluding classification layer
+                target_layer_idx = 0
+
                 out_high, out_low, out_rand = [], [], []
                 for i_net, net in enumerate(nets):
-                    oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [0])
-                    ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], [0])
-                    or_, _= net.forward_targeted_dropout(images, [rr[i_net]], [0])
+                    # Handle classification layer exclusion
+                    if exclude_classification_layer and net.is_classification_layer_included():
+                        # Skip the classification layer's pruning
+                        # For global pruning, we don't directly handle this, as weights are already concatenated
+                        pass
+                        
+                    oh, _ = net.forward_targeted_dropout(images, [hi[i_net]], [target_layer_idx])
+                    ol, _ = net.forward_targeted_dropout(images, [lo[i_net]], [target_layer_idx])
+                    or_, _= net.forward_targeted_dropout(images, [rr[i_net]], [target_layer_idx])
                     out_high.append(oh)
                     out_low.append(ol)
                     out_rand.append(or_)
@@ -295,6 +308,11 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         layer_indices = []
         for i, layer_tsr in enumerate(parsed):
             if layer_tsr is not None:
+                # Skip classification layer if requested
+                if exclude_classification_layer and i == len(parsed) - 1 and nets[0].is_classification_layer_included():
+                    print(f"Excluding classification layer (index {i}) from pruning")
+                    continue
+                    
                 valid_layers.append(layer_tsr)
                 layer_indices.append(i)
 
@@ -461,7 +479,9 @@ def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set
         num_drops=exp.args.extra.num_drops,
         train_set=train_set,
         aggregate_alignment=exp.args.extra.aggregate_alignment,
-        pruning_mode=exp.args.extra.dropout_pruning_mode
+        pruning_mode=exp.args.extra.dropout_pruning_mode,
+        scale_by_norm=getattr(exp.args.alignment, "scale_by_norm", False),
+        exclude_classification_layer=getattr(exp.args.extra, "exclude_classification_layer", False)
     )
     dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
     return dropout_results, dropout_params
