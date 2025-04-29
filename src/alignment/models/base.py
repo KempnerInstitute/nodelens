@@ -208,9 +208,9 @@ class AlignmentNetwork(nn.Module):
                     preprocessed.append(unfolded)
                 elif self.cnn_mode == "patchwise":
                     preprocessed.append(unfolded)
-                elif self.cnn_mode == "v2_compatible":
-                    # Exactly matches the transformation used in alignment_v2
+                elif self.cnn_mode == "batch_patch_combined":
                     # Combines batch and patch dimensions for convolutional layers
+                    # in a standardized format for alignment computations
                     unfolded = unfolded.transpose(1, 2).contiguous().view(-1, unfolded.size(1))
                     preprocessed.append(unfolded)
                 else:
