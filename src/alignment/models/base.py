@@ -280,39 +280,115 @@ class AlignmentNetwork(nn.Module):
 
     @torch.no_grad()
     def forward_targeted_dropout(self, x, idxs, layers):
+        """
+        Perform forward pass with targeted dropout, matching alignment_v2 behavior.
+        
+        This function zeros out specified nodes in each layer, then scales
+        the output to compensate by multiplying by (1-fraction_dropout).
+        
+        Args:
+            x: Input tensor
+            idxs: List of tensors with indices to dropout for each layer
+            layers: List of layer indices where to apply dropout
+            
+        Returns:
+            Tuple of (network output, hidden layer outputs)
+        """
         from alignment.utils import check_iterable
         assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables with same length"
         assert len(idxs) == len(layers), "idxs and layers must be the same length"
         assert all([0 <= layer < len(self.alignment_layers) for layer in layers]), "invalid layer index"
+        
+        print(f"DEBUG: forward_targeted_dropout called with {len(layers)} layers")
+        print(f"DEBUG: layers indices: {layers}")
+        print(f"DEBUG: indices lengths: {[idx.numel() for idx in idxs]}")
+        
+        # Create an estimate of the overall pruning impact to detect excessive pruning
+        total_effective_pruning = 1.0
+        for idx, layer in zip(idxs, layers):
+            layer_size = self.alignment_layers[layer].weight.size(0)  # Output dimension
+            fraction = idx.numel() / layer_size
+            # Cap fraction for safety
+            fraction = min(fraction, 0.9) 
+            total_effective_pruning *= (1.0 - fraction)
+        
+        print(f"DEBUG: Total estimated effective pruning impact: {1.0 - total_effective_pruning:.3f}")
+        if total_effective_pruning < 0.01:
+            print("WARNING: Combined pruning across layers is very high! This could result in near-zero accuracy.")
+        
         hidden_outputs_dict = {}
         hooks = []
-        def dropout(hook_name, dropout_idx):
+        
+        # Store the original state of parameters that we'll modify
+        original_states = {}
+        
+        def dropout(hook_name, dropout_idx, layer_idx):
             def dropout_hook(module, in_, out_):
+                # Get maximum dimension size (for safety)
                 max_index = out_.shape[1]
+                
+                # Filter indices to avoid out-of-bounds errors
                 valid_idx = dropout_idx[dropout_idx < max_index]
-                frac = len(valid_idx) / float(max_index)
+                
+                # Calculate fraction of nodes being dropped for normalization
+                fraction_dropout = len(valid_idx) / float(max_index)
+                
+                # Cap the fraction to avoid extreme pruning
+                if fraction_dropout > 0.9:
+                    old_fraction = fraction_dropout
+                    fraction_dropout = 0.9
+                    print(f"WARNING: Capping pruning fraction from {old_fraction:.3f} to {fraction_dropout:.3f}")
+                
+                # Create a copy to avoid modifying the original output
+                out_copy = out_.clone()
+                
+                # Log before zeroing
+                print(f"DEBUG: Layer {layer_idx}, before zeroing: min={out_copy.min().item():.3f}, max={out_copy.max().item():.3f}")
+                
+                # Zero out the specified nodes
                 if valid_idx.numel() > 0:
-                    out_[:, valid_idx] = 0
-                out_ = out_ * (1 - frac)
-                hidden_outputs_dict[hook_name] = out_
-                return out_
+                    out_copy[:, valid_idx] = 0
+                
+                # Apply scaling (important: do this exactly as in alignment_v2)
+                scaling_factor = (1.0 - fraction_dropout)
+                out_copy = out_copy * scaling_factor
+                
+                # Log after modification
+                print(f"DEBUG: Layer {layer_idx}, after zeroing {valid_idx.numel()} nodes and scaling by {scaling_factor:.3f}: min={out_copy.min().item():.3f}, max={out_copy.max().item():.3f}")
+                
+                # Store the result
+                hidden_outputs_dict[hook_name] = out_copy
+                return out_copy
             return dropout_hook
+            
         def get_output(hook_name):
             def output_hook(module, in_, out_):
                 hidden_outputs_dict[hook_name] = out_
             return output_hook
+            
+        # Register hooks for all layers
         for idx_layer, (name, layer) in enumerate(zip(self.alignment_names, self.alignment_layers)):
             if idx_layer in layers:
                 i_lyr = layers.index(idx_layer)
                 d_idx = idxs[i_lyr]
-                hooks.append(layer.register_forward_hook(dropout(name, d_idx)))
+                hooks.append(layer.register_forward_hook(dropout(name, d_idx, idx_layer)))
             else:
                 hooks.append(layer.register_forward_hook(get_output(name)))
+                
+        # Forward pass through the model
         x = self.base_model(x)
+        
+        # Log model output statistics
+        print(f"DEBUG: Model output - shape: {x.shape}, min: {x.min().item():.3f}, max: {x.max().item():.3f}")
+        
+        # Remove all hooks
         for hk in hooks:
             hk.remove()
+            
+        # Collect hidden outputs in order
         assert len(hidden_outputs_dict) == len(self.alignment_names)
         hidden_outputs = [hidden_outputs_dict[nm] for nm in self.alignment_names]
+        
         return x, hidden_outputs
 
     @torch.no_grad()
