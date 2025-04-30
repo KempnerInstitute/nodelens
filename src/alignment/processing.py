@@ -211,6 +211,28 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         if not isinstance(parsed, torch.Tensor) or parsed.dim() != 2:
             raise ValueError("Expected shape (#nets, total_nodes) for pruning_mode='global'")
 
+        # Get all layer indices and their sizes for tracking
+        target_layer_indices = list(range(len(nets[0].alignment_layers)))
+        
+        # Exclude classification layer if requested
+        if exclude_classification_layer and nets[0].is_classification_layer_included():
+            # Remove last layer which is the classification layer
+            target_layer_indices = target_layer_indices[:-1]
+            print(f"Excluding classification layer from pruning")
+        
+        # For each network, we need to track which layer each flattened index belongs to
+        layer_sizes = []
+        for net in nets:
+            sizes = []
+            for i, layer in enumerate(net.alignment_layers):
+                if i in target_layer_indices:
+                    if hasattr(layer, 'weight'):
+                        sizes.append(layer.weight.shape[0])  # Output dimension
+                    else:
+                        # Handle case where layer might not have weights directly
+                        sizes.append(0)  # Will be corrected later
+            layer_sizes.append(sizes)
+        
         # IMPORTANT: We sort the alignment values (RQ) in ascending order
         # So idx_sorted[:, 0] has the index of the lowest RQ and idx_sorted[:, -1] has the highest RQ
         idx_sorted = torch.argsort(parsed, dim=1)  # (#nets, total_nodes)
@@ -231,42 +253,106 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             for dropidx, fraction in enumerate(drop_fraction):
                 dn = int(total_nodes * fraction)
                 if dn > 0:
-                    # nodes_to_drop_low: Prune lowest RQ nodes (first dn values in sorted order)
-                    # nodes_to_drop_high: Prune highest RQ nodes (last dn values in sorted order)
-                    # Variable names reflect which nodes are being DROPPED (zeroed out)
-                    nodes_to_drop_low = idx_sorted[:, :dn]
-                    nodes_to_drop_high = idx_sorted[:, total_nodes-dn:]
-                    nodes_to_drop_rand = []
+                    # Get indices of nodes to prune (low/high/random)
+                    global_low_indices = idx_sorted[:, :dn]  # Lowest alignment nodes
+                    global_high_indices = idx_sorted[:, total_nodes-dn:]  # Highest alignment nodes
+                    
+                    global_rand_indices = []
                     for i_net in range(num_nets):
                         perm = torch.randperm(total_nodes, device=idx_sorted.device)
-                        nodes_to_drop_rand.append(perm[:dn])
-                    nodes_to_drop_rand = torch.stack(nodes_to_drop_rand, dim=0)
-                else:
-                    nodes_to_drop_high = idx_sorted[:, :0]
-                    nodes_to_drop_low = idx_sorted[:, :0]
-                    nodes_to_drop_rand = idx_sorted[:, :0]
-
-                # Default layer index for targeting - this will be adjusted if excluding classification layer
-                target_layer_idx = 0
-
-                out_high, out_low, out_rand = [], [], []
-                for i_net, net in enumerate(nets):
-                    # Handle classification layer exclusion
-                    if exclude_classification_layer and net.is_classification_layer_included():
-                        # Skip the classification layer's pruning
-                        # For global pruning, we don't directly handle this, as weights are already concatenated
-                        pass
+                        global_rand_indices.append(perm[:dn])
+                    global_rand_indices = torch.stack(global_rand_indices, dim=0)
                     
-                    # Forward pass with pruning:
-                    # out_low = output when DROPPING LOW alignment nodes (keeping HIGH alignment nodes)
-                    # out_high = output when DROPPING HIGH alignment nodes (keeping LOW alignment nodes)
-                    # Better variable names would be "output_after_dropping_low_nodes", etc.
-                    ol, _ = net.forward_targeted_dropout(images, [nodes_to_drop_low[i_net]], [target_layer_idx])
-                    oh, _ = net.forward_targeted_dropout(images, [nodes_to_drop_high[i_net]], [target_layer_idx])
-                    or_, _= net.forward_targeted_dropout(images, [nodes_to_drop_rand[i_net]], [target_layer_idx])
-                    out_low.append(ol)    # Networks with LOW alignment nodes removed
-                    out_high.append(oh)   # Networks with HIGH alignment nodes removed
-                    out_rand.append(or_)
+                    # Now convert these global indices to per-layer indices
+                    # For each network and for each pruning type (high/low/random)
+                    out_high, out_low, out_rand = [], [], []
+                    
+                    for i_net, net in enumerate(nets):
+                        # Maps from global index to (layer_idx, node_idx) for this network
+                        cumulative_size = 0
+                        layer_boundaries = []
+                        for lyr_idx, size in enumerate(layer_sizes[i_net]):
+                            layer_boundaries.append((cumulative_size, cumulative_size + size))
+                            cumulative_size += size
+                        
+                        # Process the global indices for this network - group by layer
+                        nodes_by_layer_low = [[] for _ in range(len(target_layer_indices))]
+                        nodes_by_layer_high = [[] for _ in range(len(target_layer_indices))]
+                        nodes_by_layer_rand = [[] for _ in range(len(target_layer_indices))]
+                        
+                        # For low alignment nodes
+                        for global_idx in global_low_indices[i_net]:
+                            global_idx = global_idx.item()
+                            # Find which layer this index belongs to
+                            for lyr_idx, (start, end) in enumerate(layer_boundaries):
+                                if start <= global_idx < end:
+                                    # Convert global index to index within the layer
+                                    local_idx = global_idx - start
+                                    nodes_by_layer_low[lyr_idx].append(local_idx)
+                                    break
+                        
+                        # For high alignment nodes
+                        for global_idx in global_high_indices[i_net]:
+                            global_idx = global_idx.item()
+                            for lyr_idx, (start, end) in enumerate(layer_boundaries):
+                                if start <= global_idx < end:
+                                    local_idx = global_idx - start
+                                    nodes_by_layer_high[lyr_idx].append(local_idx)
+                                    break
+                        
+                        # For random nodes
+                        for global_idx in global_rand_indices[i_net]:
+                            global_idx = global_idx.item()
+                            for lyr_idx, (start, end) in enumerate(layer_boundaries):
+                                if start <= global_idx < end:
+                                    local_idx = global_idx - start
+                                    nodes_by_layer_rand[lyr_idx].append(local_idx)
+                                    break
+                        
+                        # Convert lists to tensors
+                        for lyr_idx in range(len(nodes_by_layer_low)):
+                            if nodes_by_layer_low[lyr_idx]:
+                                nodes_by_layer_low[lyr_idx] = torch.tensor(nodes_by_layer_low[lyr_idx], 
+                                                                      device=idx_sorted.device)
+                            else:
+                                nodes_by_layer_low[lyr_idx] = torch.tensor([], 
+                                                                      device=idx_sorted.device, dtype=torch.long)
+                                
+                            if nodes_by_layer_high[lyr_idx]:
+                                nodes_by_layer_high[lyr_idx] = torch.tensor(nodes_by_layer_high[lyr_idx], 
+                                                                       device=idx_sorted.device)
+                            else:
+                                nodes_by_layer_high[lyr_idx] = torch.tensor([], 
+                                                                       device=idx_sorted.device, dtype=torch.long)
+                                
+                            if nodes_by_layer_rand[lyr_idx]:
+                                nodes_by_layer_rand[lyr_idx] = torch.tensor(nodes_by_layer_rand[lyr_idx], 
+                                                                       device=idx_sorted.device)
+                            else:
+                                nodes_by_layer_rand[lyr_idx] = torch.tensor([], 
+                                                                       device=idx_sorted.device, dtype=torch.long)
+                        
+                        # Now perform the targeted dropout with the correct indices for each layer
+                        ol, _ = net.forward_targeted_dropout(images, nodes_by_layer_low, target_layer_indices)
+                        oh, _ = net.forward_targeted_dropout(images, nodes_by_layer_high, target_layer_indices)
+                        or_, _= net.forward_targeted_dropout(images, nodes_by_layer_rand, target_layer_indices)
+                        
+                        out_low.append(ol)    # Networks with LOW alignment nodes removed
+                        out_high.append(oh)   # Networks with HIGH alignment nodes removed
+                        out_rand.append(or_)
+                else:
+                    # No nodes to drop
+                    empty_indices = [torch.tensor([], device=idx_sorted.device, dtype=torch.long) 
+                                     for _ in range(len(target_layer_indices))]
+                    
+                    out_high, out_low, out_rand = [], [], []
+                    for i_net, net in enumerate(nets):
+                        ol, _ = net.forward_targeted_dropout(images, empty_indices, target_layer_indices)
+                        oh, _ = net.forward_targeted_dropout(images, empty_indices, target_layer_indices)
+                        or_, _= net.forward_targeted_dropout(images, empty_indices, target_layer_indices)
+                        out_low.append(ol)
+                        out_high.append(oh)
+                        out_rand.append(or_)
 
                 lh, ll, lr = [], [], []
                 ah, al, ar = [], [], []
@@ -310,7 +396,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             "progdrop_acc_rand":  progdrop_acc_rand,
             "dropout_fraction":   drop_fraction,
             "pruning_mode":       pruning_mode,
-            "idx_dropout_layers": [0],
+            "idx_dropout_layers": target_layer_indices,
         }
         return results
     else:
@@ -410,25 +496,60 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         progdrop_acc_rand[:, dropidx, lyr_idx]  += torch.tensor(ar, device="cpu")
                     
                     else:  # "per_layer_combined"
-                        # For per_layer_combined, we still run the loop for each layer
-                        # but collect pruning results for all layers together
+                        # For per_layer_combined, we prune X% from EVERY layer and apply all prunings at once
+                        # This is different from per_layer_independent (one layer at a time) and
+                        # different from global (where pruning is distributed based on global ranking)
                         
-                        # Apply pruning to each layer independently but record results in each layer's slot
-                        # This is primarily for visualization purposes to show effect on each layer
+                        # First collect the pruning indices for all layers
+                        all_layers_low_indices = []
+                        all_layers_high_indices = []
+                        all_layers_rand_indices = []
+                        
+                        # Determine pruning indices for each layer
+                        for lyr_idx, layer_tsr in enumerate(valid_layers):
+                            idx_sorted = torch.argsort(layer_tsr, dim=1)
+                            node_count = idx_sorted.size(1)
+                            dn = int(node_count * fraction)
+                            
+                            if dn > 0:
+                                # For each layer, determine which nodes to prune
+                                # nodes_to_drop_low: Prune lowest RQ nodes (first dn values in sorted order)
+                                # nodes_to_drop_high: Prune highest RQ nodes (last dn values in sorted order)
+                                nodes_to_drop_low = idx_sorted[:, :dn]
+                                nodes_to_drop_high = idx_sorted[:, node_count-dn:]
+                                nodes_to_drop_rand = []
+                                for i_net in range(num_nets):
+                                    perm = torch.randperm(node_count, device=idx_sorted.device)
+                                    nodes_to_drop_rand.append(perm[:dn])
+                                nodes_to_drop_rand = torch.stack(nodes_to_drop_rand, dim=0)
+                            else:
+                                nodes_to_drop_high = idx_sorted[:, :0]
+                                nodes_to_drop_low = idx_sorted[:, :0]
+                                nodes_to_drop_rand = torch.stack([torch.tensor([], device=idx_sorted.device, dtype=torch.long) 
+                                                                 for _ in range(num_nets)], dim=0)
+                            
+                            all_layers_low_indices.append(nodes_to_drop_low)
+                            all_layers_high_indices.append(nodes_to_drop_high)
+                            all_layers_rand_indices.append(nodes_to_drop_rand)
+                        
+                        # Now apply all prunings at once and measure the combined effect
                         out_high, out_low, out_rand = [], [], []
                         for i_net, net in enumerate(nets):
-                            # Forward pass with pruning for current layer:
-                            # out_low = output when DROPPING LOW alignment nodes (keeping HIGH alignment nodes)
-                            # out_high = output when DROPPING HIGH alignment nodes (keeping LOW alignment nodes)
-                            ol, _ = net.forward_targeted_dropout(images, [nodes_to_drop_low[i_net]], [layer_indices[lyr_idx]])
-                            oh, _ = net.forward_targeted_dropout(images, [nodes_to_drop_high[i_net]], [layer_indices[lyr_idx]])
-                            or_, _= net.forward_targeted_dropout(images, [nodes_to_drop_rand[i_net]], [layer_indices[lyr_idx]])
+                            # Extract indices for this network from all layers
+                            net_low_indices = [indices[i_net] for indices in all_layers_low_indices]
+                            net_high_indices = [indices[i_net] for indices in all_layers_high_indices]
+                            net_rand_indices = [indices[i_net] for indices in all_layers_rand_indices]
                             
-                            out_low.append(ol)    # Networks with LOW alignment nodes removed
-                            out_high.append(oh)   # Networks with HIGH alignment nodes removed
+                            # Apply pruning to ALL layers simultaneously
+                            ol, _ = net.forward_targeted_dropout(images, net_low_indices, layer_indices)
+                            oh, _ = net.forward_targeted_dropout(images, net_high_indices, layer_indices)
+                            or_, _= net.forward_targeted_dropout(images, net_rand_indices, layer_indices)
+                            
+                            out_low.append(ol)    # Networks with LOW alignment nodes removed from all layers
+                            out_high.append(oh)   # Networks with HIGH alignment nodes removed from all layers
                             out_rand.append(or_)
                         
-                        # Record metrics for this layer
+                        # Record metrics for the combined pruning result
                         lh, ll, lr = [], [], []
                         ah, al, ar = [], [], []
                         for i_net in range(num_nets):
@@ -447,13 +568,16 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             ah.append(av_h)
                             al.append(av_l)
                             ar.append(av_r)
-
-                        progdrop_loss_high[:, dropidx, lyr_idx] += torch.tensor(lh, device="cpu")
-                        progdrop_loss_low[:, dropidx, lyr_idx]  += torch.tensor(ll, device="cpu")
-                        progdrop_loss_rand[:, dropidx, lyr_idx] += torch.tensor(lr, device="cpu")
-                        progdrop_acc_high[:, dropidx, lyr_idx]  += torch.tensor(ah, device="cpu")
-                        progdrop_acc_low[:, dropidx, lyr_idx]   += torch.tensor(al, device="cpu")
-                        progdrop_acc_rand[:, dropidx, lyr_idx]  += torch.tensor(ar, device="cpu")
+                        
+                        # Store the same result for each layer (duplicating the result)
+                        # This is for compatibility with the existing plotting code
+                        for lyr_idx in range(len(valid_layers)):
+                            progdrop_loss_high[:, dropidx, lyr_idx] += torch.tensor(lh, device="cpu")
+                            progdrop_loss_low[:, dropidx, lyr_idx]  += torch.tensor(ll, device="cpu")
+                            progdrop_loss_rand[:, dropidx, lyr_idx] += torch.tensor(lr, device="cpu")
+                            progdrop_acc_high[:, dropidx, lyr_idx]  += torch.tensor(ah, device="cpu")
+                            progdrop_acc_low[:, dropidx, lyr_idx]   += torch.tensor(al, device="cpu")
+                            progdrop_acc_rand[:, dropidx, lyr_idx]  += torch.tensor(ar, device="cpu")
 
         progdrop_loss_high /= num_batches
         progdrop_loss_low  /= num_batches
@@ -474,16 +598,18 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             "idx_dropout_layers": layer_indices,
         }
         
-        # For per_layer_combined mode, we need to aggregate the results across layers
-        # to produce a single figure showing the combined effect of pruning
+        # For per_layer_combined mode, we have already measured the effect of pruning all layers together
+        # The real results are already in the per-layer tensors (duplicated across all layers)
+        # We don't need to do any aggregation because the measurements were already done with all layers pruned together
         if pruning_mode == "per_layer_combined":
-            # Average the results across all layers to get one result per dropout fraction
-            combined_loss_high = progdrop_loss_high.mean(dim=2)
-            combined_loss_low = progdrop_loss_low.mean(dim=2)
-            combined_loss_rand = progdrop_loss_rand.mean(dim=2)
-            combined_acc_high = progdrop_acc_high.mean(dim=2)
-            combined_acc_low = progdrop_acc_low.mean(dim=2)
-            combined_acc_rand = progdrop_acc_rand.mean(dim=2)
+            # We've already stored the same result in each layer slot (all identical)
+            # Just for visualization purposes, we'll add combined results to match the keys used in plotting
+            combined_loss_high = progdrop_loss_high[:, :, 0]  # Just take first layer's results (all are identical)
+            combined_loss_low = progdrop_loss_low[:, :, 0]
+            combined_loss_rand = progdrop_loss_rand[:, :, 0]
+            combined_acc_high = progdrop_acc_high[:, :, 0]
+            combined_acc_low = progdrop_acc_low[:, :, 0]
+            combined_acc_rand = progdrop_acc_rand[:, :, 0]
             
             # Add a new dimension to match expected shape for plotting code
             results["combined_progdrop_loss_high"] = combined_loss_high.unsqueeze(2)
