@@ -72,6 +72,7 @@ class ExtraConfig(BaseConfig):
     single_layer_mode: bool = False
     aggregate_alignment: bool = False
     dropout_pruning_mode: str = "global"  # "global", "per_layer_combined", or "per_layer_independent"
+    dropout_mode: str = "scaled"  # "scaled" or "unscaled" - how targeted dropout is applied to neurons
     exclude_classification_layer: bool = False  # If True, excludes the classification layer from pruning
 
 @dataclass
