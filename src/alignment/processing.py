@@ -207,6 +207,10 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     - "per_layer_combined": Prune X% of each layer but apply to all layers at once (v2 behavior)
     - "per_layer_independent": Prune one layer at a time, creating separate results for each layer
     
+    dropout_mode options:
+    - "scaled": Zeroes neurons and applies scaling to maintain signal magnitude (default)
+    - "unscaled": Zeroes neurons but doesn't apply compensation scaling
+    
     Parameters:
     - exclude_classification_layer: If True, excludes the final classification layer from pruning
     """
@@ -218,6 +222,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 
     aggregator = parameters.get("aggregate_alignment", False)
     pruning_mode = parameters.get("pruning_mode", "global")
+    dropout_mode = parameters.get("dropout_mode", "scaled")
     exclude_classification_layer = parameters.get("exclude_classification_layer", False)
 
     parsed = parse_alignment_to_tensor(alignment, aggregate=aggregator, by_layer=(pruning_mode != "global"))
@@ -226,7 +231,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
     drop_fraction = torch.linspace(0, 1, num_drops + 2)[1:-1]
     use_train = parameters.get("train_set", False)
     dataloader = dataset.train_loader if use_train else dataset.test_loader
-    print(f"Progressive Dropout (mode: {pruning_mode}):")
+    print(f"Progressive Dropout (mode: {pruning_mode}, dropout_mode: {dropout_mode}):")
 
     num_nets = len(nets)
 
@@ -319,9 +324,9 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     rand_indices = [drop_rand[i_net] for drop_rand in idx_rand]
                     
                     # Apply dropout to all layers
-                    oh, _ = net.forward_targeted_dropout(images, high_indices, valid_layer_indices)
-                    ol, _ = net.forward_targeted_dropout(images, low_indices, valid_layer_indices)
-                    or_, _ = net.forward_targeted_dropout(images, rand_indices, valid_layer_indices)
+                    oh, _ = net.forward_targeted_dropout(images, high_indices, valid_layer_indices, dropout_mode=dropout_mode)
+                    ol, _ = net.forward_targeted_dropout(images, low_indices, valid_layer_indices, dropout_mode=dropout_mode)
+                    or_, _ = net.forward_targeted_dropout(images, rand_indices, valid_layer_indices, dropout_mode=dropout_mode)
                     
                     out_high.append(oh)
                     out_low.append(ol)
@@ -372,6 +377,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             "progdrop_acc_rand":  progdrop_acc_rand,
             "dropout_fraction":   drop_fraction,
             "pruning_mode":       pruning_mode,
+            "dropout_mode":       dropout_mode,
             "idx_dropout_layers": valid_layer_indices,
         }
         return results
@@ -453,9 +459,9 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             # Forward pass with pruning:
                             # out_low = output when DROPPING LOW alignment nodes (keeping HIGH alignment nodes)
                             # out_high = output when DROPPING HIGH alignment nodes (keeping LOW alignment nodes)
-                            ol, _ = net.forward_targeted_dropout(images, [nodes_to_drop_low[i_net]], target_layers)
-                            oh, _ = net.forward_targeted_dropout(images, [nodes_to_drop_high[i_net]], target_layers)
-                            or_, _= net.forward_targeted_dropout(images, [nodes_to_drop_rand[i_net]], target_layers)
+                            ol, _ = net.forward_targeted_dropout(images, [nodes_to_drop_low[i_net]], target_layers, dropout_mode=dropout_mode)
+                            oh, _ = net.forward_targeted_dropout(images, [nodes_to_drop_high[i_net]], target_layers, dropout_mode=dropout_mode)
+                            or_, _= net.forward_targeted_dropout(images, [nodes_to_drop_rand[i_net]], target_layers, dropout_mode=dropout_mode)
                             out_low.append(ol)    # Networks with LOW alignment nodes removed
                             out_high.append(oh)   # Networks with HIGH alignment nodes removed
                             out_rand.append(or_)
@@ -489,20 +495,14 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                     
                     else:  # "per_layer_combined"
                         # For per_layer_combined, we prune X% from EVERY layer and apply all prunings at once
-                        # This matches alignment_v2's by_layer=True code branch
-                        
-                        # Add specific debug message for this mode
-                        print(f"\n==== DEBUG: per_layer_combined mode, fraction={fraction:.3f} ====")
-                        
+                        # This matches alignment_v2's by_layer=True code branch                        
+                    
                         # Get the sorted indices for each layer
                         idx_sorted_layers = [torch.argsort(layer_tsr, dim=1) for layer_tsr in valid_layers]
                         
                         # Get dropout indices for each layer using alignment_v2's approach
                         idx_high, idx_low, idx_rand = get_dropout_indices(idx_sorted_layers, fraction)
-                        
-                        # Debug: Print indices shapes
-                        print(f"Indices shapes: high={[idx.shape for idx in idx_high]}, low={[idx.shape for idx in idx_low]}")
-                        
+                                
                         # Apply pruning to all layers simultaneously, exactly like alignment_v2 does
                         out_high, out_low, out_rand = [], [], []
                         for i_net, net in enumerate(nets):
@@ -512,18 +512,11 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             low_indices = [drop[i_net, :] for drop in idx_low]
                             rand_indices = [drop[i_net, :] for drop in idx_rand]
                             
-                            # Debug: Print indices information for this network
-                            print(f"Network {i_net}: high_indices: {[h.shape for h in high_indices]}, total nodes: {sum(h.numel() for h in high_indices)}")
                             
                             # Apply dropout to all layers at once (consistent with alignment_v2)
-                            oh, _ = net.forward_targeted_dropout(images, high_indices, layer_indices)
-                            ol, _ = net.forward_targeted_dropout(images, low_indices, layer_indices)
-                            or_, _ = net.forward_targeted_dropout(images, rand_indices, layer_indices)
-                            
-                            # Debug: Print output statistics
-                            print(f"  Output shapes - high: {oh.shape}, low: {ol.shape}, rand: {or_.shape}")
-                            print(f"  Output stats - high: min={oh.min().item():.3f}, max={oh.max().item():.3f}, mean={oh.mean().item():.3f}")
-                            print(f"  Output stats - low: min={ol.min().item():.3f}, max={ol.max().item():.3f}, mean={ol.mean().item():.3f}")
+                            oh, _ = net.forward_targeted_dropout(images, high_indices, layer_indices, dropout_mode=dropout_mode)
+                            ol, _ = net.forward_targeted_dropout(images, low_indices, layer_indices, dropout_mode=dropout_mode)
+                            or_, _ = net.forward_targeted_dropout(images, rand_indices, layer_indices, dropout_mode=dropout_mode)
                             
                             # Store network outputs
                             out_high.append(oh)
@@ -542,11 +535,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             ll.append(lv_l)
                             lr.append(lv_r)
 
-                            # Debug before accuracy measurement
-                            print(f"Network {i_net} before accuracy - outputs: shape={out_high[i_net].shape}, labels: shape={labels.shape}")
-                            print(f"  Output sample (first 5 values): {out_high[i_net][0, :5].detach().cpu().tolist()}")
-                            print(f"  Labels sample (first 5): {labels[:5].detach().cpu().tolist()}")
-                            
+
                             # Get the predicted classes
                             _, pred_high = out_high[i_net].max(1)
                             _, pred_low = out_low[i_net].max(1)
@@ -557,16 +546,11 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             manual_acc_low = 100 * (pred_low == labels).float().mean().item()
                             manual_acc_rand = 100 * (pred_rand == labels).float().mean().item()
                             
-                            print(f"  Manual accuracy - high: {manual_acc_high:.2f}%, low: {manual_acc_low:.2f}%, rand: {manual_acc_rand:.2f}%")
-
                             # Accuracy after pruning - convert to float to ensure proper handling
                             av_h = float(dataset.measure_accuracy(out_high[i_net], labels).cpu())
                             av_l = float(dataset.measure_accuracy(out_low[i_net], labels).cpu())
                             av_r = float(dataset.measure_accuracy(out_rand[i_net], labels).cpu())
-                            
-                            # Debug after accuracy measurement
-                            print(f"  Measured accuracy - high: {av_h:.2f}%, low: {av_l:.2f}%, rand: {av_r:.2f}%")
-                            
+
                             ah.append(av_h)
                             al.append(av_l)
                             ar.append(av_r)
@@ -578,10 +562,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                         ah_tensor = torch.tensor(ah, device="cpu")
                         al_tensor = torch.tensor(al, device="cpu")
                         ar_tensor = torch.tensor(ar, device="cpu")
-                        
-                        # Debug accuracy tensor values
-                        print(f"Accuracy tensors - high: {ah_tensor}, low: {al_tensor}, rand: {ar_tensor}")
-                        
+
                         # Initialize the combined results storage if first batch
                         if pruning_combined_results.count == 0:
                             num_actual_nets = lh_tensor.size(0)
@@ -611,7 +592,6 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
                             progdrop_acc_low[:, dropidx, lyr_idx] += al_tensor
                             progdrop_acc_rand[:, dropidx, lyr_idx] += ar_tensor
                             
-                        print("==== End of per_layer_combined debug ====\n")
 
         progdrop_loss_high /= num_batches
         progdrop_loss_low  /= num_batches
@@ -629,6 +609,7 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             "progdrop_acc_rand":  progdrop_acc_rand,
             "dropout_fraction":   drop_fraction,
             "pruning_mode":       pruning_mode,
+            "dropout_mode":       dropout_mode,
             "idx_dropout_layers": layer_indices,
         }
         
@@ -643,14 +624,9 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
             pruning_combined_results.acc_low /= pruning_combined_results.count
             pruning_combined_results.acc_rand /= pruning_combined_results.count
             
-            # Debug combined results
-            print(f"\nDEBUG: Normalized combined results:")
-            print(f"Loss - high: {pruning_combined_results.loss_high}")
-            print(f"Accuracy - high: {pruning_combined_results.acc_high}")
-            
+
             # Check for flat zero accuracy
             if torch.all(pruning_combined_results.acc_high == 0) and torch.all(pruning_combined_results.acc_low == 0):
-                print("WARNING: All accuracies are zero! Applying safety measure to prevent flat lines in plots.")
                 
                 # Apply safety measure - add tiny epsilon to first few fractions
                 # This ensures plots will show a curve instead of a flat line
@@ -675,7 +651,6 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
         for key in result_keys:
             if key.startswith("progdrop_acc"):
                 if torch.all(results[key] == 0):
-                    print(f"WARNING: All values in {key} are zero! Adding small values to prevent flat lines.")
                     
                     # Add tiny values that decrease with dropout fraction
                     result_shape = results[key].shape
@@ -688,15 +663,30 @@ def progressive_dropout(nets, dataset, alignment=None, **parameters):
 
 
 def progressive_dropout_experiment(exp, nets, dataset, alignment=None, train_set=False):
-    print("performing targeted dropout...")
-    dropout_params = dict(
-        num_drops=exp.args.extra.num_drops,
-        train_set=train_set,
-        aggregate_alignment=exp.args.extra.aggregate_alignment,
-        pruning_mode=exp.args.extra.dropout_pruning_mode,
-        scale_by_norm=getattr(exp.args.alignment, "scale_by_norm", False),
-        exclude_classification_layer=getattr(exp.args.extra, "exclude_classification_layer", False)
-    )
+    """
+    Run progressive dropout experiment using the provided experiment config.
+    """
+    print("\nRunning progressive dropout experiment...")
+    # Support both exp.args and exp.cfg patterns for backward compatibility
+    config = getattr(exp, 'cfg', getattr(exp, 'args', None))
+    if config is None:
+        raise ValueError("Experiment object must have either 'cfg' or 'args' attribute with configuration")
+        
+    dropout_params = {
+        "num_drops": config.extra.num_drops,
+        "pruning_mode": config.extra.dropout_pruning_mode,
+        "dropout_mode": config.extra.dropout_mode,
+        "exclude_classification_layer": config.extra.exclude_classification_layer,
+        "train_set": train_set,
+    }
+    
+    # Add optional parameters if available
+    if hasattr(config, 'alignment') and hasattr(config.alignment, 'scale_by_norm'):
+        dropout_params["scale_by_norm"] = config.alignment.scale_by_norm
+        
+    if hasattr(config.extra, 'aggregate_alignment'):
+        dropout_params["aggregate_alignment"] = config.extra.aggregate_alignment
+        
     dropout_results = progressive_dropout(nets, dataset, alignment=alignment, **dropout_params)
     return dropout_results, dropout_params
 
