@@ -279,17 +279,18 @@ class AlignmentNetwork(nn.Module):
         return outputs
 
     @torch.no_grad()
-    def forward_targeted_dropout(self, x, idxs, layers):
+    def forward_targeted_dropout(self, x, idxs, layers, dropout_mode="scaled"):
         """
         Perform forward pass with targeted dropout, matching alignment_v2 behavior.
         
-        This function zeros out specified nodes in each layer, then scales
+        This function zeros out specified nodes in each layer, then optionally scales
         the output to compensate by multiplying by (1-fraction_dropout).
         
         Args:
             x: Input tensor
             idxs: List of tensors with indices to dropout for each layer
             layers: List of layer indices where to apply dropout
+            dropout_mode: How to apply dropout - "scaled" (with compensation) or "unscaled" (without)
             
         Returns:
             Tuple of (network output, hidden layer outputs)
@@ -299,9 +300,6 @@ class AlignmentNetwork(nn.Module):
         assert len(idxs) == len(layers), "idxs and layers must be the same length"
         assert all([0 <= layer < len(self.alignment_layers) for layer in layers]), "invalid layer index"
         
-        print(f"DEBUG: forward_targeted_dropout called with {len(layers)} layers")
-        print(f"DEBUG: layers indices: {layers}")
-        print(f"DEBUG: indices lengths: {[idx.numel() for idx in idxs]}")
         
         # Create an estimate of the overall pruning impact to detect excessive pruning
         total_effective_pruning = 1.0
@@ -310,11 +308,7 @@ class AlignmentNetwork(nn.Module):
             fraction = idx.numel() / layer_size
             # Cap fraction for safety
             fraction = min(fraction, 0.9) 
-            total_effective_pruning *= (1.0 - fraction)
-        
-        print(f"DEBUG: Total estimated effective pruning impact: {1.0 - total_effective_pruning:.3f}")
-        if total_effective_pruning < 0.01:
-            print("WARNING: Combined pruning across layers is very high! This could result in near-zero accuracy.")
+
         
         hidden_outputs_dict = {}
         hooks = []
@@ -333,29 +327,20 @@ class AlignmentNetwork(nn.Module):
                 # Calculate fraction of nodes being dropped for normalization
                 fraction_dropout = len(valid_idx) / float(max_index)
                 
-                # Cap the fraction to avoid extreme pruning
-                if fraction_dropout > 0.9:
-                    old_fraction = fraction_dropout
-                    fraction_dropout = 0.9
-                    print(f"WARNING: Capping pruning fraction from {old_fraction:.3f} to {fraction_dropout:.3f}")
-                
+
                 # Create a copy to avoid modifying the original output
                 out_copy = out_.clone()
                 
-                # Log before zeroing
-                print(f"DEBUG: Layer {layer_idx}, before zeroing: min={out_copy.min().item():.3f}, max={out_copy.max().item():.3f}")
-                
+
                 # Zero out the specified nodes
                 if valid_idx.numel() > 0:
                     out_copy[:, valid_idx] = 0
                 
-                # Apply scaling (important: do this exactly as in alignment_v2)
-                scaling_factor = (1.0 - fraction_dropout)
-                out_copy = out_copy * scaling_factor
-                
-                # Log after modification
-                print(f"DEBUG: Layer {layer_idx}, after zeroing {valid_idx.numel()} nodes and scaling by {scaling_factor:.3f}: min={out_copy.min().item():.3f}, max={out_copy.max().item():.3f}")
-                
+                # Apply scaling if using "scaled" dropout mode
+                if dropout_mode == "scaled":
+                    scaling_factor = (1.0 - fraction_dropout)
+                    out_copy = out_copy * scaling_factor
+
                 # Store the result
                 hidden_outputs_dict[hook_name] = out_copy
                 return out_copy
@@ -377,9 +362,6 @@ class AlignmentNetwork(nn.Module):
                 
         # Forward pass through the model
         x = self.base_model(x)
-        
-        # Log model output statistics
-        print(f"DEBUG: Model output - shape: {x.shape}, min: {x.min().item():.3f}, max: {x.max().item():.3f}")
         
         # Remove all hooks
         for hk in hooks:

@@ -174,15 +174,8 @@ class DataSet(ABC):
         total = targets.size(0)
         
         # Convert to percentage if requested
-        accuracy = (correct / total) * (100.0 if percentage else 1.0)
-        
-        # More than one correct prediction means the model is functioning
-        if correct > 0:
-            # Only log if predictions are reasonable (for debugging)
-            print(f"INFO: Got {correct}/{total} correct predictions ({accuracy:.2f}{'%' if percentage else ''})")
-        else:
-            # Log a warning if all predictions are wrong
-            print(f"WARNING: All predictions incorrect! Output stats: min={outputs.min().item():.3f}, max={outputs.max().item():.3f}")
+        accuracy = (correct / total) * (100.0 if percentage else 1.0)        
+
             
         return torch.tensor(accuracy, device=outputs.device)
 
