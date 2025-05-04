@@ -1,84 +1,103 @@
-# --------------------------------------------
-# registry.py
-# --------------------------------------------
-from typing import Optional
+"""
+Model registry module for managing model creation and registration.
 
-from torchvision.models import alexnet
+This module provides a centralized registry for all models used in the alignment
+experiments, allowing for consistent model instantiation based on configuration.
+"""
 
-from alignment.models import models
+import logging
+from typing import Dict, Type, Callable, Optional, Any, Union, List, Tuple
+
+import torch
+import torch.nn as nn
+
+from alignment.config import ModelConfig
 from alignment.models.base import AlignmentNetwork
 
-MODEL_REGISTRY = {
-    "MLP": models.MLP,
-    "CNN2P2": models.CNN2P2,
-    "AlexNet": alexnet,
-}
 
-DATASET_ARGUMENTS = {
-    "MLP": {
-        "MNIST": dict(input_dim=784, output_dim=10),
-        "CIFAR10": dict(input_dim=3072, output_dim=10),
-        "CIFAR100": dict(input_dim=3072, output_dim=100),
-    },
-    "CNN2P2": {
-        "MNIST": dict(in_channels=1, output_dim=10),
-        "CIFAR10": dict(in_channels=3, num_hidden=[4096, 128], output_dim=10),
-        "CIFAR100": dict(in_channels=3, num_hidden=[4096, 128], output_dim=100),
-        "ImageNet": dict(in_channels=3, output_dim=1000),
-    },
-    "AlexNet": {
-        "MNIST": dict(num_classes=10),
-        "CIFAR10": dict(num_classes=10),
-        "CIFAR100": dict(num_classes=100),
-        "ImageNet": dict(num_classes=1000),
-    },
-}
+logger = logging.getLogger(__name__)
 
-def gray_to_rgb(batch):
-    batch[0] = batch[0].expand(-1, 3, -1, -1)
-    return batch
 
-TRANSFORM_PARAMETERS = {
-    "MLP": {
-        "MNIST": dict(flatten=True, resize=None),
-        "CIFAR10": dict(flatten=True, resize=None),
-        "CIFAR100": dict(flatten=True, resize=None),
-        "ImageNet": dict(flatten=True),
-    },
-    "CNN2P2": {
-        "MNIST": dict(flatten=False, resize=None),
-        "CIFAR10": dict(flatten=False, resize=None),
-        "CIFAR100": dict(flatten=False, resize=None),
-        "ImageNet": dict(flatten=False),
-    },
-    "AlexNet": {
-        "MNIST": dict(flatten=False, resize=(256, 256), extra_transform=[gray_to_rgb,]),
-        "CIFAR10": dict(flatten=False, resize=(256, 256)),
-        "CIFAR100": dict(flatten=False, resize=(256, 256)),
-        "ImageNet": dict(center_crop=224, flatten=False, resize=(256, 256)),
-    },
-}
+# Registry of model constructors
+_MODEL_REGISTRY: Dict[str, Callable[..., AlignmentNetwork]] = {}
 
-def get_transform_parameters(model_name, dataset):
-    return TRANSFORM_PARAMETERS[model_name][dataset]
 
-def get_model_parameters(model_name, dataset):
-    if model_name not in MODEL_REGISTRY:
-        raise ValueError(f"Model ({model_name}) is not in MODEL_REGISTRY")
-    if dataset not in DATASET_ARGUMENTS[model_name]:
-        raise ValueError(f"Dataset ({dataset}) is not in the DATASET_ARGUMENTS lookup for model ({model_name})")
-    return DATASET_ARGUMENTS[model_name][dataset]
+def register_model(name: str) -> Callable:
+    """
+    Decorator to register a model constructor in the global registry.
+    
+    Args:
+        name: Unique identifier for the model
+        
+    Returns:
+        Decorator function that registers the model constructor
+    
+    Example:
+        @register_model("resnet18")
+        def create_resnet18(**kwargs):
+            return AlignmentNetwork(...)
+    """
+    def decorator(fn: Callable[..., AlignmentNetwork]) -> Callable[..., AlignmentNetwork]:
+        if name in _MODEL_REGISTRY:
+            logger.warning(f"Model {name} already registered, overwriting previous registration")
+        _MODEL_REGISTRY[name] = fn
+        return fn
+    return decorator
 
-def get_model(model_name, alignment_layer_names: Optional[dict] = None, build=False, dataset=None, **kwargs):
-    if model_name not in MODEL_REGISTRY:
-        raise ValueError(f"Model ({model_name}) is not in MODEL_REGISTRY")
-    base_model_cls = MODEL_REGISTRY[model_name]
-    if not build: 
-        return base_model_cls
-    if dataset is not None:
-        dataset_specific_arguments = get_model_parameters(model_name, dataset)
-        for key, val in dataset_specific_arguments.items():
-            if key not in kwargs:
-                kwargs[key] = val
-    base_model = base_model_cls(**kwargs)
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=alignment_layer_names)
+
+def get_model_constructor(model_name: str) -> Callable[..., AlignmentNetwork]:
+    """
+    Get the constructor function for a registered model.
+    
+    Args:
+        model_name: Name of the registered model
+        
+    Returns:
+        Constructor function for the specified model
+        
+    Raises:
+        ValueError: If model_name is not registered
+    """
+    # Convert model name to lowercase for case-insensitive lookup
+    model_name_lower = model_name.lower()
+    
+    # Create a case-insensitive registry lookup
+    registry_lower = {k.lower(): v for k, v in _MODEL_REGISTRY.items()}
+    
+    if model_name_lower not in registry_lower:
+        available_models = ', '.join(sorted(_MODEL_REGISTRY.keys()))
+        raise ValueError(f"Model '{model_name}' not found in registry. Available models: {available_models}")
+    
+    return registry_lower[model_name_lower]
+
+
+def create_model(config: ModelConfig) -> AlignmentNetwork:
+    """
+    Create a model instance from configuration.
+    
+    Args:
+        config: Model configuration containing model type and parameters
+        
+    Returns:
+        Configured AlignmentNetwork instance
+    """
+    model_constructor = get_model_constructor(config.model_name)
+    
+    # Extract the necessary parameters for the model constructor
+    model_params = {
+        "dropout_rate": config.dropout_rate,
+        "alignment_layers": config.alignment_layers
+    }
+    
+    logger.info(f"Creating model '{config.model_name}' with dropout rate: {config.dropout_rate}")
+    return model_constructor(**model_params)
+
+
+def get_available_models() -> List[str]:
+    """
+    Get a list of all registered model names.
+    
+    Returns:
+        List of registered model names
+    """
+    return sorted(_MODEL_REGISTRY.keys())

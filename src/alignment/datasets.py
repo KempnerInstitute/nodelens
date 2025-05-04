@@ -3,9 +3,11 @@
 # --------------------------------------------
 
 import sys
+import logging
 from pathlib import Path
 from warnings import warn
 from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional, Union, Tuple
 
 import torch
 import torchvision
@@ -14,7 +16,9 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
 
 from alignment.models.base import AlignmentNetwork
-from alignment.config import ExperimentConfig
+from alignment.config import DatasetConfig, ExperimentConfig
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_PROPERTIES = ["dataset_constructor", "loss_function"]
 
@@ -70,6 +74,31 @@ class DataSet(ABC):
         self.dataloader_parameters = default_loader_parameters(distributed, **loader_parameters)
         self.dataset_parameters = dataset_parameters
         self.load_dataset(**dataset_parameters)
+        
+        # Set the number of classes
+        self._set_num_classes()
+
+    def _set_num_classes(self):
+        """Set the number of classes based on the dataset type."""
+        dataset_name = self.__class__.__name__.upper()
+        if dataset_name == 'MNIST' or dataset_name == 'CIFAR10':
+            self.num_classes = 10
+        elif dataset_name == 'CIFAR100':
+            self.num_classes = 100
+        elif dataset_name == 'IMAGENET2012':
+            self.num_classes = 1000
+        else:
+            # Try to infer from the test dataset if possible
+            try:
+                if hasattr(self.test_dataset, 'classes'):
+                    self.num_classes = len(self.test_dataset.classes)
+                else:
+                    # Default to a common value as fallback
+                    logger.warning(f"Could not determine number of classes for {dataset_name}, defaulting to 10")
+                    self.num_classes = 10
+            except Exception as e:
+                logger.warning(f"Error determining number of classes: {str(e)}, defaulting to 10")
+                self.num_classes = 10
 
     def check_properties(self):
         if not all([hasattr(self, prop) for prop in REQUIRED_PROPERTIES]):
@@ -163,7 +192,7 @@ class DataSet(ABC):
         # Use a simple, direct implementation that's guaranteed to work correctly
         # First check for invalid values
         if torch.isnan(outputs).any() or torch.isinf(outputs).any():
-            print("WARNING: NaN or Inf values in measure_accuracy inputs")
+            logger.warning("WARNING: NaN or Inf values in measure_accuracy inputs")
             return torch.tensor(0.0, device=outputs.device)
             
         # Get the predicted classes (most likely class for each sample)
@@ -175,7 +204,6 @@ class DataSet(ABC):
         
         # Convert to percentage if requested
         accuracy = (correct / total) * (100.0 if percentage else 1.0)        
-
             
         return torch.tensor(accuracy, device=outputs.device)
 
@@ -196,6 +224,7 @@ class MNIST(DataSet):
         )
         return kwargs
 
+
 class CIFAR10(DataSet):
     def set_properties(self):
         self.dataset_constructor = torchvision.datasets.CIFAR10
@@ -211,11 +240,13 @@ class CIFAR10(DataSet):
         )
         return kwargs
 
+
 class CIFAR100(CIFAR10):
     def set_properties(self):
         self.dataset_constructor = torchvision.datasets.CIFAR100
         self.loss_function = nn.CrossEntropyLoss()
         self.dist_params = dict(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+
 
 class ImageNet2012(DataSet):
     def set_properties(self):
@@ -236,12 +267,14 @@ class ImageNet2012(DataSet):
         )
         return kwargs
 
+
 DATASET_REGISTRY = {
     "MNIST": MNIST,
     "CIFAR10": CIFAR10,
     "CIFAR100": CIFAR100,
     "ImageNet": ImageNet2012,
 }
+
 
 def get_dataset(
     dataset_name,
@@ -252,9 +285,18 @@ def get_dataset(
     **kwargs,
 ):
     """
-    lookup dataset constructor from dataset registry by name.
-    if build=True, return an instantiated dataset object,
-    otherwise return the constructor.
+    Lookup dataset constructor from dataset registry by name.
+    
+    Args:
+        dataset_name: Name of the dataset to retrieve
+        build: If True, instantiate the dataset; otherwise return the constructor
+        dataset_parameters: Parameters to pass to the dataset constructor
+        transform_parameters: Parameters for transforms
+        loader_parameters: Parameters for data loaders
+        **kwargs: Additional arguments for dataset
+        
+    Returns:
+        Dataset constructor or instance
     """
     if dataset_name not in DATASET_REGISTRY:
         raise ValueError(f"Dataset ({dataset_name}) is not in DATASET_REGISTRY")
@@ -270,11 +312,99 @@ def get_dataset(
         )
     return dataset
 
+
+def load_dataset(
+    dataset_config: Union[DatasetConfig, Dict[str, Any]],
+    batch_size: Optional[int] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    transform_params: Optional[Dict[str, Any]] = None
+) -> DataSet:
+    """
+    Load a dataset based on configuration.
+    
+    Args:
+        dataset_config: Dataset configuration object or dictionary
+        batch_size: Optional batch size (overrides config)
+        device: Optional device to place tensors on
+        transform_params: Optional transform parameters (overrides config)
+        
+    Returns:
+        Dataset object with loaders
+    """
+    # Handle dict or object config
+    if isinstance(dataset_config, dict):
+        dataset_name = dataset_config.get('dataset_name')
+        dataset_path = dataset_config.get('data_path')
+    else:
+        dataset_name = dataset_config.dataset_name
+        dataset_path = dataset_config.data_path
+        
+    # Check for required parameters
+    if not dataset_name:
+        raise ValueError("Dataset name must be provided in configuration")
+        
+    # Get transform parameters from model if necessary
+    if transform_params is None:
+        if hasattr(dataset_config, 'transform_params') and dataset_config.transform_params:
+            transform_params = dataset_config.transform_params
+        else:
+            # Try to load from models registry if it exists
+            try:
+                from alignment.models.models import get_transform_parameters
+                model_name = None
+                if hasattr(dataset_config, 'model_name'):
+                    model_name = dataset_config.model_name
+                elif hasattr(dataset_config, 'model') and hasattr(dataset_config.model, 'model_name'):
+                    model_name = dataset_config.model.model_name
+                else:
+                    model_name = 'mlp'  # Default
+                
+                transform_params = get_transform_parameters(model_name, dataset_name)
+            except (ImportError, AttributeError) as e:
+                logger.warning(f"Could not load transform parameters: {str(e)}")
+                transform_params = {}
+    
+    # Set up loader parameters
+    loader_params = {}
+    if batch_size is not None:
+        loader_params['batch_size'] = batch_size
+    elif hasattr(dataset_config, 'batch_size'):
+        loader_params['batch_size'] = dataset_config.batch_size
+    
+    # Load the dataset
+    dataset = get_dataset(
+        dataset_name=dataset_name,
+        build=True,
+        dataset_parameters={'root': dataset_path, 'download': True},
+        transform_parameters=transform_params,
+        loader_parameters=loader_params,
+        device=device
+    )
+    
+    logger.info(f"Loaded {dataset_name} dataset with batch size {loader_params.get('batch_size', 'default')}")
+    
+    return dataset
+
+
 if __name__ == "__main__":
     try:
-        yaml_path, args_list = sys.argv[1]
+        yaml_path, args_list = sys.argv[1], sys.argv[2:]
     except IndexError:
         raise ValueError(f"Usage: {sys.argv[0]} [CONFIG_PATH]")
 
     cfg = ExperimentConfig.load(yaml_path)
-    dataset = get_dataset(cfg.dataset.name, build=True, dataset_parameters=dict(download=True, root=Path(cfg.dataset.path)))
+    dataset = load_dataset(cfg.dataset)
+    
+    # Print dataset info
+    print(f"Dataset: {cfg.dataset.dataset_name}")
+    print(f"Train samples: {len(dataset.train_dataset)}")
+    print(f"Test samples: {len(dataset.test_dataset)}")
+    print(f"Batch size: {dataset.dataloader_parameters['batch_size']}")
+    print(f"Number of classes: {dataset.num_classes}")
+    
+    # Sample a batch
+    sample_batch = next(iter(dataset.train_loader))
+    inputs, targets = dataset.unwrap_batch(sample_batch)
+    print(f"Sample batch shape: {inputs.shape}")
+    print(f"Sample targets shape: {targets.shape}")
+    print(f"Sample target values: {targets[:5]}")

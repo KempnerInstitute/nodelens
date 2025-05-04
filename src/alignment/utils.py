@@ -5,7 +5,7 @@
 import os
 import math
 import zipfile
-from typing import List
+from typing import List, Dict, Union, Callable, Any, Optional, Tuple, TypeVar
 from warnings import warn
 from contextlib import contextmanager
 from functools import wraps
@@ -17,6 +17,12 @@ import numpy as np
 from scipy.linalg import null_space
 from sklearn.decomposition import IncrementalPCA
 
+import functools
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
 @contextmanager
 def no_grad(no_grad=True):
     if no_grad:
@@ -26,15 +32,37 @@ def no_grad(no_grad=True):
         yield
 
 def test_nets(func):
+    """
+    Decorator to ensure input networks are in evaluation mode during function execution.
+    
+    Args:
+        func: Function to decorate
+        
+    Returns:
+        Wrapped function
+    """
     @wraps(func)
-    def wrapper(nets, *args, **kwargs):
-        # get original training mode and set to eval
-        in_training_mode = [set_net_mode(net, training=False) for net in nets]
-        func_outputs = func(nets, *args, **kwargs)
-        # return networks to whatever mode they used to be in
-        for train_mode, net in zip(in_training_mode, nets):
-            set_net_mode(net, training=train_mode)
-        return func_outputs
+    def wrapper(*args, **kwargs):
+        # Extract nets from arguments
+        if len(args) > 0 and isinstance(args[0], (torch.nn.Module, list)):
+            nets = args[0]
+            if not isinstance(nets, list):
+                nets = [nets]
+            
+            # Store original states
+            original_states = [set_net_mode(net, training=False) for net in nets]
+            
+            try:
+                # Run function
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                # Restore original states
+                for net, state in zip(nets, original_states):
+                    set_net_mode(net, training=state)
+        else:
+            # No networks found, just run the function
+            return func(*args, **kwargs)
     return wrapper
 
 def train_nets(func):
@@ -73,14 +101,23 @@ def get_device(obj):
     else:
         raise ValueError("get_device: object must be nn.Module or torch.Tensor")
 
-def check_iterable(val):
-    """duck-type check if val is iterable"""
-    try:
-        _ = iter(val)
-    except:
+def check_iterable(obj: Any) -> bool:
+    """
+    Check if an object is iterable (but not a string).
+    
+    Args:
+        obj: Object to check
+        
+    Returns:
+        True if object is iterable but not a string, False otherwise
+    """
+    if isinstance(obj, str):
         return False
-    else:
+    try:
+        iter(obj)
         return True
+    except TypeError:
+        return False
 
 def remove_by_idx(input, idx, dim):
     """
@@ -629,3 +666,202 @@ def condense_values(al_list):
             net_layers.append(torch.stack(layer_values, dim=0).mean(dim=0))
         aggregated.append(net_layers)
     return aggregated
+
+def timed(func):
+    """
+    Decorator to time the execution of a function.
+    
+    Args:
+        func: Function to decorate
+        
+    Returns:
+        Wrapped function
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        print(f"{func.__name__} took {end_time - start_time:.2f} seconds")
+
+def setup_logging(log_file: Optional[Union[str, Path]] = None, level: int = logging.INFO) -> None:
+    """
+    Configure logging for the application.
+    
+    Args:
+        log_file: Optional path to a log file
+        level: Logging level (default: INFO)
+    """
+    # Root logger configuration
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    
+    # Remove existing handlers to avoid duplicate logs
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    # File handler if log file is specified
+    if log_file:
+        log_path = Path(log_file)
+        
+        # Create parent directory if it doesn't exist
+        if not log_path.parent.exists():
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+        
+        logger.info(f"Logging to file: {log_path}")
+
+def to_numpy(tensor: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
+    """
+    Convert torch tensor to numpy array.
+    
+    Args:
+        tensor: PyTorch tensor or numpy array
+        
+    Returns:
+        Numpy array
+    """
+    if isinstance(tensor, torch.Tensor):
+        return tensor.cpu().detach().numpy()
+    return tensor
+
+def to_tensor(array: Union[torch.Tensor, np.ndarray], device: Optional[torch.device] = None) -> torch.Tensor:
+    """
+    Convert numpy array to torch tensor.
+    
+    Args:
+        array: Numpy array or PyTorch tensor
+        device: Device to place tensor on
+        
+    Returns:
+        PyTorch tensor
+    """
+    if isinstance(array, np.ndarray):
+        tensor = torch.from_numpy(array)
+    else:
+        tensor = array
+        
+    if device is not None:
+        tensor = tensor.to(device)
+        
+    return tensor
+
+# Type variable for function decorators
+F = TypeVar('F', bound=Callable[..., Any])
+
+def timer(func: F) -> F:
+    """
+    Decorator to time function execution.
+    
+    Args:
+        func: Function to time
+        
+    Returns:
+        Wrapped function
+        
+    Example:
+        @timer
+        def slow_function():
+            time.sleep(1)
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        import time
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        logger.info(f"Function {func.__name__} took {end_time - start_time:.4f} seconds to run")
+        return result
+    return wrapper
+
+def debug(func: F) -> F:
+    """
+    Decorator to add debug logging to function entry and exit.
+    
+    Args:
+        func: Function to debug
+        
+    Returns:
+        Wrapped function
+        
+    Example:
+        @debug
+        def sensitive_function(x, y):
+            return x / y
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        logger.debug(f"Entering {func.__name__} with args={args}, kwargs={kwargs}")
+        try:
+            result = func(*args, **kwargs)
+            logger.debug(f"Exiting {func.__name__} with result={result}")
+            return result
+        except Exception as e:
+            logger.exception(f"Exception in {func.__name__}: {e}")
+            raise
+    return wrapper
+
+def ensure_device(device_arg: Optional[Union[str, torch.device]] = None) -> torch.device:
+    """
+    Ensure a valid torch device.
+    
+    Args:
+        device_arg: Device specification or None
+        
+    Returns:
+        Resolved torch.device
+    """
+    if device_arg is None:
+        device_str = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device_str = str(device_arg)
+        
+    # Validate CUDA availability
+    if device_str.startswith("cuda") and not torch.cuda.is_available():
+        logger.warning("CUDA requested but not available. Falling back to CPU.")
+        device_str = "cpu"
+        
+    return torch.device(device_str)
+
+def get_model_size(model: torch.nn.Module) -> int:
+    """
+    Calculate the number of parameters in a model.
+    
+    Args:
+        model: PyTorch model
+        
+    Returns:
+        Number of parameters
+    """
+    return sum(p.numel() for p in model.parameters())
+
+def get_memory_usage(model: torch.nn.Module) -> float:
+    """
+    Estimate memory usage of model in MB.
+    
+    Args:
+        model: PyTorch model
+        
+    Returns:
+        Estimated memory usage in MB
+    """
+    total_bytes = 0
+    for p in model.parameters():
+        if p.data is not None:
+            total_bytes += p.element_size() * p.numel()
+        if p.grad is not None:
+            total_bytes += p.element_size() * p.numel()
+    
+    # Convert bytes to MB
+    return total_bytes / (1024 * 1024)
