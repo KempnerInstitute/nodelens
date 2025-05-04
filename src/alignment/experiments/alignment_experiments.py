@@ -15,6 +15,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 from alignment.config import ExperimentConfig
 from alignment.experiments.experiment import Experiment
@@ -102,7 +103,7 @@ class AlignmentExperiment(Experiment):
                 self.config.dataset, 
                 self.config.training,
                 device=self.device,
-                checkpoint_path=self.get_checkpoint_path(),
+                checkpoint_path=self.checkpoint_path,
                 extra_config=self.config.extra
             )
             
@@ -157,9 +158,9 @@ class AlignmentExperiment(Experiment):
         
         results = {}
         
-        for dropout_fraction in dropout_fractions:
-            # Run the progressive dropout experiment
-            logger.info(f"Running progressive dropout with fraction {dropout_fraction:.4f}")
+        # Use tqdm for a nice progress bar
+        for dropout_fraction in tqdm(dropout_fractions, desc="Progressive Dropout"):
+            # Run without verbose logging for each fraction
             accuracy, alignment_values = progressive_dropout(
                 net,
                 self.config.dataset,
@@ -195,9 +196,9 @@ class AlignmentExperiment(Experiment):
         
         results = {}
         
-        for dropout_fraction in dropout_fractions:
-            # Run the eigenvector dropout experiment
-            logger.info(f"Running eigenvector dropout with fraction {dropout_fraction:.4f}")
+        # Use tqdm for a nice progress bar
+        for dropout_fraction in tqdm(dropout_fractions, desc="Eigenvector Dropout"):
+            # Run without verbose logging for each fraction
             accuracy, alignment_values = eigenvector_dropout(
                 net,
                 self.config.dataset,

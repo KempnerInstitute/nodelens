@@ -381,7 +381,8 @@ def load_dataset(
         device=device
     )
     
-    logger.info(f"Loaded {dataset_name} dataset with batch size {loader_params.get('batch_size', 'default')}")
+    # Log at debug level instead of info to reduce console output
+    logger.debug(f"Loaded {dataset_name} dataset with batch size {loader_params.get('batch_size', 'default')}")
     
     return dataset
 
