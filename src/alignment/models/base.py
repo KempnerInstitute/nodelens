@@ -284,13 +284,16 @@ class AlignmentNetwork(nn.Module):
         Perform forward pass with targeted dropout, matching alignment_v2 behavior.
         
         This function zeros out specified nodes in each layer, then optionally scales
-        the output to compensate by multiplying by (1-fraction_dropout).
+        the output to compensate by multiplying by (1-fraction_dropout) based on the
+        dropout_mode parameter.
         
         Args:
             x: Input tensor
             idxs: List of tensors with indices to dropout for each layer
             layers: List of layer indices where to apply dropout
-            dropout_mode: How to apply dropout - "scaled" (with compensation) or "unscaled" (without)
+            dropout_mode: Mode for dropout application, options:
+                - "scaled": Apply scaling factor to maintain signal magnitude
+                - "unscaled": Don't apply scaling after zeroing neurons
             
         Returns:
             Tuple of (network output, hidden layer outputs)
@@ -299,7 +302,7 @@ class AlignmentNetwork(nn.Module):
         assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables with same length"
         assert len(idxs) == len(layers), "idxs and layers must be the same length"
         assert all([0 <= layer < len(self.alignment_layers) for layer in layers]), "invalid layer index"
-        
+        assert dropout_mode in ["scaled", "unscaled"], f"Invalid dropout_mode: {dropout_mode}, must be 'scaled' or 'unscaled'"
         
         # Create an estimate of the overall pruning impact to detect excessive pruning
         total_effective_pruning = 1.0
@@ -308,13 +311,15 @@ class AlignmentNetwork(nn.Module):
             fraction = idx.numel() / layer_size
             # Cap fraction for safety
             fraction = min(fraction, 0.9) 
-
+            total_effective_pruning *= (1.0 - fraction)
+        
+        # Warn if combined pruning is very high
+        if total_effective_pruning < 0.01:
+            import warnings
+            warnings.warn("Combined pruning across layers is very high (>99%). This could result in near-zero accuracy.")
         
         hidden_outputs_dict = {}
         hooks = []
-        
-        # Store the original state of parameters that we'll modify
-        original_states = {}
         
         def dropout(hook_name, dropout_idx, layer_idx):
             def dropout_hook(module, in_, out_):
@@ -327,11 +332,16 @@ class AlignmentNetwork(nn.Module):
                 # Calculate fraction of nodes being dropped for normalization
                 fraction_dropout = len(valid_idx) / float(max_index)
                 
-
+                # Cap the fraction to avoid extreme pruning
+                if fraction_dropout > 0.9:
+                    old_fraction = fraction_dropout
+                    fraction_dropout = 0.9
+                    import warnings
+                    warnings.warn(f"Capping pruning fraction from {old_fraction:.3f} to {fraction_dropout:.3f}")
+                
                 # Create a copy to avoid modifying the original output
                 out_copy = out_.clone()
                 
-
                 # Zero out the specified nodes
                 if valid_idx.numel() > 0:
                     out_copy[:, valid_idx] = 0
@@ -340,7 +350,7 @@ class AlignmentNetwork(nn.Module):
                 if dropout_mode == "scaled":
                     scaling_factor = (1.0 - fraction_dropout)
                     out_copy = out_copy * scaling_factor
-
+                
                 # Store the result
                 hidden_outputs_dict[hook_name] = out_copy
                 return out_copy
@@ -368,7 +378,7 @@ class AlignmentNetwork(nn.Module):
             hk.remove()
             
         # Collect hidden outputs in order
-        assert len(hidden_outputs_dict) == len(self.alignment_names)
+        assert len(hidden_outputs_dict) == len(self.alignment_names), "Missing outputs from some layers"
         hidden_outputs = [hidden_outputs_dict[nm] for nm in self.alignment_names]
         
         return x, hidden_outputs

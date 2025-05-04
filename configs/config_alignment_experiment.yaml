@@ -1,0 +1,58 @@
+# Alignment Experiment Configuration
+# This configuration file defines parameters for neural network alignment experiments
+
+# Experiment metadata
+experiment_type: "alignment" # Type of experiment to run
+results_path: "results" # Base path for saving results
+use_timestamp: true # Whether to include timestamp in result paths
+
+# Core execution options
+device: "cuda" # Device to run on (cuda/cpu)
+no_save: false # If true, don't save any results
+just_plot: false # If true, only load and plot existing results
+save_networks: true # Whether to save trained network checkpoints
+show_all: false # Whether to display all plots
+
+# Dataset configuration
+dataset:
+  dataset_name: "MNIST" # Name of the dataset to use
+  data_path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/data" # Path to dataset files
+  batch_size: 1024 # Batch size for training and evaluation
+
+# Model configuration
+model:
+  model_name: "MLP" # Model architecture to use
+  dropout_rate: 0.0 # Base dropout rate during training
+  alignment_layers: null # Layers to measure alignment on (null for all)
+
+# Training configuration
+training:
+  epochs: 5 # Number of training epochs
+  replicates: 10 # Number of network replicates to train
+  optimizer: "Adam" # Optimizer to use (Adam/SGD)
+  learning_rate: 1.0e-3 # Learning rate
+  weight_decay: 0.0 # L2 regularization strength
+  
+# Checkpointing configuration
+checkpointing:
+  save_checkpoints: true # Whether to save training checkpoints
+  checkpoint_frequency: 1 # How often to save checkpoints (epochs)
+  use_wandb: true # Whether to use Weights & Biases for tracking
+  load_checkpoint: false # Whether to load from previous checkpoint
+  
+# Alignment analysis configuration
+alignment:
+  metric: "RQ" # Alignment metric to use (RQ/NullSpace)
+  run_progressive: true # Whether to run progressive dropout experiment
+  run_eigenvector: false # Whether to run eigenvector dropout experiment
+  dropout_min: 0.0 # Minimum dropout fraction
+  dropout_max: 0.95 # Maximum dropout fraction
+  dropout_steps: 40 # Number of dropout fractions to test
+  scale_by_norm: false # Whether to scale covariance matrices by norm
+
+# Extra configuration parameters
+extra:
+  dropout_mode: "scaled" # How dropout is applied: "scaled" or "unscaled"
+  dropout_pruning_mode: "per_layer_combined" # How pruning is distributed across layers
+  exclude_classification_layer: true # Whether to exclude the output layer from pruning
+  cnn_mode: "unfold" # How CNN features are processed for alignment 
