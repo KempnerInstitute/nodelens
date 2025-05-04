@@ -865,3 +865,77 @@ def get_memory_usage(model: torch.nn.Module) -> float:
     
     # Convert bytes to MB
     return total_bytes / (1024 * 1024)
+
+def get_git_revision_hash() -> str:
+    """
+    Get the current git revision hash.
+    
+    Returns:
+        String with the current git hash, or "unknown" if not in a git repo
+    """
+    import subprocess
+    try:
+        return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return "unknown"
+
+def initialize_logger(log_level: str = "INFO") -> None:
+    """
+    Initialize the logger with the specified log level.
+    
+    Args:
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    """
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f"Invalid log level: {log_level}")
+    
+    # Configure root logger
+    logging.basicConfig(
+        level=numeric_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    
+    # Set the logger level for this module
+    logger.setLevel(numeric_level)
+    
+    logging.info(f"Logger initialized with level: {log_level}")
+
+def init_seed(seed: int) -> None:
+    """
+    Initialize random number generator seeds for reproducibility.
+    
+    Args:
+        seed: Integer seed for random number generators
+    """
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        # These settings may impact performance but improve reproducibility
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    
+    logger.info(f"Random seed initialized to {seed}")
+
+def save_pickle(obj: Any, filepath: Union[str, Path]) -> None:
+    """
+    Save an object to a pickle file.
+    
+    Args:
+        obj: Object to save
+        filepath: Path to the output file
+    """
+    import pickle
+    
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(filepath, 'wb') as f:
+        pickle.dump(obj, f)
+    
+    logger.info(f"Object saved to {filepath}")

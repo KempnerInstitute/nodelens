@@ -76,7 +76,7 @@ def progressive_dropout(
         output_dim = layer.weight.size(0) if hasattr(layer, "weight") else 0
         
         if output_dim == 0:
-            logger.warning(f"Layer {layer_idx} has no weight attribute, skipping")
+            logger.debug(f"Layer {layer_idx} has no weight attribute, skipping")
             dropout_indices.append(torch.tensor([], device=device, dtype=torch.long))
             continue
             
@@ -121,7 +121,8 @@ def progressive_dropout(
     
     accuracy = correct / total if total > 0 else 0.0
     
-    logger.info(f"Progressive dropout with fraction {dropout_fraction:.4f}: Accuracy = {accuracy:.4f}")
+    # Only log at debug level
+    logger.debug(f"Progressive dropout with fraction {dropout_fraction:.4f}: Accuracy = {accuracy:.4f}")
     
     return accuracy, alignment_values
 
@@ -185,7 +186,7 @@ def eigenvector_dropout(
         activations = activation_stats[layer_idx]["activations"]
         
         if activations.size(1) == 0:
-            logger.warning(f"Layer {layer_idx} has no activations, skipping")
+            logger.debug(f"Layer {layer_idx} has no activations, skipping")
             dropout_indices.append(torch.tensor([], device=device, dtype=torch.long))
             continue
         
@@ -242,7 +243,8 @@ def eigenvector_dropout(
     
     accuracy = correct / total if total > 0 else 0.0
     
-    logger.info(f"Eigenvector dropout with fraction {dropout_fraction:.4f}: Accuracy = {accuracy:.4f}")
+    # Only log at debug level
+    logger.debug(f"Eigenvector dropout with fraction {dropout_fraction:.4f}: Accuracy = {accuracy:.4f}")
     
     return accuracy, alignment_values
 
