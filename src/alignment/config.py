@@ -393,3 +393,21 @@ class ExtraArgs:
             raise ValueError(f"Invalid dropout mode: {self.dropout_mode}")
             
         return True
+
+# For backward compatibility
+Config = ExperimentConfig
+
+def load_config(path: Union[str, PathLike]) -> ExperimentConfig:
+    """
+    Load configuration from YAML file.
+    
+    Args:
+        path: Path to YAML file
+        
+    Returns:
+        Configuration object
+        
+    Raises:
+        ValueError: If configuration is invalid
+    """
+    return ExperimentConfig.load(path)
