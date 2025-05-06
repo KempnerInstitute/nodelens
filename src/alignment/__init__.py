@@ -31,12 +31,6 @@ results = progressive_dropout([model], dataset, [0.1, 0.2, 0.3], RQMetric())
 from alignment.models import (
     MLP,
     CNN2P2,
-    ResNetCIFAR10,
-    ResNet18,
-    BaseModel,
-    ModelFamily,
-    load_model,
-    load_model_family,
     AlignmentNetwork,
 )
 
@@ -104,12 +98,6 @@ __all__ = [
     "MLP",
     "CNN",
     "CNN2P2",
-    "ResNetCIFAR10",
-    "ResNet18",
-    "BaseModel",
-    "ModelFamily",
-    "load_model",
-    "load_model_family",
     "AlignmentNetwork",
     
     # Datasets

@@ -22,14 +22,14 @@ from tqdm import tqdm
 
 from alignment.config import ExperimentConfig
 from alignment.models.registry import create_model
-from Code.alignment.src.alignment.metrics_rem import get_metric
+from alignment.metrics import get_metric
 from alignment.datasets import load_dataset
 from alignment.dropout import progressive_dropout
 from alignment import utils
 
 # Setup logging
 logger = logging.getLogger(__name__)
-utils.setup_logging(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 def create_networks(config, num_networks=20):
     """Create multiple neural networks for benchmarking."""

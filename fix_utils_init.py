@@ -1,9 +1,21 @@
+#!/usr/bin/env python3
 """
+Fix the alignment/utils/__init__.py file to correct the missing imports.
+"""
+
+import os
+from pathlib import Path
+
+# File path
+file_path = Path(__file__).parent / "src" / "alignment" / "utils" / "__init__.py"
+
+# Define the corrected content
+fixed_content = """\"\"\"
 Utilities for the alignment package.
 
 This module contains various utility functions for the alignment package,
 including plotting, timing, linear algebra helpers, and other utility functions.
-"""
+\"\"\"
 
 # Import plotting functions
 from alignment.utils.plotting import (
@@ -88,3 +100,9 @@ __all__ = [
     'remove_by_idx',
     'smart_pca'
 ]
+"""
+
+print(f"Updating file: {file_path}")
+with open(file_path, 'w') as f:
+    f.write(fixed_content)
+print("File updated successfully.") 

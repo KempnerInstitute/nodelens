@@ -15,8 +15,8 @@ from alignment.utils.model_utils import (
     remove_by_idx,
     smart_pca
 )
-from alignment.alignment_metrics import AlignmentMetrics
-from alignment.alignment_metrics import alignment
+from alignment.utils.metrics_utils import AlignmentMetricsFactory as AlignmentMetrics
+from alignment.utils.metrics_utils import alignment
 
 class AlignmentNetwork(nn.Module):
     """

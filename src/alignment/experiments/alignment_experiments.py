@@ -21,12 +21,12 @@ from tqdm import tqdm
 
 from alignment.config import ExperimentConfig
 from alignment.experiments.experiment import Experiment
-from Code.alignment.src.alignment.metrics_rem import AlignmentMetric, get_metric
+from alignment.metrics import AlignmentMetric, get_metric
 from alignment.models.registry import create_model
 from alignment.dropout import progressive_dropout, eigenvector_dropout
 from alignment.training import train_model, evaluate_model
 from alignment.utils.core import setup_logging
-from alignment.plotting import plot_dropout_results, plot_experiment_summary
+from alignment.utils.plotting import plot_dropout_results, plot_experiment_summary
 from alignment.datasets import get_dataset, load_dataset
 
 logger = logging.getLogger(__name__)

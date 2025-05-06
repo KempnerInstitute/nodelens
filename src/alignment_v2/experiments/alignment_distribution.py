@@ -2,7 +2,7 @@ import torch
 from alignment.models.registry import get_model
 from alignment import arglib
 from alignment import processing
-from Code.alignment.src.alignment import plotting_rem
+from Code.alignment.src.alignment_preref import plotting_rem
 from alignment.experiments.experiment import Experiment
 
 

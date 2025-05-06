@@ -1,8 +1,8 @@
 """
-Training and evaluation utilities for neural networks.
+Training functions for neural network models.
 
-This module provides utilities for training and evaluating neural networks,
-including methods for measuring alignment during training.
+This module provides functions for training and testing neural networks,
+with standardized interfaces and reporting.
 """
 
 import os
@@ -16,10 +16,254 @@ from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 
-from Code.alignment.src.alignment.metrics_rem import AlignmentMetric, get_metric
+from alignment.metrics import AlignmentMetric, get_metric
 from alignment.datasets import load_dataset
+from alignment.models import AlignmentNetwork
+from alignment.datasets import DataSet
+from alignment.utils.core import setup_logging, timed
 
+# Setup module logger
 logger = logging.getLogger(__name__)
+
+
+def train_network(
+    network: AlignmentNetwork,
+    dataset: DataSet,
+    epochs: int = 10,
+    learning_rate: float = 0.001,
+    optimizer_name: str = "Adam",
+    batch_size: Optional[int] = None,
+    weight_decay: float = 0.0,
+    device: Optional[torch.device] = None,
+    progress_callback: Optional[Callable[[int, float, float], None]] = None,
+) -> Dict[str, List[float]]:
+    """
+    Train a neural network.
+    
+    Args:
+        network: The neural network to train
+        dataset: Dataset to train on
+        epochs: Number of epochs to train
+        learning_rate: Learning rate
+        optimizer_name: Name of optimizer ('Adam', 'SGD', etc.)
+        batch_size: Batch size (uses dataset default if None)
+        weight_decay: Weight decay for regularization
+        device: Device to train on
+        progress_callback: Optional callback function for progress updates
+    
+    Returns:
+        Dictionary with training metrics (loss, accuracy)
+    """
+    if device is None:
+        device = next(network.parameters()).device
+    
+    # Set network to training mode
+    network.train()
+    
+    # Get data loader (use dataset's batch size if not specified)
+    if batch_size is None:
+        batch_size = dataset.batch_size
+    
+    train_loader = DataLoader(
+        dataset.train_dataset, 
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=2,
+        pin_memory=True if device.type == 'cuda' else False
+    )
+    
+    # Loss function
+    criterion = nn.CrossEntropyLoss()
+    
+    # Optimizer
+    optimizer_class = getattr(optim, optimizer_name)
+    optimizer = optimizer_class(
+        network.parameters(), 
+        lr=learning_rate,
+        weight_decay=weight_decay
+    )
+    
+    # Training history
+    history = {
+        'train_loss': [],
+        'train_acc': []
+    }
+    
+    # Training loop
+    for epoch in range(epochs):
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        start_time = time.time()
+        
+        # Iterate over batches
+        for i, (inputs, labels) in enumerate(train_loader):
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            # Zero the parameter gradients
+            optimizer.zero_grad()
+            
+            # Forward + backward + optimize
+            outputs = network(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            # Statistics
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+        
+        # Calculate epoch metrics
+        epoch_loss = running_loss / len(train_loader)
+        epoch_acc = 100 * correct / total
+        epoch_time = time.time() - start_time
+        
+        # Save history
+        history['train_loss'].append(epoch_loss)
+        history['train_acc'].append(epoch_acc)
+        
+        # Log progress
+        logger.info(f'Epoch {epoch+1}/{epochs} - '
+                   f'Loss: {epoch_loss:.4f}, '
+                   f'Accuracy: {epoch_acc:.2f}%, '
+                   f'Time: {epoch_time:.2f}s')
+        
+        # Progress callback
+        if progress_callback:
+            progress_callback(epoch, epoch_loss, epoch_acc)
+    
+    return history
+
+
+def test_network(
+    network: AlignmentNetwork,
+    dataset: DataSet,
+    batch_size: Optional[int] = None,
+    device: Optional[torch.device] = None,
+) -> Dict[str, float]:
+    """
+    Test a neural network.
+    
+    Args:
+        network: The neural network to test
+        dataset: Dataset to test on
+        batch_size: Batch size (uses dataset default if None)
+        device: Device to test on
+    
+    Returns:
+        Dictionary with test metrics (loss, accuracy)
+    """
+    if device is None:
+        device = next(network.parameters()).device
+    
+    # Set network to evaluation mode
+    network.eval()
+    
+    # Get data loader (use dataset's batch size if not specified)
+    if batch_size is None:
+        batch_size = dataset.batch_size
+    
+    test_loader = DataLoader(
+        dataset.test_dataset, 
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True if device.type == 'cuda' else False
+    )
+    
+    # Loss function
+    criterion = nn.CrossEntropyLoss()
+    
+    test_loss = 0.0
+    correct = 0
+    total = 0
+    
+    # No gradient computation during testing
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            # Forward pass
+            outputs = network(inputs)
+            loss = criterion(outputs, labels)
+            
+            # Statistics
+            test_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    
+    # Calculate metrics
+    avg_loss = test_loss / len(test_loader)
+    accuracy = 100 * correct / total
+    
+    # Log results
+    logger.info(f'Test - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%')
+    
+    return {
+        'test_loss': avg_loss,
+        'test_acc': accuracy
+    }
+
+
+@timed
+def train_and_test(
+    network: AlignmentNetwork,
+    dataset: DataSet,
+    epochs: int = 10,
+    learning_rate: float = 0.001,
+    optimizer_name: str = "Adam",
+    batch_size: Optional[int] = None,
+    weight_decay: float = 0.0,
+    device: Optional[torch.device] = None,
+    progress_callback: Optional[Callable[[int, float, float], None]] = None,
+) -> Dict[str, Dict[str, Union[List[float], float]]]:
+    """
+    Train and test a neural network.
+    
+    Args:
+        network: The neural network to train
+        dataset: Dataset to train on
+        epochs: Number of epochs to train
+        learning_rate: Learning rate
+        optimizer_name: Name of optimizer ('Adam', 'SGD', etc.)
+        batch_size: Batch size (uses dataset default if None)
+        weight_decay: Weight decay for regularization
+        device: Device to train on
+        progress_callback: Optional callback function for progress updates
+    
+    Returns:
+        Dictionary with training and test metrics
+    """
+    # Train network
+    train_history = train_network(
+        network=network,
+        dataset=dataset,
+        epochs=epochs,
+        learning_rate=learning_rate,
+        optimizer_name=optimizer_name,
+        batch_size=batch_size,
+        weight_decay=weight_decay,
+        device=device,
+        progress_callback=progress_callback
+    )
+    
+    # Test network
+    test_metrics = test_network(
+        network=network,
+        dataset=dataset,
+        batch_size=batch_size,
+        device=device
+    )
+    
+    # Combine results
+    return {
+        'train': train_history,
+        'test': test_metrics
+    }
 
 
 def train_model(

@@ -30,6 +30,9 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+except ImportError:
+    WANDB_AVAILABLE = False
+
 from alignment.config import Config
 from alignment.datasets import DataSet, load_dataset
 from alignment.models import load_model, load_model_family
