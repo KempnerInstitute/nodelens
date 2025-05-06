@@ -1,397 +1,770 @@
 """
-Plotting utilities for alignment experiments.
+Plotting utilities for visualization of experiment results.
 
-This module provides functions for visualizing experiment results,
-including training trajectories, dropout effects, and alignment metrics.
+This module provides functions for visualizing experimental results from
+alignment studies, including progressive dropout analysis with different
+pruning strategies and other alignment metrics.
 """
 
 import logging
+import math
+import os
+from typing import Dict, List, Optional, Tuple, Union, Any
+import json
+
 import numpy as np
 import torch
-from typing import Dict, List, Any, Tuple, Optional, Union
-
-import matplotlib.pyplot as plt
 import matplotlib as mpl
+import matplotlib.pyplot as plt
+import seaborn as sns
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 
 logger = logging.getLogger(__name__)
 
+# Set default figure size
+plt.rcParams["figure.figsize"] = (10, 6)
+# Use SVG backend for better quality
+plt.rcParams["figure.dpi"] = 120
 
-def plot_training_results(
-    experiment: Any,
-    results: Dict[str, Any],
-    title: str = "Training Results"
-) -> None:
+
+def plot_pruning_experiments(
+    results: Dict[str, Dict[str, List[Tuple[float, float]]]],
+    metric_names: Dict[str, str],
+    output_dir: str,
+    filename_prefix: str = "dropout",
+    separate_plots: bool = False,
+    title_suffix: str = "",
+    ylim: Optional[Tuple[float, float]] = None,
+    fig_size: Tuple[int, int] = (10, 6),
+) -> List[Figure]:
     """
-    Plot training metrics (loss and accuracy) over epochs.
+    Plot accuracy vs. prune fraction for different metrics and strategies.
     
     Args:
-        experiment: Experiment object with plot_ready method
-        results: Dictionary containing training metrics
-        title: Plot title
+        results: Dict[metric_name, Dict[strategy, [(prune_fraction, accuracy)]]]
+        metric_names: Names to display for each metric
+        output_dir: Directory to save plots
+        filename_prefix: Prefix for filename
+        separate_plots: If True, create separate plots for each metric
+        title_suffix: Additional text to append to plot title
+        ylim: Optional y-axis limits
+        fig_size: Figure size (width, height) in inches
+        
+    Returns:
+        List of created figures
     """
-    try:
-        # Extract metrics
-        train_loss = results.get('train_loss', [])
-        train_accuracy = results.get('train_accuracy', [])
-        val_loss = results.get('val_loss', [])
-        val_accuracy = results.get('val_accuracy', [])
-        
-        if not train_loss and not train_accuracy:
-            logger.warning("No training metrics found to plot")
-            return
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    if separate_plots:
+        return _plot_separate_figures(
+            results, metric_names, output_dir, filename_prefix, 
+            title_suffix, ylim, fig_size
+        )
+    else:
+        return _plot_combined_figure(
+            results, metric_names, output_dir, filename_prefix, 
+            title_suffix, ylim, fig_size
+        )
+
+
+def _plot_combined_figure(
+    results: Dict[str, Dict[str, List[Tuple[float, float]]]],
+    metric_names: Dict[str, str],
+    output_dir: str,
+    filename_prefix: str,
+    title_suffix: str,
+    ylim: Optional[Tuple[float, float]],
+    fig_size: Tuple[int, int],
+) -> List[Figure]:
+    """
+    Create a combined plot with all metrics and strategies.
+    """
+    # Define colors and markers for different strategies
+    colors = {
+        "random": "gray",
+        "high_rq": "green",
+        "low_rq": "red",
+        "high_mi": "blue",
+        "low_mi": "purple",
+    }
+    
+    markers = {
+        "random": "o",
+        "high_rq": "^",
+        "low_rq": "v",
+        "high_mi": "s",
+        "low_mi": "D",
+    }
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=fig_size)
+    
+    # Plot each metric and strategy
+    for metric_name, strategies in results.items():
+        for strategy, data_points in strategies.items():
+            # Extract x and y values
+            x = [point[0] for point in data_points]
+            y = [point[1] for point in data_points]
             
-        # Create figure with two subplots (loss and accuracy)
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        epochs = range(1, len(train_loss) + 1)
+            # Get display name
+            display_name = f"{metric_names.get(metric_name, metric_name)} {strategy}"
+            
+            # Get color and marker
+            color = colors.get(strategy, "black")
+            marker = markers.get(strategy, ".")
+            
+            # Plot
+            ax.plot(x, y, marker=marker, label=display_name, color=color)
+    
+    # Set title and labels
+    title = f"Accuracy vs. Prune Fraction{title_suffix}"
+    ax.set_title(title)
+    ax.set_xlabel("Prune Fraction")
+    ax.set_ylabel("Accuracy (%)")
+    
+    # Set y-axis limits if specified
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    
+    # Add grid
+    ax.grid(True, linestyle="--", alpha=0.7)
+    
+    # Add legend
+    ax.legend()
+    
+    # Save figure
+    filename = f"{filename_prefix}_combined.png"
+    filepath = os.path.join(output_dir, filename)
+    fig.savefig(filepath, bbox_inches="tight")
+    
+    logger.info(f"Saved combined plot to {filepath}")
+    
+    return [fig]
+
+
+def _plot_separate_figures(
+    results: Dict[str, Dict[str, List[Tuple[float, float]]]],
+    metric_names: Dict[str, str],
+    output_dir: str,
+    filename_prefix: str,
+    title_suffix: str,
+    ylim: Optional[Tuple[float, float]],
+    fig_size: Tuple[int, int],
+) -> List[Figure]:
+    """
+    Create separate plots for each metric.
+    """
+    # Define colors and markers for different strategies
+    colors = {
+        "random": "gray",
+        "high_rq": "green",
+        "low_rq": "red",
+        "high_mi": "blue",
+        "low_mi": "purple",
+    }
+    
+    markers = {
+        "random": "o",
+        "high_rq": "^",
+        "low_rq": "v",
+        "high_mi": "s",
+        "low_mi": "D",
+    }
+    
+    figures = []
+    
+    # Create a separate plot for each metric
+    for metric_name, strategies in results.items():
+        fig, ax = plt.subplots(figsize=fig_size)
         
-        # Plot loss
-        ax1.plot(epochs, train_loss, 'b-', linewidth=2, label='Training Loss')
-        if val_loss:
-            ax1.plot(epochs, [val_loss] * len(epochs), 'r--', linewidth=1.5, label='Validation Loss')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss')
-        ax1.set_title('Loss vs. Epochs')
-        ax1.grid(True)
-        ax1.legend()
+        # Plot each strategy
+        for strategy, data_points in strategies.items():
+            # Extract x and y values
+            x = [point[0] for point in data_points]
+            y = [point[1] for point in data_points]
+            
+            # Get display name
+            display_name = strategy
+            
+            # Get color and marker
+            color = colors.get(strategy, "black")
+            marker = markers.get(strategy, ".")
+            
+            # Plot
+            ax.plot(x, y, marker=marker, label=display_name, color=color)
         
-        # Plot accuracy
-        ax2.plot(epochs, train_accuracy, 'g-', linewidth=2, label='Training Accuracy')
-        if val_accuracy:
-            ax2.plot(epochs, [val_accuracy] * len(epochs), 'r--', linewidth=1.5, label='Validation Accuracy')
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('Accuracy (%)')
-        ax2.set_title('Accuracy vs. Epochs')
-        ax2.set_ylim(0, 100)
-        ax2.grid(True)
-        ax2.legend()
+        # Set title and labels
+        metric_display = metric_names.get(metric_name, metric_name)
+        title = f"{metric_display}: Accuracy vs. Prune Fraction{title_suffix}"
+        ax.set_title(title)
+        ax.set_xlabel("Prune Fraction")
+        ax.set_ylabel("Accuracy (%)")
         
-        plt.tight_layout()
-        experiment.plot_ready(f"training_results_{title.lower().replace(' ', '_')}.png")
+        # Set y-axis limits if specified
+        if ylim is not None:
+            ax.set_ylim(ylim)
         
-    except Exception as e:
-        logger.error(f"Error plotting training results: {str(e)}", exc_info=True)
+        # Add grid
+        ax.grid(True, linestyle="--", alpha=0.7)
+        
+        # Add legend
+        ax.legend()
+        
+        # Save figure
+        filename = f"{filename_prefix}_{metric_name}.png"
+        filepath = os.path.join(output_dir, filename)
+        fig.savefig(filepath, bbox_inches="tight")
+        
+        logger.info(f"Saved {metric_name} plot to {filepath}")
+        
+        figures.append(fig)
+    
+    return figures
+
+
+def plot_per_layer_independent(
+    results: Dict[str, Dict[int, Tuple[float, float]]],
+    layer_names: Optional[Dict[int, str]] = None,
+    output_dir: str = ".",
+    filename_prefix: str = "per_layer",
+    title_suffix: str = "",
+    ylim: Optional[Tuple[float, float]] = None,
+    fig_size: Tuple[int, int] = (12, 8),
+) -> List[Figure]:
+    """
+    Plot accuracy when pruning each layer independently.
+    
+    Args:
+        results: Dict[metric_name, Dict[layer_idx, (prune_fraction, accuracy)]]
+        layer_names: Optional mapping of layer indices to display names
+        output_dir: Directory to save plots
+        filename_prefix: Prefix for filename
+        title_suffix: Additional text to append to plot title
+        ylim: Optional y-axis limits
+        fig_size: Figure size (width, height) in inches
+        
+    Returns:
+        List of created figures
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Define colors for different metrics
+    colors = {
+        "random": "gray",
+        "rq": "green",
+        "mi": "blue",
+        "high_rq": "green",
+        "low_rq": "red",
+        "high_mi": "blue", 
+        "low_mi": "purple",
+    }
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=fig_size)
+    
+    # For each metric, create a grouped bar chart
+    metrics = list(results.keys())
+    num_metrics = len(metrics)
+    
+    # Get all unique layer indices
+    all_layers = set()
+    for metric_data in results.values():
+        all_layers.update(metric_data.keys())
+    all_layers = sorted(all_layers)
+    
+    # Bar width and positions
+    bar_width = 0.8 / num_metrics
+    
+    # Plot each metric
+    for i, metric_name in enumerate(metrics):
+        layer_results = results[metric_name]
+        
+        # Positions of the bars
+        positions = np.arange(len(all_layers)) + (i - num_metrics/2 + 0.5) * bar_width
+        
+        # Heights of the bars (accuracies)
+        heights = [layer_results.get(layer_idx, (0, 0))[1] for layer_idx in all_layers]
+        
+        # Plot bars
+        color = colors.get(metric_name, "black")
+        ax.bar(positions, heights, bar_width, label=metric_name, color=color, alpha=0.7)
+    
+    # Set x-axis ticks and labels
+    if layer_names is None:
+        layer_names = {idx: f"Layer {idx}" for idx in all_layers}
+        
+    ax.set_xticks(np.arange(len(all_layers)))
+    ax.set_xticklabels([layer_names.get(idx, f"Layer {idx}") for idx in all_layers], rotation=45, ha="right")
+    
+    # Set title and labels
+    title = f"Per-Layer Pruning: Accuracy by Layer{title_suffix}"
+    ax.set_title(title)
+    ax.set_xlabel("Layer")
+    ax.set_ylabel("Accuracy (%)")
+    
+    # Set y-axis limits if specified
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    
+    # Add grid
+    ax.grid(True, linestyle="--", alpha=0.5, axis="y")
+    
+    # Add legend
+    ax.legend()
+    
+    # Save figure
+    filename = f"{filename_prefix}_per_layer.png"
+    filepath = os.path.join(output_dir, filename)
+    fig.savefig(filepath, bbox_inches="tight")
+    
+    logger.info(f"Saved per-layer plot to {filepath}")
+    
+    return [fig]
 
 
 def plot_dropout_results(
-    experiment: Any,
-    results: Dict[str, Dict[float, Dict[str, Any]]],
-    title: str,
-    metric_name: str,
-    sort_types: List[str] = ["high", "low", "random"],
-    filename: str = "dropout_results"
-) -> None:
+    results: Dict,
+    plot_dir: str,
+    pruning_mode: str = "global",
+    dropout_mode: str = "scaled",
+    title_prefix: str = "Dropout"
+) -> Dict[str, str]:
     """
-    Plot comprehensive dropout results with different sorting strategies.
+    Plot dropout experiment results using a style similar to the preref implementation.
     
     Args:
-        experiment: Experiment object with plot_ready method
-        results: Dictionary containing dropout results
-        title: Plot title
-        metric_name: Name of the alignment metric used
-        sort_types: List of sorting strategies to plot (high, low, random)
-        filename: Base filename for saving the plot
+        results: Results dictionary from progressive_dropout
+        plot_dir: Directory to save plots to
+        pruning_mode: Pruning mode used in the experiment
+        dropout_mode: Dropout mode used in the experiment
+        title_prefix: Prefix for plot titles
+        
+    Returns:
+        Dictionary mapping plot types to file paths
     """
-    try:
-        if not results:
-            logger.warning("No dropout results to plot")
-            return
+    # Create the output directory if it doesn't exist
+    os.makedirs(plot_dir, exist_ok=True)
+    
+    # Check for error in results
+    if "error" in results:
+        logger.error(f"Cannot plot results due to error: {results['error']}")
+        return {}
+    
+    # Extract dropout fractions
+    dropout_fractions = results.get("dropout_fractions", [])
+    if not isinstance(dropout_fractions, (list, np.ndarray)) or len(dropout_fractions) == 0:
+        logger.error("No dropout fractions found in results")
+        return {}
+    
+    # Set up figure parameters
+    strategies = ["high_rq", "low_rq", "random"]
+    colors = {"high_rq": "blue", "low_rq": "red", "random": "green"}
+    linestyles = {"high_rq": "-", "low_rq": "-", "random": "-"}
+    markers = {"high_rq": "o", "low_rq": "s", "random": "^"}
+    strategy_labels = {"high_rq": "High RQ", "low_rq": "Low RQ", "random": "Random"}
+    
+    # Create dictionary to store file paths
+    file_paths = {}
+    
+    # ----------------
+    # Plot Accuracy (single figure with all strategies)
+    # ----------------
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    for strategy in strategies:
+        accs = results.get("accuracies", {}).get(strategy)
+        if not isinstance(accs, (list, np.ndarray)) or len(accs) == 0:
+            logger.warning(f"No accuracy data for strategy {strategy}")
+            continue
+        
+        ax.plot(
+            dropout_fractions,
+            accs,
+            marker=markers[strategy],
+            linestyle=linestyles[strategy],
+            color=colors[strategy],
+            linewidth=2,
+            markersize=6,
+            label=strategy_labels[strategy]
+        )
+    
+    ax.set_xlabel('Dropout Fraction', fontsize=14)
+    ax.set_ylabel('Accuracy (%)', fontsize=14)
+    ax.set_title(f'{title_prefix} - {pruning_mode.replace("_", " ").title()} Pruning ({dropout_mode})', fontsize=16)
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend(fontsize=12)
+    ax.set_ylim([0, 100])  # Fixed y-axis for accuracy
+    
+    accuracy_file = os.path.join(plot_dir, f"{title_prefix.lower().replace(' ', '_')}_{pruning_mode}_accuracy.png")
+    plt.savefig(accuracy_file, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    
+    file_paths["accuracy"] = accuracy_file
+    logger.info(f"Saved accuracy plot to {accuracy_file}")
+    
+    # ----------------
+    # Plot Loss (single figure with all strategies)
+    # ----------------
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    for strategy in strategies:
+        losses = results.get("losses", {}).get(strategy)
+        if not isinstance(losses, (list, np.ndarray)) or len(losses) == 0:
+            logger.warning(f"No loss data for strategy {strategy}")
+            continue
+        
+        ax.plot(
+            dropout_fractions,
+            losses,
+            marker=markers[strategy],
+            linestyle=linestyles[strategy],
+            color=colors[strategy],
+            linewidth=2,
+            markersize=6,
+            label=strategy_labels[strategy]
+        )
+    
+    ax.set_xlabel('Dropout Fraction', fontsize=14)
+    ax.set_ylabel('Loss (%)', fontsize=14)
+    ax.set_title(f'{title_prefix} Loss - {pruning_mode.replace("_", " ").title()} Pruning ({dropout_mode})', fontsize=16)
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend(fontsize=12)
+    
+    loss_file = os.path.join(plot_dir, f"{title_prefix.lower().replace(' ', '_')}_{pruning_mode}_loss.png")
+    plt.savefig(loss_file, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    
+    file_paths["loss"] = loss_file
+    logger.info(f"Saved loss plot to {loss_file}")
+    
+    # ----------------
+    # Plot Individual Strategy Comparisons
+    # ----------------
+    for strategy in strategies:
+        accs = results.get("accuracies", {}).get(strategy)
+        if not isinstance(accs, (list, np.ndarray)) or len(accs) == 0:
+            continue
             
-        dropout_fractions = sorted(results.keys())
+        fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Create a plot with separate panels for accuracy and alignment
-        fig = plt.figure(figsize=(15, 10))
-        gs = fig.add_gridspec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1])
-        
-        # Panel 1: Accuracy vs Dropout Fraction for all strategies
-        ax1 = fig.add_subplot(gs[0, 0])
-        
-        # Colors for different sorting strategies
-        colors = {'high': 'r', 'low': 'g', 'random': 'b'}
-        markers = {'high': 'o', 'low': 's', 'random': '^'}
-        
-        # Get the number of layers from the first result
-        first_key = dropout_fractions[0]
-        num_layers = len(results[first_key]["alignment"])
-        
-        # Extract and plot accuracy for each sorting strategy
-        for sort_type in sort_types:
-            if sort_type == "high":
-                label = "From High Alignment"
-                accuracies = [results[frac]["accuracy"] for frac in dropout_fractions]
-            elif sort_type == "low":
-                label = "From Low Alignment"
-                # Simulate low alignment by reversing the order of dropout
-                accuracies = [results[frac]["accuracy"] for frac in reversed(dropout_fractions)]
-            elif sort_type == "random":
-                label = "Random Dropout"
-                # For random, use midpoint between high and low as approximation
-                high_accs = [results[frac]["accuracy"] for frac in dropout_fractions]
-                low_accs = [results[frac]["accuracy"] for frac in reversed(dropout_fractions)]
-                accuracies = [(h + l) / 2 for h, l in zip(high_accs, low_accs)]
-                
-            ax1.plot(
-                dropout_fractions, 
-                accuracies, 
-                f"{colors[sort_type]}{markers[sort_type]}-", 
-                linewidth=2, 
-                label=label
-            )
-            
-        ax1.set_xlabel("Dropout Fraction")
-        ax1.set_ylabel("Accuracy (%)")
-        ax1.set_title("Accuracy vs. Dropout Fraction")
-        ax1.grid(True)
-        ax1.legend()
-        
-        # Panel 2: Accuracy Difference Between High and Low
-        ax2 = fig.add_subplot(gs[0, 1])
-        
-        # Calculate difference between high and low alignment
-        high_accs = [results[frac]["accuracy"] for frac in dropout_fractions]
-        low_accs = [results[frac]["accuracy"] for frac in reversed(dropout_fractions)]
-        diff_accs = [h - l for h, l in zip(high_accs, low_accs)]
-        
-        ax2.plot(
-            dropout_fractions, 
-            diff_accs, 
-            'mo-', 
-            linewidth=2, 
-            label="High - Low"
+        ax.plot(
+            dropout_fractions,
+            accs,
+            marker=markers[strategy],
+            linestyle=linestyles[strategy],
+            color=colors[strategy],
+            linewidth=2,
+            markersize=6,
+            label=f"{strategy_labels[strategy]} Accuracy"
         )
         
-        ax2.set_xlabel("Dropout Fraction")
-        ax2.set_ylabel("Accuracy Difference (%)")
-        ax2.set_title("Accuracy Difference (High - Low)")
-        ax2.grid(True)
+        # Add loss to the same plot if available
+        losses = results.get("losses", {}).get(strategy)
+        if isinstance(losses, (list, np.ndarray)) and len(losses) > 0:
+            ax.plot(
+                dropout_fractions,
+                losses,
+                marker=markers[strategy],
+                linestyle='--',
+                color=colors[strategy],
+                linewidth=2,
+                markersize=6,
+                label=f"{strategy_labels[strategy]} Loss"
+            )
+        
+        ax.set_xlabel('Dropout Fraction', fontsize=14)
+        ax.set_ylabel('Percentage (%)', fontsize=14)
+        ax.set_title(f'{title_prefix} - {strategy_labels[strategy]} ({dropout_mode})', fontsize=16)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend(fontsize=12)
+        
+        strategy_file = os.path.join(plot_dir, f"{title_prefix.lower().replace(' ', '_')}_{pruning_mode}_{strategy}.png")
+        plt.savefig(strategy_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        
+        file_paths[f"{strategy}_comparison"] = strategy_file
+        logger.info(f"Saved {strategy} comparison plot to {strategy_file}")
+    
+    # ----------------
+    # Plot Alignment Values (if available)
+    # ----------------
+    alignment_values = results.get("alignment_values", {})
+    if alignment_values:
+        # Create one plot per layer
+        for layer_idx in range(len(alignment_values.get("high_rq", [{}])[0] or [])):
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            for strategy in strategies:
+                # Extract alignment values for this layer across dropout fractions
+                if strategy in alignment_values:
+                    layer_alignments = []
+                    for frac_idx, alignment in enumerate(alignment_values[strategy]):
+                        if alignment and layer_idx < len(alignment):
+                            layer_alignments.append(alignment[layer_idx])
+                        else:
+                            layer_alignments.append(None)
+                    
+                    # Filter out None values
+                    valid_fractions = []
+                    valid_alignments = []
+                    for frac_idx, alignment in enumerate(layer_alignments):
+                        if alignment is not None:
+                            valid_fractions.append(dropout_fractions[frac_idx])
+                            valid_alignments.append(alignment)
+                    
+                    if valid_fractions and valid_alignments:
+                        ax.plot(
+                            valid_fractions,
+                            valid_alignments,
+                            marker=markers[strategy],
+                            linestyle=linestyles[strategy],
+                            color=colors[strategy],
+                            linewidth=2,
+                            markersize=6,
+                            label=strategy_labels[strategy]
+                        )
+            
+            ax.set_xlabel('Dropout Fraction', fontsize=14)
+            ax.set_ylabel('Alignment Value', fontsize=14)
+            ax.set_title(f'Layer {layer_idx+1} Alignment - {pruning_mode.replace("_", " ").title()}', fontsize=16)
+            ax.grid(True, linestyle='--', alpha=0.7)
+            ax.legend(fontsize=12)
+            
+            alignment_file = os.path.join(plot_dir, f"{title_prefix.lower().replace(' ', '_')}_{pruning_mode}_layer{layer_idx+1}_alignment.png")
+            plt.savefig(alignment_file, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            
+            file_paths[f"layer{layer_idx+1}_alignment"] = alignment_file
+            logger.info(f"Saved layer {layer_idx+1} alignment plot to {alignment_file}")
+    
+    # Save raw results as JSON for further analysis
+    try:
+        # Helper function to safely convert tensors and numpy arrays to lists
+        def safe_convert(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, torch.Tensor):
+                return obj.cpu().tolist()
+            elif isinstance(obj, dict):
+                return {k: safe_convert(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [safe_convert(item) for item in obj]
+            else:
+                return obj
+        
+        # Create a simplified version of results for JSON serialization
+        json_results = {
+            "dropout_fractions": safe_convert(dropout_fractions),
+            "accuracies": safe_convert(results.get("accuracies", {})),
+            "losses": safe_convert(results.get("losses", {})),
+        }
+        
+        # Exclude alignment_values as they can be complex and not easily serializable
+        
+        json_path = os.path.join(plot_dir, f"{title_prefix.lower().replace(' ', '_')}_{pruning_mode}_results.json")
+        with open(json_path, 'w') as f:
+            json.dump(json_results, f, indent=2)
+            
+        file_paths["json_results"] = json_path
+        logger.info(f"Saved raw results to {json_path}")
+    except Exception as e:
+        logger.error(f"Error saving JSON results: {str(e)}")
+    
+    return file_paths
+
+
+def plot_experiment_summary(
+    results: Dict,
+    plot_dir: str
+) -> Dict[str, str]:
+    """
+    Generate a comprehensive summary of experiment results.
+    
+    Args:
+        results: Results dictionary from the experiment
+        plot_dir: Directory to save plots to
+        
+    Returns:
+        Dictionary mapping plot types to file paths
+    """
+    # Create the output directory if it doesn't exist
+    os.makedirs(plot_dir, exist_ok=True)
+    
+    # Prepare figure
+    fig = plt.figure(figsize=(15, 12))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1])
+    
+    # Panel 1: Configuration summary
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.axis('off')
+    
+    # Extract config info
+    config = results.get("config", {})
+    config_text = []
+    
+    if hasattr(config, "model") and hasattr(config.model, "model_name"):
+        config_text.append(f"Model: {config.model.model_name}")
+    
+    if hasattr(config, "dataset") and hasattr(config.dataset, "dataset_name"):
+        config_text.append(f"Dataset: {config.dataset.dataset_name}")
+    
+    if hasattr(config, "alignment") and hasattr(config.alignment, "metric"):
+        config_text.append(f"Alignment Metric: {config.alignment.metric}")
+    
+    if hasattr(config, "alignment"):
+        if hasattr(config.alignment, "dropout_min") and hasattr(config.alignment, "dropout_max"):
+            config_text.append(f"Dropout Range: {config.alignment.dropout_min} to {config.alignment.dropout_max}")
+        if hasattr(config.alignment, "dropout_steps"):
+            config_text.append(f"Dropout Steps: {config.alignment.dropout_steps}")
+    
+    if hasattr(config, "extra"):
+        if hasattr(config.extra, "dropout_mode"):
+            config_text.append(f"Dropout Mode: {config.extra.dropout_mode}")
+        if hasattr(config.extra, "dropout_pruning_mode"):
+            config_text.append(f"Dropout Pruning Mode: {config.extra.dropout_pruning_mode}")
+    
+    ax1.text(0.05, 0.95, "\n".join(config_text), fontsize=11, 
+             verticalalignment='top', horizontalalignment='left')
+    ax1.set_title("Experiment Configuration", fontsize=14)
+    
+    # Panel 2: Progressive Dropout results if available
+    ax2 = fig.add_subplot(gs[0, 1])
+    prog_results = results.get("progressive_dropout", {})
+    
+    if "accuracies" in prog_results and "dropout_fractions" in prog_results:
+        fractions = prog_results["dropout_fractions"]
+        for strategy, color in [("high_rq", "blue"), ("low_rq", "red"), ("random", "green")]:
+            if strategy in prog_results["accuracies"]:
+                accs = prog_results["accuracies"][strategy]
+                ax2.plot(
+                    fractions, 
+                    accs, 
+                    marker='o', 
+                    linestyle='-', 
+                    color=color, 
+                    label=strategy.replace('_', ' ').title()
+                )
+        
+        ax2.set_xlabel("Dropout Fraction", fontsize=12)
+        ax2.set_ylabel("Accuracy (%)", fontsize=12)
+        ax2.set_title("Progressive Dropout Results", fontsize=14)
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim([0, 105])
         ax2.legend()
-        
-        # Panel 3: Alignment vs Dropout Fraction for each layer
-        ax3 = fig.add_subplot(gs[1, 0])
-        
-        # Extract and plot alignment for each layer
-        for layer_idx in range(num_layers):
-            layer_alignments = [
-                results[frac]["alignment"][layer_idx] 
-                for frac in dropout_fractions
-            ]
+    else:
+        ax2.text(0.5, 0.5, "No Progressive Dropout Results", 
+                fontsize=12, ha='center', va='center')
+        ax2.axis('off')
+    
+    # Panel 3: Eigenvector Dropout results if available
+    ax3 = fig.add_subplot(gs[1, 0])
+    eig_results = results.get("eigenvector_dropout", {})
+    
+    if "accuracies" in eig_results and "dropout_fractions" in eig_results:
+        fractions = eig_results["dropout_fractions"]
+        if "eigenvector" in eig_results["accuracies"]:
+            accs = eig_results["accuracies"]["eigenvector"]
             ax3.plot(
-                dropout_fractions, 
-                layer_alignments, 
-                'o-', 
-                linewidth=2, 
-                label=f"Layer {layer_idx}"
+                fractions, 
+                accs, 
+                marker='o', 
+                linestyle='-', 
+                color='purple', 
+                label="Eigenvector"
             )
             
-        ax3.set_xlabel("Dropout Fraction")
-        ax3.set_ylabel("Alignment")
-        ax3.set_title(f"{title} - {metric_name} Alignment")
-        ax3.grid(True)
+            # Also add the high_rq from progressive dropout for comparison if available
+            if "accuracies" in prog_results and "high_rq" in prog_results["accuracies"]:
+                prog_fracs = prog_results["dropout_fractions"]
+                prog_accs = prog_results["accuracies"]["high_rq"]
+                # Only plot if the fractions match
+                if len(prog_fracs) == len(fractions) and all(a == b for a, b in zip(prog_fracs, fractions)):
+                    ax3.plot(
+                        fractions,
+                        prog_accs,
+                        marker='s',
+                        linestyle='--',
+                        color='blue',
+                        label="High RQ"
+                    )
+        
+        ax3.set_xlabel("Dropout Fraction", fontsize=12)
+        ax3.set_ylabel("Accuracy (%)", fontsize=12)
+        ax3.set_title("Eigenvector Dropout Results", fontsize=14)
+        ax3.grid(True, alpha=0.3)
+        ax3.set_ylim([0, 105])
         ax3.legend()
-        
-        # Panel 4: Comparative view of high vs low for the first layer
-        ax4 = fig.add_subplot(gs[1, 1])
-        
-        if num_layers > 0:
-            # High alignment for first layer
-            high_layer_alignments = [
-                results[frac]["alignment"][0] 
-                for frac in dropout_fractions
-            ]
-            
-            # Low alignment for first layer (reverse order)
-            low_layer_alignments = [
-                results[frac]["alignment"][0] 
-                for frac in reversed(dropout_fractions)
-            ]
-            
-            ax4.plot(
-                dropout_fractions, 
-                high_layer_alignments, 
-                'ro-', 
-                linewidth=2, 
-                label="High Alignment"
-            )
-            
-            ax4.plot(
-                dropout_fractions, 
-                low_layer_alignments, 
-                'go-', 
-                linewidth=2, 
-                label="Low Alignment"
-            )
-            
-            ax4.set_xlabel("Dropout Fraction")
-            ax4.set_ylabel("Alignment (Layer 0)")
-            ax4.set_title(f"Layer 0 Alignment: High vs Low")
-            ax4.grid(True)
-            ax4.legend()
-        
-        plt.tight_layout()
-        experiment.plot_ready(f"{filename}_{title.lower().replace(' ', '_')}.png")
-        
-    except Exception as e:
-        logger.error(f"Error plotting dropout results: {str(e)}", exc_info=True)
-
-
-def plot_detailed_layer_dropout(
-    experiment: Any,
-    results: Dict[str, Dict[float, Dict[str, Any]]],
-    title: str,
-    metric_name: str,
-    filename: str = "layer_dropout"
-) -> None:
-    """
-    Plot detailed per-layer dropout results.
+    else:
+        ax3.text(0.5, 0.5, "No Eigenvector Dropout Results", 
+                fontsize=12, ha='center', va='center')
+        ax3.axis('off')
     
-    Args:
-        experiment: Experiment object with plot_ready method
-        results: Dictionary containing dropout results
-        title: Plot title
-        metric_name: Name of the alignment metric used
-        filename: Base filename for saving the plot
-    """
-    try:
-        if not results:
-            logger.warning("No dropout results to plot")
-            return
-            
-        dropout_fractions = sorted(results.keys())
-        
-        # Get the number of layers from the first result
-        first_key = dropout_fractions[0]
-        num_layers = len(results[first_key]["alignment"])
-        
-        # Create a grid of plots, one for each layer
-        num_cols = min(3, num_layers)
-        num_rows = (num_layers + num_cols - 1) // num_cols
-        
-        fig, axes = plt.subplots(num_rows, num_cols, figsize=(15, 5 * num_rows))
-        
-        # Handle case where num_layers = 1 (axes is not a 2D array)
-        if num_layers == 1:
-            axes = np.array([[axes]])
-        elif num_rows == 1:
-            axes = axes.reshape(1, -1)
-        
-        for layer_idx in range(num_layers):
-            row = layer_idx // num_cols
-            col = layer_idx % num_cols
-            
-            # Extract layer alignments and accuracies
-            layer_alignments = [
-                results[frac]["alignment"][layer_idx] 
-                for frac in dropout_fractions
-            ]
-            accuracies = [
-                results[frac]["accuracy"] 
-                for frac in dropout_fractions
-            ]
-            
-            # Create two y-axes for alignment and accuracy
-            ax1 = axes[row, col]
-            ax2 = ax1.twinx()
-            
-            # Plot alignment on left y-axis
-            alignment_line = ax1.plot(
-                dropout_fractions, 
-                layer_alignments, 
-                'bo-', 
-                linewidth=2, 
-                label=f"Layer {layer_idx} Alignment"
-            )
-            
-            # Plot accuracy on right y-axis
-            accuracy_line = ax2.plot(
-                dropout_fractions, 
-                accuracies, 
-                'ro-', 
-                linewidth=2, 
-                label="Accuracy"
-            )
-            
-            # Set labels and title
-            ax1.set_xlabel("Dropout Fraction")
-            ax1.set_ylabel("Alignment")
-            ax2.set_ylabel("Accuracy (%)")
-            ax1.set_title(f"Layer {layer_idx}")
-            
-            # Add grid
-            ax1.grid(True)
-            
-            # Add legend
-            lines = alignment_line + accuracy_line
-            labels = [l.get_label() for l in lines]
-            ax1.legend(lines, labels, loc="lower left")
-        
-        # Hide unused subplots
-        for layer_idx in range(num_layers, num_rows * num_cols):
-            row = layer_idx // num_cols
-            col = layer_idx % num_cols
-            axes[row, col].axis('off')
-        
-        plt.suptitle(f"{title} - Per-Layer Analysis", fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.96])  # Adjust layout to make room for the title
-        experiment.plot_ready(f"{filename}_per_layer_{title.lower().replace(' ', '_')}.png")
-        
-    except Exception as e:
-        logger.error(f"Error plotting detailed layer dropout: {str(e)}", exc_info=True)
-
-
-def plot_basic_dropout_results(
-    experiment: Any,
-    results: Dict[float, Dict[str, Any]],
-    title: str,
-    metric_name: str,
-    filename: str
-) -> None:
-    """
-    Plot basic dropout results for a single dropout strategy.
+    # Panel 4: Alignment comparison or other metrics
+    ax4 = fig.add_subplot(gs[1, 1])
     
-    Args:
-        experiment: Experiment object with plot_ready method
-        results: Dictionary containing dropout results
-        title: Plot title
-        metric_name: Name of the alignment metric used
-        filename: Filename for saving the plot
-    """
-    try:
-        if not results:
-            logger.warning("No dropout results to plot")
-            return
-            
-        dropout_fractions = sorted(results.keys())
-        accuracies = [results[k]["accuracy"] for k in dropout_fractions]
+    # Check both progressive and eigenvector results for alignment values
+    alignment_data = None
+    if "alignment_values" in prog_results and "high_rq" in prog_results["alignment_values"]:
+        alignment_data = prog_results["alignment_values"]["high_rq"][0]
+    elif "alignment_values" in eig_results and "eigenvector" in eig_results["alignment_values"]:
+        alignment_data = eig_results["alignment_values"]["eigenvector"][0]
+    
+    if alignment_data and len(alignment_data) > 0:
+        # Extract alignment values as floats
+        alignment_values = []
+        for val in alignment_data:
+            if isinstance(val, torch.Tensor):
+                alignment_values.append(val.item())
+            else:
+                alignment_values.append(float(val))
         
-        # Create figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        # Create bar chart of alignment by layer
+        x = np.arange(len(alignment_values))
+        bars = ax4.bar(x, alignment_values, width=0.6, alpha=0.7)
         
-        # Plot accuracy vs dropout fraction
-        ax1.plot(dropout_fractions, accuracies, 'o-', linewidth=2)
-        ax1.set_xlabel("Dropout Fraction")
-        ax1.set_ylabel("Accuracy")
-        ax1.set_title(f"{title} - Accuracy")
-        ax1.grid(True)
+        # Add value labels on top of bars
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax4.text(
+                bar.get_x() + bar.get_width()/2., 
+                height + 0.01,
+                f'{alignment_values[i]:.3f}',
+                ha='center', 
+                va='bottom', 
+                rotation=0, 
+                fontsize=9
+            )
         
-        # Plot alignment values for each layer
-        if len(results[dropout_fractions[0]]["alignment"]) > 0:
-            for layer_idx in range(len(results[dropout_fractions[0]]["alignment"])):
-                layer_alignments = [
-                    results[frac]["alignment"][layer_idx] 
-                    for frac in dropout_fractions
-                ]
-                ax2.plot(dropout_fractions, layer_alignments, 'o-', linewidth=2, 
-                         label=f"Layer {layer_idx}")
-            
-            ax2.set_xlabel("Dropout Fraction")
-            ax2.set_ylabel("Alignment")
-            ax2.set_title(f"{title} - {metric_name} Alignment")
-            ax2.grid(True)
-            ax2.legend()
-        
-        plt.tight_layout()
-        experiment.plot_ready(filename)
-        
-    except Exception as e:
-        logger.error(f"Error plotting basic dropout results: {str(e)}", exc_info=True) 
+        ax4.set_xlabel("Layer", fontsize=12)
+        ax4.set_ylabel("Alignment Value", fontsize=12)
+        ax4.set_title("Alignment by Layer", fontsize=14)
+        ax4.set_xticks(x)
+        ax4.set_xticklabels([f"Layer {i+1}" for i in range(len(alignment_values))])
+        ax4.grid(True, alpha=0.3, axis='y')
+    else:
+        ax4.text(0.5, 0.5, "No Alignment Data", 
+                fontsize=12, ha='center', va='center')
+        ax4.axis('off')
+    
+    # Add an overall title
+    title = "Experiment Summary"
+    if hasattr(config, "model") and hasattr(config.model, "model_name"):
+        if hasattr(config, "dataset") and hasattr(config.dataset, "dataset_name"):
+            title += f": {config.model.model_name} on {config.dataset.dataset_name}"
+        else:
+            title += f": {config.model.model_name}"
+    
+    fig.suptitle(title, fontsize=16, y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Adjust for suptitle
+    
+    # Save the figure
+    summary_file = os.path.join(plot_dir, "experiment_summary.png")
+    plt.savefig(summary_file, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    
+    logger.info(f"Saved experiment summary to {summary_file}")
+    
+    return {"summary": summary_file} 

@@ -120,12 +120,27 @@ class AlignmentNetwork(nn.Module):
             hook.remove()
 
     def forward(self, x, store_hidden=False):
+        """
+        Forward pass through the network.
+        
+        Args:
+            x: Input tensor
+            store_hidden: Whether to store hidden layer activations
+            
+        Returns:
+            Network output or tuple of (output, hidden activations)
+        """
         if store_hidden:
             self.hidden = {}
             self.setup_forward_hooks()
+        
+        # Forward pass through base model
         out = self.base_model(x)
+        
         if store_hidden:
             self.remove_forward_hooks()
+            return out, self.hidden
+        
         return out
 
     def get_dropout(self):
@@ -309,8 +324,8 @@ class AlignmentNetwork(nn.Module):
         for idx, layer in zip(idxs, layers):
             layer_size = self.alignment_layers[layer].weight.size(0)  # Output dimension
             fraction = idx.numel() / layer_size
-            # Cap fraction for safety
-            fraction = min(fraction, 0.9) 
+            # Remove fraction cap for full flexibility
+            # fraction = min(fraction, 0.9)  
             total_effective_pruning *= (1.0 - fraction)
         
         # Warn if combined pruning is very high
@@ -332,12 +347,12 @@ class AlignmentNetwork(nn.Module):
                 # Calculate fraction of nodes being dropped for normalization
                 fraction_dropout = len(valid_idx) / float(max_index)
                 
-                # Cap the fraction to avoid extreme pruning
-                if fraction_dropout > 0.9:
-                    old_fraction = fraction_dropout
-                    fraction_dropout = 0.9
-                    import warnings
-                    warnings.warn(f"Capping pruning fraction from {old_fraction:.3f} to {fraction_dropout:.3f}")
+                # Remove fraction cap to allow all levels of pruning
+                # if fraction_dropout > 0.9:
+                #    old_fraction = fraction_dropout
+                #    fraction_dropout = 0.9
+                #    import warnings
+                #    warnings.warn(f"Capping pruning fraction from {old_fraction:.3f} to {fraction_dropout:.3f}")
                 
                 # Create a copy to avoid modifying the original output
                 out_copy = out_.clone()

@@ -24,24 +24,28 @@ logger = logging.getLogger(__name__)
 
 def train_model(
     model: nn.Module,
-    dataset_config: Any,
-    training_config: Any,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader] = None,
+    optimizer: Optional[optim.Optimizer] = None,
+    num_epochs: int = 10,
     device: Optional[torch.device] = None,
-    checkpoint_path: Optional[str] = None,
-    extra_config: Optional[Any] = None,
-    callbacks: Optional[List[Callable]] = None
+    checkpoint_dir: Optional[str] = None,
+    checkpoint_freq: int = 1,
+    return_history: bool = False
 ) -> Dict[str, Any]:
     """
     Train a neural network model.
     
     Args:
         model: Model to train
-        dataset_config: Configuration for the dataset
-        training_config: Configuration for training (epochs, optimizer, etc.)
+        train_loader: DataLoader for training data
+        val_loader: Optional DataLoader for validation data
+        optimizer: Optimizer to use for training (if None, creates Adam optimizer)
+        num_epochs: Number of epochs to train
         device: Device to train on
-        checkpoint_path: Path to save checkpoints
-        extra_config: Additional configuration
-        callbacks: List of callback functions to call during training
+        checkpoint_dir: Directory to save checkpoints
+        checkpoint_freq: Frequency to save checkpoints (in epochs)
+        return_history: Whether to return training history
         
     Returns:
         Dictionary containing training metrics and results
@@ -49,60 +53,28 @@ def train_model(
     if device is None:
         device = next(model.parameters()).device
     
-    # Load dataset
-    batch_size = dataset_config.batch_size if hasattr(dataset_config, 'batch_size') else 128
-    dataset = load_dataset(dataset_config, batch_size=batch_size)
-    train_loader = dataset.train_loader
-    
-    # Set up optimizer
-    optimizer_name = training_config.optimizer
-    optimizer_cls = getattr(optim, optimizer_name)
-    optimizer = optimizer_cls(
-        model.parameters(),
-        lr=training_config.learning_rate,
-        weight_decay=training_config.weight_decay
-    )
-    
-    # Set up learning rate scheduler if configured
-    scheduler = None
-    if hasattr(training_config, 'scheduler') and training_config.scheduler:
-        scheduler_cls = getattr(optim.lr_scheduler, training_config.scheduler.name)
-        scheduler = scheduler_cls(optimizer, **training_config.scheduler.params)
+    # Create optimizer if not provided
+    if optimizer is None:
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
     
     # Initialize metric tracking
-    metrics = {
+    history = {
         'train_loss': [],
         'train_accuracy': [],
+        'val_loss': [],
+        'val_accuracy': [],
         'learning_rate': []
     }
     
-    # Set up W&B if enabled
-    wandb_enabled = False
-    if extra_config and hasattr(extra_config, 'use_wandb') and extra_config.use_wandb:
-        try:
-            import wandb
-            if not wandb.run:
-                wandb.init(
-                    project=getattr(extra_config, 'wandb_project', 'alignment'),
-                    config={
-                        'dataset': vars(dataset_config) if hasattr(dataset_config, 'to_dict') else vars(dataset_config),
-                        'training': vars(training_config) if hasattr(training_config, 'to_dict') else vars(training_config),
-                        'extra': vars(extra_config) if hasattr(extra_config, 'to_dict') else vars(extra_config)
-                    }
-                )
-            wandb_enabled = True
-        except ImportError:
-            logger.warning("wandb not installed, but use_wandb=True. Disabling W&B logging.")
-    
     # Training loop
-    for epoch in range(training_config.epochs):
+    for epoch in range(num_epochs):
         model.train()
         total_loss = 0.0
         correct = 0
         total = 0
         
         # Progress bar
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{training_config.epochs}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
         
         for batch_idx, (inputs, targets) in enumerate(pbar):
             inputs, targets = inputs.to(device), targets.to(device)
@@ -128,10 +100,10 @@ def train_model(
             correct += predicted.eq(targets).sum().item()
             total += targets.size(0)
             
-            # Update progress bar
+            # Update progress bar - simplified
             pbar.set_postfix({
-                'loss': total_loss / total,
-                'acc': 100. * correct / total
+                'loss': f"{total_loss / total:.4f}",
+                'acc': f"{100. * correct / total:.1f}%"
             })
         
         # Calculate epoch metrics
@@ -140,64 +112,60 @@ def train_model(
         current_lr = optimizer.param_groups[0]['lr']
         
         # Store metrics
-        metrics['train_loss'].append(epoch_loss)
-        metrics['train_accuracy'].append(epoch_accuracy)
-        metrics['learning_rate'].append(current_lr)
+        history['train_loss'].append(epoch_loss)
+        history['train_accuracy'].append(epoch_accuracy)
+        history['learning_rate'].append(current_lr)
         
-        # Log to W&B if enabled
-        if wandb_enabled:
-            wandb.log({
-                'epoch': epoch + 1,
-                'train_loss': epoch_loss,
-                'train_accuracy': epoch_accuracy,
-                'learning_rate': current_lr
-            })
+        # Evaluate on validation set if provided
+        if val_loader is not None:
+            val_results = evaluate_model(
+                model=model,
+                data_loader=val_loader,
+                device=device
+            )
+            
+            history['val_loss'].append(val_results['loss'])
+            history['val_accuracy'].append(val_results['accuracy'])
+            
+            # Simplified logging - only log final epoch or every 5 epochs
+            if epoch == num_epochs - 1 or (epoch + 1) % 5 == 0:
+                logger.info(f"Epoch {epoch+1}/{num_epochs}: "
+                          f"Loss={epoch_loss:.4f}, Acc={epoch_accuracy:.2f}%, "
+                          f"Val Loss={val_results['loss']:.4f}, Val Acc={val_results['accuracy']:.2f}%")
+        else:
+            # Simplified logging - only log final epoch or every 5 epochs
+            if epoch == num_epochs - 1 or (epoch + 1) % 5 == 0:
+                logger.info(f"Epoch {epoch+1}/{num_epochs}: "
+                          f"Loss={epoch_loss:.4f}, Acc={epoch_accuracy:.2f}%")
         
-        # Step scheduler if configured
-        if scheduler is not None:
-            scheduler.step()
-        
-        # Save checkpoint if path is provided
-        if checkpoint_path is not None and hasattr(training_config, 'checkpoint_frequency') and (epoch + 1) % training_config.checkpoint_frequency == 0:
-            checkpoint = {
+        # Save checkpoint if directory is provided
+        if checkpoint_dir is not None and (epoch + 1) % checkpoint_freq == 0:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pt")
+            
+            torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': epoch_loss,
-                'metrics': metrics
-            }
-            if scheduler is not None:
-                checkpoint['scheduler_state_dict'] = scheduler.state_dict()
-            
-            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-            torch.save(checkpoint, checkpoint_path)
-            logger.info(f"Saved checkpoint at epoch {epoch+1} to {checkpoint_path}")
-        
-        # Call callbacks if provided
-        if callbacks is not None:
-            for callback in callbacks:
-                callback(epoch=epoch, model=model, metrics=metrics)
-        
-        # Log progress
-        logger.info(f"Epoch {epoch+1}/{training_config.epochs}: "
-                   f"Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.2f}%, "
-                   f"LR: {current_lr:.6f}")
+                'train_loss': epoch_loss,
+                'train_accuracy': epoch_accuracy,
+                'val_loss': history['val_loss'][-1] if val_loader is not None else None,
+                'val_accuracy': history['val_accuracy'][-1] if val_loader is not None else None
+            }, checkpoint_file)
     
-    # Evaluate on validation set if available
-    if hasattr(dataset, 'val_loader') and dataset.val_loader is not None:
-        val_metrics = evaluate_model(
-            model,
-            dataset_config,
-            device=device,
-            loader_name='val_loader',
-            extra_config=extra_config
-        )
-        metrics.update({
-            'val_loss': val_metrics['loss'],
-            'val_accuracy': val_metrics['accuracy']
-        })
+    # Return training history if requested
+    if return_history:
+        return history
     
-    return metrics
+    # Return final model and optimizer for compatibility
+    return {
+        'model': model,
+        'optimizer': optimizer,
+        'final_loss': history['train_loss'][-1],
+        'final_accuracy': history['train_accuracy'][-1],
+        'val_loss': history['val_loss'][-1] if val_loader is not None else None,
+        'val_accuracy': history['val_accuracy'][-1] if val_loader is not None else None
+    }
 
 
 def evaluate_model(

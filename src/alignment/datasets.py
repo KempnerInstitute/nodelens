@@ -207,6 +207,80 @@ class DataSet(ABC):
             
         return torch.tensor(accuracy, device=outputs.device)
 
+    def get_loader(self, batch_size=None, num_batches=None):
+        """
+        Get a data loader for the dataset.
+        
+        Args:
+            batch_size: Batch size to use. Defaults to self.batch_size.
+            num_batches: Number of batches to include. If None, includes all batches.
+            
+        Returns:
+            DataLoader for the dataset.
+        """
+        if batch_size is None:
+            batch_size = self.dataloader_parameters['batch_size']
+            
+        loader = self.train_loader if self.train_loader else self.test_loader
+        
+        if num_batches is not None:
+            # Calculate total number of examples to use
+            total_examples = batch_size * num_batches
+            
+            # Create a subset of the dataset
+            subset = torch.utils.data.Subset(loader.dataset, range(min(total_examples, len(loader.dataset))))
+            
+            # Create a new loader with the subset
+            return torch.utils.data.DataLoader(subset, batch_size=batch_size, shuffle=False)
+        
+        return loader
+
+    def evaluate(self, model, device='cpu', num_batches=None):
+        """
+        Evaluate a model on the dataset.
+        
+        Args:
+            model: Model to evaluate.
+            device: Device to use for evaluation.
+            num_batches: Number of batches to evaluate on. If None, evaluates on all batches.
+            
+        Returns:
+            Tuple of (accuracy, loss).
+        """
+        model.eval()
+        
+        # Get data loader
+        loader = self.get_loader(num_batches=num_batches)
+        
+        # Set up metrics
+        correct = 0
+        total = 0
+        total_loss = 0.0
+        
+        # Evaluate
+        with torch.no_grad():
+            for inputs, targets in loader:
+                inputs = inputs.to(device)
+                targets = targets.to(device)
+                
+                # Forward pass
+                outputs = model(inputs)
+                loss = self.measure_loss(outputs, targets)
+                
+                # Calculate accuracy
+                _, predicted = outputs.max(1)
+                total += targets.size(0)
+                correct += (predicted == targets).sum().item()
+                
+                # Update loss
+                total_loss += loss.item()
+        
+        # Calculate metrics
+        accuracy = correct / total
+        avg_loss = total_loss / len(loader)
+        
+        return accuracy, avg_loss
+
 
 class MNIST(DataSet):
     def set_properties(self):

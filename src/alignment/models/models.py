@@ -74,11 +74,30 @@ class MLP(nn.Module):
         Forward pass of the MLP.
         
         Args:
-            x: Input tensor [batch_size, input_dim]
+            x: Input tensor [batch_size, input_dim] or [batch_size, channels, height, width]
             
         Returns:
             Output tensor [batch_size, output_dim]
         """
+        # Ensure input is flattened
+        if x.dim() > 2:
+            # If input is [batch_size, channels, height, width], flatten it
+            batch_size = x.size(0)
+            x = x.view(batch_size, -1)
+            
+            # Ensure the flattened dimension matches the expected input_dim
+            if x.size(1) != self.layers[0].in_features:
+                # Log a warning about dimension mismatch
+                logging.warning(
+                    f"Input dimension mismatch. Expected {self.layers[0].in_features}, "
+                    f"got {x.size(1)}. Adjusting to expected dimension."
+                )
+                # Calculate expected dimensions based on common image sizes
+                if self.layers[0].in_features == 784:  # MNIST (28x28)
+                    x = x.view(batch_size, -1)[:, :784]
+                elif self.layers[0].in_features == 3072:  # CIFAR (3x32x32)
+                    x = x.view(batch_size, -1)[:, :3072]
+        
         return self.layers(x)
 
 
@@ -92,7 +111,7 @@ class CNN2P2(nn.Module):
         fc1: First fully connected layer
         fc2: Last fully connected layer (output layer)
     """
-    
+
     def __init__(
         self,
         in_channels: int = 1,
@@ -110,7 +129,7 @@ class CNN2P2(nn.Module):
             dropout_rate: Dropout probability between fully connected layers
         """
         super().__init__()
-        
+
         # Default hidden dimensions if not provided
         if not isinstance(num_hidden, list) or len(num_hidden) < 2:
             num_hidden = [128, 64]
