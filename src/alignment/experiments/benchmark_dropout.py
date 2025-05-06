@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 from alignment.config import ExperimentConfig
 from alignment.models.registry import create_model
-from alignment.metrics import get_metric
+from Code.alignment.src.alignment.metrics_rem import get_metric
 from alignment.datasets import load_dataset
 from alignment.dropout import progressive_dropout
 from alignment import utils

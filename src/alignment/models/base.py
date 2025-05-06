@@ -5,20 +5,15 @@ import torch
 from torch import nn
 from tqdm import tqdm
 
-from alignment.utils import (
-    check_iterable,
-    get_maximum_strides,
-    weighted_average,
+from alignment.utils.core import check_iterable, to_numpy, to_tensor, ensure_device
+from alignment.utils.model_utils import (
     get_device,
-    remove_by_idx,
     set_net_mode,
+    get_maximum_strides,
     get_unfold_params,
-    smart_pca,
-)
-from alignment.models.layers import (
-    LAYER_REGISTRY,
-    REGISTRY_REQUIREMENTS,
-    check_metaparameters,
+    weighted_average,
+    remove_by_idx,
+    smart_pca
 )
 from alignment.alignment_metrics import AlignmentMetrics
 from alignment.alignment_metrics import alignment
@@ -313,7 +308,6 @@ class AlignmentNetwork(nn.Module):
         Returns:
             Tuple of (network output, hidden layer outputs)
         """
-        from alignment.utils import check_iterable
         assert check_iterable(idxs) and check_iterable(layers), "idxs & layers must be iterables with same length"
         assert len(idxs) == len(layers), "idxs and layers must be the same length"
         assert all([0 <= layer < len(self.alignment_layers) for layer in layers]), "invalid layer index"
@@ -400,7 +394,6 @@ class AlignmentNetwork(nn.Module):
 
     @torch.no_grad()
     def forward_eigenvector_dropout(self, x, eigenvalues, eigenvectors, idxs, layers):
-        from alignment.utils import check_iterable
         device = get_device(x)
         assert check_iterable(idxs) and check_iterable(layers), "idxs/layers must be iterables with the same length"
         assert len(idxs) == len(layers), "idxs and layers must be the same length"

@@ -2,7 +2,7 @@ import torch
 from alignment.models.registry import get_model
 from alignment import arglib
 from alignment import processing
-from alignment import plotting
+from Code.alignment.src.alignment import plotting_rem
 from alignment.experiments.experiment import Experiment
 
 
@@ -113,16 +113,16 @@ class AlignmentDistribution(Experiment):
         """
         main plotting loop
         """
-        plotting.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
-        plotting.plot_dropout_results(
+        plotting_rem.plot_train_results(self, results["train_results"], results["test_results"], results["prms"])
+        plotting_rem.plot_dropout_results(
             self,
             results["dropout_results"],
             results["dropout_parameters"],
             results["prms"],
             dropout_type="nodes",
         )
-        plotting.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
-        plotting.plot_dropout_results(
+        plotting_rem.plot_eigenfeatures(self, results["eigen_results"], results["prms"])
+        plotting_rem.plot_dropout_results(
             self,
             results["evec_dropout_results"],
             results["evec_dropout_parameters"],

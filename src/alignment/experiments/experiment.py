@@ -1,335 +1,282 @@
 """
-Base experiment module for alignment experiments.
+Base experiment class for alignment experiments.
 
-This module defines an abstract base class for all alignment experiments.
-This class provides common functionality for experiment lifecycle, checkpointing, 
-result handling and visualization.
+This module provides the foundation for all alignment experiments,
+handling common operations like configuration loading, checkpointing,
+and result management.
 """
 
-import os
-import sys
+import argparse
 import datetime
-import gc
-import glob
+import json
 import logging
+import os
 import pickle
-import shutil
+import random
+import sys
 import time
-import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
+import yaml
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from alignment.config import BaseConfig, ModelConfig
-from alignment.datasets import get_dataset
-from alignment.metrics import AlignmentMetric
-from alignment.models import create_model, get_model_constructor
-from alignment.training import evaluate_model, load_checkpoint, train_model
-from alignment.utils import (
-    get_git_revision_hash,
-    initialize_logger,
-    init_seed,
-    save_pickle,
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
+from alignment.config import Config
+from alignment.datasets import DataSet, load_dataset
+from alignment.models import load_model, load_model_family
+from Code.alignment.src.alignment.metrics_rem import get_metric
+
+# Update imports to use the new module structure
+from alignment.utils.core import (
     setup_logging,
+    timer,
+    debug,
+    to_numpy,
+    to_tensor,
+    check_iterable,
+    ensure_device,
+    timed
+)
+
+from alignment.utils.plotting import (
+    plot_dropout_results,
+    plot_experiment_summary,
+    plot_dropout_comparison,
+    log_plots_to_wandb
 )
 
 logger = logging.getLogger(__name__)
 
 
 class Experiment(ABC):
-    """Base class for all alignment experiments.
+    """Base class for all experiments."""
 
-    This class contains common functionality for:
-    - Experiment lifecycle management
-    - Checkpointing and storage
-    - Results handling and visualization
-
-    It is designed to be subclassed for specific experiment implementations.
-    Subclasses need to implement:
-    - get_basename: Provides a unique name for the experiment
-    - prepare_path: Creates any additional directories needed
-    - create_networks: Instantiates the neural networks
-    - main: Main experiment logic
-    - plot: Plotting functionality for experiment results
-    """
-
-    def __init__(
-        self,
-        config: BaseConfig,
-        device: Optional[Union[str, torch.device]] = None,
-        log_level: str = "INFO",
-    ):
-        """Initialize the experiment with the given configuration.
-
-        Args:
-            config: Configuration object containing experiment parameters
-            device: Device to run the experiment on. If None, use cuda if available
-            log_level: Logging level to use for this experiment
+    def __init__(self, config: Union[Dict, str, DictConfig], 
+                 working_dir: Optional[str] = None, 
+                 setup_logger: bool = True):
         """
-        self.config = config
-        self._resolved_device = None
-        if device is not None:
-            self.device = device
-        else:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        self.path = None
-        self.checkpoint_path = None
-        self.results_path = None
-        self.figure_path = None
-        self.timestamp = None
-        self.timestamp_history = []
-
-        # Setup logging
-        self.log_level = log_level
-        initialize_logger(self.log_level)
-
-    def report(self) -> Dict[str, Any]:
-        """Report experiment details.
-
-        Returns:
-            Dictionary with experiment details
-        """
-        return {
-            "config": self.config.to_dict() if self.config else {},
-            "timestamp": self.timestamp,
-            "timestamp_history": self.timestamp_history,
-            "git_hash": get_git_revision_hash(),
-        }
-
-    def register_timestamp(self) -> None:
-        """Register the current timestamp."""
-        self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.timestamp_history.append(self.timestamp)
-
-    @property
-    def device(self) -> torch.device:
-        """Get the current device.
-
-        Returns:
-            torch.device: The current device
-        """
-        return self._resolved_device
-
-    @device.setter
-    def device(self, device_str: Union[str, torch.device]) -> None:
-        """Set device and resolve to torch.device.
-
-        Args:
-            device_str: Device specification ('cuda', 'cpu', or torch.device)
-        """
-        if isinstance(device_str, torch.device):
-            self._resolved_device = device_str
-        else:
-            self._resolved_device = torch.device(device_str)
-
-        logger.info(f"Using device: {self._resolved_device}")
-
-    @abstractmethod
-    def get_basename(self) -> str:
-        """Get a unique basename for the experiment.
-
-        Returns:
-            String with a unique basename for the experiment
-        """
-        pass
-
-    def get_dir(self) -> str:
-        """Get the output directory for this experiment.
-
-        Returns:
-            Path to the output directory
-        """
-        if not self.timestamp:
-            self.register_timestamp()
-
-        # Use results_path from ExperimentConfig or output_dir from BaseConfig if available
-        output_dir = getattr(self.config, 'results_path', getattr(self.config, 'output_dir', 'results'))
+        Initialize an experiment.
         
-        return os.path.join(
-            output_dir,
-            self.get_basename(),
-            self.timestamp,
-        )
-
-    def setup_paths(self) -> Tuple[str, str, str, str]:
-        """Set up and create directories for the experiment.
-
-        Returns:
-            Tuple of (base_path, checkpoint_path, results_path, figure_path)
-        """
-        path = self.get_dir()
-        os.makedirs(path, exist_ok=True)
-
-        checkpoint_path = os.path.join(path, "checkpoints")
-        os.makedirs(checkpoint_path, exist_ok=True)
-
-        results_path = os.path.join(path, "results")
-        os.makedirs(results_path, exist_ok=True)
-
-        figure_path = os.path.join(path, "figures")
-        os.makedirs(figure_path, exist_ok=True)
-
-        self.path = path
-        self.checkpoint_path = checkpoint_path
-        self.results_path = results_path
-        self.figure_path = figure_path
-
-        logger.info(f"Created experiment directory: {path}")
-        logger.info(f"Checkpoint directory: {checkpoint_path}")
-        logger.info(f"Results directory: {results_path}")
-        logger.info(f"Figure directory: {figure_path}")
-
-        return path, checkpoint_path, results_path, figure_path
-
-    def prepare_path(self) -> None:
-        """Prepare additional directories if needed.
-
-        This method should be overridden by subclasses if they need
-        additional directories beyond the standard ones.
-        """
-        pass
-
-    def save(self, filename: str = "experiment.pkl") -> str:
-        """Save the experiment state.
-
         Args:
-            filename: Filename for the saved experiment
-
-        Returns:
-            Path to the saved experiment file
+            config: Configuration in dict, filepath, or omegaconf format
+            working_dir: Directory to store results in
+            setup_logger: Whether to set up logging
         """
-        if not self.path:
-            self.setup_paths()
-
-        save_path = os.path.join(self.path, filename)
-        with open(save_path, "wb") as f:
-            pickle.dump(self, f)
-
-        logger.info(f"Saved experiment to {save_path}")
-        return save_path
-
-    @staticmethod
-    def load(path: str) -> "Experiment":
-        """Load an experiment from a file.
-
-        Args:
-            path: Path to the saved experiment file
-
-        Returns:
-            Loaded experiment instance
-        """
-        with open(path, "rb") as f:
-            experiment = pickle.load(f)
-
-        logger.info(f"Loaded experiment from {path}")
-        return experiment
-
-    @abstractmethod
-    def create_networks(self) -> Dict[str, nn.Module]:
-        """Create the neural networks for this experiment.
-
-        Returns:
-            Dictionary mapping network names to nn.Module instances
-        """
-        pass
-
-    @abstractmethod
-    def main(self) -> Dict[str, Any]:
-        """Run the main experiment logic.
-
-        Returns:
-            Dictionary with experiment results
-        """
-        pass
-
-    def run(self) -> Dict[str, Any]:
-        """Run the entire experiment.
-
-        This method:
-        1. Sets up paths
-        2. Prepares any additional directories
-        3. Sets the random seed
-        4. Runs the main experiment logic
-        5. Saves the experiment state
-
-        Returns:
-            Dictionary with experiment results
-        """
-        self.setup_paths()
-        self.prepare_path()
-
-        # Initialize random seed if available
-        seed = getattr(self.config, 'seed', None)
-        if seed is None and hasattr(self.config, 'training') and hasattr(self.config.training, 'seed'):
-            seed = self.config.training.seed
+        self.start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Load configuration
+        if isinstance(config, str):
+            if os.path.isfile(config):
+                self.config = Config.load(config)
+                self.config_path = os.path.basename(config)
+            else:
+                raise ValueError(f"Config file {config} not found")
+        elif isinstance(config, (dict, DictConfig)):
+            self.config = Config.from_dict(config)
+            self.config_path = "config_dict"
+        else:
+            raise ValueError(f"Unsupported config type: {type(config)}")
             
-        if seed is not None:
-            init_seed(seed)
-            logger.info(f"Initialized random seed: {seed}")
-
-        results = self.main()
-        self.save()
-
-        return results
-
+        # Set up working directory
+        if working_dir is None:
+            # Default to a directory named with config and timestamp
+            base_name = self.get_basename()
+            timestamp = self.start_time
+            working_dir = os.path.join(
+                "results", f"{base_name}_{timestamp}"
+            )
+        
+        self.working_dir = working_dir
+        os.makedirs(self.working_dir, exist_ok=True)
+        
+        # Create subdirectories
+        self.checkpoint_path = os.path.join(self.working_dir, "checkpoints")
+        os.makedirs(self.checkpoint_path, exist_ok=True)
+        
+        self.output_path = os.path.join(self.working_dir, "outputs")
+        os.makedirs(self.output_path, exist_ok=True)
+        
+        self.figure_path = os.path.join(self.working_dir, "figures")
+        os.makedirs(self.figure_path, exist_ok=True)
+        
+        # Set up logging
+        if setup_logger:
+            log_file = os.path.join(self.working_dir, "experiment.log")
+            setup_logging(log_file=log_file, log_level=self.config.get("log_level", "INFO"))
+        
+        # Initialize random seeds
+        self._set_random_seeds()
+        
+        # Save config
+        self._save_config()
+        
+        # Set up WandB if requested
+        self._setup_wandb()
+        
+        logger.info(f"Initialized experiment in {self.working_dir}")
+    
+    def get_basename(self) -> str:
+        """Get a base name for the experiment derived from the config."""
+        if hasattr(self.config, "experiment_name"):
+            return self.config.experiment_name
+        elif hasattr(self, "config_path"):
+            return os.path.splitext(os.path.basename(self.config_path))[0]
+        else:
+            return "experiment"
+    
+    def _set_random_seeds(self) -> None:
+        """Set random seeds for reproducibility."""
+        seed = getattr(self.config, "seed", 42)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        logger.info(f"Set random seed to {seed}")
+    
+    def _save_config(self) -> None:
+        """Save the configuration to a file."""
+        config_path = os.path.join(self.working_dir, "config.yaml")
+        with open(config_path, "w") as f:
+            OmegaConf.save(self.config, f)
+        logger.info(f"Saved config to {config_path}")
+    
+    def _setup_wandb(self) -> None:
+        """Set up Weights & Biases for experiment tracking if configured."""
+        if not hasattr(self.config, "checkpointing") or not hasattr(self.config.checkpointing, "use_wandb"):
+            return
+            
+        if not self.config.checkpointing.use_wandb:
+            return
+            
+        if not WANDB_AVAILABLE:
+            logger.warning("wandb not installed, skipping wandb initialization")
+            return
+        
+        wandb_config = {
+            "experiment_name": getattr(self.config, "experiment_name", self.get_basename()),
+            "seed": getattr(self.config, "seed", 42),
+        }
+        
+        # Add other relevant config items
+        if hasattr(self.config, "model"):
+            wandb_config["model"] = OmegaConf.to_container(self.config.model)
+        if hasattr(self.config, "dataset"):
+            wandb_config["dataset"] = OmegaConf.to_container(self.config.dataset)
+        if hasattr(self.config, "training"):
+            wandb_config["training"] = OmegaConf.to_container(self.config.training)
+        
+        # Start WandB run
+        project_name = getattr(self.config.checkpointing, "wandb_project", "alignment")
+        entity = getattr(self.config.checkpointing, "wandb_entity", None)
+        
+        wandb.init(
+            project=project_name,
+            entity=entity,
+            config=wandb_config,
+            name=getattr(self.config, "experiment_name", None),
+            dir=self.working_dir,
+        )
+        
+        logger.info(f"Initialized WandB for project {project_name}")
+    
     @abstractmethod
-    def plot(self, results: Dict[str, Any]) -> List[plt.Figure]:
-        """Create plots for the experiment results.
-
-        Args:
-            results: Experiment results dictionary
-
+    def run(self) -> Dict[str, Any]:
+        """
+        Run the experiment.
+        
         Returns:
-            List of matplotlib figures
+            Dictionary of results
         """
         pass
-
-    def save_figure(
-        self, figure: plt.Figure, filename: str, close: bool = True
-    ) -> str:
-        """Save a figure to the figure directory.
-
+    
+    def save_results(self, results: Dict[str, Any], filename: str = "results.pkl") -> str:
+        """
+        Save experiment results to a file.
+        
         Args:
-            figure: Matplotlib figure to save
-            filename: Filename for the figure
-            close: Whether to close the figure after saving
-
+            results: Dictionary of results to save
+            filename: Name of the file to save to
+            
         Returns:
-            Path to the saved figure
+            Path to the saved file
         """
-        if not self.figure_path:
-            self.setup_paths()
-
-        filename = os.path.splitext(filename)[0]
-        filepath = os.path.join(self.figure_path, f"{filename}.png")
-        figure.savefig(filepath)
-
-        if close:
-            plt.close(figure)
-
-        logger.info(f"Saved figure to {filepath}")
+        filepath = os.path.join(self.output_path, filename)
+        
+        # Save as pickle for complete object serialization
+        with open(filepath, "wb") as f:
+            pickle.dump(results, f)
+        
+        # Also save as JSON for human readability if possible
+        try:
+            # Convert numpy arrays and tensors to lists
+            def convert_for_json(obj):
+                if isinstance(obj, (np.ndarray, np.number)):
+                    return obj.tolist()
+                elif isinstance(obj, torch.Tensor):
+                    return obj.detach().cpu().numpy().tolist()
+                elif isinstance(obj, dict):
+                    return {k: convert_for_json(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_for_json(item) for item in obj]
+                elif isinstance(obj, tuple):
+                    return tuple(convert_for_json(item) for item in obj)
+                else:
+                    return obj
+            
+            json_results = convert_for_json(results)
+            json_path = os.path.join(self.output_path, f"{os.path.splitext(filename)[0]}.json")
+            with open(json_path, "w") as f:
+                json.dump(json_results, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save results as JSON: {str(e)}")
+        
+        logger.info(f"Saved results to {filepath}")
         return filepath
-        
-    def plot_ready(self, filename: str) -> None:
-        """Finalize and save the current matplotlib figure.
-        
-        This method is provided for backward compatibility with existing
-        plotting utilities that expect an Experiment object with a plot_ready method.
-        It gets the current figure and saves it using save_figure.
+    
+    def load_results(self, filename: str = "results.pkl") -> Dict[str, Any]:
+        """
+        Load experiment results from a file.
         
         Args:
-            filename: Name of the file to save the figure as
+            filename: Name of the file to load from
+            
+        Returns:
+            Dictionary of results
         """
+        filepath = os.path.join(self.output_path, filename)
+        
+        if not os.path.isfile(filepath):
+            raise ValueError(f"Results file {filepath} not found")
+        
+        with open(filepath, "rb") as f:
+            results = pickle.load(f)
+        
+        logger.info(f"Loaded results from {filepath}")
+        return results
+    
+    def cleanup(self) -> None:
+        """Clean up resources used by the experiment."""
+        # Close WandB if it was used
+        if hasattr(self.config, "checkpointing") and hasattr(self.config.checkpointing, "use_wandb"):
+            if self.config.checkpointing.use_wandb and WANDB_AVAILABLE and wandb.run is not None:
+                wandb.finish()
+        
+        logger.info("Experiment cleanup complete")
+    
+    def __del__(self) -> None:
+        """Destructor to ensure cleanup."""
         try:
-            figure = plt.gcf()  # Get current figure
-            self.save_figure(figure, filename)
-        except Exception as e:
-            logger.error(f"Error in plot_ready: {str(e)}", exc_info=True) 
+            self.cleanup()
+        except:
+            pass 

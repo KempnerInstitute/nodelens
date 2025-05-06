@@ -42,12 +42,12 @@ training:
   
 # Checkpointing configuration
 checkpointing:
-  save_checkpoints: false # Whether to save training checkpoints to disk
+  save_checkpoints: true # Whether to save training checkpoints to disk
   checkpoint_frequency: 1 # How often to save checkpoints (in epochs, 1 means every epoch)
   use_wandb: true # Whether to use Weights & Biases for experiment tracking and visualization
   load_checkpoint: false # Whether to load from previous checkpoint (for resuming training)
   save_model: true
-  save_interval: 5
+  save_interval: 1
   
 # Alignment analysis configuration
 alignment:
@@ -65,7 +65,12 @@ extra:
   dropout_pruning_mode: "cascading_layer" # How pruning is distributed (options: "global_joint", "layer_wise", "layer_isolated", "cascading_layer")
   exclude_classification_layer: true # Whether to exclude the output layer from pruning (usually true for classification tasks)
   cnn_mode: "unfold" # How CNN features are processed for alignment (options: "unfold", "patchwise", "batch_patch_combined")
-  track_metrics: ["accuracy", "loss", "alignment"]
+  track_metrics: ["accuracy", "loss", "alignment", "time"]
+  log_frequency: 1 # How often to log metrics (in epochs)
+  log_images: true # Whether to log images to wandb
+  detailed_logging: true # Enable detailed metric logging
   
 # Experiment name for identification
-experiment_name: "cascading_layer_pruning_test" # Used for identifying this experiment in logs, result directories, and visualizations 
+experiment_name: "cascading_layer_pruning_test" # Used for identifying this experiment in logs, result directories, and visualizations
+wandb_project: "neural_alignment" # Weights & Biases project name
+wandb_entity: null # Weights & Biases entity (team or username), set to null for default 
