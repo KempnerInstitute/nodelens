@@ -1,19 +1,31 @@
 """
 Alignment metrics for neural network analysis.
 
+DEPRECATED: This module is deprecated and will be removed in a future version.
+Please import directly from `alignment.metrics` instead.
+
 This module provides various metrics for measuring alignment between weight vectors
 and activation vectors, including RQ (representation quality), MI (mutual information),
 and other metrics for analyzing neural network representations.
 """
 
+import warnings
 import torch
 import numpy as np
 from typing import Dict, List, Tuple, Union, Optional, Callable
 
+# Show deprecation warning when the module is imported
+warnings.warn(
+    "The alignment.alignment_metrics module is deprecated and will be removed in a future version. "
+    "Please import directly from alignment.metrics instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
+# Original classes for backward compatibility
 class AlignmentMetricBase:
     """Base class for all alignment metrics."""
-    
+
     @staticmethod
     def measure(inputs: torch.Tensor, weights: torch.Tensor, **kwargs) -> torch.Tensor:
         """
@@ -37,7 +49,7 @@ class AlignmentMetricBase:
 
 class RQMetric(AlignmentMetricBase):
     """Representation Quality (RQ) alignment metric."""
-    
+
     @staticmethod
     def measure(inputs: torch.Tensor, weights: torch.Tensor, 
                 relative: bool = True, epsilon: float = 1e-8, **kwargs) -> torch.Tensor:
@@ -86,7 +98,7 @@ class RQMetric(AlignmentMetricBase):
 
 class MIMetric(AlignmentMetricBase):
     """Mutual Information (MI) alignment metric."""
-    
+
     @staticmethod
     def measure(inputs: torch.Tensor, weights: torch.Tensor, 
                bins: int = 50, epsilon: float = 1e-8, **kwargs) -> torch.Tensor:
@@ -127,7 +139,7 @@ class MIMetric(AlignmentMetricBase):
 
 class WeightSimilarityMetric(AlignmentMetricBase):
     """Measures similarity between weight vectors."""
-    
+
     @staticmethod
     def measure(inputs: torch.Tensor, weights: torch.Tensor, 
                metric: str = "cosine", **kwargs) -> torch.Tensor:
@@ -158,7 +170,7 @@ class WeightSimilarityMetric(AlignmentMetricBase):
 
 class NodeRedundancyMetric(AlignmentMetricBase):
     """Measures redundancy between nodes."""
-    
+
     @staticmethod
     def measure(inputs: torch.Tensor, weights: torch.Tensor, **kwargs) -> torch.Tensor:
         """

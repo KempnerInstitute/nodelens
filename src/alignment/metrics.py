@@ -3,10 +3,12 @@ Alignment metrics for neural network analysis.
 
 This module provides metrics for measuring alignment between weight matrices 
 and input activations, with various metrics to quantify the degree of alignment.
+It also supports node-wise scoring for pruning and other experiments.
 """
 
 import torch
 import numpy as np
+import torch.nn.functional as F
 from typing import Dict, List, Tuple, Union, Optional, Any, Callable
 
 from alignment.alignment_metrics import (
@@ -24,17 +26,20 @@ class AlignmentMetric:
     """
     Base class for alignment metrics.
     
-    This class provides a standardized interface for alignment metrics.
+    This class provides a standardized interface for alignment metrics,
+    including support for node-wise scoring for pruning experiments.
     """
     
-    def __init__(self, name: str = "RQ"):
+    def __init__(self, name: str = "RQ", scale_by_norm: bool = False):
         """
         Initialize alignment metric.
         
         Args:
             name: Name of the alignment metric to use
+            scale_by_norm: Whether to scale the covariance or final measure by norm
         """
         self.name = name
+        self.scale_by_norm = scale_by_norm
         
     def measure(self, 
                 activations: List[torch.Tensor], 
@@ -107,6 +112,114 @@ class AlignmentMetric:
             results.append(result.item())
         
         return results
+        
+    def compute_per_node_scores(
+        self,
+        layer_input: torch.Tensor,   # shape (N, input_dim) or with conv flattening
+        layer_weights: torch.Tensor, # shape (num_nodes, input_dim)
+        device: Optional[torch.device] = None
+    ) -> torch.Tensor:
+        """
+        Compute a per-node alignment score for each node's weight vector w_i.
+
+        Return shape: (num_nodes,).
+
+        For RQ:
+            RQ_i = (w_i^T Cov(X) w_i) / (w_i^T w_i), optionally scaled or adjusted.
+        For MI_x:
+            Possibly an alternate measure.
+
+        Args:
+            layer_input: 2D tensor of shape (N, input_dim) with the data
+            layer_weights: 2D tensor (#nodes, input_dim)
+            device: PyTorch device to ensure everything is on the correct device
+
+        Returns:
+            A 1D tensor (#nodes,) of alignment scores
+        """
+        if device is None:
+            device = layer_input.device
+
+        # Basic checks
+        if layer_input.dim() != 2:
+            # For CNN, you might have already flattened each patch or done an "unfold"
+            # If not, do so here or raise an error:
+            raise ValueError(f"layer_input must be 2D, got shape {layer_input.shape}")
+
+        # Move weights if not on the same device
+        layer_weights = layer_weights.to(device)
+
+        # Depending on the metric name, do your computation:
+        if self.name.upper() == "RQ":
+            return self._compute_rq(layer_input, layer_weights, device)
+        elif self.name.upper().startswith("MI"):
+            return self._compute_mi_placeholder(layer_input, layer_weights, device)
+        else:
+            # Default fallback => just do RQ
+            return self._compute_rq(layer_input, layer_weights, device)
+            
+    def _compute_rq(
+        self,
+        X: torch.Tensor,            # shape (N, input_dim)
+        W: torch.Tensor,            # shape (num_nodes, input_dim)
+        device: torch.device
+    ) -> torch.Tensor:
+        """
+        Compute Rayleigh Quotient per node.
+
+        RQ_i = (w_i^T Cov(X) w_i) / (w_i^T w_i)
+        where Cov(X) is the sample covariance of X. If scale_by_norm is True,
+        we might also scale Cov(X) or the final RQ_i.
+
+        Args:
+            X: input data
+            W: weight matrix
+        Returns:
+            shape (#nodes,)
+        """
+        # Center the input
+        N = X.size(0)
+        if N < 2:
+            # fallback if dataset is extremely small
+            return torch.zeros(W.size(0), device=device)
+
+        X_centered = X - X.mean(dim=0, keepdim=True)
+        # sample covariance => (input_dim x input_dim)
+        cov_x = (X_centered.t() @ X_centered) / (N - 1)
+
+        # Possibly scale
+        if self.scale_by_norm:
+            norm_val = cov_x.norm(p=2)
+            if norm_val > 1e-12:
+                cov_x = cov_x / norm_val
+
+        # W shape (#nodes, input_dim)
+        # Let's do a row-by-row RQ:
+        w_norm_sq = (W * W).sum(dim=1)  # (#nodes,)
+        wCov = W @ cov_x               # (#nodes, input_dim)
+        numerator = (wCov * W).sum(dim=1)  # dot with W row wise => (#nodes,)
+
+        eps = 1e-12
+        rq_scores = numerator / (w_norm_sq + eps)
+        return rq_scores
+
+    def _compute_mi_placeholder(
+        self,
+        X: torch.Tensor,
+        W: torch.Tensor,
+        device: torch.device
+    ) -> torch.Tensor:
+        """
+        Placeholder for a mutual-information-like measure, or some custom measure.
+        For demonstration, let's just do a log(1 + abs(RQ)) or something.
+
+        In practice, you'd implement the actual per-node MI measure.
+        """
+        # We'll reuse the RQ as a base, then transform:
+        rq_scores = self._compute_rq(X, W, device)
+        # Suppose we define MI_i = log(1 + |RQ_i|)
+        mi_scores = torch.log(1.0 + rq_scores.abs())
+        return mi_scores
 
 
 class RankAlignmentMetric(AlignmentMetric):
@@ -195,31 +308,22 @@ class NullSpaceAlignmentMetric(AlignmentMetric):
         return results
 
 
-def get_metric(name: str) -> AlignmentMetric:
+def get_metric(name: str, scale_by_norm: bool = False) -> AlignmentMetric:
     """
     Get alignment metric by name.
     
     Args:
-        name: Name of the metric ('RQ', 'rank', 'null_space', etc.)
+        name: Name of the metric ('RQ', 'MI', 'rank', 'null_space', etc.)
+        scale_by_norm: Whether to scale the covariance or final measure by norm
         
     Returns:
         AlignmentMetric instance
-        
-    Raises:
-        ValueError: If metric name is not recognized
     """
     name = name.lower()
     
-    if name == 'rq':
-        return AlignmentMetric(name="RQ")
-    elif name == 'rank':
+    if name == 'rank':
         return RankAlignmentMetric()
     elif name == 'null_space':
         return NullSpaceAlignmentMetric()
-    elif name == 'class_separation':
-        return AlignmentMetric(name="class_separation")
     else:
-        # Default to RQ with a warning
-        import warnings
-        warnings.warn(f"Unknown metric '{name}', defaulting to 'RQ'")
-        return AlignmentMetric(name="RQ") 
+        return AlignmentMetric(name=name, scale_by_norm=scale_by_norm) 

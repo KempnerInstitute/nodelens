@@ -3,7 +3,7 @@
 # that analyze the relationship between alignment, dropout, and network performance.
 
 # Experiment metadata
-experiment_type: "progressive_dropout" # Type of experiment to run (options: "alignment", "progressive_dropout", "eigenvector_dropout")
+experiment_type: "alignment" # Type of experiment to run (options: "alignment", "training", "analysis")
 results_path: "results" # Base path for saving results (can be relative or absolute path)
 use_timestamp: true # Whether to include timestamp in result paths for unique experiment tracking
 
@@ -17,55 +17,43 @@ show_all: false # Whether to display all plots during execution (vs. just saving
 # Dataset configuration
 dataset:
   dataset_name: "MNIST" # Name of the dataset to use (options: "MNIST", "CIFAR10", "CIFAR100")
-  data_path: "data" # Path to dataset files
+  data_path: "/n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/data" # Path to dataset files
   batch_size: 1024 # Batch size for training and evaluation (higher values use more memory but train faster)
-  num_workers: 4
 
 # Model configuration
 model:
   model_name: "MLP" # Model architecture to use (options: "MLP", "CNN2P2", "alexnet")
-  input_dim: 784
-  hidden_dims: [100, 100]
-  activation: "relu"
-  dropout: 0.0
-  output_dim: 10
-  bias: true
+  dropout_rate: 0.0 # Base dropout rate during training (range: 0.0-1.0, 0.0 means no dropout)
+  alignment_layers: null # Layers to measure alignment on (null for all layers, or specify as [0,1,2])
 
 # Training configuration
 training:
-  epochs: 10 # Number of training epochs (more epochs can improve performance but take longer)
-  replicates: 10 # Number of network replicates to run for statistical analysis
-  optimizer: "adam" # Optimizer to use (options: "Adam", "SGD", "RMSprop")
-  learning_rate: 0.001 # Learning rate for optimizer (typical range: 1e-4 to 1e-2)
-  momentum: 0.9
-  loss: "cross_entropy"
+  epochs: 5 # Number of training epochs (more epochs can improve performance but take longer)
+  replicates: 10 # Number of network replicates to train (for statistical analysis)
+  optimizer: "Adam" # Optimizer to use (options: "Adam", "SGD", "RMSprop")
+  learning_rate: 1.0e-3 # Learning rate for optimizer (typical range: 1e-4 to 1e-2)
+  weight_decay: 0.0 # L2 regularization strength (higher values prevent overfitting)
   
 # Checkpointing configuration
 checkpointing:
-  save_checkpoints: false # Whether to save training checkpoints to disk
+  save_checkpoints: true # Whether to save training checkpoints to disk
   checkpoint_frequency: 1 # How often to save checkpoints (in epochs, 1 means every epoch)
   use_wandb: true # Whether to use Weights & Biases for experiment tracking and visualization
   load_checkpoint: false # Whether to load from previous checkpoint (for resuming training)
-  save_model: true
-  save_interval: 5
   
 # Alignment analysis configuration
 alignment:
-  metric: "rq" # Alignment metric to use (options: "RQ", "NullSpace", "Delta", "R2")
+  metric: "RQ" # Alignment metric to use (options: "RQ", "NullSpace", "Delta", "R2")
   run_progressive: true # Whether to run progressive dropout experiment (node pruning)
-  run_eigenvector: false # Whether to run eigenvector dropout experiment (feature pruning)
+  run_eigenvector: true # Whether to run eigenvector dropout experiment (feature pruning based on PCA components)
   dropout_min: 0.0 # Minimum dropout fraction to test (range: 0.0-1.0)
-  dropout_max: 0.9 # Maximum dropout fraction to test (range: 0.0-1.0, <1.0 to avoid complete dropout)
-  dropout_steps: 20 # Number of steps for testing dropout fractions
+  dropout_max: 0.95 # Maximum dropout fraction to test (range: 0.0-1.0, <1.0 to avoid complete dropout)
+  dropout_steps: 20 # Number of dropout fractions to test (more steps = higher resolution but slower)
   scale_by_norm: false # Whether to scale covariance matrices by norm (can improve numerics)
 
 # Extra configuration parameters
 extra:
   dropout_mode: "scaled" # How dropout is applied (options: "scaled" = multiply by 1/(1-p), "unscaled" = no scaling)
-  dropout_pruning_mode: "cascading_layer" # How pruning is distributed (options: "global_joint", "layer_wise", "layer_isolated", "cascading_layer")
+  dropout_pruning_mode: "global" # How pruning is distributed (options: "global" = across all neurons, "per_layer" = layer-by-layer, "per_layer_combined" = combination)
   exclude_classification_layer: true # Whether to exclude the output layer from pruning (usually true for classification tasks)
-  cnn_mode: "unfold" # How CNN features are processed for alignment (options: "unfold", "patchwise", "batch_patch_combined")
-  track_metrics: ["accuracy", "loss", "alignment"]
-  
-# Experiment name for identification
-experiment_name: "cascading_layer_pruning_test" # Used for identifying this experiment in logs, result directories, and visualizations 
+  cnn_mode: "unfold" # How CNN features are processed for alignment (options: "unfold", "patchwise", "batch_patch_combined") 
