@@ -1,11 +1,15 @@
 """
 Plotting utilities for visualization of experiment results.
 
+DEPRECATED: This module is kept for backward compatibility.
+Please use alignment.utils.plotting instead.
+
 This module provides functions for visualizing experimental results from
 alignment studies, including progressive dropout analysis with different
 pruning strategies and other alignment metrics.
 """
 
+import warnings
 import logging
 import math
 import os
@@ -20,6 +24,22 @@ import seaborn as sns
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 
+# Import the new modules for re-export
+from alignment.utils.plotting import (
+    plot_dropout_results,
+    plot_experiment_summary,
+    plot_dropout_comparison,
+    log_plots_to_wandb
+)
+
+# Show deprecation warning on import
+warnings.warn(
+    "The alignment.plotting module is deprecated and will be removed in a future version. "
+    "Please use alignment.utils.plotting instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 logger = logging.getLogger(__name__)
 
 # Set default figure size
@@ -29,300 +49,86 @@ plt.rcParams["figure.dpi"] = 120
 
 
 def plot_pruning_experiments(
-    results: Dict[str, Dict[str, List[Tuple[float, float]]]],
-    metric_names: Dict[str, str],
-    output_dir: str,
-    filename_prefix: str = "dropout",
-    separate_plots: bool = False,
-    title_suffix: str = "",
-    ylim: Optional[Tuple[float, float]] = None,
-    fig_size: Tuple[int, int] = (10, 6),
-) -> List[Figure]:
+    results: Dict[str, Any],
+    figure_path: Optional[str] = None,
+    title_prefix: str = "Progressive Dropout",
+) -> List[str]:
     """
-    Plot accuracy vs. prune fraction for different metrics and strategies.
+    Plot results from pruning experiments.
+    
+    DEPRECATED: Use plot_dropout_results in alignment.utils.plotting instead.
     
     Args:
-        results: Dict[metric_name, Dict[strategy, [(prune_fraction, accuracy)]]]
-        metric_names: Names to display for each metric
-        output_dir: Directory to save plots
-        filename_prefix: Prefix for filename
-        separate_plots: If True, create separate plots for each metric
-        title_suffix: Additional text to append to plot title
-        ylim: Optional y-axis limits
-        fig_size: Figure size (width, height) in inches
+        results: Dictionary of results
+        figure_path: Path to save figures
+        title_prefix: Prefix for plot titles
         
     Returns:
-        List of created figures
+        List of saved figure paths
     """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    if separate_plots:
-        return _plot_separate_figures(
-            results, metric_names, output_dir, filename_prefix, 
-            title_suffix, ylim, fig_size
-        )
-    else:
-        return _plot_combined_figure(
-            results, metric_names, output_dir, filename_prefix, 
-            title_suffix, ylim, fig_size
-        )
-
-
-def _plot_combined_figure(
-    results: Dict[str, Dict[str, List[Tuple[float, float]]]],
-    metric_names: Dict[str, str],
-    output_dir: str,
-    filename_prefix: str,
-    title_suffix: str,
-    ylim: Optional[Tuple[float, float]],
-    fig_size: Tuple[int, int],
-) -> List[Figure]:
-    """
-    Create a combined plot with all metrics and strategies.
-    """
-    # Define colors and markers for different strategies
-    colors = {
-        "random": "gray",
-        "high_rq": "green",
-        "low_rq": "red",
-        "high_mi": "blue",
-        "low_mi": "purple",
-    }
+    warnings.warn(
+        "plot_pruning_experiments is deprecated. Use plot_dropout_results instead.",
+        DeprecationWarning, 
+        stacklevel=2
+    )
     
-    markers = {
-        "random": "o",
-        "high_rq": "^",
-        "low_rq": "v",
-        "high_mi": "s",
-        "low_mi": "D",
-    }
+    # Extract pruning and dropout modes
+    pruning_mode = results.get("pruning_mode", "global_joint")
+    dropout_mode = results.get("dropout_mode", "global")
     
-    # Create figure
-    fig, ax = plt.subplots(figsize=fig_size)
+    # Map old modes to new ones
+    if pruning_mode == "global":
+        pruning_mode = "global_joint"
+    elif pruning_mode == "per_layer_combined":
+        pruning_mode = "layer_wise"
+    elif pruning_mode == "per_layer_independent":
+        pruning_mode = "layer_isolated"
     
-    # Plot each metric and strategy
-    for metric_name, strategies in results.items():
-        for strategy, data_points in strategies.items():
-            # Extract x and y values
-            x = [point[0] for point in data_points]
-            y = [point[1] for point in data_points]
-            
-            # Get display name
-            display_name = f"{metric_names.get(metric_name, metric_name)} {strategy}"
-            
-            # Get color and marker
-            color = colors.get(strategy, "black")
-            marker = markers.get(strategy, ".")
-            
-            # Plot
-            ax.plot(x, y, marker=marker, label=display_name, color=color)
-    
-    # Set title and labels
-    title = f"Accuracy vs. Prune Fraction{title_suffix}"
-    ax.set_title(title)
-    ax.set_xlabel("Prune Fraction")
-    ax.set_ylabel("Accuracy (%)")
-    
-    # Set y-axis limits if specified
-    if ylim is not None:
-        ax.set_ylim(ylim)
-    
-    # Add grid
-    ax.grid(True, linestyle="--", alpha=0.7)
-    
-    # Add legend
-    ax.legend()
-    
-    # Save figure
-    filename = f"{filename_prefix}_combined.png"
-    filepath = os.path.join(output_dir, filename)
-    fig.savefig(filepath, bbox_inches="tight")
-    
-    logger.info(f"Saved combined plot to {filepath}")
-    
-    return [fig]
-
-
-def _plot_separate_figures(
-    results: Dict[str, Dict[str, List[Tuple[float, float]]]],
-    metric_names: Dict[str, str],
-    output_dir: str,
-    filename_prefix: str,
-    title_suffix: str,
-    ylim: Optional[Tuple[float, float]],
-    fig_size: Tuple[int, int],
-) -> List[Figure]:
-    """
-    Create separate plots for each metric.
-    """
-    # Define colors and markers for different strategies
-    colors = {
-        "random": "gray",
-        "high_rq": "green",
-        "low_rq": "red",
-        "high_mi": "blue",
-        "low_mi": "purple",
-    }
-    
-    markers = {
-        "random": "o",
-        "high_rq": "^",
-        "low_rq": "v",
-        "high_mi": "s",
-        "low_mi": "D",
-    }
-    
-    figures = []
-    
-    # Create a separate plot for each metric
-    for metric_name, strategies in results.items():
-        fig, ax = plt.subplots(figsize=fig_size)
-        
-        # Plot each strategy
-        for strategy, data_points in strategies.items():
-            # Extract x and y values
-            x = [point[0] for point in data_points]
-            y = [point[1] for point in data_points]
-            
-            # Get display name
-            display_name = strategy
-            
-            # Get color and marker
-            color = colors.get(strategy, "black")
-            marker = markers.get(strategy, ".")
-            
-            # Plot
-            ax.plot(x, y, marker=marker, label=display_name, color=color)
-        
-        # Set title and labels
-        metric_display = metric_names.get(metric_name, metric_name)
-        title = f"{metric_display}: Accuracy vs. Prune Fraction{title_suffix}"
-        ax.set_title(title)
-        ax.set_xlabel("Prune Fraction")
-        ax.set_ylabel("Accuracy (%)")
-        
-        # Set y-axis limits if specified
-        if ylim is not None:
-            ax.set_ylim(ylim)
-        
-        # Add grid
-        ax.grid(True, linestyle="--", alpha=0.7)
-        
-        # Add legend
-        ax.legend()
-        
-        # Save figure
-        filename = f"{filename_prefix}_{metric_name}.png"
-        filepath = os.path.join(output_dir, filename)
-        fig.savefig(filepath, bbox_inches="tight")
-        
-        logger.info(f"Saved {metric_name} plot to {filepath}")
-        
-        figures.append(fig)
-    
-    return figures
+    # Call the new function
+    return plot_dropout_results(
+        results,
+        figure_path=figure_path,
+        pruning_mode=pruning_mode,
+        dropout_mode=dropout_mode,
+        title_prefix=title_prefix
+    )
 
 
 def plot_per_layer_independent(
-    results: Dict[str, Dict[int, Tuple[float, float]]],
-    layer_names: Optional[Dict[int, str]] = None,
-    output_dir: str = ".",
-    filename_prefix: str = "per_layer",
-    title_suffix: str = "",
-    ylim: Optional[Tuple[float, float]] = None,
-    fig_size: Tuple[int, int] = (12, 8),
-) -> List[Figure]:
+    results: Dict[str, Any],
+    figure_path: Optional[str] = None,
+    title_prefix: str = "Per-Layer Independent Pruning",
+) -> List[str]:
     """
-    Plot accuracy when pruning each layer independently.
+    Plot results from per-layer independent pruning.
+    
+    DEPRECATED: Use plot_dropout_results with pruning_mode="layer_isolated" instead.
     
     Args:
-        results: Dict[metric_name, Dict[layer_idx, (prune_fraction, accuracy)]]
-        layer_names: Optional mapping of layer indices to display names
-        output_dir: Directory to save plots
-        filename_prefix: Prefix for filename
-        title_suffix: Additional text to append to plot title
-        ylim: Optional y-axis limits
-        fig_size: Figure size (width, height) in inches
+        results: Dictionary of results
+        figure_path: Path to save figures
+        title_prefix: Prefix for plot titles
         
     Returns:
-        List of created figures
+        List of saved figure paths
     """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    warnings.warn(
+        "plot_per_layer_independent is deprecated. Use plot_dropout_results with pruning_mode='layer_isolated' instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     
-    # Define colors for different metrics
-    colors = {
-        "random": "gray",
-        "rq": "green",
-        "mi": "blue",
-        "high_rq": "green",
-        "low_rq": "red",
-        "high_mi": "blue", 
-        "low_mi": "purple",
-    }
+    # Force pruning mode to be layer_isolated (formerly per_layer_independent)
+    results["pruning_mode"] = "layer_isolated"
     
-    # Create figure
-    fig, ax = plt.subplots(figsize=fig_size)
-    
-    # For each metric, create a grouped bar chart
-    metrics = list(results.keys())
-    num_metrics = len(metrics)
-    
-    # Get all unique layer indices
-    all_layers = set()
-    for metric_data in results.values():
-        all_layers.update(metric_data.keys())
-    all_layers = sorted(all_layers)
-    
-    # Bar width and positions
-    bar_width = 0.8 / num_metrics
-    
-    # Plot each metric
-    for i, metric_name in enumerate(metrics):
-        layer_results = results[metric_name]
-        
-        # Positions of the bars
-        positions = np.arange(len(all_layers)) + (i - num_metrics/2 + 0.5) * bar_width
-        
-        # Heights of the bars (accuracies)
-        heights = [layer_results.get(layer_idx, (0, 0))[1] for layer_idx in all_layers]
-        
-        # Plot bars
-        color = colors.get(metric_name, "black")
-        ax.bar(positions, heights, bar_width, label=metric_name, color=color, alpha=0.7)
-    
-    # Set x-axis ticks and labels
-    if layer_names is None:
-        layer_names = {idx: f"Layer {idx}" for idx in all_layers}
-        
-    ax.set_xticks(np.arange(len(all_layers)))
-    ax.set_xticklabels([layer_names.get(idx, f"Layer {idx}") for idx in all_layers], rotation=45, ha="right")
-    
-    # Set title and labels
-    title = f"Per-Layer Pruning: Accuracy by Layer{title_suffix}"
-    ax.set_title(title)
-    ax.set_xlabel("Layer")
-    ax.set_ylabel("Accuracy (%)")
-    
-    # Set y-axis limits if specified
-    if ylim is not None:
-        ax.set_ylim(ylim)
-    
-    # Add grid
-    ax.grid(True, linestyle="--", alpha=0.5, axis="y")
-    
-    # Add legend
-    ax.legend()
-    
-    # Save figure
-    filename = f"{filename_prefix}_per_layer.png"
-    filepath = os.path.join(output_dir, filename)
-    fig.savefig(filepath, bbox_inches="tight")
-    
-    logger.info(f"Saved per-layer plot to {filepath}")
-    
-    return [fig]
+    # Call the main plotting function
+    return plot_dropout_results(
+        results,
+        figure_path=figure_path,
+        pruning_mode="layer_isolated",
+        dropout_mode=results.get("dropout_mode", "global"),
+        title_prefix=title_prefix
+    )
 
 
 def plot_dropout_results(

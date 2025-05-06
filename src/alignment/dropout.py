@@ -41,7 +41,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from alignment.metrics import AlignmentMetric
+from Code.alignment.src.alignment.metrics_rem import AlignmentMetric, get_metric
+from alignment.utils.metrics_utils import AlignmentMetricsFactory
 from alignment.datasets import DataSet
 
 logger = logging.getLogger(__name__)

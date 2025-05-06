@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 
-from alignment.metrics import AlignmentMetric, get_metric
+from Code.alignment.src.alignment.metrics_rem import AlignmentMetric, get_metric
 from alignment.datasets import load_dataset
 
 logger = logging.getLogger(__name__)

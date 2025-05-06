@@ -239,7 +239,16 @@ class ExtraConfig(BaseConfig):
     
     def validate(self) -> bool:
         """Validate extra configuration."""
-        if self.dropout_pruning_mode not in ["global", "per_layer_combined", "per_layer_independent"]:
+        valid_pruning_modes = [
+            # Original modes
+            "global", "per_layer_combined", "per_layer_independent",
+            # New names for backward compatibility
+            "global_joint", "layer_wise", "layer_isolated",
+            # New progressive pruning mode
+            "cascading_layer"
+        ]
+        
+        if self.dropout_pruning_mode not in valid_pruning_modes:
             raise ValueError(f"Invalid dropout pruning mode: {self.dropout_pruning_mode}")
             
         if self.dropout_mode not in ["scaled", "unscaled"]:
@@ -368,7 +377,16 @@ class ExtraArgs:
         if self.num_drops <= 0:
             raise ValueError(f"Number of drops must be positive, got {self.num_drops}")
             
-        if self.dropout_pruning_mode not in ["global", "per_layer_combined", "per_layer_independent"]:
+        valid_pruning_modes = [
+            # Original modes
+            "global", "per_layer_combined", "per_layer_independent",
+            # New names for backward compatibility
+            "global_joint", "layer_wise", "layer_isolated",
+            # New progressive pruning mode
+            "cascading_layer"
+        ]
+        
+        if self.dropout_pruning_mode not in valid_pruning_modes:
             raise ValueError(f"Invalid dropout pruning mode: {self.dropout_pruning_mode}")
             
         if self.dropout_mode not in ["scaled", "unscaled"]:
