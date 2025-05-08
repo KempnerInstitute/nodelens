@@ -15,6 +15,7 @@ import pickle
 import datetime
 import json
 import yaml
+import time
 
 import numpy as np
 import torch
@@ -51,9 +52,12 @@ class AlignmentExperiment(Experiment):
         """
         super().__init__(config)
         
+        # Initialize dataset_config to avoid reference errors
+        dataset_config = {}
+        
         # Make sure dataset_config has required fields to prevent loading errors
         if isinstance(self.config.dataset, dict):
-            dataset_config = self.config.dataset
+            dataset_config = self.config.dataset.copy()  # Use copy to avoid modifying original
             
             # Ensure consistent naming between dataset.name and dataset.dataset_name
             if "name" in dataset_config and "dataset_name" not in dataset_config:
@@ -71,6 +75,16 @@ class AlignmentExperiment(Experiment):
                     logger.warning("No dataset name provided in configuration. Using default: cifar10")
                     dataset_config["name"] = "cifar10"
                     dataset_config["dataset_name"] = "cifar10"
+        elif isinstance(self.config.dataset, str):
+            # Handle case where config.dataset is directly a string
+            dataset_config["name"] = self.config.dataset
+            dataset_config["dataset_name"] = self.config.dataset
+            logger.info(f"Using dataset name from string: {self.config.dataset}")
+        else:
+            # Default case if dataset config is neither dict nor string
+            logger.warning("No valid dataset configuration found. Using default: cifar10")
+            dataset_config["name"] = "cifar10"
+            dataset_config["dataset_name"] = "cifar10"
             
         logger.info(f"Using dataset: {dataset_config.get('name', 'unknown')}")
         
@@ -251,7 +265,7 @@ class AlignmentExperiment(Experiment):
             logger.error(f"Error loading dataset: {str(e)}")
             return {"error": f"Dataset configuration error: {str(e)}", "dropout_fractions": dropout_fractions}
         
-        # IMPORTANT: Train all networks at once before applying dropout
+        # Train all networks at once before applying dropout
         logger.info(f"Training {len(networks)} networks before applying progressive dropout")
         
         # Track training history for plotting
@@ -272,8 +286,7 @@ class AlignmentExperiment(Experiment):
             network.to(self.device)
             optimizers.append(torch.optim.Adam(network.parameters(), lr=learning_rate))
         
-        # Train all networks for each epoch - with progress bars
-        from tqdm import tqdm
+        # Train all networks in parallel across epochs
         epoch_pbar = tqdm(range(num_epochs), desc="Training epochs", position=0)
         for epoch in epoch_pbar:
             # Initialize epoch stats
@@ -282,28 +295,21 @@ class AlignmentExperiment(Experiment):
             epoch_test_loss = 0.0
             epoch_test_acc = 0.0
             
-            # Training phase
-            net_pbar = tqdm(enumerate(zip(networks, optimizers)), 
-                           desc=f"Epoch {epoch+1}/{num_epochs} networks", 
-                           total=len(networks), 
-                           position=1, 
-                           leave=False)
-                           
-            for network_idx, (network, optimizer) in net_pbar:
+            # Batch training - process all networks in parallel for each data batch
+            for net_idx, network in enumerate(networks):
                 network.train()
-                running_loss = 0.0
-                correct = 0
-                total = 0
+            
+            batch_pbar = tqdm(dataset.train_loader, desc=f"Epoch {epoch+1}/{num_epochs} batches", position=1, leave=False)
+            for inputs, targets in batch_pbar:
+                inputs, targets = inputs.to(self.device), targets.to(self.device)
                 
-                # Train on each batch
-                batch_pbar = tqdm(dataset.train_loader, 
-                                 desc=f"Network {network_idx+1}/{len(networks)}", 
-                                 position=2, 
-                                 leave=False)
-                                 
-                for inputs, targets in batch_pbar:
-                    inputs, targets = inputs.to(self.device), targets.to(self.device)
-                    
+                # Process each network with the same batch
+                batch_loss = 0.0
+                batch_correct = 0
+                batch_total = targets.size(0)
+                
+                # Train all networks on this batch in parallel
+                for net_idx, (network, optimizer) in enumerate(zip(networks, optimizers)):
                     # Zero the parameter gradients
                     optimizer.zero_grad()
                     
@@ -316,80 +322,68 @@ class AlignmentExperiment(Experiment):
                     optimizer.step()
                     
                     # Track statistics
-                    running_loss += loss.item()
+                    batch_loss += loss.item()
                     _, predicted = outputs.max(1)
-                    total += targets.size(0)
-                    correct += predicted.eq(targets).sum().item()
-                    
-                    # Update batch progress bar
-                    if total > 0:
-                        batch_pbar.set_postfix({
-                            'loss': running_loss / len(batch_pbar), 
-                            'acc': 100.0 * correct / total
-                        })
+                    batch_correct += predicted.eq(targets).sum().item()
                 
-                # Calculate network training statistics
-                if total > 0:
-                    network_train_loss = running_loss / len(dataset.train_loader)
-                    network_train_acc = 100.0 * correct / total
-                    
-                    # Accumulate for epoch average
-                    epoch_train_loss += network_train_loss
-                    epoch_train_acc += network_train_acc
-                    
-                    # Update network progress bar
-                    net_pbar.set_postfix({
-                        'train_loss': network_train_loss, 
-                        'train_acc': network_train_acc
-                    })
-                
-                # Evaluation phase
+                # Update batch progress bar with average across networks
+                avg_batch_loss = batch_loss / len(networks)
+                avg_batch_acc = 100.0 * batch_correct / (batch_total * len(networks))
+                batch_pbar.set_postfix({
+                    'loss': avg_batch_loss,
+                    'acc': avg_batch_acc
+                })
+            
+            # Evaluation phase - evaluate all networks in parallel
+            all_test_loss = 0.0
+            all_test_correct = 0
+            all_test_total = 0
+            
+            # Set all networks to eval mode
+            for network in networks:
                 network.eval()
-                test_correct = 0
-                test_total = 0
-                test_loss_sum = 0.0
-                
-                # Evaluation progress bar
-                eval_pbar = tqdm(dataset.test_loader, 
-                                desc=f"Evaluating network {network_idx+1}", 
-                                position=2, 
-                                leave=False)
-                                
-                with torch.no_grad():
-                    for inputs, targets in eval_pbar:
-                        inputs, targets = inputs.to(self.device), targets.to(self.device)
+            
+            # Evaluation progress bar
+            eval_pbar = tqdm(dataset.test_loader, desc=f"Evaluating networks", position=1, leave=False)
+            
+            with torch.no_grad():
+                for inputs, targets in eval_pbar:
+                    inputs, targets = inputs.to(self.device), targets.to(self.device)
+                    test_total = targets.size(0)
+                    all_test_total += test_total
+                    
+                    # Evaluate all networks on this batch
+                    batch_test_loss = 0.0
+                    batch_test_correct = 0
+                    
+                    for net_idx, network in enumerate(networks):
                         outputs = network(inputs)
                         
                         # Calculate loss
                         loss = torch.nn.functional.cross_entropy(outputs, targets, reduction='sum')
-                        test_loss_sum += loss.item()
+                        batch_test_loss += loss.item()
                         
                         # Calculate accuracy
                         _, predicted = outputs.max(1)
-                        test_total += targets.size(0)
-                        test_correct += predicted.eq(targets).sum().item()
-                        
-                        # Update eval progress bar
-                        if test_total > 0:
-                            eval_pbar.set_postfix({
-                                'test_loss': test_loss_sum / test_total, 
-                                'test_acc': 100.0 * test_correct / test_total
-                            })
-                
-                # Calculate network testing statistics
-                if test_total > 0:
-                    network_test_loss = test_loss_sum / test_total
-                    network_test_acc = 100.0 * test_correct / test_total
+                        batch_test_correct += predicted.eq(targets).sum().item()
                     
-                    # Accumulate for epoch average
-                    epoch_test_loss += network_test_loss
-                    epoch_test_acc += network_test_acc
+                    # Accumulate statistics
+                    all_test_loss += batch_test_loss
+                    all_test_correct += batch_test_correct
+                    
+                    # Update eval progress bar
+                    avg_test_loss = batch_test_loss / len(networks)
+                    avg_test_acc = 100.0 * batch_test_correct / (test_total * len(networks))
+                    eval_pbar.set_postfix({
+                        'test_loss': avg_test_loss,
+                        'test_acc': avg_test_acc
+                    })
             
             # Calculate and store epoch averages
-            epoch_train_loss /= len(networks)
-            epoch_train_acc /= len(networks)
-            epoch_test_loss /= len(networks)
-            epoch_test_acc /= len(networks)
+            epoch_train_loss = batch_loss / (len(dataset.train_loader) * len(networks))
+            epoch_train_acc = 100.0 * batch_correct / (len(dataset.train_loader) * targets.size(0) * len(networks))
+            epoch_test_loss = all_test_loss / all_test_total
+            epoch_test_acc = 100.0 * all_test_correct / all_test_total
             
             training_history['train_loss'].append(epoch_train_loss)
             training_history['train_acc'].append(epoch_train_acc)
@@ -427,14 +421,25 @@ class AlignmentExperiment(Experiment):
             # Define the strategies to run
             strategies = ["high_rq", "low_rq", "random"]
             
-            # Run each strategy separately with progress bars
-            strategy_pbar = tqdm(strategies, desc="Running pruning strategies", position=0)
-            for strategy in strategy_pbar:
-                strategy_pbar.set_description(f"Strategy: {strategy}")
-                
-                # Run progressive dropout with this strategy
-                network_accuracies, network_losses = progressive_dropout(
-                    networks,
+            # Track time for benchmarking
+            start_time = time.time()
+            logger.info(f"Running all pruning strategies in parallel for {len(networks)} networks")
+            
+            # Create copies of the networks for each strategy to avoid interference
+            strategy_networks = {}
+            for strategy in strategies:
+                strategy_networks[strategy] = [copy.deepcopy(net) for net in networks]
+            
+            # Process all strategies in parallel
+            all_results = {}
+            
+            # Run all strategies in parallel using multiprocessing
+            import concurrent.futures
+            
+            def run_strategy(strategy):
+                logger.info(f"Starting pruning with strategy: {strategy}")
+                return progressive_dropout(
+                    strategy_networks[strategy],
                     dataset,
                     dropout_fractions,
                     self.metric,
@@ -443,53 +448,64 @@ class AlignmentExperiment(Experiment):
                     dropout_mode=dropout_mode,
                     strategy=strategy
                 )
+            
+            # Use ThreadPoolExecutor to run strategies in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(strategies)) as executor:
+                # Submit all strategy jobs
+                future_to_strategy = {
+                    executor.submit(run_strategy, strategy): strategy 
+                    for strategy in strategies
+                }
                 
-                # Calculate averages and standard deviations across networks for this strategy
-                fraction_pbar = tqdm(range(len(dropout_fractions)), 
-                                  desc="Processing dropout fractions", 
-                                  position=1, 
-                                  leave=False)
-                                  
-                for fraction_idx in fraction_pbar:
-                    fraction_pbar.set_description(f"Fraction: {dropout_fractions[fraction_idx]:.2f}")
+                # Process results as they complete
+                for future in concurrent.futures.as_completed(future_to_strategy):
+                    strategy = future_to_strategy[future]
+                    try:
+                        network_accuracies, network_losses = future.result()
+                        all_results[strategy] = (network_accuracies, network_losses)
+                        logger.info(f"Completed {strategy} pruning strategy")
+                    except Exception as e:
+                        logger.error(f"Error in {strategy} pruning: {str(e)}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+            
+            # Process the results for all strategies
+            end_time = time.time()
+            logger.info(f"All pruning strategies completed in {end_time - start_time:.2f} seconds")
+            
+            # Calculate statistics for all strategies
+            for strategy in strategies:
+                if strategy in all_results:
+                    network_accuracies, network_losses = all_results[strategy]
                     
-                    # Collect results for this fraction across all networks
-                    fraction_accs = []
-                    fraction_losses = []
-                    
-                    for net_idx in network_accuracies:
-                        if fraction_idx < len(network_accuracies[net_idx]):
-                            fraction_accs.append(network_accuracies[net_idx][fraction_idx])
-                        if fraction_idx < len(network_losses[net_idx]):
-                            fraction_losses.append(network_losses[net_idx][fraction_idx])
-                    
-                    # Calculate statistics
-                    if fraction_accs:
-                        mean_acc = np.mean(fraction_accs)
-                        std_acc = np.std(fraction_accs)
-                        mean_loss = np.mean(fraction_losses) if fraction_losses else 0.0
+                    # Process results for this strategy
+                    for fraction_idx in range(len(dropout_fractions)):
+                        # Collect results for this fraction across all networks
+                        fraction_accs = []
+                        fraction_losses = []
                         
-                        # Add to appropriate strategy in results
-                        if fraction_idx >= len(final_results["accuracies"][strategy]):
+                        for net_idx in network_accuracies:
+                            if fraction_idx < len(network_accuracies[net_idx]):
+                                fraction_accs.append(network_accuracies[net_idx][fraction_idx])
+                            if fraction_idx < len(network_losses[net_idx]):
+                                fraction_losses.append(network_losses[net_idx][fraction_idx])
+                        
+                        # Calculate statistics
+                        if fraction_accs:
+                            mean_acc = np.mean(fraction_accs)
+                            std_acc = np.std(fraction_accs)
+                            mean_loss = np.mean(fraction_losses) if fraction_losses else 0.0
+                            
+                            # Add to results for this strategy
                             final_results["accuracies"][strategy].append(mean_acc)
                             final_results["stds"][strategy].append(std_acc)
                             final_results["losses"][strategy].append(mean_loss)
-                        else:
-                            # Update existing value (shouldn't happen with our current code)
-                            final_results["accuracies"][strategy][fraction_idx] = mean_acc
-                            final_results["stds"][strategy][fraction_idx] = std_acc
-                            final_results["losses"][strategy][fraction_idx] = mean_loss
-                        
-                        # Update progress bar
-                        fraction_pbar.set_postfix({
-                            'acc': f"{mean_acc:.2f}%",
-                            'std': f"{std_acc:.2f}%"
-                        })
             
             # Log results for verification
             logger.info(f"Final results:")
             for strategy in strategies:
-                logger.info(f"  {strategy}: {final_results['accuracies'][strategy]}")
+                if strategy in all_results:
+                    logger.info(f"  {strategy}: {final_results['accuracies'][strategy]}")
                 
         except Exception as e:
             logger.error(f"Error running progressive dropout: {str(e)}")
@@ -556,7 +572,8 @@ class AlignmentExperiment(Experiment):
         }
         
         # Prepare dataset config
-        dataset_config = self.config.dataset
+        dataset_config = {}
+        dataset_config.update(self.config.dataset)
         
         # Process each dropout fraction
         for dropout_fraction in tqdm(dropout_fractions, desc="Eigenvector Dropout"):
