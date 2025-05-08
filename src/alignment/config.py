@@ -68,6 +68,53 @@ class BaseConfig:
             return obj
         except Exception as e:
             raise ValueError(f"Error loading config from {path}: {str(e)}")
+    
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]):
+        """
+        Create a configuration from a dictionary.
+        
+        Args:
+            config_dict: Dictionary containing configuration values
+            
+        Returns:
+            Configuration object
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        try:
+            # Create an instance of the class
+            obj = cls()
+            
+            # Update the object with values from the dictionary
+            for key, value in config_dict.items():
+                if hasattr(obj, key):
+                    current_val = getattr(obj, key)
+                    
+                    # For nested configurations, create new instances
+                    if hasattr(current_val, '__class__') and issubclass(current_val.__class__, BaseConfig) and isinstance(value, dict):
+                        # Create a new instance of the nested config
+                        nested_config = current_val.__class__()
+                        
+                        # Update its fields
+                        for k, v in value.items():
+                            if hasattr(nested_config, k):
+                                setattr(nested_config, k, v)
+                        
+                        # Set the nested config on the parent
+                        setattr(obj, key, nested_config)
+                    else:
+                        # Direct assignment for simple values
+                        setattr(obj, key, value)
+            
+            # Validate the configuration
+            if hasattr(obj, "validate"):
+                obj.validate()
+                
+            return obj
+        except Exception as e:
+            raise ValueError(f"Error creating config from dictionary: {str(e)}")
             
     def validate(self) -> bool:
         """
@@ -95,6 +142,19 @@ class BaseConfig:
             else:
                 result[k] = v
         return result
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Get a configuration value by key, returning default if not found.
+        
+        Args:
+            key: Key to look up
+            default: Default value to return if key not found
+            
+        Returns:
+            Configuration value or default
+        """
+        return getattr(self, key, default)
 
 
 @dataclass
@@ -233,7 +293,7 @@ class ExtraConfig(BaseConfig):
     """Extra configuration parameters."""
     
     dropout_mode: str = "scaled"
-    dropout_pruning_mode: str = "per_layer_combined"
+    dropout_pruning_mode: str = "layer_wise"
     exclude_classification_layer: bool = True
     cnn_mode: str = "unfold"
     

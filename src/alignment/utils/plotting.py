@@ -3,6 +3,7 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Union, Any
+import logging
 
 # Set preref style for matplotlib
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -17,332 +18,170 @@ plt.rcParams['legend.fontsize'] = 12
 plt.rcParams['figure.titlesize'] = 16
 
 def plot_dropout_results(
-    results, 
-    figure_path=None, 
-    pruning_mode="global_joint", 
-    dropout_mode="global", 
-    title_prefix="Progressive Dropout"
+    results,
+    save_dir=None,
+    title_prefix="Dropout Results",
+    pruning_mode="global_joint",
+    dropout_mode="scaled",
+    show=False
 ):
-    """Plot results from progressive dropout.
+    """
+    Create plots for progressive dropout results, showing accuracy vs dropout fraction.
+    
+    This enhanced version ensures error bars are shown for all strategies.
     
     Args:
-        results (dict): Results dictionary from progressive_dropout.
-        figure_path (str, optional): Path to save figures. If None, figures are not saved.
-        pruning_mode (str): Mode of pruning used ("global_joint", "layer_wise", "layer_isolated", "cascading_layer").
-        dropout_mode (str): Mode of dropout used ("global", "rescaled", "layerwise").
-        title_prefix (str): Prefix for plot titles.
+        results: Results dictionary with accuracies, stds, losses and dropout_fractions
+        save_dir: Directory to save plots to
+        title_prefix: Prefix for plot titles
+        pruning_mode: Pruning mode used in the experiment
+        dropout_mode: Dropout mode used in the experiment
+        show: Whether to display plots (vs just saving them)
         
     Returns:
-        list: List of saved figure filenames.
+        List of saved plot files
     """
-    saved_figures = []
+    # Create directory if not exists
+    if save_dir and not os.path.exists(save_dir):
+        os.makedirs(save_dir)
     
-    # Map old pruning modes to new ones for backward compatibility
-    if pruning_mode == "global":
-        pruning_mode = "global_joint"
-    elif pruning_mode == "per_layer_combined":
-        pruning_mode = "layer_wise" 
-    elif pruning_mode == "per_layer_independent":
-        pruning_mode = "layer_isolated"
-    
-    # Get human-readable pruning mode for plot titles
-    pruning_mode_display = {
-        "global_joint": "Global Joint Pruning",
-        "layer_wise": "Layer-wise Pruning",
-        "layer_isolated": "Layer Isolation Pruning",
-        "cascading_layer": "Cascading Layer Pruning"
-    }.get(pruning_mode, pruning_mode)
-    
-    dropout_mode_display = {
-        "global": "Global",
-        "rescaled": "Rescaled",
-        "layerwise": "Layer-wise",
-        "scaled": "Scaled"
-    }.get(dropout_mode, dropout_mode)
-
-    # Create figure directory if it doesn't exist
-    if figure_path is not None:
-        os.makedirs(figure_path, exist_ok=True)
-    
-    # Extract data
-    dropout_fractions = results["dropout_fractions"]
-    
-    # Define preref style colors and markers
-    strategies = ["high_rq", "low_rq", "random", "eigenvector"]
-    colors = {
-        "high_rq": "#1f77b4",  # blue
-        "low_rq": "#d62728",   # red
-        "random": "#2ca02c",   # green
-        "eigenvector": "#9467bd"  # purple
-    }
-    markers = {
-        "high_rq": "o",
-        "low_rq": "s",
-        "random": "^",
-        "eigenvector": "d"
-    }
-    labels = {
-        "high_rq": "High RQ",
-        "low_rq": "Low RQ", 
-        "random": "Random",
-        "eigenvector": "Eigenvector"
-    }
-    
-    # Plot accuracy vs. dropout fraction
-    plt.figure(figsize=(12, 8))
-    
-    # Plot each strategy
-    has_data = False
-    for strategy in strategies:
-        if strategy in results["accuracies"]:
-            has_data = True
-            accs = results["accuracies"][strategy]
-            mean_accs = np.mean(accs, axis=0) if isinstance(accs, np.ndarray) and accs.ndim > 1 else accs
-            std_accs = np.std(accs, axis=0) if isinstance(accs, np.ndarray) and accs.ndim > 1 else np.zeros_like(mean_accs)
-            
-            plt.plot(
-                dropout_fractions, 
-                mean_accs, 
-                marker=markers.get(strategy, "o"),
-                linestyle="-",
-                linewidth=2.5,
-                markersize=8,
-                color=colors.get(strategy, "black"),
-                label=labels.get(strategy, strategy.replace("_", " ").title())
-            )
-            
-            # Add error bands
-            plt.fill_between(
-                dropout_fractions,
-                mean_accs - std_accs,
-                mean_accs + std_accs,
-                alpha=0.2,
-                color=colors.get(strategy, "black")
-            )
-    
-    if not has_data:
-        if "accuracies" in results and isinstance(results["accuracies"], np.ndarray):
-            # Handle direct accuracy array
-            mean_accs = np.mean(results["accuracies"], axis=0)
-            std_accs = np.std(results["accuracies"], axis=0)
-            
-            plt.plot(
-                dropout_fractions, 
-                mean_accs, 
-                marker="o",
-                linestyle="-",
-                linewidth=2.5,
-                markersize=8,
-                color="#1f77b4",
-                label="Mean Accuracy"
-            )
-            
-            # Add error bands
-            plt.fill_between(
-                dropout_fractions,
-                mean_accs - std_accs,
-                mean_accs + std_accs,
-                alpha=0.2,
-                color="#1f77b4"
-            )
-            
-    # Style the plot (preref style)
-    plt.xlabel("Dropout Fraction", fontsize=14)
-    plt.ylabel("Accuracy (%)", fontsize=14)
-    plt.title(f"{title_prefix}: {pruning_mode_display} ({dropout_mode_display})", fontsize=16)
-    plt.grid(True, alpha=0.3)
-    plt.ylim(0, 100)  # Set consistent y-axis range
-    plt.legend(loc="best", fontsize=12, framealpha=0.7)
-    
-    # Save the accuracy figure
-    if figure_path is not None:
-        filename = os.path.join(
-            figure_path, 
-            f"dropout_{pruning_mode}_{dropout_mode}_accuracy.png"
-        )
-        plt.savefig(filename, dpi=300, bbox_inches="tight")
-        saved_figures.append(filename)
-        plt.close()
+    # Create a more readable title from the pruning mode
+    if pruning_mode == "global_joint":
+        pruning_title = "Global Joint Pruning"
+    elif pruning_mode == "layer_wise":
+        pruning_title = "Layer-wise Pruning"
+    elif pruning_mode == "layer_isolated":
+        pruning_title = "Layer Isolated Pruning" 
+    elif pruning_mode == "cascading_layer":
+        pruning_title = "Cascading Layer Pruning"
     else:
-        plt.show()
+        pruning_title = pruning_mode.replace("_", " ").title()
     
-    # Plot loss vs. dropout (preref style)
-    plt.figure(figsize=(12, 8))
-    
-    # Plot each strategy
-    has_data = False
-    for strategy in strategies:
-        if strategy in results.get("losses", {}):
-            has_data = True
-            losses = results["losses"][strategy]
-            mean_losses = np.mean(losses, axis=0) if isinstance(losses, np.ndarray) and losses.ndim > 1 else losses
-            std_losses = np.std(losses, axis=0) if isinstance(losses, np.ndarray) and losses.ndim > 1 else np.zeros_like(mean_losses)
-            
-            plt.plot(
-                dropout_fractions, 
-                mean_losses, 
-                marker=markers.get(strategy, "o"),
-                linestyle="-",
-                linewidth=2.5,
-                markersize=8,
-                color=colors.get(strategy, "black"),
-                label=labels.get(strategy, strategy.replace("_", " ").title())
-            )
-            
-            # Add error bands
-            plt.fill_between(
-                dropout_fractions,
-                mean_losses - std_losses,
-                mean_losses + std_losses,
-                alpha=0.2,
-                color=colors.get(strategy, "black")
-            )
-    
-    if has_data:
-        # Style the plot (preref style)
-        plt.xlabel("Dropout Fraction", fontsize=14)
-        plt.ylabel("Loss (%)", fontsize=14)
-        plt.title(f"{title_prefix} Loss: {pruning_mode_display} ({dropout_mode_display})", fontsize=16)
-        plt.grid(True, alpha=0.3)
-        plt.legend(loc="best", fontsize=12, framealpha=0.7)
+    # Check if results has the expected structure
+    if not isinstance(results, dict) or "accuracies" not in results or "dropout_fractions" not in results:
+        logger.error(f"Invalid results format: {type(results)}")
+        return []
         
-        # Save the loss figure
-        if figure_path is not None:
-            filename = os.path.join(
-                figure_path, 
-                f"dropout_{pruning_mode}_{dropout_mode}_loss.png"
-            )
-            plt.savefig(filename, dpi=300, bbox_inches="tight")
-            saved_figures.append(filename)
-            plt.close()
-        else:
-            plt.show()
+    # Get data from results
+    dropout_fractions = results["dropout_fractions"]
+    strategies = list(results["accuracies"].keys())
     
-    # For layer_isolated mode, plot accuracy for each layer separately
-    if pruning_mode == "layer_isolated":
-        n_layers = results["accuracies"]["high_rq"].shape[1] - 1 if "high_rq" in results["accuracies"] else 0
-        if n_layers > 0:
-            for layer_idx in range(n_layers):
-                plt.figure(figsize=(10, 6))
-                
-                for strategy in ["high_rq", "low_rq", "random"]:
-                    if strategy in results["accuracies"]:
-                        accs = results["accuracies"][strategy]
-                        mean_accs = np.mean(accs[:, layer_idx, :], axis=0)
-                        std_accs = np.std(accs[:, layer_idx, :], axis=0)
-                        
-                        plt.plot(
-                            dropout_fractions, 
-                            mean_accs, 
-                            marker=markers.get(strategy, "o"),
-                            linestyle="-",
-                            linewidth=2.5,
-                            markersize=8,
-                            color=colors.get(strategy, "black"),
-                            label=labels.get(strategy, strategy.capitalize())
-                        )
-                        
-                        # Add error bands
-                        plt.fill_between(
-                            dropout_fractions,
-                            mean_accs - std_accs,
-                            mean_accs + std_accs,
-                            alpha=0.2,
-                            color=colors.get(strategy, "black")
-                        )
-                
-                plt.xlabel("Dropout Fraction", fontsize=14)
-                plt.ylabel("Accuracy (%)", fontsize=14)
-                plt.title(f"{title_prefix}: {pruning_mode_display} - Layer {layer_idx + 1} ({dropout_mode_display})", fontsize=16)
-                plt.grid(True, alpha=0.3)
-                plt.ylim(0, 100)
-                plt.legend(loc="best", fontsize=12, framealpha=0.7)
-                
-                if figure_path is not None:
-                    filename = os.path.join(
-                        figure_path,
-                        f"dropout_{pruning_mode}_layer{layer_idx+1}_{dropout_mode}.png"
-                    )
-                    plt.savefig(filename, dpi=300, bbox_inches="tight")
-                    saved_figures.append(filename)
-                    plt.close()
-                else:
-                    plt.show()
+    # Set strategy colors and markers
+    colors = {"high_rq": "red", "low_rq": "green", "random": "blue"}
+    markers = {"high_rq": "o", "low_rq": "s", "random": "^"}
+    labels = {
+        "high_rq": "Prune Highest Magnitude", 
+        "low_rq": "Prune Lowest Magnitude", 
+        "random": "Random Pruning"
+    }
+    
+    # Create accuracy plot
+    saved_files = []
+    
+    # Accuracy Plot
+    plt.figure(figsize=(10, 6))
+    
+    for strategy in strategies:
+        if strategy in results["accuracies"] and len(results["accuracies"][strategy]) > 0:
+            # Get accuracy and standard deviation
+            accs = results["accuracies"][strategy]
             
-            # Plot combined case
-            plt.figure(figsize=(10, 6))
-            
-            for strategy in ["high_rq", "low_rq", "random"]:
-                if strategy in results["accuracies"]:
-                    accs = results["accuracies"][strategy]
-                    mean_accs = np.mean(accs[:, -1, :], axis=0)
-                    std_accs = np.std(accs[:, -1, :], axis=0)
-                    
-                    plt.plot(
-                        dropout_fractions, 
-                        mean_accs, 
-                        marker=markers.get(strategy, "o"),
-                        linestyle="-",
-                        linewidth=2.5,
-                        markersize=8,
-                        color=colors.get(strategy, "black"),
-                        label=labels.get(strategy, strategy.capitalize())
-                    )
-                    
-                    # Add error bands
-                    plt.fill_between(
-                        dropout_fractions,
-                        mean_accs - std_accs,
-                        mean_accs + std_accs,
-                        alpha=0.2,
-                        color=colors.get(strategy, "black")
-                    )
-            
-            plt.xlabel("Dropout Fraction", fontsize=14)
-            plt.ylabel("Accuracy (%)", fontsize=14)
-            plt.title(f"{title_prefix}: {pruning_mode_display} - All Layers ({dropout_mode_display})", fontsize=16)
-            plt.grid(True, alpha=0.3)
-            plt.ylim(0, 100)
-            plt.legend(loc="best", fontsize=12, framealpha=0.7)
-            
-            if figure_path is not None:
-                filename = os.path.join(
-                    figure_path,
-                    f"dropout_{pruning_mode}_all_layers_{dropout_mode}.png"
-                )
-                plt.savefig(filename, dpi=300, bbox_inches="tight")
-                saved_figures.append(filename)
-                plt.close()
+            # Ensure we have standard deviations
+            if "stds" in results and strategy in results["stds"] and len(results["stds"][strategy]) > 0:
+                stds = results["stds"][strategy]
             else:
-                plt.show()
+                stds = np.zeros_like(accs)  # Use zeros if no stds available
+                
+            # Plot with error bars
+            plt.errorbar(
+                dropout_fractions[:len(accs)],  # Use only as many fractions as we have accuracies
+                accs,
+                yerr=stds,  # Include error bars
+                label=labels.get(strategy, strategy),
+                marker=markers.get(strategy, 'o'),
+                color=colors.get(strategy, 'black'),
+                capsize=4,  # Add caps to error bars
+                markersize=8,
+                linewidth=2
+            )
     
-    # Save results as JSON for future analysis
-    if figure_path is not None:
-        try:
-            # Helper function to safely convert types for JSON serialization
-            def safe_convert(obj):
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                elif hasattr(obj, 'tolist'):  # Check for torch tensors
-                    return obj.tolist()
-                elif isinstance(obj, dict):
-                    return {k: safe_convert(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [safe_convert(item) for item in obj]
+    plt.title(f"{title_prefix}: Accuracy vs Dropout Fraction\n({pruning_title}, {dropout_mode} mode)", fontsize=14)
+    plt.xlabel("Dropout Fraction", fontsize=12)
+    plt.ylabel("Accuracy (%)", fontsize=12)
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save_dir:
+        file_path = os.path.join(save_dir, f"accuracy_vs_dropout_{pruning_mode}.png")
+        plt.savefig(file_path, dpi=300, bbox_inches="tight")
+        saved_files.append(file_path)
+        logger.info(f"Saved accuracy plot to {file_path}")
+    
+    if show:
+        plt.show()
+    else:
+        plt.close()
+    
+    # Loss Plot (if available)
+    if "losses" in results and any(len(results["losses"].get(s, [])) > 0 for s in strategies):
+        plt.figure(figsize=(10, 6))
+        
+        for strategy in strategies:
+            if strategy in results["losses"] and len(results["losses"][strategy]) > 0:
+                losses = results["losses"][strategy]
+                
+                # Ensure we have standard deviations (for losses we might not have them)
+                if "loss_stds" in results and strategy in results["loss_stds"] and len(results["loss_stds"][strategy]) > 0:
+                    loss_stds = results["loss_stds"][strategy]
                 else:
-                    return obj
+                    loss_stds = None
                     
-            # Convert data
-            json_results = safe_convert(results)
-            
-            # Save as JSON
-            json_path = os.path.join(figure_path, f"dropout_{pruning_mode}_{dropout_mode}_results.json")
-            with open(json_path, 'w') as f:
-                json.dump(json_results, f, indent=2)
-        except Exception as e:
-            print(f"Error saving JSON results: {str(e)}")
+                if loss_stds:
+                    plt.errorbar(
+                        dropout_fractions[:len(losses)],
+                        losses,
+                        yerr=loss_stds,
+                        label=labels.get(strategy, strategy),
+                        marker=markers.get(strategy, 'o'),
+                        color=colors.get(strategy, 'black'),
+                        capsize=4,
+                        markersize=8,
+                        linewidth=2
+                    )
+                else:
+                    plt.plot(
+                        dropout_fractions[:len(losses)],
+                        losses,
+                        label=labels.get(strategy, strategy),
+                        marker=markers.get(strategy, 'o'),
+                        color=colors.get(strategy, 'black'),
+                        markersize=8,
+                        linewidth=2
+                    )
+        
+        plt.title(f"{title_prefix}: Loss vs Dropout Fraction\n({pruning_title}, {dropout_mode} mode)", fontsize=14)
+        plt.xlabel("Dropout Fraction", fontsize=12)
+        plt.ylabel("Loss", fontsize=12)
+        plt.grid(True, linestyle="--", alpha=0.7)
+        plt.legend(fontsize=11)
+        plt.tight_layout()
+        
+        if save_dir:
+            file_path = os.path.join(save_dir, f"loss_vs_dropout_{pruning_mode}.png")
+            plt.savefig(file_path, dpi=300, bbox_inches="tight")
+            saved_files.append(file_path)
+            logger.info(f"Saved loss plot to {file_path}")
+        
+        if show:
+            plt.show()
+        else:
+            plt.close()
     
-    return saved_figures
+    return saved_files
+
+# Alias for backward compatibility
+custom_plot_dropout = plot_dropout_results
 
 def plot_experiment_summary(
     results: Dict,

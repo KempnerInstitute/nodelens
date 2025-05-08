@@ -72,7 +72,7 @@ class AlignmentExperiment(Experiment):
                     dataset_config["name"] = "cifar10"
                     dataset_config["dataset_name"] = "cifar10"
             
-        logger.info(f"Using dataset: {dataset_config.get('name', 'unknown')}")
+            logger.info(f"Using dataset: {dataset_config.get('name', 'unknown')}")
         
         # Set up experiment-specific paths
         self.figure_path = None
