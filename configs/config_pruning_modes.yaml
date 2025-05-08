@@ -1,9 +1,10 @@
 # Pruning Modes Configuration Sample
 
-# This config demonstrates the three different pruning modes available:
-# 1. "global": Concatenate all nodes and prune X% across all layers (original v1)
-# 2. "per_layer_combined": Prune X% from each layer separately, but all at once (v2-like)
-# 3. "per_layer_independent": Prune X% from only one layer at a time (new option)
+# This config demonstrates the different pruning modes available:
+# 1. "global_joint": Concatenate all nodes and prune X% across all layers (original v1)
+# 2. "layer_wise": Prune X% from each layer separately, but all at once (v2-like)
+# 3. "layer_isolated": Prune X% from only one layer at a time (new option)
+# 4. "cascading_layer": Prune layers progressively - prune layer 1, use pruned network for layer 2, etc.
 
 experiment:
   name: pruning_modes_comparison
@@ -43,33 +44,37 @@ checkpointing:
   frequency: 10
 
 extra:
-  # Choose one of the three pruning modes:
+  # Choose one of the pruning modes:
   
-  # Option 1: Global Pruning (Original v1) 
+  # Option 1: Global Joint Pruning (Original v1) 
   # Concatenates all nodes from all layers and prunes the lowest X% across all nodes
-  dropout_pruning_mode: "global"
+  # dropout_pruning_mode: "global_joint"
   
-  # Option 2: Per-Layer Combined (v2-like)
+  # Option 2: Layer-wise Pruning (v2-like)
   # Prunes X% from each layer separately, but all at once
-  # dropout_pruning_mode: "per_layer_combined"
+  # dropout_pruning_mode: "layer_wise"
   
-  # Option 3: Per-Layer Independent (new)
+  # Option 3: Layer Isolation Pruning (new)
   # Prunes X% from only one layer at a time, generating separate results per layer
-  # dropout_pruning_mode: "per_layer_independent"
+  # dropout_pruning_mode: "layer_isolated"
+  
+  # Option 4: Cascading Layer Pruning (new)
+  # Progressively prunes layers - prune layer 1, use pruned network to compute alignments for layer 2, etc.
+  dropout_pruning_mode: "cascading_layer"
   
   aggregate_alignment: false
   num_drops: 9
 
 # Alternative configs you can uncomment to use:
 
-# Config for "per_layer_combined" mode (v2 behavior)
+# Config for "layer_wise" mode (v2 behavior)
 # extra:
-#   dropout_pruning_mode: "per_layer_combined"
+#   dropout_pruning_mode: "layer_wise"
 #   aggregate_alignment: false 
 #   num_drops: 9
 
-# Config for "per_layer_independent" mode
+# Config for "layer_isolated" mode
 # extra:
-#   dropout_pruning_mode: "per_layer_independent"
+#   dropout_pruning_mode: "layer_isolated"
 #   aggregate_alignment: false
 #   num_drops: 9 

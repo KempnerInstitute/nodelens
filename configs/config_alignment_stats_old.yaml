@@ -50,14 +50,14 @@ checkpointing:
   
 extra:
   num_drops: 40
-  dropout_pruning_mode: "global"  # Options: 
-                                  # "global" - Prune X% of nodes across all layers based on their global alignment ranking
+  dropout_pruning_mode: "global_joint"  # Options: 
+                                  # "global_joint" - Prune X% of nodes across all layers based on their global alignment ranking
                                   #            This distributes pruning across layers proportional to where the 
                                   #            highest/lowest alignment nodes are located. Some layers may have more
                                   #            neurons pruned than others, preserving the global ranking of importance.
-                                  # "per_layer_combined" - Prune exactly X% from each layer and apply pruning to all layers at once
+                                  # "layer_wise" - Prune exactly X% from each layer and apply pruning to all layers at once
                                   #            This shows the effect of pruning all layers simultaneously with fixed proportions
-                                  # "per_layer_independent" - Prune X% from only one layer at a time
+                                  # "layer_isolated" - Prune X% from only one layer at a time
                                   #            This creates multiple figures (one per layer) showing isolated effects
   dropout_mode: "scaled"  # Options for how targeted dropout is applied to neurons:
                           # "scaled" - Zeroes neurons and applies scaling to maintain signal magnitude (default)

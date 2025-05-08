@@ -30,7 +30,7 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
-from alignment.config import Config
+from alignment.config import Config, ExperimentConfig
 from alignment.datasets import DataSet, load_dataset
 from alignment.models import load_model, load_model_family
 from alignment.metrics import get_metric
@@ -60,14 +60,14 @@ logger = logging.getLogger(__name__)
 class Experiment(ABC):
     """Base class for all experiments."""
 
-    def __init__(self, config: Union[Dict, str, DictConfig], 
+    def __init__(self, config: Union[Dict, str, DictConfig, ExperimentConfig], 
                  working_dir: Optional[str] = None, 
                  setup_logger: bool = True):
         """
         Initialize an experiment.
         
         Args:
-            config: Configuration in dict, filepath, or omegaconf format
+            config: Configuration in dict, filepath, omegaconf, or ExperimentConfig format
             working_dir: Directory to store results in
             setup_logger: Whether to set up logging
         """
@@ -78,12 +78,20 @@ class Experiment(ABC):
             if os.path.isfile(config):
                 self.config = Config.load(config)
                 self.config_path = os.path.basename(config)
+                logger.info(f"Loaded config from file: {self.config_path}")
             else:
                 raise ValueError(f"Config file {config} not found")
         elif isinstance(config, (dict, DictConfig)):
+            logger.info(f"Creating config from dict-like object: {type(config)}")
             self.config = Config.from_dict(config)
             self.config_path = "config_dict"
+        elif isinstance(config, ExperimentConfig):
+            # Already an ExperimentConfig instance, just use it directly
+            logger.info(f"Using provided ExperimentConfig directly: {type(config)}")
+            self.config = config
+            self.config_path = getattr(config, "config_path", "config_object")
         else:
+            logger.error(f"Unsupported config type: {type(config)}")
             raise ValueError(f"Unsupported config type: {type(config)}")
             
         # Set up working directory
@@ -110,8 +118,21 @@ class Experiment(ABC):
         
         # Set up logging
         if setup_logger:
-            log_file = os.path.join(self.working_dir, "experiment.log")
-            setup_logging(log_file=log_file, log_level=self.config.get("log_level", "INFO"))
+            # Create log directory if needed
+            log_dir = os.path.join(self.working_dir, "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # Call setup_logging with just the log_level parameter
+            log_level = self.config.get("log_level", "INFO")
+            setup_logging(log_level=log_level)
+            
+            # Set up file handler manually
+            log_file = os.path.join(log_dir, "experiment.log")
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+            logging.getLogger().addHandler(file_handler)
+            
+            logger.info(f"Set up logging with level {log_level}, writing to {log_file}")
         
         # Initialize random seeds
         self._set_random_seeds()
@@ -146,9 +167,33 @@ class Experiment(ABC):
     def _save_config(self) -> None:
         """Save the configuration to a file."""
         config_path = os.path.join(self.working_dir, "config.yaml")
-        with open(config_path, "w") as f:
-            OmegaConf.save(self.config, f)
-        logger.info(f"Saved config to {config_path}")
+        try:
+            # Convert to dictionary if it's a Config object
+            if hasattr(self.config, 'to_dict'):
+                # Use the to_dict method if available
+                config_dict = self.config.to_dict()
+                with open(config_path, "w") as f:
+                    yaml.dump(config_dict, f, default_flow_style=False)
+            else:
+                # Use OmegaConf for other types
+                with open(config_path, "w") as f:
+                    OmegaConf.save(self.config, f)
+            
+            logger.info(f"Saved config to {config_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save config to {config_path}: {str(e)}")
+            # Try a simpler approach
+            try:
+                # Just save the basic attributes
+                simple_config = {
+                    k: v for k, v in vars(self.config).items()
+                    if not k.startswith('_') and not callable(v)
+                }
+                with open(config_path, "w") as f:
+                    yaml.dump(simple_config, f, default_flow_style=False)
+                logger.info(f"Saved simplified config to {config_path}")
+            except Exception as e2:
+                logger.error(f"Failed to save even simplified config: {str(e2)}")
     
     def _setup_wandb(self) -> None:
         """Set up Weights & Biases for experiment tracking if configured."""
@@ -169,11 +214,34 @@ class Experiment(ABC):
         
         # Add other relevant config items
         if hasattr(self.config, "model"):
-            wandb_config["model"] = OmegaConf.to_container(self.config.model)
+            # Check if we can convert to dict
+            if hasattr(self.config.model, 'to_dict'):
+                wandb_config["model"] = self.config.model.to_dict()
+            else:
+                # Fallback to direct attribute extraction
+                model_dict = {k: v for k, v in vars(self.config.model).items() 
+                             if not k.startswith('_') and not callable(v)}
+                wandb_config["model"] = model_dict
+        
         if hasattr(self.config, "dataset"):
-            wandb_config["dataset"] = OmegaConf.to_container(self.config.dataset)
+            # Check if we can convert to dict
+            if hasattr(self.config.dataset, 'to_dict'):
+                wandb_config["dataset"] = self.config.dataset.to_dict()
+            else:
+                # Fallback to direct attribute extraction
+                dataset_dict = {k: v for k, v in vars(self.config.dataset).items()
+                                if not k.startswith('_') and not callable(v)}
+                wandb_config["dataset"] = dataset_dict
+        
         if hasattr(self.config, "training"):
-            wandb_config["training"] = OmegaConf.to_container(self.config.training)
+            # Check if we can convert to dict
+            if hasattr(self.config.training, 'to_dict'):
+                wandb_config["training"] = self.config.training.to_dict()
+            else:
+                # Fallback to direct attribute extraction
+                training_dict = {k: v for k, v in vars(self.config.training).items()
+                                if not k.startswith('_') and not callable(v)}
+                wandb_config["training"] = training_dict
         
         # Start WandB run
         project_name = getattr(self.config.checkpointing, "wandb_project", "alignment")

@@ -24,30 +24,30 @@ dataset:
 # Model configuration
 model:
   model_name: "MLP" # Model architecture to use (options: "MLP", "CNN2P2", "alexnet")
-  input_dim: 784
-  hidden_dims: [100, 100]
-  activation: "relu"
-  dropout: 0.0
-  output_dim: 10
-  bias: true
+  input_dim: 784 # Input dimension (MNIST: 784, CIFAR10: 3072)
+  hidden_dims: [100, 100] # Sizes of hidden layers
+  activation: "relu" # Activation function (options: "relu", "tanh", "sigmoid")
+  dropout: 0.0 # Dropout rate during training (0.0 means no dropout)
+  output_dim: 10 # Output dimension (number of classes)
+  bias: true # Whether to include bias terms in linear layers
 
 # Training configuration
 training:
   epochs: 10 # Number of training epochs (more epochs can improve performance but take longer)
-  replicates: 10 # Number of network replicates to run for statistical analysis
+  replicates: 5 # Number of network replicates to run for statistical analysis
   optimizer: "adam" # Optimizer to use (options: "Adam", "SGD", "RMSprop")
   learning_rate: 0.001 # Learning rate for optimizer (typical range: 1e-4 to 1e-2)
-  momentum: 0.9
-  loss: "cross_entropy"
+  momentum: 0.9 # Momentum parameter for SGD (not used for Adam)
+  loss: "cross_entropy" # Loss function to use for training
   
 # Checkpointing configuration
 checkpointing:
-  save_checkpoints: true # Whether to save training checkpoints to disk
+  save_checkpoints: false # Whether to save training checkpoints to disk
   checkpoint_frequency: 1 # How often to save checkpoints (in epochs, 1 means every epoch)
   use_wandb: true # Whether to use Weights & Biases for experiment tracking and visualization
   load_checkpoint: false # Whether to load from previous checkpoint (for resuming training)
-  save_model: true
-  save_interval: 1
+  save_model: true # Whether to save the final trained models
+  save_interval: 1 # How often to save model (in epochs)
   
 # Alignment analysis configuration
 alignment:
@@ -56,21 +56,45 @@ alignment:
   run_eigenvector: false # Whether to run eigenvector dropout experiment (feature pruning)
   dropout_min: 0.0 # Minimum dropout fraction to test (range: 0.0-1.0)
   dropout_max: 0.9 # Maximum dropout fraction to test (range: 0.0-1.0, <1.0 to avoid complete dropout)
-  dropout_steps: 20 # Number of steps for testing dropout fractions
+  dropout_steps: 10 # Number of steps for testing dropout fractions
   scale_by_norm: false # Whether to scale covariance matrices by norm (can improve numerics)
 
 # Extra configuration parameters
 extra:
-  dropout_mode: "scaled" # How dropout is applied (options: "scaled" = multiply by 1/(1-p), "unscaled" = no scaling)
-  dropout_pruning_mode: "cascading_layer" # How pruning is distributed (options: "global_joint", "layer_wise", "layer_isolated", "cascading_layer")
-  exclude_classification_layer: true # Whether to exclude the output layer from pruning (usually true for classification tasks)
-  cnn_mode: "unfold" # How CNN features are processed for alignment (options: "unfold", "patchwise", "batch_patch_combined")
-  track_metrics: ["accuracy", "loss", "alignment", "time"]
-  log_frequency: 1 # How often to log metrics (in epochs)
-  log_images: true # Whether to log images to wandb
-  detailed_logging: true # Enable detailed metric logging
+  dropout_mode: "scaled" # How dropout is applied:
+                        # - "scaled": Multiply remaining weights by 1/(1-p) to maintain expected output
+                        # - "unscaled": No scaling, just zero out weights
+  
+  dropout_pruning_mode: "layer_wise" # How pruning is distributed across the network:
+                                   # - "global_joint": Prune x% of nodes across all layers simultaneously based on alignment score
+                                   # - "layer_wise": Prune x% from each layer simultaneously (optionally skip classification)
+                                   # - "layer_isolated": For each layer, prune x% of that layer alone and measure accuracy
+                                   # - "cascading_layer": Prune layers progressively, using pruned layer 1 to compute RQ for layer 2, etc.
+  
+  exclude_classification_layer: true # Whether to exclude the output layer from pruning:
+                                    # - true: Skip pruning the final layer (recommended for classification tasks)
+                                    # - false: Include all layers in pruning
+  
+  cnn_mode: "unfold" # How CNN features are processed for alignment:
+                    # - "unfold": Unfold CNN features to 2D matrices
+                    # - "patchwise": Process each patch separately
+                    # - "batch_patch_combined": Combine batch and patch dimensions
+  
+  track_metrics: ["accuracy", "loss", "alignment", "time"] # Metrics to track during experiments
+  
+  log_frequency: 1 # How often to log metrics during training (in epochs)
+  
+  log_images: true # Whether to log images to wandb for visualization
+  
+  detailed_logging: true # Whether to enable detailed metric logging:
+                        # - true: Log comprehensive metrics (more disk space)
+                        # - false: Log minimal metrics (lighter files)
+  
+  use_tensorized: true # Whether to use tensorized implementation:
+                       # - true: Use tensor operations for faster computation (recommended)
+                       # - false: Use sequential processing (slower but may use less memory)
   
 # Experiment name for identification
-experiment_name: "cascading_layer_pruning_test" # Used for identifying this experiment in logs, result directories, and visualizations
+experiment_name: "layer_wise_pruning_test" # Descriptive name for this experiment
 wandb_project: "neural_alignment" # Weights & Biases project name
 wandb_entity: null # Weights & Biases entity (team or username), set to null for default 

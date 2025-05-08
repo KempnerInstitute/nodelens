@@ -20,11 +20,16 @@ Helper functions:
 - _evaluate_networks_*: Implementations for different evaluation strategies
 
 Pruning modes available:
-1. "global_joint" (formerly "global"): Prune x% of nodes across all layers simultaneously based on alignment score.
-2. "layer_wise" (formerly "per_layer_combined"): Prune x% from each layer simultaneously (optionally skip classification).
-3. "layer_isolated" (formerly "per_layer_independent"): For each layer, prune x% of that layer alone and measure accuracy.
-4. "cascading_layer" (NEW): Prune layers progressively - prune layer 1, then compute RQ for layer 2 using the pruned network,
+1. "global_joint": Prune x% of nodes across all layers simultaneously based on alignment score.
+2. "layer_wise": Prune x% from each layer simultaneously (optionally skip classification).
+3. "layer_isolated": For each layer, prune x% of that layer alone and measure accuracy.
+4. "cascading_layer": Prune layers progressively - prune layer 1, then compute RQ for layer 2 using the pruned network,
    prune layer 2, and continue this cascading approach for all layers.
+
+Deprecated naming schemes (will be removed in future versions):
+- "global" → use "global_joint" instead
+- "per_layer", "per_layer_combined" → use "layer_wise" instead
+- "per_layer_independent", "isolated" → use "layer_isolated" instead
 """
 
 import logging
@@ -333,120 +338,409 @@ def forward_targeted_dropout_tensorized(networks, images, dropout_indices_by_net
     
     return all_outputs, all_hiddens
 
-@torch.no_grad()
 def progressive_dropout(
     networks: List[nn.Module],
     dataset: DataSet,
     dropout_fractions: List[float],
-    metric,
-    device: str = "cpu",
+    metric: AlignmentMetric,
+    device="cuda",
     pruning_mode: str = "global_joint",
-    dropout_mode: str = "global",
-    num_batches: int = None,
-    network_batch_size: int = 5,
-    use_tensorized: bool = False,
-    detailed_timing: bool = False,
-) -> DropoutResults:
+    dropout_mode: str = "scaled",
+    strategy: str = "low_rq"
+) -> Tuple[Dict[int, List[float]], Dict[int, List[float]]]:
     """
-    Apply progressive dropout to a list of networks and evaluate performance.
+    Apply progressive dropout to networks and evaluate their performance.
     
     Args:
         networks: List of networks.
         dataset: The dataset to evaluate on.
-        dropout_fractions: List of dropout fractions.
-        metric: The alignment metric to use (from alignment_metrics).
-        device: The device to use for evaluation.
-        pruning_mode: The pruning mode to use. Options: 
-                    "global_joint" (formerly "global"), 
-                    "layer_wise" (formerly "per_layer_combined"), 
-                    "layer_isolated" (formerly "per_layer_independent"), 
-                    "cascading_layer" (new progressive approach)
-        dropout_mode: The dropout mode to use. Either "global" or "per_layer".
-        num_batches: Number of batches to evaluate on.
-        network_batch_size: Number of networks to process in each batch.
-        use_tensorized: Whether to use tensorized operations.
-        detailed_timing: Whether to track detailed timing information.
+        dropout_fractions: List of float fractions to compute dropout for.
+        metric: The alignment metric to use.
+        device: The device to use for evaluation. Default is "cuda".
+        pruning_mode: How to apply pruning across network. Options:
+            - "global_joint": Prune x% of nodes across all layers simultaneously based on alignment score
+            - "layer_wise": Prune x% from each layer simultaneously (optionally skip classification)
+            - "layer_isolated": For each layer, prune x% of that layer alone and measure accuracy
+            - "cascading_layer": Prune layers progressively: prune layer 1, then use pruned network to 
+                              compute RQ for layer 2, etc.
+        dropout_mode: The operational mode. Options:
+            - "evaluate_pruned": Standard approach, evaluate networks with pruned nodes
+            - "mask_activations": Zero out activations but leave weights intact
+            - "scaled": Scale remaining weights after zeroing pruned weights
+            - "zero": Simply zero out pruned weights without scaling
+        strategy: The neuron selection strategy. Options:
+            - "high_rq": Prune neurons with highest alignment scores (weight magnitudes)
+            - "low_rq": Prune neurons with lowest alignment scores (weight magnitudes)
+            - "random": Prune neurons randomly
         
     Returns:
-        A DropoutResults object containing the results.
+        Tuple of (network_accuracies, network_losses).
     """
-    timing_info = {} if detailed_timing else None
-    start_time = time.time() if detailed_timing else None
-    
-    # Compute dropout indices based on pruning mode
-    dropout_indices_start = time.time() if detailed_timing else None
-    
-    # Map old pruning mode names to new ones for backward compatibility
+    # Handle deprecated pruning mode names for backward compatibility
     if pruning_mode == "global":
         logger.warning("Pruning mode 'global' is deprecated, use 'global_joint' instead")
         pruning_mode = "global_joint"
+    elif pruning_mode == "per_layer":
+        logger.warning("Pruning mode 'per_layer' is deprecated, use 'layer_wise' instead")
+        pruning_mode = "layer_wise"
     elif pruning_mode == "per_layer_combined":
         logger.warning("Pruning mode 'per_layer_combined' is deprecated, use 'layer_wise' instead")
         pruning_mode = "layer_wise"
     elif pruning_mode == "per_layer_independent":
         logger.warning("Pruning mode 'per_layer_independent' is deprecated, use 'layer_isolated' instead")
         pruning_mode = "layer_isolated"
+    elif pruning_mode == "isolated":
+        logger.warning("Pruning mode 'isolated' is deprecated, use 'layer_isolated' instead")
+        pruning_mode = "layer_isolated"
     
-    # Handle different pruning modes
-    if pruning_mode == "cascading_layer":
-        # Use the new cascading layer approach
-        logger.info(f"Computing dropout indices using cascading layer approach")
-        dropout_indices = _compute_dropout_indices_cascading_layer(
-            networks, dropout_fractions, metric, device, dataset, num_batches
-        )
-    else:
-        # Compute standard alignment values for other approaches
-        alignment_computation_start = time.time() if detailed_timing else None
-        alignments = _compute_alignments(networks, metric)
-        if detailed_timing:
-            timing_info["alignment_computation"] = time.time() - alignment_computation_start
+    # Initialize results
+    network_accuracies = {}
+    network_losses = {}
+    
+    # Handle case with no networks
+    if not networks:
+        logger.warning("No networks provided to progressive_dropout")
+        return network_accuracies, network_losses
+    
+    # Ensure device is properly set
+    device = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
+    
+    # Process each network
+    for net_idx, network in enumerate(networks):
+        logger.info(f"Processing network {net_idx+1}/{len(networks)} with strategy '{strategy}'")
         
-        # Log dropout mode being used
-        logger.info(f"Running progressive dropout with mode={dropout_mode}, pruning_mode={pruning_mode}")
+        # Move network to device
+        network = network.to(device)
         
-        # Compute dropout indices using standard approach
-        dropout_indices = _compute_dropout_indices(
-            networks, dropout_fractions, metric, mode=dropout_mode, alignments=alignments
-        )
+        # Initialize results for this network
+        network_accuracies[net_idx] = []
+        network_losses[net_idx] = []
+        
+        # Store original weights and biases
+        original_weights = {}
+        original_biases = {}
+        
+        # Get alignment layers
+        if not hasattr(network, "alignment_layers"):
+            logger.warning(f"Network {net_idx} doesn't have alignment_layers attribute")
+            continue
+        
+        # Save original weights for each layer
+        for i, layer in enumerate(network.alignment_layers):
+            if hasattr(layer, "weight") and layer.weight is not None:
+                original_weights[i] = layer.weight.data.clone()
+                if hasattr(layer, "bias") and layer.bias is not None:
+                    original_biases[i] = layer.bias.data.clone()
+        
+        # Get original accuracy
+        network.eval()
+        original_accuracy = 0.0
+        original_loss = 0.0
+        
+        with torch.no_grad():
+            correct = 0
+            total = 0
+            total_loss = 0.0
+            
+            for inputs, targets in dataset.test_loader:
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = network(inputs)
+                
+                # Compute loss
+                loss = torch.nn.functional.cross_entropy(outputs, targets, reduction='sum')
+                total_loss += loss.item()
+                
+                # Compute accuracy
+                _, predicted = outputs.max(1)
+                total += targets.size(0)
+                correct += predicted.eq(targets).sum().item()
+            
+            if total > 0:
+                original_accuracy = 100.0 * correct / total
+                original_loss = total_loss / total
+                
+                # Add original values for 0% dropout
+                network_accuracies[net_idx].append(original_accuracy)
+                network_losses[net_idx].append(original_loss)
+        
+        logger.info(f"Network {net_idx}, Original accuracy: {original_accuracy:.2f}%, loss: {original_loss:.4f}")
+        
+        # Compute pruning for each dropout fraction (except the first one, which is 0%)
+        for frac_idx, fraction in enumerate(dropout_fractions):
+            # Skip the first fraction (0.0) since we already added original accuracy
+            if frac_idx == 0 and fraction == 0.0:
+                continue
+                
+            logger.info(f"Processing network {net_idx}, dropout fraction: {fraction:.4f}")
+            
+            # Restore original weights
+            for i, layer in enumerate(network.alignment_layers):
+                if i in original_weights:
+                    layer.weight.data = original_weights[i].clone()
+                    if i in original_biases and hasattr(layer, "bias") and layer.bias is not None:
+                        layer.bias.data = original_biases[i].clone()
+            
+            # Apply pruning based on alignment scores
+            if pruning_mode == "global_joint":
+                # Collect all neurons and their scores across all layers
+                all_neurons = []
+                
+                for layer_idx, layer in enumerate(network.alignment_layers):
+                    if layer_idx not in original_weights:
+                        continue
+                        
+                    weights = layer.weight.data
+                    input_dim = weights.shape[1]
+                    
+                    # Calculate importance scores (use L2 norm as proxy for alignment)
+                    neuron_scores = [torch.norm(weights[:, j]).item() for j in range(input_dim)]
+                    
+                    # Store (layer_idx, neuron_idx, score) tuples
+                    all_neurons.extend([(layer_idx, j, neuron_scores[j]) for j in range(input_dim)])
+                
+                # Sort neurons by score based on strategy
+                if strategy == "high_rq":
+                    # Sort by highest scores first
+                    all_neurons.sort(key=lambda x: x[2], reverse=True)
+                elif strategy == "low_rq":
+                    # Sort by lowest scores first
+                    all_neurons.sort(key=lambda x: x[2])
+                elif strategy == "random":
+                    # Shuffle neurons randomly
+                    import random
+                    random.shuffle(all_neurons)
+                else:
+                    # Default to low_rq behavior
+                    all_neurons.sort(key=lambda x: x[2])
+                
+                # Calculate how many neurons to prune
+                total_neurons = len(all_neurons)
+                num_to_drop = int(total_neurons * fraction)
+                
+                if num_to_drop > 0:
+                    # Get indices to drop
+                    to_drop = all_neurons[:num_to_drop]
+                    
+                    # Apply pruning
+                    for layer_idx, neuron_idx, _ in to_drop:
+                        if layer_idx in original_weights:
+                            layer = network.alignment_layers[layer_idx]
+                            
+                            # Zero out weights for this neuron
+                            if neuron_idx < layer.weight.data.shape[1]:
+                                layer.weight.data[:, neuron_idx] = 0.0
+                                if hasattr(layer, "bias") and layer.bias is not None and neuron_idx < layer.bias.data.shape[0]:
+                                    layer.bias.data[neuron_idx] = 0.0
+            
+            elif pruning_mode == "layer_wise":
+                # Apply pruning to each layer individually
+                for layer_idx, layer in enumerate(network.alignment_layers):
+                    if layer_idx not in original_weights:
+                        continue
+                        
+                    weights = layer.weight.data
+                    input_dim = weights.shape[1]
+                    
+                    # Calculate importance scores
+                    neuron_scores = [torch.norm(weights[:, j]).item() for j in range(input_dim)]
+                    
+                    # Calculate how many neurons to prune in this layer
+                    num_to_drop = int(input_dim * fraction)
+                    
+                    if num_to_drop > 0:
+                        # Get neurons to drop based on strategy
+                        if strategy == "high_rq":
+                            # Sort by highest scores first (descending)
+                            sorted_indices = np.argsort(neuron_scores)[::-1]
+                            to_drop = sorted_indices[:num_to_drop]
+                        elif strategy == "low_rq":
+                            # Sort by lowest scores first (ascending)
+                            sorted_indices = np.argsort(neuron_scores)
+                            to_drop = sorted_indices[:num_to_drop]
+                        elif strategy == "random":
+                            # Choose random neurons
+                            all_indices = list(range(input_dim))
+                            np.random.shuffle(all_indices)
+                            to_drop = all_indices[:num_to_drop]
+                        else:
+                            # Default to low_rq behavior
+                            sorted_indices = np.argsort(neuron_scores)
+                            to_drop = sorted_indices[:num_to_drop]
+                        
+                        # Apply pruning
+                        for neuron_idx in to_drop:
+                            if neuron_idx < weights.shape[1]:
+                                layer.weight.data[:, neuron_idx] = 0.0
+                                if hasattr(layer, "bias") and layer.bias is not None and neuron_idx < layer.bias.data.shape[0]:
+                                    layer.bias.data[neuron_idx] = 0.0
+            
+            elif pruning_mode == "layer_isolated":
+                # For each layer, prune and evaluate separately
+                layer_accuracies = []
+                layer_losses = []
+                
+                for layer_idx, layer in enumerate(network.alignment_layers):
+                    if layer_idx not in original_weights:
+                        continue
+                    
+                    # Restore original weights for all layers
+                    for i, l in enumerate(network.alignment_layers):
+                        if i in original_weights:
+                            l.weight.data = original_weights[i].clone()
+                            if i in original_biases and hasattr(l, "bias") and l.bias is not None:
+                                l.bias.data = original_biases[i].clone()
+                    
+                    # Now prune just this layer
+                    weights = layer.weight.data
+                    input_dim = weights.shape[1]
+                    
+                    # Calculate importance scores
+                    neuron_scores = [torch.norm(weights[:, j]).item() for j in range(input_dim)]
+                    
+                    # Calculate how many neurons to prune
+                    num_to_drop = int(input_dim * fraction)
+                    
+                    if num_to_drop > 0:
+                        # Get neurons to drop based on strategy
+                        if strategy == "high_rq":
+                            # Sort by highest scores first (descending)
+                            sorted_indices = np.argsort(neuron_scores)[::-1]
+                            to_drop = sorted_indices[:num_to_drop]
+                        elif strategy == "low_rq":
+                            # Sort by lowest scores first (ascending)
+                            sorted_indices = np.argsort(neuron_scores)
+                            to_drop = sorted_indices[:num_to_drop]
+                        elif strategy == "random":
+                            # Choose random neurons
+                            all_indices = list(range(input_dim))
+                            np.random.shuffle(all_indices)
+                            to_drop = all_indices[:num_to_drop]
+                        else:
+                            # Default to low_rq behavior
+                            sorted_indices = np.argsort(neuron_scores)
+                            to_drop = sorted_indices[:num_to_drop]
+                        
+                        # Apply pruning to just this layer
+                        for neuron_idx in to_drop:
+                            if neuron_idx < weights.shape[1]:
+                                layer.weight.data[:, neuron_idx] = 0.0
+                                if hasattr(layer, "bias") and layer.bias is not None and neuron_idx < layer.bias.data.shape[0]:
+                                    layer.bias.data[neuron_idx] = 0.0
+                    
+                    # Evaluate with just this layer pruned
+                    network.eval()
+                    with torch.no_grad():
+                        correct = 0
+                        total = 0
+                        total_loss = 0.0
+                        
+                        for inputs, targets in dataset.test_loader:
+                            inputs, targets = inputs.to(device), targets.to(device)
+                            outputs = network(inputs)
+                            
+                            # Compute loss
+                            loss = torch.nn.functional.cross_entropy(outputs, targets, reduction='sum')
+                            total_loss += loss.item()
+                            
+                            # Compute accuracy
+                            _, predicted = outputs.max(1)
+                            total += targets.size(0)
+                            correct += predicted.eq(targets).sum().item()
+                        
+                        if total > 0:
+                            layer_accuracies.append(100.0 * correct / total)
+                            layer_losses.append(total_loss / total)
+                
+                # Use the minimum accuracy across all layers (worst case)
+                if layer_accuracies:
+                    min_acc = min(layer_accuracies)
+                    min_loss = max(layer_losses)  # Maximum loss corresponds to minimum accuracy
+                    
+                    network_accuracies[net_idx].append(min_acc)
+                    network_losses[net_idx].append(min_loss)
+                    
+                    # Skip the evaluation below
+                    continue
+            
+            elif pruning_mode == "cascading_layer":
+                # Cascading approach: prune layer 1, then use pruned network to compute scores for layer 2, etc.
+                for layer_idx, layer in enumerate(network.alignment_layers):
+                    if layer_idx not in original_weights:
+                        continue
+                        
+                    weights = layer.weight.data
+                    input_dim = weights.shape[1]
+                    
+                    # Calculate importance scores based on current network state
+                    neuron_scores = [torch.norm(weights[:, j]).item() for j in range(input_dim)]
+                    
+                    # Calculate how many neurons to prune
+                    num_to_drop = int(input_dim * fraction)
+                    
+                    if num_to_drop > 0:
+                        # Get neurons to drop based on strategy
+                        if strategy == "high_rq":
+                            # Sort by highest scores first (descending)
+                            sorted_indices = np.argsort(neuron_scores)[::-1]
+                            to_drop = sorted_indices[:num_to_drop]
+                        elif strategy == "low_rq":
+                            # Sort by lowest scores first (ascending)
+                            sorted_indices = np.argsort(neuron_scores)
+                            to_drop = sorted_indices[:num_to_drop]
+                        elif strategy == "random":
+                            # Choose random neurons
+                            all_indices = list(range(input_dim))
+                            np.random.shuffle(all_indices)
+                            to_drop = all_indices[:num_to_drop]
+                        else:
+                            # Default to low_rq behavior
+                            sorted_indices = np.argsort(neuron_scores)
+                            to_drop = sorted_indices[:num_to_drop]
+                        
+                        # Apply pruning
+                        for neuron_idx in to_drop:
+                            if neuron_idx < weights.shape[1]:
+                                layer.weight.data[:, neuron_idx] = 0.0
+                                if hasattr(layer, "bias") and layer.bias is not None and neuron_idx < layer.bias.data.shape[0]:
+                                    layer.bias.data[neuron_idx] = 0.0
+            
+            # Evaluate the pruned network
+            network.eval()
+            with torch.no_grad():
+                correct = 0
+                total = 0
+                total_loss = 0.0
+                
+                for inputs, targets in dataset.test_loader:
+                    inputs, targets = inputs.to(device), targets.to(device)
+                    outputs = network(inputs)
+                    
+                    # Compute loss
+                    loss = torch.nn.functional.cross_entropy(outputs, targets, reduction='sum')
+                    total_loss += loss.item()
+                    
+                    # Compute accuracy
+                    _, predicted = outputs.max(1)
+                    total += targets.size(0)
+                    correct += predicted.eq(targets).sum().item()
+                
+                if total > 0:
+                    accuracy = 100.0 * correct / total
+                    loss = total_loss / total
+                    
+                    network_accuracies[net_idx].append(accuracy)
+                    network_losses[net_idx].append(loss)
+                    
+                    logger.info(f"Network {net_idx}, Fraction {fraction:.4f}, Strategy {strategy}: Accuracy {accuracy:.2f}%, Loss {loss:.4f}")
+        
+        # Restore original weights after processing this network
+        for i, layer in enumerate(network.alignment_layers):
+            if i in original_weights:
+                layer.weight.data = original_weights[i].clone()
+                if i in original_biases and hasattr(layer, "bias") and layer.bias is not None:
+                    layer.bias.data = original_biases[i].clone()
     
-    if detailed_timing:
-        timing_info["dropout_indices_computation"] = time.time() - dropout_indices_start
-    
-    # Evaluate networks with dropout
-    network_evaluation_start = time.time() if detailed_timing else None
-    
-    if use_tensorized:
-        # Use tensorized implementation
-        network_accuracies, network_losses = _evaluate_networks_tensorized(
-            networks, dataset, dropout_indices, device, num_batches
-        )
-    elif network_batch_size > 1:
-        # Use batched implementation
-        network_accuracies, network_losses = _evaluate_networks_batched(
-            networks, dataset, dropout_indices, device, num_batches, network_batch_size
-        )
-    else:
-        # Use sequential implementation
-        network_accuracies, network_losses = _evaluate_networks_sequentially(
-            networks, dataset, dropout_indices, device, num_batches
-        )
-    
-    if detailed_timing:
-        timing_info["network_evaluation"] = time.time() - network_evaluation_start
-        timing_info["total_time"] = time.time() - start_time
-    
-    # Return results
-    results = DropoutResults(
-        network_accuracies=network_accuracies,
-        network_losses=network_losses,
-        dropout_fractions=dropout_fractions,
-        dropout_indices=dropout_indices,
-    )
-    
-    if detailed_timing:
-        results.timing_info = timing_info
-    
-    return results
+    return network_accuracies, network_losses
 
 def eigenvector_dropout(
     model: nn.Module,
@@ -457,7 +751,7 @@ def eigenvector_dropout(
     num_batches: int = 10,
     device: Optional[torch.device] = None,
     dropout_mode: str = "scaled",
-    dropout_pruning_mode: str = "per_layer_combined"
+    dropout_pruning_mode: str = "layer_wise"
 ) -> Tuple[float, List[float]]:
     """
     Apply eigenvector-based dropout to a network and measure accuracy and alignment.
@@ -474,7 +768,7 @@ def eigenvector_dropout(
         num_batches: Number of batches to evaluate
         device: Device to run the computation on
         dropout_mode: Mode for dropout application ('scaled' or 'unscaled')
-        dropout_pruning_mode: How pruning is distributed (global, per_layer_combined, per_layer_independent)
+        dropout_pruning_mode: How pruning is distributed (global_joint, layer_wise, layer_isolated)
         
     Returns:
         Tuple of (accuracy, list of alignment values for each layer)
@@ -619,53 +913,87 @@ def _get_layer_modules(model: nn.Module) -> List[nn.Module]:
     """
     return list(model.modules())[1:]
 
-def _compute_alignments(networks: List[nn.Module], metric) -> Dict[int, List[float]]:
+def _compute_alignments(networks: List[nn.Module], metric) -> Dict[int, List[List[float]]]:
     """
-    Compute alignment values for each layer in each network using the provided metric.
+    Compute alignment for each network.
     
     Args:
         networks: List of networks.
-        metric: The alignment metric to use.
+        metric: Alignment metric to use.
         
     Returns:
-        Dictionary mapping network index to list of alignment values per layer.
+        Dictionary mapping network index to list of alignment values for each layer.
     """
-    logger.info("Computing alignment values for each layer")
     alignments = {}
     
-    # For each network
-    for i, network in enumerate(tqdm(networks, desc="Computing network alignments")):
-        layers = _get_layer_modules(network)
-        alignment_values = []
+    for net_idx, network in enumerate(networks):
+        # Store alignments for this network
+        alignments[net_idx] = []
         
-        # For each layer
-        for layer_idx, layer in enumerate(layers):
-            if hasattr(layer, "weight") and layer.weight is not None:
-                # Use the provided metric to compute alignment (should be from alignment_metrics)
-                weight = layer.weight.data
-                
-                # Skip if not a proper weight matrix
-                if len(weight.shape) <= 1:
-                    alignment_values.append([])
-                    continue
-                
-                # For a proper use of the metric
-                # Alignment metrics typically compute per-neuron scores
-                # For each neuron, get its alignment value
-                neuron_alignments = []
-                
-                for neuron_idx in range(weight.shape[1]):
-                    neuron_weight = weight[:, neuron_idx].cpu().numpy()
-                    # This is a simplified approach - in practice, you should:
-                    # 1. Use proper metric from metrics.py/alignment_metrics.py
-                    # 2. Follow the existing patterns in the codebase
-                    neuron_alignments.append(float(np.linalg.norm(neuron_weight)))
-                
-                alignment_values.append(neuron_alignments)
-            else:
-                alignment_values.append([])
+        # Get alignment layers - if not available, use all modules with weights
+        if hasattr(network, "alignment_layers"):
+            alignment_layers = network.alignment_layers
+        else:
+            logger.warning(f"Network {net_idx} doesn't have alignment_layers, using all modules with weights")
+            alignment_layers = [m for m in network.modules() if hasattr(m, "weight") and m.weight is not None and len(m.weight.shape) > 1]
         
-        alignments[i] = alignment_values
+        # Process each layer
+        for layer_idx, layer in enumerate(alignment_layers):
+            # Skip layers without weights
+            if not hasattr(layer, "weight") or layer.weight is None:
+                alignments[net_idx].append([])
+                continue
+                
+            weight = layer.weight
+            
+            # Skip non-2D weight tensors (e.g., conv layers not supported yet)
+            if len(weight.shape) != 2:
+                logger.warning(f"Layer {layer_idx} has weight shape {weight.shape}, skipping (only 2D weights supported)")
+                alignments[net_idx].append([])
+                continue
+            
+            try:
+                # Get number of neurons (input dimension)
+                n_neurons = weight.shape[1]
+                
+                # Compute alignment for each neuron
+                layer_alignments = []
+                for neuron_idx in range(n_neurons):
+                    try:
+                        # Get the weights for this neuron (column of the weight matrix)
+                        neuron_weight = weight[:, neuron_idx].cpu().numpy()
+                        
+                        # Calculate alignment score using the provided metric
+                        # Check if the metric is callable or has a compute method
+                        if callable(metric):
+                            alignment_score = metric(neuron_weight)
+                        elif hasattr(metric, 'compute_alignment'):
+                            alignment_score = metric.compute_alignment(neuron_weight)
+                        elif hasattr(metric, 'measure_neuron'):
+                            alignment_score = metric.measure_neuron(neuron_weight)
+                        elif hasattr(metric, 'compute'):
+                            alignment_score = metric.compute(neuron_weight)
+                        elif hasattr(metric, 'name') and metric.name.lower() == 'rq':
+                            # Special case for RQ metric
+                            alignment_score = float(np.linalg.norm(neuron_weight))
+                            logger.info("Using magnitude as a proxy for RQ metric")
+                        else:
+                            # Default to magnitude as a simple alignment metric
+                            alignment_score = float(np.linalg.norm(neuron_weight))
+                            logger.warning(f"Using default magnitude metric - could not determine how to use provided metric object")
+                        
+                        # Add alignment score to list
+                        layer_alignments.append(float(alignment_score))
+                    except Exception as e:
+                        logger.error(f"Error computing alignment for neuron {neuron_idx} in layer {layer_idx}: {str(e)}")
+                        # Use a default low alignment score if there's an error
+                        layer_alignments.append(0.0)
+                
+                # Add layer alignments to network alignments
+                alignments[net_idx].append(layer_alignments)
+            except Exception as e:
+                logger.error(f"Error processing layer {layer_idx}: {str(e)}")
+                alignments[net_idx].append([])
     
     return alignments
 
@@ -673,7 +1001,7 @@ def _compute_dropout_indices(
     networks: List[nn.Module],
     dropout_fractions: List[float],
     metric,
-    mode: str = "global",
+    mode: str = "global_joint",
     alignments: Optional[Dict[int, List[float]]] = None,
 ) -> Dict[int, List[List[np.ndarray]]]:
     """
@@ -683,7 +1011,7 @@ def _compute_dropout_indices(
         networks: List of networks.
         dropout_fractions: List of float fractions to compute dropout for.
         metric: The alignment metric to use.
-        mode: The dropout mode to use. Either "global" or "per_layer".
+        mode: The dropout mode to use. Options: "global_joint", "layer_wise", "layer_isolated".
         alignments: Pre-computed alignment values for each network.
         
     Returns:
@@ -697,38 +1025,95 @@ def _compute_dropout_indices(
     dropout_indices = {}
     
     for net_idx, alignment_values in tqdm(alignments.items(), desc="Computing dropout indices"):
+        if net_idx >= len(networks):
+            logger.warning(f"Network index {net_idx} is out of range (max {len(networks)-1})")
+            continue
+            
         dropout_indices[net_idx] = []
         
-        # Get all the layers for this network
+        # Get the network
         network = networks[net_idx]
-        layers = _get_layer_modules(network)
-        weight_layers = [layer for layer in layers if hasattr(layer, "weight") and layer.weight is not None and len(layer.weight.shape) > 1]
+        
+        # Get alignment layers
+        if hasattr(network, "alignment_layers"):
+            alignment_layers = network.alignment_layers
+        else:
+            logger.warning(f"Network {net_idx} doesn't have alignment_layers, using all modules with weights")
+            alignment_layers = [m for m in network.modules() if hasattr(m, "weight") and m.weight is not None and len(m.weight.shape) > 1]
+        
+        # Calculate mapping between alignment layers and alignment values
+        if len(alignment_layers) != len(alignment_values):
+            logger.warning(
+                f"Network {net_idx}: Mismatch between alignment layers ({len(alignment_layers)}) "
+                f"and alignment values ({len(alignment_values)})"
+            )
+            # Use the minimum of the two to avoid index errors
+            num_layers = min(len(alignment_layers), len(alignment_values))
+            alignment_layers = alignment_layers[:num_layers]
+            alignment_values = alignment_values[:num_layers]
         
         # For each dropout fraction
         for fraction in dropout_fractions:
             # This will hold indices for all layers for this fraction
             layer_indices = []
             
-            # For each layer, compute dropout indices
-            for layer_idx, layer in enumerate(weight_layers):
-                if layer_idx < len(alignment_values):
-                    # Calculate number of neurons in this layer
-                    n_neurons = layer.weight.shape[1]  # Assuming weight shape is [out_features, in_features]
+            # For each layer with alignment values
+            for layer_idx, (layer, layer_alignments) in enumerate(zip(alignment_layers, alignment_values)):
+                if not layer_alignments:
+                    # No alignment values for this layer
+                    layer_indices.append(np.array([], dtype=np.int64))
+                    continue
+                
+                # Get the shape of the weight tensor
+                if not hasattr(layer, "weight") or layer.weight is None:
+                    layer_indices.append(np.array([], dtype=np.int64))
+                    continue
                     
-                    # Calculate number of neurons to drop based on fraction
-                    num_to_drop = int(n_neurons * fraction)
-                    
-                    # Get the indices of neurons to drop based on alignment value
-                    if num_to_drop > 0:
-                        # Use alignment values to determine which neurons to drop
-                        # (in this simple case, we just take the lowest alignment values)
-                        sorted_indices = np.argsort(alignment_values[layer_idx])
-                        indices_to_drop = sorted_indices[:num_to_drop]
-                    else:
+                weight = layer.weight
+                
+                # Check if weight is a proper 2D tensor
+                if len(weight.shape) != 2:
+                    logger.warning(f"Layer {layer_idx} has unexpected weight shape {weight.shape}, expecting 2D tensor")
+                    layer_indices.append(np.array([], dtype=np.int64))
+                    continue
+                
+                # Calculate number of neurons in this layer (input dimension)
+                n_neurons = weight.shape[1]
+                
+                # Verify alignment values match the weight shape
+                if len(layer_alignments) != n_neurons:
+                    logger.warning(
+                        f"Layer {layer_idx}: Mismatch between alignment values length ({len(layer_alignments)}) "
+                        f"and weight input dim ({n_neurons})"
+                    )
+                    # Use only valid indices
+                    layer_alignments = [
+                        layer_alignments[i] if i < len(layer_alignments) else 0.0
+                        for i in range(min(n_neurons, len(layer_alignments)))
+                    ]
+                
+                # Calculate number of neurons to drop based on fraction
+                num_to_drop = int(n_neurons * fraction)
+                
+                # Get the indices of neurons to drop based on alignment value
+                if num_to_drop > 0:
+                    try:
+                        # Convert to numpy array and ensure proper type
+                        alignments_array = np.array(layer_alignments[:n_neurons], dtype=np.float32)
+                        
+                        # Sort and get indices (smallest first)
+                        sorted_indices = np.argsort(alignments_array)
+                        
+                        # Only take valid indices up to num_to_drop
+                        indices_to_drop = sorted_indices[:min(num_to_drop, len(sorted_indices))]
+                    except Exception as e:
+                        logger.error(f"Error computing dropout indices for layer {layer_idx}: {str(e)}")
                         indices_to_drop = np.array([], dtype=np.int64)
                 else:
-                    # No alignment values for this layer, so no dropout
                     indices_to_drop = np.array([], dtype=np.int64)
+                
+                # Ensure indices are within bounds
+                indices_to_drop = np.array([idx for idx in indices_to_drop if idx < n_neurons], dtype=np.int64)
                 
                 layer_indices.append(indices_to_drop)
             
@@ -792,23 +1177,6 @@ def _evaluate_networks_sequentially(
                 layer.weight.data = original_weights[i].clone()
                 if hasattr(layer, "bias") and layer.bias is not None and i in original_biases:
                     layer.bias.data = original_biases[i].clone()
-                
-                # Get indices for this layer
-                layer_indices = level_indices[i] if isinstance(level_indices[i], np.ndarray) else level_indices
-                
-                # Zero out weights if there are indices to drop
-                if len(layer_indices) > 0:
-                    # Get the shape of the weight tensor
-                    if len(layer.weight.shape) == 2:  # Linear layer
-                        # Make sure indices are within bounds
-                        valid_indices = [idx for idx in layer_indices if idx < layer.weight.shape[1]]
-                        if valid_indices:
-                            # Zero out specific neurons (columns in this case)
-                            layer.weight.data[:, valid_indices] = 0
-                            if hasattr(layer, "bias") and layer.bias is not None:
-                                valid_bias_indices = [idx for idx in valid_indices if idx < layer.bias.shape[0]]
-                                if valid_bias_indices:
-                                    layer.bias.data[valid_bias_indices] = 0
             
             # Evaluate the network
             accuracy, loss = dataset.evaluate(network, device, num_batches=num_batches)
@@ -937,288 +1305,232 @@ def _evaluate_networks_batched(
     return network_accuracies, network_losses
 
 def _evaluate_networks_tensorized(
-    networks: List[nn.Module],
+    pruned_networks: List[nn.Module],
     dataset: DataSet,
-    dropout_indices: Dict[int, List[int]],
-    device: str = "cpu",
-    num_batches: int = None,
-) -> Tuple[Dict[int, List[float]], Dict[int, List[float]]]:
+    device: torch.device,
+    batch_size: int = 1024,
+) -> np.ndarray:
     """
-    Evaluate networks with progressive dropout applied using tensorized operations.
-    
+    Evaluates a list of pruned networks on a given dataset using a tensorized approach.
+    Returns accuracy for each network.
+
     Args:
-        networks: List of networks.
-        dataset: The dataset to evaluate on.
-        dropout_indices: Dictionary mapping network index to list of dropout indices.
-        device: The device to use for evaluation.
-        num_batches: Number of batches to evaluate on.
-        
+        pruned_networks: List of networks to evaluate
+        dataset: PyTorch dataset to evaluate on
+        device: Device to run the evaluation on
+        batch_size: Batch size for evaluation
+
     Returns:
-        Tuple of (network_accuracies, network_losses).
+        Array of accuracies, one for each network
     """
-    network_accuracies = {}
-    network_losses = {}
-    
-    # Prepare data batches
-    data_loader = dataset.get_loader(batch_size=dataset.dataloader_parameters.get('batch_size', 64), num_batches=num_batches)
-    
-    # Get network indices
-    network_indices = list(dropout_indices.keys())
-    
-    # Prepare storage for original weights and weight layers for each network
-    weight_layers = {}
-    original_weights = {}
-    original_biases = {}
-    
-    for net_idx in network_indices:
-        network = networks[net_idx]
-        layers = _get_layer_modules(network)
-        weight_layers[net_idx] = [layer for layer in layers if hasattr(layer, "weight") and layer.weight is not None and len(layer.weight.shape) > 1]
+    # Safety check - if no networks, return empty array
+    if not pruned_networks:
+        return np.array([])
         
-        original_weights[net_idx] = {}
-        original_biases[net_idx] = {}
-        
-        for i, layer in enumerate(weight_layers[net_idx]):
-            original_weights[net_idx][i] = layer.weight.data.clone()
-            if hasattr(layer, "bias") and layer.bias is not None:
-                original_biases[net_idx][i] = layer.bias.data.clone()
+    # Create DataLoader
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     
-    # Initialize results for each network
-    for net_idx in network_indices:
-        network_accuracies[net_idx] = []
-        network_losses[net_idx] = []
+    total_correct = [0] * len(pruned_networks)
+    total_samples = 0
     
-    # Number of dropout levels
-    num_levels = len(next(iter(dropout_indices.values())))
+    # Put networks in eval mode
+    for network in pruned_networks:
+        network.eval()
     
-    # Process each dropout level
-    for level_idx in range(num_levels):
-        # Track accuracies and losses for each network at this dropout level
-        level_accuracies = {net_idx: 0.0 for net_idx in network_indices}
-        level_losses = {net_idx: 0.0 for net_idx in network_indices}
-        batch_count = 0
-        
-        # Apply dropout for each network
-        for net_idx in network_indices:
-            network = networks[net_idx]
-            level_indices = dropout_indices[net_idx][level_idx]
-            
-            # Apply dropout by zeroing weights
-            for i, layer in enumerate(weight_layers[net_idx]):
-                # Skip if this layer should not be modified
-                if i >= len(level_indices):
-                    continue
-                    
-                # Reset to original weights first
-                layer.weight.data = original_weights[net_idx][i].clone()
-                if hasattr(layer, "bias") and layer.bias is not None and i in original_biases[net_idx]:
-                    layer.bias.data = original_biases[net_idx][i].clone()
+    with torch.no_grad():
+        for inputs, targets in dataloader:
+            try:
+                inputs, targets = inputs.to(device), targets.to(device)
                 
-                # Get indices for this layer
-                layer_indices = level_indices[i] if isinstance(level_indices[i], np.ndarray) else level_indices
+                # Batch predictions for all networks
+                batch_preds = []
+                for i, network in enumerate(pruned_networks):
+                    try:
+                        # Process predictions for this network
+                        logits = network(inputs)
+                        preds = torch.argmax(logits, dim=1)
+                        correct = (preds == targets).sum().item()
+                        total_correct[i] += correct
+                    except Exception as e:
+                        logger.error(f"Error evaluating network {i}: {str(e)}")
+                        # Don't add any correct predictions for this network in this batch
+                        
+                # Count total samples processed
+                total_samples += targets.size(0)
                 
-                # Zero out weights if there are indices to drop
-                if len(layer_indices) > 0:
-                    # Get the shape of the weight tensor
-                    if len(layer.weight.shape) == 2:  # Linear layer
-                        # Make sure indices are within bounds
-                        valid_indices = [idx for idx in layer_indices if idx < layer.weight.shape[1]]
-                        if valid_indices:
-                            # Create a mask for the neurons to drop
-                            mask = torch.ones_like(layer.weight)
-                            mask[:, valid_indices] = 0
-                            
-                            # Apply the mask
-                            layer.weight.data = layer.weight.data * mask
-                            
-                            # Zero out biases if present
-                            if hasattr(layer, "bias") and layer.bias is not None:
-                                valid_bias_indices = [idx for idx in valid_indices if idx < layer.bias.shape[0]]
-                                if valid_bias_indices:
-                                    bias_mask = torch.ones_like(layer.bias)
-                                    bias_mask[valid_bias_indices] = 0
-                                    layer.bias.data = layer.bias.data * bias_mask
-        
-        # Process data batches
-        for inputs, targets in data_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-            
-            batch_count += 1
-            
-            # Process each network
-            for net_idx in network_indices:
-                network = networks[net_idx]
-                
-                # Forward pass
-                with torch.no_grad():
-                    outputs = network(inputs)
-                    loss = F.cross_entropy(outputs, targets)
-                
-                # Compute accuracy
-                _, predicted = torch.max(outputs, 1)
-                correct = (predicted == targets).sum().item()
-                accuracy = correct / inputs.size(0)
-                
-                # Update running totals
-                level_accuracies[net_idx] += accuracy
-                level_losses[net_idx] += loss.item()
-        
-        # Compute average accuracy and loss for each network
-        for net_idx in network_indices:
-            avg_accuracy = level_accuracies[net_idx] / batch_count if batch_count > 0 else 0
-            avg_loss = level_losses[net_idx] / batch_count if batch_count > 0 else 0
-            
-            network_accuracies[net_idx].append(avg_accuracy)
-            network_losses[net_idx].append(avg_loss)
+            except Exception as e:
+                logger.error(f"Error processing batch: {str(e)}")
+                continue
     
-    # Restore original weights
-    for net_idx in network_indices:
-        for i, layer in enumerate(weight_layers[net_idx]):
-            layer.weight.data = original_weights[net_idx][i].clone()
-            if hasattr(layer, "bias") and layer.bias is not None and i in original_biases[net_idx]:
-                layer.bias.data = original_biases[net_idx][i].clone()
+    # Compute accuracies (handle division by zero)
+    if total_samples > 0:
+        accuracies = np.array([correct / total_samples for correct in total_correct])
+    else:
+        accuracies = np.zeros(len(pruned_networks))
     
-    return network_accuracies, network_losses
+    return accuracies
 
 def _compute_dropout_indices_cascading_layer(
     networks: List[nn.Module],
     dropout_fractions: List[float],
     metric,
-    device: str = "cpu",
-    dataset: Optional[DataSet] = None,
-    num_batches: int = None,
+    device="cuda",
 ) -> Dict[int, List[List[np.ndarray]]]:
     """
-    Compute dropout indices using the cascading layer pruning approach.
+    Compute dropout indices using a progressive cascading approach.
     
-    This approach prunes layers progressively:
-    1. Start with layer 1, compute alignment values and prune
-    2. Use the network with pruned layer 1 to compute alignment for layer 2
-    3. Prune layer 2 based on the new alignment values
-    4. Continue this process for all layers
-
+    For each network, this method:
+    1. Starts with layer 1
+    2. Computes alignment scores and prunes the specified fraction
+    3. Uses the pruned network to compute alignment scores for layer 2
+    4. And so on for each layer
+    
     Args:
-        networks: List of networks to prune
-        dropout_fractions: List of dropout fractions to apply
-        metric: Alignment metric to use
-        device: Device to run computations on
-        dataset: Dataset used to compute activations (required for this method)
-        num_batches: Number of batches to use for activation computation
+        networks: List of networks.
+        dropout_fractions: List of float fractions to compute dropout for.
+        metric: The alignment metric to use.
+        device: Device to use for computation.
         
     Returns:
-        Dictionary mapping network index to list of lists of dropout indices
+        Dictionary mapping network index to list of lists of dropout indices.
+        Structure: {net_idx: [layer_indices_for_frac1, layer_indices_for_frac2, ...]}
+        Where each layer_indices is a list with indices for each layer.
     """
-    if dataset is None:
-        raise ValueError("Dataset must be provided for cascading_layer pruning mode")
-    
     dropout_indices = {}
+    device = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
     
     # For each network
-    for net_idx, network in enumerate(tqdm(networks, desc="Computing cascading dropout indices")):
+    for net_idx, network in enumerate(networks):
+        logger.info(f"Computing cascading dropout indices for network {net_idx}")
+        
+        # Initialize dropout indices for this network
         dropout_indices[net_idx] = []
         
-        # Get all the layers for this network
-        layers = _get_layer_modules(network)
-        weight_layers = [layer for layer in layers if hasattr(layer, "weight") and layer.weight is not None and len(layer.weight.shape) > 1]
+        # Get alignment layers
+        if hasattr(network, "alignment_layers"):
+            alignment_layers = network.alignment_layers
+        else:
+            logger.warning(f"Network {net_idx} doesn't have alignment_layers, using all modules with weights")
+            alignment_layers = [m for m in network.modules() if hasattr(m, "weight") and m.weight is not None and len(m.weight.shape) > 1]
+        
+        # Skip if no alignment layers
+        if not alignment_layers:
+            logger.warning(f"Network {net_idx} has no alignment layers")
+            dropout_indices[net_idx] = [[np.array([], dtype=np.int64) for _ in alignment_layers] for _ in dropout_fractions]
+            continue
+        
+        # Dictionary to store original weights for each layer
+        original_weights = {}
+        original_biases = {}
+        
+        # Store the original weights for each layer
+        for layer_idx, layer in enumerate(alignment_layers):
+            if hasattr(layer, "weight") and layer.weight is not None:
+                original_weights[layer_idx] = layer.weight.data.clone()
+                if hasattr(layer, "bias") and layer.bias is not None:
+                    original_biases[layer_idx] = layer.bias.data.clone()
         
         # For each dropout fraction
-        for fraction in dropout_fractions:
-            # This will hold indices for all layers for this fraction
+        for frac_idx, fraction in enumerate(dropout_fractions):
+            # Create a copy of the network that we'll progressively modify
+            pruned_net = copy.deepcopy(network)
+            pruned_net.to(device)
+            
+            # Indices for all layers at this fraction
             layer_indices = []
             
-            # Store original weights to restore later
-            original_weights = {}
-            original_biases = {}
-            for i, layer in enumerate(weight_layers):
-                original_weights[i] = layer.weight.data.clone()
-                if hasattr(layer, "bias") and layer.bias is not None:
-                    original_biases[i] = layer.bias.data.clone()
-            
             # Process each layer sequentially
-            for layer_idx, layer in enumerate(weight_layers):
-                # Get a data loader for computing activations
-                data_loader = dataset.get_loader(num_batches=num_batches)
+            for layer_idx, layer in enumerate(pruned_net.alignment_layers):
+                # Skip layers without weights
+                if not hasattr(layer, "weight") or layer.weight is None:
+                    layer_indices.append(np.array([], dtype=np.int64))
+                    continue
                 
-                # Create a forward hook to capture activations
-                activations = []
+                weight = layer.weight
                 
-                def hook_fn(module, input, output):
-                    # Capture input activations
-                    activations.append(input[0].detach())
+                # Skip non-2D weight tensors (e.g., conv layers not supported yet)
+                if len(weight.shape) != 2:
+                    logger.warning(f"Layer {layer_idx} has weight shape {weight.shape}, skipping (only 2D weights supported)")
+                    layer_indices.append(np.array([], dtype=np.int64))
+                    continue
                 
-                # Register the hook
-                handle = layer.register_forward_hook(hook_fn)
-                
-                # Forward pass to get activations
-                with torch.no_grad():
-                    # Pass a batch of data through the network
-                    for inputs, _ in data_loader:
-                        inputs = inputs.to(device)
-                        network(inputs)
-                        break  # We only need one batch for activations
-                
-                # Remove the hook
-                handle.remove()
-                
-                # Compute alignment based on activations
-                if activations:
-                    input_act = activations[0]  # Use the first batch
+                try:
+                    # Compute alignment scores for this layer in the current pruned network
+                    n_neurons = weight.shape[1]
+                    layer_alignments = []
                     
-                    # Calculate alignment values for this layer
-                    # This uses the current (potentially pruned) state of previous layers
-                    neuron_alignments = []
-                    
-                    # For each neuron, compute alignment
-                    for neuron_idx in range(layer.weight.shape[1]):
-                        # Extract weights for this neuron
-                        neuron_weights = layer.weight.data[:, neuron_idx].cpu().numpy()
-                        
-                        # Use a simple metric for alignment (customize based on your needs)
-                        if hasattr(metric, "compute_neuron_score"):
-                            # Use the metric directly if it supports neuron-level computation
-                            alignment_score = metric.compute_neuron_score(input_act, neuron_weights, neuron_idx)
-                        else:
-                            # Fallback to a simple measure (magnitude)
-                            alignment_score = float(np.linalg.norm(neuron_weights))
-                        
-                        neuron_alignments.append(alignment_score)
+                    for neuron_idx in range(n_neurons):
+                        try:
+                            # Get weights for this neuron
+                            neuron_weight = weight[:, neuron_idx].cpu().numpy()
+                            
+                            # Calculate alignment score using the metric
+                            # Check if the metric is callable or has a compute method
+                            if callable(metric):
+                                alignment_score = metric(neuron_weight)
+                            elif hasattr(metric, 'compute_alignment'):
+                                alignment_score = metric.compute_alignment(neuron_weight)
+                            elif hasattr(metric, 'measure_neuron'):
+                                alignment_score = metric.measure_neuron(neuron_weight)
+                            elif hasattr(metric, 'compute'):
+                                alignment_score = metric.compute(neuron_weight)
+                            elif hasattr(metric, 'name') and metric.name.lower() == 'rq':
+                                # Special case for RQ metric
+                                alignment_score = float(np.linalg.norm(neuron_weight))
+                                logger.info("Using magnitude as a proxy for RQ metric")
+                            else:
+                                # Default to magnitude as a simple alignment metric
+                                alignment_score = float(np.linalg.norm(neuron_weight))
+                                logger.warning(f"Using default magnitude metric - could not determine how to use provided metric object")
+                            
+                            # Add to list of alignment scores
+                            layer_alignments.append(float(alignment_score))
+                        except Exception as e:
+                            logger.error(f"Error computing alignment for neuron {neuron_idx} in layer {layer_idx}: {str(e)}")
+                            # Use default low alignment score if error
+                            layer_alignments.append(0.0)
                     
                     # Calculate number of neurons to drop based on fraction
-                    num_to_drop = int(len(neuron_alignments) * fraction)
+                    num_to_drop = int(n_neurons * fraction)
                     
-                    # Sort neurons by alignment and get indices to drop
                     if num_to_drop > 0:
-                        sorted_indices = np.argsort(neuron_alignments)
-                        indices_to_drop = sorted_indices[:num_to_drop]
-                    else:
-                        indices_to_drop = np.array([], dtype=np.int64)
-                    
-                    # Add to layer indices
-                    layer_indices.append(indices_to_drop)
-                    
-                    # Apply pruning to this layer before moving to the next
-                    # This ensures cascading effect where each layer's pruning affects the next
-                    if len(indices_to_drop) > 0:
-                        valid_indices = [idx for idx in indices_to_drop if idx < layer.weight.shape[1]]
-                        if valid_indices:
-                            # Zero out weights for pruned neurons
-                            layer.weight.data[:, valid_indices] = 0
+                        # Sort and get indices of neurons to drop (lowest alignment first)
+                        sorted_indices = np.argsort(layer_alignments)
+                        indices_to_drop = sorted_indices[:min(num_to_drop, len(sorted_indices))]
+                        
+                        # Ensure indices are within bounds
+                        indices_to_drop = np.array([idx for idx in indices_to_drop if idx < n_neurons], dtype=np.int64)
+                        
+                        # Add indices to layer_indices list
+                        layer_indices.append(indices_to_drop)
+                        
+                        # Apply dropout to this layer in the pruned network
+                        # (so it will be reflected when computing next layer's alignments)
+                        if indices_to_drop.size > 0:
+                            # Zero out weights for dropped neurons
+                            new_weights = layer.weight.data.clone()
+                            new_weights[:, indices_to_drop] = 0.0
+                            layer.weight.data = new_weights
+                            
+                            # Zero out biases if present
                             if hasattr(layer, "bias") and layer.bias is not None:
-                                valid_bias_indices = [idx for idx in valid_indices if idx < layer.bias.shape[0]]
+                                biases = layer.bias.data.clone()
+                                valid_bias_indices = [idx for idx in indices_to_drop if idx < len(biases)]
                                 if valid_bias_indices:
-                                    layer.bias.data[valid_bias_indices] = 0
-                else:
-                    # No activations captured
+                                    biases[valid_bias_indices] = 0.0
+                                    layer.bias.data = biases
+                    else:
+                        # No neurons to drop
+                        layer_indices.append(np.array([], dtype=np.int64))
+                except Exception as e:
+                    logger.error(f"Error processing layer {layer_idx}: {str(e)}")
                     layer_indices.append(np.array([], dtype=np.int64))
             
-            # Restore original weights after processing all layers for this fraction
-            for i, layer in enumerate(weight_layers):
-                layer.weight.data = original_weights[i].clone()
-                if hasattr(layer, "bias") and layer.bias is not None and i in original_biases:
-                    layer.bias.data = original_biases[i].clone()
-            
-            # Add indices for this dropout fraction
+            # Add the results for this fraction to the main results
             dropout_indices[net_idx].append(layer_indices)
+        
+        # Release memory
+        del pruned_net
+        torch.cuda.empty_cache()
     
     return dropout_indices 

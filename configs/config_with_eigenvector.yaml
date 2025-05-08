@@ -54,6 +54,6 @@ alignment:
 # Extra configuration parameters
 extra:
   dropout_mode: "scaled" # How dropout is applied (options: "scaled" = multiply by 1/(1-p), "unscaled" = no scaling)
-  dropout_pruning_mode: "global" # How pruning is distributed (options: "global" = across all neurons, "per_layer" = layer-by-layer, "per_layer_combined" = combination)
+  dropout_pruning_mode: "global_joint" # How pruning is distributed (options: "global_joint" = across all neurons, "layer_wise" = layer-by-layer, "layer_isolated" = one layer at a time)
   exclude_classification_layer: true # Whether to exclude the output layer from pruning (usually true for classification tasks)
   cnn_mode: "unfold" # How CNN features are processed for alignment (options: "unfold", "patchwise", "batch_patch_combined") 
