@@ -346,7 +346,8 @@ def progressive_dropout(
     device="cuda",
     pruning_mode: str = "global_joint",
     dropout_mode: str = "scaled",
-    strategy: str = "low_rq"
+    strategy: str = "low_rq",
+    show_progress: bool = False
 ) -> Tuple[Dict[int, List[float]], Dict[int, List[float]]]:
     """
     Apply progressive dropout to networks and evaluate their performance.
@@ -372,6 +373,7 @@ def progressive_dropout(
             - "high_rq": Prune neurons with highest alignment scores (weight magnitudes)
             - "low_rq": Prune neurons with lowest alignment scores (weight magnitudes)
             - "random": Prune neurons randomly
+        show_progress: Whether to show progress bars during processing
         
     Returns:
         Tuple of (network_accuracies, network_losses).
@@ -406,8 +408,12 @@ def progressive_dropout(
     device = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
     
     # Process each network
-    for net_idx, network in enumerate(networks):
-        logger.info(f"Processing network {net_idx+1}/{len(networks)} with strategy '{strategy}'")
+    network_iterator = tqdm(enumerate(networks), total=len(networks), desc=f"Networks ({strategy})", 
+                           position=1, leave=False) if show_progress else enumerate(networks)
+    
+    for net_idx, network in network_iterator:
+        if not show_progress:
+            logger.info(f"Processing network {net_idx+1}/{len(networks)} with strategy '{strategy}'")
         
         # Move network to device
         network = network.to(device)
@@ -442,7 +448,10 @@ def progressive_dropout(
             total = 0
             total_loss = 0.0
             
-            for inputs, targets in dataset.test_loader:
+            test_iter = tqdm(dataset.test_loader, desc="Evaluating original accuracy", 
+                           position=2, leave=False) if show_progress else dataset.test_loader
+            
+            for inputs, targets in test_iter:
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = network(inputs)
                 
@@ -463,15 +472,24 @@ def progressive_dropout(
                 network_accuracies[net_idx].append(original_accuracy)
                 network_losses[net_idx].append(original_loss)
         
-        logger.info(f"Network {net_idx}, Original accuracy: {original_accuracy:.2f}%, loss: {original_loss:.4f}")
+        if not show_progress:
+            logger.info(f"Network {net_idx}, Original accuracy: {original_accuracy:.2f}%, loss: {original_loss:.4f}")
         
         # Compute pruning for each dropout fraction (except the first one, which is 0%)
-        for frac_idx, fraction in enumerate(dropout_fractions):
+        fraction_iterator = tqdm(enumerate(dropout_fractions), total=len(dropout_fractions), 
+                               desc="Dropout fractions", position=2, 
+                               leave=False) if show_progress else enumerate(dropout_fractions)
+        
+        for frac_idx, fraction in fraction_iterator:
             # Skip the first fraction (0.0) since we already added original accuracy
             if frac_idx == 0 and fraction == 0.0:
                 continue
                 
-            logger.info(f"Processing network {net_idx}, dropout fraction: {fraction:.4f}")
+            if not show_progress:
+                logger.info(f"Processing network {net_idx}, dropout fraction: {fraction:.4f}")
+            
+            if show_progress:
+                fraction_iterator.set_description(f"Fraction: {fraction:.2f}")
             
             # Restore original weights
             for i, layer in enumerate(network.alignment_layers):
@@ -480,7 +498,7 @@ def progressive_dropout(
                     if i in original_biases and hasattr(layer, "bias") and layer.bias is not None:
                         layer.bias.data = original_biases[i].clone()
             
-            # Apply pruning based on alignment scores
+            # Apply pruning based on the selected strategy
             if pruning_mode == "global_joint":
                 # Collect all neurons and their scores across all layers
                 all_neurons = []
@@ -634,7 +652,10 @@ def progressive_dropout(
                         total = 0
                         total_loss = 0.0
                         
-                        for inputs, targets in dataset.test_loader:
+                        eval_iter = tqdm(dataset.test_loader, desc=f"Layer {layer_idx} eval", 
+                                       position=3, leave=False) if show_progress else dataset.test_loader
+                        
+                        for inputs, targets in eval_iter:
                             inputs, targets = inputs.to(device), targets.to(device)
                             outputs = network(inputs)
                             
@@ -706,12 +727,18 @@ def progressive_dropout(
             
             # Evaluate the pruned network
             network.eval()
+            pruned_accuracy = 0.0
+            pruned_loss = 0.0
+            
             with torch.no_grad():
                 correct = 0
                 total = 0
                 total_loss = 0.0
                 
-                for inputs, targets in dataset.test_loader:
+                eval_iter = tqdm(dataset.test_loader, desc=f"Eval fraction {fraction:.2f}", 
+                               position=3, leave=False) if show_progress else dataset.test_loader
+                
+                for inputs, targets in eval_iter:
                     inputs, targets = inputs.to(device), targets.to(device)
                     outputs = network(inputs)
                     
@@ -725,13 +752,23 @@ def progressive_dropout(
                     correct += predicted.eq(targets).sum().item()
                 
                 if total > 0:
-                    accuracy = 100.0 * correct / total
-                    loss = total_loss / total
+                    pruned_accuracy = 100.0 * correct / total
+                    pruned_loss = total_loss / total
                     
-                    network_accuracies[net_idx].append(accuracy)
-                    network_losses[net_idx].append(loss)
+                    # Add to results
+                    network_accuracies[net_idx].append(pruned_accuracy)
+                    network_losses[net_idx].append(pruned_loss)
                     
-                    logger.info(f"Network {net_idx}, Fraction {fraction:.4f}, Strategy {strategy}: Accuracy {accuracy:.2f}%, Loss {loss:.4f}")
+                    if show_progress:
+                        fraction_iterator.set_postfix({"acc": f"{pruned_accuracy:.2f}%"})
+            
+            if not show_progress:
+                logger.info(f"Network {net_idx}, fraction {fraction:.2f}: accuracy = {pruned_accuracy:.2f}%, loss = {pruned_loss:.4f}")
+        
+        # Update progress bar for this network if showing progress
+        if show_progress:
+            last_acc = network_accuracies[net_idx][-1] if network_accuracies[net_idx] else 0
+            network_iterator.set_postfix({"final_acc": f"{last_acc:.2f}%"})
         
         # Restore original weights after processing this network
         for i, layer in enumerate(network.alignment_layers):
