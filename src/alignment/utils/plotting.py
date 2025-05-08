@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Union, Any
 import logging
 
+# Set up logger
+logger = logging.getLogger(__name__)
+
 # Set preref style for matplotlib
 plt.style.use('seaborn-v0_8-whitegrid')
 plt.rcParams['figure.figsize'] = (10, 6)
