@@ -14,6 +14,7 @@ import torchvision
 from torch import nn
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
+from tqdm import tqdm
 
 from alignment.models.base import AlignmentNetwork
 from alignment.config import DatasetConfig, ExperimentConfig
@@ -235,7 +236,7 @@ class DataSet(ABC):
         
         return loader
 
-    def evaluate(self, model, device='cpu', num_batches=None):
+    def evaluate(self, model, device='cpu', num_batches=None, show_progress: bool = True):
         """
         Evaluate a model on the dataset.
         
@@ -243,41 +244,70 @@ class DataSet(ABC):
             model: Model to evaluate.
             device: Device to use for evaluation.
             num_batches: Number of batches to evaluate on. If None, evaluates on all batches.
-            
-        Returns:
-            Tuple of (accuracy, loss).
+            show_progress: Whether to show batch-level progress and final evaluation log.
         """
         model.eval()
         
-        # Get data loader
+        if show_progress: # Only log weight states if showing progress
+            logger.info(f"Evaluating model {type(model).__name__} on device {device}")
+            if hasattr(model, 'alignment_layers'):
+                for i, layer in enumerate(model.alignment_layers):
+                    if hasattr(layer, 'weight') and layer.weight is not None:
+                        weight_shape = layer.weight.shape
+                        # Ensure weight_shape has at least 2 dimensions for numel calculation
+                        if len(weight_shape) >= 2:
+                            total_weights = layer.weight.numel() # Use numel for total elements
+                            num_zeros = (layer.weight == 0).sum().item()
+                        
+                            num_rows = weight_shape[0]
+                            zero_rows = 0
+                            for row_idx in range(num_rows):
+                                if torch.all(layer.weight[row_idx] == 0):
+                                    zero_rows += 1
+                            
+                            logger.info(f"Layer {i}: Shape {weight_shape}, "
+                                    f"zeros: {num_zeros}/{total_weights} ({num_zeros/total_weights:.2%}), "
+                                    f"pruned neurons: {zero_rows}/{num_rows} ({zero_rows/num_rows:.2%})")
+                        else:
+                            logger.info(f"Layer {i}: Shape {weight_shape} - Not a standard 2D+ weight matrix for this logging.")
+
         loader = self.get_loader(num_batches=num_batches)
         
-        # Set up metrics
         correct = 0
         total = 0
         total_loss = 0.0
         
-        # Evaluate
+        # Use tqdm for progress bar if show_progress is True
+        batch_iterator = tqdm(loader, desc="Evaluating Batches", leave=False) if show_progress else loader
+
         with torch.no_grad():
-            for inputs, targets in loader:
+            for inputs, targets in batch_iterator:
                 inputs = inputs.to(device)
                 targets = targets.to(device)
-                
-                # Forward pass
                 outputs = model(inputs)
+                if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                    logger.warning(f"NaN or Inf detected in model outputs")
                 loss = self.measure_loss(outputs, targets)
-                
-                # Calculate accuracy
                 _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += (predicted == targets).sum().item()
-                
-                # Update loss
+                batch_total = targets.size(0)
+                batch_correct = (predicted == targets).sum().item()
+                total += batch_total
+                correct += batch_correct
                 total_loss += loss.item()
+                
+                # Batch logging only if show_progress is True (and not too frequent)
+                if show_progress and isinstance(batch_iterator, tqdm):
+                    # Update tqdm postfix instead of random logging
+                    batch_iterator.set_postfix({
+                        'loss': f"{total_loss / (batch_iterator.n + 1) if (batch_iterator.n + 1) > 0 else 0:.4f}", 
+                        'acc': f"{100.0 * correct / total if total > 0 else 0:.2f}%"
+                    })
         
-        # Calculate metrics
-        accuracy = correct / total
-        avg_loss = total_loss / len(loader)
+        accuracy = 100.0 * correct / total if total > 0 else 0.0
+        avg_loss = total_loss / len(loader) if len(loader) > 0 else float('inf')
+        
+        if show_progress: # Only log final summary if progress was shown
+            logger.info(f"Evaluation complete: Accuracy = {accuracy:.2f}%, Loss = {avg_loss:.4f}")
         
         return accuracy, avg_loss
 

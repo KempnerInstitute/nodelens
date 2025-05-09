@@ -26,16 +26,17 @@ class MLP(nn.Module):
     Attributes:
         input_dim: Dimension of input features
         output_dim: Dimension of output (number of classes)
-        num_hidden: List of hidden layer dimensions
+        hidden_dims: List of hidden layer dimensions
         layers: Sequential container of linear layers and activations
     """
     
     def __init__(
-        self, 
-        input_dim: int = 784, 
-        output_dim: int = 10, 
-        num_hidden: List[int] = [128, 64],
-        dropout_rate: float = 0.0
+        self,
+        input_dim: int = 784,
+        hidden_dims: List[int] = [100, 100, 50],
+        output_dim: int = 10,
+        dropout_rate: float = 0.5,
+        activation_type: str = "relu"
     ):
         """
         Initialize MLP with configurable architecture.
@@ -43,32 +44,52 @@ class MLP(nn.Module):
         Args:
             input_dim: Dimension of input features
             output_dim: Dimension of output (number of classes)
-            num_hidden: List of hidden layer dimensions
+            hidden_dims: List of hidden layer dimensions
             dropout_rate: Dropout probability between layers
+            activation_type: Activation function type
         """
         super().__init__()
         
-        # Ensure num_hidden is a list
-        if not isinstance(num_hidden, list):
-            num_hidden = [num_hidden]
-            
-        # Build sequential layers
+        if activation_type.lower() == "relu":
+            activation_fn = nn.ReLU()
+        elif activation_type.lower() == "tanh":
+            activation_fn = nn.Tanh()
+        elif activation_type.lower() == "sigmoid":
+            activation_fn = nn.Sigmoid()
+        elif activation_type.lower() == "identity":
+            activation_fn = nn.Identity()
+        else:
+            logger.warning(f"Unknown activation_type '{activation_type}'. Defaulting to ReLU.")
+            activation_fn = nn.ReLU()
+
         layers = []
-        prev_dim = input_dim
+        current_dim = input_dim
         
-        # Add hidden layers
-        for h_dim in num_hidden:
-            layers.append(nn.Linear(prev_dim, h_dim))
-            layers.append(nn.ReLU())
-            if dropout_rate > 0.0:
-                layers.append(nn.Dropout(dropout_rate))
-            prev_dim = h_dim
-            
-        # Add output layer
-        layers.append(nn.Linear(prev_dim, output_dim))
+        # Input layer (can be considered part of the first hidden block conceptually from v2)
+        # Or as a separate input projection if no dropout/activation is desired right after it.
+        # For simplicity matching v2 structure: (Linear -> Activation) then (Dropout -> Linear -> Activation)
         
-        self.layers = nn.Sequential(*layers)
+        # First hidden layer (or input projection + first hidden layer based on interpretation)
+        if hidden_dims:
+            layers.append(nn.Linear(current_dim, hidden_dims[0]))
+            layers.append(activation_fn)
+            current_dim = hidden_dims[0]
+
+            # Subsequent hidden layers
+            for i in range(len(hidden_dims) - 1):
+                if dropout_rate > 0.0:
+                    layers.append(nn.Dropout(p=dropout_rate))
+                layers.append(nn.Linear(current_dim, hidden_dims[i+1]))
+                layers.append(activation_fn)
+                current_dim = hidden_dims[i+1]
         
+        # Output layer
+        if dropout_rate > 0.0 and hidden_dims: # Only add dropout if there were hidden layers to apply it after
+            layers.append(nn.Dropout(p=dropout_rate))
+        layers.append(nn.Linear(current_dim, output_dim))
+        
+        self.network = nn.Sequential(*layers)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of the MLP.
@@ -86,19 +107,19 @@ class MLP(nn.Module):
             x = x.view(batch_size, -1)
             
             # Ensure the flattened dimension matches the expected input_dim
-            if x.size(1) != self.layers[0].in_features:
+            if x.size(1) != self.network[0].in_features:
                 # Log a warning about dimension mismatch
-                logging.warning(
-                    f"Input dimension mismatch. Expected {self.layers[0].in_features}, "
+                logger.warning(
+                    f"Input dimension mismatch. Expected {self.network[0].in_features}, "
                     f"got {x.size(1)}. Adjusting to expected dimension."
                 )
                 # Calculate expected dimensions based on common image sizes
-                if self.layers[0].in_features == 784:  # MNIST (28x28)
+                if self.network[0].in_features == 784:  # MNIST (28x28)
                     x = x.view(batch_size, -1)[:, :784]
-                elif self.layers[0].in_features == 3072:  # CIFAR (3x32x32)
+                elif self.network[0].in_features == 3072:  # CIFAR (3x32x32)
                     x = x.view(batch_size, -1)[:, :3072]
         
-        return self.layers(x)
+        return self.network(x)
 
 
 class CNN2P2(nn.Module):
@@ -115,39 +136,77 @@ class CNN2P2(nn.Module):
     def __init__(
         self,
         in_channels: int = 1,
-        num_hidden: List[int] = [128, 64],
         output_dim: int = 10,
-        dropout_rate: float = 0.0
+        conv_channels: List[int] = [32, 64],
+        kernel_sizes: List[int] = [5, 5],
+        strides: List[int] = [1, 1],
+        paddings: List[int] = [2, 2],
+        pool_kernel_size: int = 2,
+        pool_stride: int = 2,
+        hidden_fc_dim: int = 128,
+        dropout_rate: float = 0.5,
+        example_input_hw: Tuple[int, int] = (28, 28)
     ):
         """
         Initialize CNN2P2 network.
         
         Args:
             in_channels: Number of input channels
-            num_hidden: List with hidden layer dimensions [conv_out_dim, fc_hidden_dim]
             output_dim: Number of output classes
+            conv_channels: List of convolutional layer output dimensions
+            kernel_sizes: List of convolutional layer kernel sizes
+            strides: List of convolutional layer strides
+            paddings: List of convolutional layer paddings
+            pool_kernel_size: Pooling layer kernel size
+            pool_stride: Pooling layer stride
+            hidden_fc_dim: Size of the one hidden FC layer
             dropout_rate: Dropout probability between fully connected layers
+            example_input_hw: Example input image height and width
         """
         super().__init__()
 
-        # Default hidden dimensions if not provided
-        if not isinstance(num_hidden, list) or len(num_hidden) < 2:
-            num_hidden = [128, 64]
+        if not (len(conv_channels) == len(kernel_sizes) == len(strides) == len(paddings) == 2):
+            raise ValueError("conv_channels, kernel_sizes, strides, paddings must all be lists of 2 elements.")
+
+        self.conv_layers = nn.ModuleList()
+        current_channels = in_channels
+        h, w = example_input_hw
+
+        # Conv Layer 1
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(current_channels, conv_channels[0], kernel_sizes[0], strides[0], paddings[0]),
+            nn.ReLU(),
+            nn.MaxPool2d(pool_kernel_size, stride=pool_stride)
+        )
+        current_channels = conv_channels[0]
+        h = (h - kernel_sizes[0] + 2 * paddings[0]) // strides[0] + 1 # after conv1
+        h = (h - pool_kernel_size) // pool_stride + 1 # after pool1
+        w = (w - kernel_sizes[0] + 2 * paddings[0]) // strides[0] + 1
+        w = (w - pool_kernel_size) // pool_stride + 1
+
+        # Conv Layer 2
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(current_channels, conv_channels[1], kernel_sizes[1], strides[1], paddings[1]),
+            nn.ReLU(),
+            nn.MaxPool2d(pool_kernel_size, stride=pool_stride)
+        )
+        current_channels = conv_channels[1]
+        h = (h - kernel_sizes[1] + 2 * paddings[1]) // strides[1] + 1 # after conv2
+        h = (h - pool_kernel_size) // pool_stride + 1 # after pool2
+        w = (w - kernel_sizes[1] + 2 * paddings[1]) // strides[1] + 1
+        w = (w - pool_kernel_size) // pool_stride + 1
         
-        conv_out_dim = num_hidden[0]
-        fc_hidden_dim = num_hidden[1]
-        
-        # Convolutional layers
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=5)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=5)
-        
-        # Calculate size after convolutions
-        # For MNIST/CIFAR: 28x28 -> 24x24 -> 12x12 -> 8x8 -> 4x4
-        # Output is 64 * 4 * 4 = 1024
-        self.fc1 = nn.Linear(1024, fc_hidden_dim)
-        self.dropout = nn.Dropout(dropout_rate) if dropout_rate > 0.0 else None
-        self.fc2 = nn.Linear(fc_hidden_dim, output_dim)
-        
+        flattened_dim = current_channels * h * w
+
+        self.fc_layers = nn.Sequential(
+            nn.Flatten(start_dim=1),
+            nn.Dropout(p=dropout_rate), # As per v2: Dropout before first FC linear
+            nn.Linear(flattened_dim, hidden_fc_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_rate), # As per v2: Dropout before second FC linear
+            nn.Linear(hidden_fc_dim, output_dim)
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of the CNN.
@@ -162,107 +221,121 @@ class CNN2P2(nn.Module):
         if x.dim() == 2:
             batch_size = x.size(0)
             # Assuming square images for simplicity
-            side_length = int(torch.sqrt(torch.tensor(x.size(1) / self.conv1.in_channels)))
-            x = x.view(batch_size, self.conv1.in_channels, side_length, side_length)
+            side_length = int(torch.sqrt(torch.tensor(x.size(1) / self.conv1[0].in_channels)))
+            x = x.view(batch_size, self.conv1[0].in_channels, side_length, side_length)
             
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2)
-        x = torch.flatten(x, 1)
-        x = F.relu(self.fc1(x))
-        if self.dropout is not None:
-            x = self.dropout(x)
-        x = self.fc2(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.fc_layers(x)
         return x
 
 
 # Register model constructors
 @register_model("mlp")
-def create_mlp(dropout_rate=0.0, alignment_layers=None, **kwargs) -> AlignmentNetwork:
-    """
-    Create an MLP model wrapped in AlignmentNetwork.
+def create_mlp(config_model: Dict, # Expecting a dict derived from ModelConfig fields
+               alignment_layers: Optional[Dict[str, Any]] = None) -> AlignmentNetwork:
     
-    Args:
-        dropout_rate: Dropout probability between layers
-        alignment_layers: Dictionary mapping layer names to input layers for alignment
-        **kwargs: Arguments for MLP constructor
-        
-    Returns:
-        AlignmentNetwork wrapping an MLP
-    """
-    base_model = MLP(dropout_rate=dropout_rate, **kwargs)
+    # Parameters from your YAML mapped to the new MLP class
+    mlp_params = {
+        "input_dim": config_model.get("input_dim", 784),
+        "hidden_dims": config_model.get("hidden_dims", [100, 100, 50]),
+        "output_dim": config_model.get("output_dim", 10),
+        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.5)), # aLlows "dropout" or "dropout_rate"
+        "activation_type": config_model.get("activation", "relu")
+    }
+    base_model = MLP(**mlp_params)
     
-    # Default alignment layer configuration for MLP
-    alignment_layer_names = alignment_layers
-    if alignment_layer_names is None:
-        alignment_layer_names = {
-            name: i for i, name in enumerate([
-                module_name for module_name, module in base_model.named_modules()
-                if isinstance(module, nn.Linear) and not module_name.endswith("layers.0")
-            ])
-        }
+    # Default alignment layer naming for the new MLP structure
+    # Linear layers are now direct children of base_model.network (a Sequential module)
+    # Their names will be like "network.0", "network.2" (if dropout is present), etc.
+    # Or, if we name them: layerInput, layerHidden.0.linear, layerOutput.linear
+    # For AlignmentNetwork, we need the names of modules that HAVE a .weight attribute.
+    default_alignment_layer_names = {}
+    idx_for_alignment = 0
+    for i, layer in enumerate(base_model.network):
+        if isinstance(layer, nn.Linear):
+            # Using a generic name format for layers within the sequential block
+            default_alignment_layer_names[f"network.{i}"] = idx_for_alignment 
+            idx_for_alignment += 1
+
+    final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=alignment_layer_names)
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names)
 
 
 @register_model("cnn2p2")
-def create_cnn2p2(dropout_rate=0.0, alignment_layers=None, **kwargs) -> AlignmentNetwork:
-    """
-    Create a CNN2P2 model wrapped in AlignmentNetwork.
+def create_cnn2p2(config_model: Dict, # Expecting a dict derived from ModelConfig fields
+                  alignment_layers: Optional[Dict[str, Any]] = None) -> AlignmentNetwork:
+    # Parameters from your YAML mapped to the new CNN2P2 class
+    # Need to add these to ModelConfig and YAML if not present
+    cnn_params = {
+        "in_channels": config_model.get("in_channels", 1),
+        "output_dim": config_model.get("output_dim", 10),
+        "conv_channels": config_model.get("conv_channels", [32, 64]),
+        "kernel_sizes": config_model.get("kernel_sizes", [5, 5]),
+        "strides": config_model.get("strides", [1, 1]),
+        "paddings": config_model.get("paddings", [0, 0]), # Default to 0 if not specified, adjust based on common use
+        "pool_kernel_size": config_model.get("pool_kernel_size", 2),
+        "pool_stride": config_model.get("pool_stride", 2),
+        "hidden_fc_dim": config_model.get("hidden_fc_dim", 128), # Your v2 num_hidden[1]
+        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.5)),
+        "example_input_hw": tuple(config_model.get("example_input_hw", [28,28])) # e.g. (28,28) for MNIST
+    }
+    # Determine input_dim for fc layer based on conv output and example_input_hw
+    # This calculation is now inside CNN2P2 __init__
+
+    base_model = CNN2P2(**cnn_params)
     
-    Args:
-        dropout_rate: Dropout probability between layers
-        alignment_layers: Dictionary mapping layer names to input layers for alignment
-        **kwargs: Arguments for CNN2P2 constructor
-        
-    Returns:
-        AlignmentNetwork wrapping a CNN2P2
-    """
-    base_model = CNN2P2(dropout_rate=dropout_rate, **kwargs)
-    
-    # Default alignment layer configuration for CNN2P2
-    alignment_layer_names = alignment_layers
-    if alignment_layer_names is None:
-        alignment_layer_names = {
-            "fc1": 0,
-            "fc2": 1
-        }
-    
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=alignment_layer_names)
+    # Default alignment layers for the new CNN2P2 structure
+    # Names will be self.conv1.0 (Conv2d), self.conv2.0 (Conv2d)
+    # And for FC layers within self.fc_layers (Sequential): self.fc_layers.1 (Linear), self.fc_layers.4 (Linear)
+    default_alignment_layer_names = {
+        "conv1.0": 0,       # First Conv2d inside self.conv1 Sequential
+        "conv2.0": 1,       # First Conv2d inside self.conv2 Sequential
+        "fc_layers.1": 2,   # First Linear layer in self.fc_layers
+        "fc_layers.4": 3    # Second Linear layer in self.fc_layers (after Dropout, ReLU, Dropout)
+    }
+    final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
+
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names)
 
 
 @register_model("alexnet")
-def create_alexnet(dropout_rate=0.0, alignment_layers=None, **kwargs) -> AlignmentNetwork:
-    """
-    Create an AlexNet model wrapped in AlignmentNetwork.
+def create_alexnet(config_model: Dict,
+                   alignment_layers: Optional[Dict[str, Any]] = None) -> AlignmentNetwork:
+    dropout_rate = config_model.get("dropout_rate", config_model.get("dropout", 0.5))
+    num_classes = config_model.get("output_dim", 1000) # AlexNet torchvision default is 1000
+
+    base_model = alexnet(weights=None, progress=False, num_classes=num_classes) # Use num_classes
     
-    Args:
-        dropout_rate: Dropout probability between layers
-        alignment_layers: Dictionary mapping layer names to input layers for alignment
-        **kwargs: Arguments for AlexNet constructor
-        
-    Returns:
-        AlignmentNetwork wrapping an AlexNet
-    """
-    base_model = alexnet(**kwargs)
-    
-    # Set dropout rates if not using default
-    if dropout_rate != 0.0:
-        for module in base_model.modules():
+    # Modify dropout rates in AlexNet if specified
+    # AlexNet has dropout layers named classifier.2 and classifier.5
+    # The original AlexNet paper used 0.5 dropout.
+    # torchvision.models.alexnet() already adds nn.Dropout(p=0.5) at these positions.
+    # We can adjust them if dropout_rate is different from 0.5 and > 0.
+    if dropout_rate > 0 and dropout_rate != 0.5:
+        for name, module in base_model.named_modules():
             if isinstance(module, nn.Dropout):
                 module.p = dropout_rate
+                logger.info(f"Set dropout for {name} in AlexNet to {dropout_rate}")
     
-    # Default alignment layer configuration for AlexNet
-    alignment_layer_names = alignment_layers
-    if alignment_layer_names is None:
-        alignment_layer_names = {
-            "classifier.1": 0,  # First ReLU in classifier
-            "classifier.4": 1,  # Second ReLU in classifier
-            "classifier.6": 2   # Final layer
-        }
+    # Default alignment layers for AlexNet (key linear and conv layers)
+    # Names from base_model.named_modules():
+    # features.0, features.3, features.6, features.8, features.10 (Conv2d)
+    # classifier.1, classifier.4, classifier.6 (Linear)
+    default_alignment_layer_names = {
+        "features.0": 0, # Conv1
+        "features.3": 1, # Conv2
+        "features.6": 2, # Conv3
+        "features.8": 3, # Conv4
+        "features.10": 4, # Conv5
+        "classifier.1": 5, # FC1
+        "classifier.4": 6, # FC2
+        "classifier.6": 7  # Output FC
+    }
+    final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=alignment_layer_names)
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names)
 
 
 # Dictionary for dataset-specific model parameters

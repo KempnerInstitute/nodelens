@@ -22,14 +22,21 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-from alignment.config import ExperimentConfig
+from alignment.config import ExperimentConfig, DatasetConfig, CheckpointingConfig, AlignmentConfig
 from alignment.experiments.experiment import Experiment
 from alignment.metrics import AlignmentMetric, get_metric
 from alignment.models.registry import create_model
-from alignment.dropout import progressive_dropout, eigenvector_dropout
-from alignment.training import train_model, evaluate_model
+from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _ensure_model_on_device, _compute_metric_for_all_nodes, _apply_pruning_to_single_net
+from alignment.training import train_networks
 from alignment.utils.core import setup_logging
-from alignment.utils.plotting import plot_dropout_results, plot_experiment_summary
+from alignment.utils.plotting import (
+    plot_dropout_results, 
+    plot_experiment_summary, 
+    plot_mean_rq_of_pruned_nodes, 
+    plot_per_layer_pruning_percentage,
+    plot_per_layer_contribution_to_pruning,
+    plot_rq_stats_per_layer
+)
 from alignment.datasets import get_dataset, load_dataset
 
 logger = logging.getLogger(__name__)
@@ -44,64 +51,64 @@ class AlignmentExperiment(Experiment):
     multiple metrics, and visualization.
     """
     
-    def __init__(self, config: Dict) -> None:
+    def __init__(self, config: ExperimentConfig) -> None:
         """Initialize the experiment with the given config.
 
         Args:
-            config: Experiment configuration.
+            config: Experiment configuration object (instance of ExperimentConfig).
         """
         super().__init__(config)
         
-        # Initialize dataset_config to avoid reference errors
-        dataset_config = {}
-        
-        # Make sure dataset_config has required fields to prevent loading errors
-        if isinstance(self.config.dataset, dict):
-            dataset_config = self.config.dataset.copy()  # Use copy to avoid modifying original
-            
-            # Ensure consistent naming between dataset.name and dataset.dataset_name
-            if "name" in dataset_config and "dataset_name" not in dataset_config:
-                dataset_config["dataset_name"] = dataset_config["name"]
-            elif "dataset_name" in dataset_config and "name" not in dataset_config:
-                dataset_config["name"] = dataset_config["dataset_name"]
-            elif "name" not in dataset_config and "dataset_name" not in dataset_config:
-                if isinstance(self.config.dataset, str):
-                    # If config.dataset is a string, use it as the dataset name
-                    dataset_config["name"] = self.config.dataset
-                    dataset_config["dataset_name"] = self.config.dataset
-                    logger.info(f"Using dataset name from string: {self.config.dataset}")
-                else:
-                    # Default to CIFAR10 if no dataset name provided
-                    logger.warning("No dataset name provided in configuration. Using default: cifar10")
-                    dataset_config["name"] = "cifar10"
-                    dataset_config["dataset_name"] = "cifar10"
-        elif isinstance(self.config.dataset, str):
-            # Handle case where config.dataset is directly a string
-            dataset_config["name"] = self.config.dataset
-            dataset_config["dataset_name"] = self.config.dataset
-            logger.info(f"Using dataset name from string: {self.config.dataset}")
+        # Ensure self.device is normalized at initialization
+        if hasattr(self.config, "device") and self.config.device:
+            device_str = self.config.device
+            if device_str == "cuda": # Normalize "cuda" to "cuda:0"
+                device_str = "cuda:0"
+            self.device = _normalize_device(torch.device(device_str))
         else:
-            # Default case if dataset config is neither dict nor string
-            logger.warning("No valid dataset configuration found. Using default: cifar10")
-            dataset_config["name"] = "cifar10"
-            dataset_config["dataset_name"] = "cifar10"
-            
-        logger.info(f"Using dataset: {dataset_config.get('name', 'unknown')}")
+            self.device = _normalize_device(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         
-        # Set up experiment-specific paths
+        # Directly use self.config.debug_mode as it's guaranteed by ExperimentConfig dataclass
+        # This makes self.debug_mode an instance attribute of AlignmentExperiment.
+        self.debug_mode = self.config.debug_mode 
+
+        current_dataset_name = "unknown"
+        if hasattr(self.config, 'dataset'):
+            if hasattr(self.config.dataset, 'dataset_name') and self.config.dataset.dataset_name:
+                current_dataset_name = self.config.dataset.dataset_name
+            elif isinstance(self.config.dataset, str): # Fallback if dataset is just a string name
+                current_dataset_name = self.config.dataset
+        
+        if current_dataset_name == "unknown":
+            logger.warning("Dataset name not found. Attempting to use default from DatasetConfig.")
+            try:
+                default_dataset_conf = DatasetConfig()
+                current_dataset_name = default_dataset_conf.dataset_name
+                logger.info(f"Using default dataset name: {current_dataset_name}")
+            except Exception as e:
+                logger.error(f"Could not determine dataset name from defaults: {e}")
+                current_dataset_name = "MNIST" # Last resort fallback
+                logger.warning(f"Falling back to hardcoded default dataset: {current_dataset_name}")
+
+        logger.info(f"Using dataset: {current_dataset_name} on device: {self.device}")
+        
         self.figure_path = None
         self.weights_path = None
         self.setup_paths()
         
-        logger.debug(f"Initialized alignment experiment")
+        logger.debug(f"Initialized alignment experiment on device {self.device} with debug_mode={self.debug_mode}")
         
-        # Add a sanity check
-        # Ensure checkpoint parameters exist in the config
-        if not hasattr(self.config, "checkpoint"):
-            self.config.checkpoint = {}
-            logger.warning("Checkpoint configuration not found, using defaults")
+        if not hasattr(self.config, "checkpointing"):
+            self.config.checkpointing = CheckpointingConfig()
+            logger.warning("Checkpointing configuration attribute not found, initializing with defaults.")
         
-        self.metric = get_metric(config.alignment.metric)
+        if hasattr(self.config, 'alignment') and hasattr(self.config.alignment, 'metric'):
+            self.metric = get_metric(self.config.alignment.metric)
+        else:
+            logger.error("Alignment metric configuration not found! Please check config.alignment.metric.")
+            default_alignment_conf = AlignmentConfig()
+            self.metric = get_metric(default_alignment_conf.metric)
+            logger.warning(f"Falling back to default alignment metric: {default_alignment_conf.metric}")
         
     def get_basename(self) -> str:
         """
@@ -110,7 +117,14 @@ class AlignmentExperiment(Experiment):
         Returns:
             Base name string
         """
-        return f"alignment_{self.config.model.model_name}_{self.config.dataset.dataset_name}"
+        # Ensure dataset_name is correctly accessed
+        dataset_name_for_path = "unknown_dataset"
+        if hasattr(self.config, 'dataset') and hasattr(self.config.dataset, 'dataset_name'):
+            dataset_name_for_path = self.config.dataset.dataset_name
+        elif hasattr(self.config, 'dataset') and isinstance(self.config.dataset, str):
+            dataset_name_for_path = self.config.dataset
+        
+        return f"alignment_{self.config.model.model_name}_{dataset_name_for_path}"
     
     def prepare_path(self) -> List[str]:
         """
@@ -119,10 +133,16 @@ class AlignmentExperiment(Experiment):
         Returns:
             List of path components
         """
+        dataset_name_for_path = "unknown_dataset"
+        if hasattr(self.config, 'dataset') and hasattr(self.config.dataset, 'dataset_name'):
+            dataset_name_for_path = self.config.dataset.dataset_name
+        elif hasattr(self.config, 'dataset') and isinstance(self.config.dataset, str):
+            dataset_name_for_path = self.config.dataset
+
         return [
             "alignment",
             self.config.model.model_name,
-            self.config.dataset.dataset_name,
+            dataset_name_for_path,
             f"metric_{self.config.alignment.metric}"
         ]
     
@@ -136,418 +156,645 @@ class AlignmentExperiment(Experiment):
         Returns:
             List containing multiple independently initialized networks
         """
-        # Get the number of network replicates from config
         num_replicates = self.config.training.replicates if hasattr(self.config.training, "replicates") else 5
-        
-        # Create multiple models based on configuration, each with different initialization
         networks = []
         for i in range(num_replicates):
-            # Set a different seed for each network to ensure different initializations
             if hasattr(self.config, 'seed') and self.config.seed is not None:
-                # Use the base seed plus the replicate index to get different but reproducible initializations
                 torch.manual_seed(self.config.seed + i)
                 torch.cuda.manual_seed_all(self.config.seed + i)
                 np.random.seed(self.config.seed + i)
             
-            # Create a new model
             model = create_model(self.config.model)
-            model.to(self.device)
+            _ensure_model_on_device(model, self.device) # Use the normalized self.device
             networks.append(model)
             
-        logger.info(f"Created {len(networks)} models with independent initializations: {self.config.model.model_name}")
-        
+        logger.info(f"Created {len(networks)} models on device {self.device}: {self.config.model.model_name}")
         return networks
     
-    def main(self) -> Tuple[Dict, List[nn.Module]]:
-        """
-        Main experiment execution method.
+    def evaluate_on_loader(self, model, data_loader, device=None, show_progress=True):
+        eval_device = _normalize_device(device if device is not None else self.device)
+        _ensure_model_on_device(model, eval_device)
         
-        Returns:
-            Tuple of (results dictionary, list of networks)
-        """
-        # Additional initialization
-        self.setup_paths()
-        logger.info(f"Set up paths. Results will be saved to {self.results_path}")
-
-        # Create network models for experiment
-        networks = self.create_networks()
+        model.eval()
+        total_loss = 0.0
+        correct = 0
+        total = 0
         
-        # Run the experiment based on the specified type
-        experiment_type = getattr(self.config, 'experiment_type', 'alignment_analysis')
+        # Control progress bar display with show_progress argument
+        loader_iter = tqdm(data_loader, desc="Evaluating", leave=False) if show_progress else data_loader
         
-        if experiment_type == "alignment_analysis" or experiment_type == "alignment":
-            # Run alignment analysis and store results
-            results = self.run_alignment_analysis(networks)
-            
-        elif experiment_type == "progressive_dropout":
-            # Run progressive dropout experiment for all networks
-            results = self._run_progressive_dropout(networks)
-            
-            # Generate and log visualization
-            self._plot_dropout_results(
-                results, 
-                self.figure_path, 
-                title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')}"
-            )
-            
-            # Save results for later reference
-            with open(os.path.join(self.results_path, "progressive_dropout_results.pkl"), "wb") as f:
-                pickle.dump(results, f)
-            
-        elif experiment_type == "eigenvector_dropout":
-            # Run eigenvector dropout experiment for one network
-            results = self._run_eigenvector_dropout(networks[0])
-            
-            # Generate and log visualization (this has a different format)
-            self._generate_dropout_plots(
-                results,
-                "Eigenvector Dropout",
-                "eigenvector_dropout"
-            )
-            
-            # Save results for later reference
-            with open(os.path.join(self.results_path, "eigenvector_dropout_results.pkl"), "wb") as f:
-                pickle.dump(results, f)
-                
-        elif experiment_type == "training_alignment":
-            # Run training alignment experiment
-            # This is handled separately because it needs different structure
-            results = self._run_training_alignment()
-            
-            # Generate and log visualization
-            self._generate_training_alignment_plots(results)
-            
-            # Save results for later reference
-            with open(os.path.join(self.results_path, "training_alignment_results.pkl"), "wb") as f:
-                pickle.dump(results, f)
+        with torch.no_grad():
+            for inputs, targets in loader_iter:
+                inputs, targets = inputs.to(eval_device), targets.to(eval_device)
+                outputs = model(inputs)
+                if isinstance(outputs, tuple):
+                    outputs = outputs[0]
+                loss = torch.nn.functional.cross_entropy(outputs, targets, reduction='sum')
+                total_loss += loss.item()
+                _, predicted = outputs.max(1)
+                correct += predicted.eq(targets).sum().item()
+                total += targets.size(0)
+                if show_progress and isinstance(loader_iter, tqdm):
+                    loader_iter.set_postfix({
+                        'loss': f"{total_loss / total if total > 0 else 0:.4f}",
+                        'acc': f"{100.0 * correct / total if total > 0 else 0:.2f}%"
+                    })
         
-        else:
-            raise ValueError(f"Unsupported experiment type: {experiment_type}")
-            
-        logger.info(f"Completed {getattr(self.config, 'experiment_name', experiment_type)} experiment")
-        
-        return results, networks
-    
-    def _run_progressive_dropout(self, networks: List[nn.Module]) -> Dict:
-        """
-        Run progressive dropout experiment with multiple networks.
-        
-        Uses the progressive_dropout function from alignment.dropout module 
-        instead of reimplementing the logic directly.
-
-        Args:
-            networks: List of networks to run the experiment on.
-
-        Returns:
-            Dictionary with results that match the expected format for plotting.
-        """
-        # Get dropout fractions from config
-        dropin_min = self.config.alignment.dropout_min
-        dropin_max = self.config.alignment.dropout_max
-        num_dropout_fractions = self.config.alignment.dropout_steps
-        dropout_fractions = np.linspace(dropin_min, dropin_max, num_dropout_fractions).tolist()
-        
-        # Get pruning mode and dropout mode from config
-        pruning_mode = getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
-        dropout_mode = getattr(self.config.extra, "dropout_mode", "scaled")
-        
-        # Print exactly what mode is being used
-        logger.info(f"Running progressive dropout with pruning_mode={pruning_mode}, dropout_mode={dropout_mode}")
-        
-        # Debug metric type
-        logger.info(f"Using metric type: {type(self.metric)}")
-        
-        # Prepare dataset
-        try:
-            batch_size = getattr(self.config.dataset, "batch_size", 128)
-            dataset = load_dataset(self.config.dataset, batch_size=batch_size)
-        except Exception as e:
-            logger.error(f"Error loading dataset: {str(e)}")
-            return {"error": f"Dataset configuration error: {str(e)}", "dropout_fractions": dropout_fractions}
-        
-        # Train all networks at once before applying dropout
-        logger.info(f"Training {len(networks)} networks before applying progressive dropout")
-        
-        # Track training history for plotting
-        training_history = {
-            'train_loss': [],
-            'train_acc': [],
-            'test_loss': [],
-            'test_acc': []
+        metrics = {
+            'loss': total_loss / total if total > 0 else 0.0,
+            'accuracy': 100.0 * correct / total if total > 0 else 0.0
         }
+        if show_progress: # Only log final if progress was shown for batches
+            logger.info(f"Evaluation complete: Accuracy = {metrics['accuracy']:.2f}%, Loss = {metrics['loss']:.4f}")
+        return metrics
         
+    def train_networks(self, networks: List[nn.Module], dataset) -> Dict:
+        """
+        Train multiple networks on the given dataset.
+        
+        Args:
+            networks: List of networks to train
+            dataset: Dataset object for training
+
+        Returns:
+            Dictionary with training history
+        """
         # Get training parameters from config
         num_epochs = getattr(self.config.training, "epochs", 5)
         learning_rate = getattr(self.config.training, "learning_rate", 0.001)
+        optimizer_name = getattr(self.config.training, "optimizer", "Adam")
+        weight_decay = getattr(self.config.training, "weight_decay", 0.0)
+        # Get training_method from config.extra
+        training_method = getattr(self.config.extra, "training_method", "auto")
         
-        # Set up optimizer for each network
-        optimizers = []
-        for network in networks:
-            network.to(self.device)
-            optimizers.append(torch.optim.Adam(network.parameters(), lr=learning_rate))
+        logger.info(f"Training {len(networks)} networks for {num_epochs} epochs using method: {training_method}.")
         
-        # Train all networks in parallel across epochs
-        epoch_pbar = tqdm(range(num_epochs), desc="Training epochs", position=0)
-        for epoch in epoch_pbar:
-            # Initialize epoch stats
-            epoch_train_loss = 0.0
-            epoch_train_acc = 0.0
-            epoch_test_loss = 0.0
-            epoch_test_acc = 0.0
-            
-            # Batch training - process all networks in parallel for each data batch
-            for net_idx, network in enumerate(networks):
-                network.train()
-            
-            # Variables to track epoch statistics
-            epoch_batch_loss = 0.0
-            epoch_batch_correct = 0
-            epoch_batch_total = 0
-            
-            batch_pbar = tqdm(dataset.train_loader, desc=f"Epoch {epoch+1}/{num_epochs} batches", position=1, leave=False)
-            for inputs, targets in batch_pbar:
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
-                batch_total = targets.size(0)
-                epoch_batch_total += batch_total
-                
-                # Process each network with the same batch
-                batch_loss = 0.0
-                batch_correct = 0
-                
-                # Train all networks on this batch in parallel
-                for net_idx, (network, optimizer) in enumerate(zip(networks, optimizers)):
-                    # Zero the parameter gradients
-                    optimizer.zero_grad()
-                    
-                    # Forward pass
-                    outputs = network(inputs)
-                    loss = torch.nn.functional.cross_entropy(outputs, targets)
-                    
-                    # Backward pass and optimize
-                    loss.backward()
-                    optimizer.step()
-                    
-                    # Track statistics
-                    batch_loss += loss.item()
-                    _, predicted = outputs.max(1)
-                    batch_correct += predicted.eq(targets).sum().item()
-                
-                # Accumulate statistics for the epoch
-                epoch_batch_loss += batch_loss
-                epoch_batch_correct += batch_correct
-                
-                # Update batch progress bar with average across networks
-                avg_batch_loss = batch_loss / len(networks)
-                avg_batch_acc = 100.0 * batch_correct / (batch_total * len(networks))
-                batch_pbar.set_postfix({
-                    'loss': avg_batch_loss,
-                    'acc': avg_batch_acc
-                })
-            
-            # Evaluation phase - evaluate all networks in parallel
-            all_test_loss = 0.0
-            all_test_correct = 0
-            all_test_total = 0
-            
-            # Set all networks to eval mode
-            for network in networks:
-                network.eval()
-            
-            # Evaluation progress bar
-            eval_pbar = tqdm(dataset.test_loader, desc=f"Evaluating networks", position=1, leave=False)
-            
-            with torch.no_grad():
-                for inputs, targets in eval_pbar:
-                    inputs, targets = inputs.to(self.device), targets.to(self.device)
-                    test_total = targets.size(0)
-                    all_test_total += test_total
-                    
-                    # Evaluate all networks on this batch
-                    batch_test_loss = 0.0
-                    batch_test_correct = 0
-                    
-                    for net_idx, network in enumerate(networks):
-                        outputs = network(inputs)
-                        
-                        # Calculate loss
-                        loss = torch.nn.functional.cross_entropy(outputs, targets, reduction='sum')
-                        batch_test_loss += loss.item()
-                        
-                        # Calculate accuracy
-                        _, predicted = outputs.max(1)
-                        batch_test_correct += predicted.eq(targets).sum().item()
-                    
-                    # Accumulate statistics
-                    all_test_loss += batch_test_loss
-                    all_test_correct += batch_test_correct
-                    
-                    # Update eval progress bar
-                    avg_test_loss = batch_test_loss / len(networks)
-                    avg_test_acc = 100.0 * batch_test_correct / (test_total * len(networks))
-                    eval_pbar.set_postfix({
-                        'test_loss': avg_test_loss,
-                        'test_acc': avg_test_acc
-                    })
-            
-            # Calculate and store epoch averages
-            epoch_train_loss = epoch_batch_loss / (len(dataset.train_loader) * len(networks))
-            epoch_train_acc = 100.0 * epoch_batch_correct / (epoch_batch_total * len(networks))
-            epoch_test_loss = all_test_loss / all_test_total
-            epoch_test_acc = 100.0 * all_test_correct / all_test_total
-            
-            training_history['train_loss'].append(epoch_train_loss)
-            training_history['train_acc'].append(epoch_train_acc)
-            training_history['test_loss'].append(epoch_test_loss)
-            training_history['test_acc'].append(epoch_test_acc)
-            
-            # Update epoch progress bar
-            epoch_pbar.set_postfix({
-                'train_loss': epoch_train_loss,
-                'train_acc': f"{epoch_train_acc:.2f}%",
-                'test_loss': epoch_test_loss,
-                'test_acc': f"{epoch_test_acc:.2f}%"
-            })
-            
-            # Log progress
-            logger.info(f"Epoch {epoch+1}/{num_epochs}: "
-                      f"Train Loss={epoch_train_loss:.4f}, Train Acc={epoch_train_acc:.2f}%, "
-                      f"Test Loss={epoch_test_loss:.4f}, Test Acc={epoch_test_acc:.2f}%")
+        return train_networks(
+            networks=networks,
+            dataset=dataset,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            device=self.device,
+            show_progress=True,
+            optimizer_class=getattr(torch.optim, optimizer_name, torch.optim.Adam),
+            weight_decay=weight_decay,
+            training_method=training_method # Pass the training_method to the dispatcher
+        )
+    
+    def run_progressive_dropout(self, networks: List[nn.Module], dataset) -> Dict:
+        """
+        Run progressive dropout experiment on multiple networks.
         
-        logger.info(f"Completed training {len(networks)} networks. Proceeding to progressive dropout...")
+        Args:
+            networks: List of networks to evaluate
+            dataset: Dataset object
+
+        Returns:
+            Dictionary with dropout experiment results
+        """
+        # Get dropout parameters from config
+        dropout_min = self.config.alignment.dropout_min
+        dropout_max = self.config.alignment.dropout_max
+        num_dropout_steps = self.config.alignment.dropout_steps
+        dropout_fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
         
-        # Initialize results structure with correct format for plotting
-        final_results = {
+        # Get pruning and dropout modes from config
+        pruning_mode = getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
+        dropout_mode = getattr(self.config.extra, "dropout_mode", "scaled")
+        
+        # IMPORTANT: Add a warning about scaled mode possibly hiding accuracy drops
+        if dropout_mode == "scaled":
+            logger.warning("Using 'scaled' dropout mode - this scales the remaining weights after pruning, "
+                          "which can mask accuracy drops. Consider using 'unscaled' mode if you don't "
+                          "see significant accuracy changes with pruning.")
+            # Optionally, uncomment this to override the scaled mode for testing
+            # dropout_mode = "unscaled"
+            # logger.info("Overriding dropout_mode to 'unscaled' for clearer pruning effects")
+        
+        # DEBUGGING: Check model structures
+        for net_idx, network in enumerate(networks[:1]):  # Just check first network
+            logger.info(f"Network {net_idx} structure (before training):")
+            total_params = 0
+            for i, layer in enumerate(network.alignment_layers):
+                if hasattr(layer, "weight") and layer.weight is not None:
+                    weights = layer.weight.data
+                    total_weights = weights.numel()
+                    total_params += total_weights
+                    
+                    # Count zero weights
+                    zero_weights = (weights == 0).sum().item()
+                    zero_percent = 100.0 * zero_weights / total_weights if total_weights > 0 else 0.0
+                    
+                    logger.info(f"Layer {i}: Shape {weights.shape}, zeros: {zero_weights}/{total_weights} ({zero_percent:.2f}%)")
+            logger.info(f"Total parameters: {total_params}")
+        
+        # Get multi-strategy option
+        use_multi_strategy = getattr(self.config.extra, "use_multi_strategy_dropout", True)
+        # Get exclude_classification_layer option
+        effective_exclude_classification_layer = getattr(self.config.extra, "exclude_classification_layer", True)
+
+        logger.info(f"Running progressive dropout with pruning_mode={pruning_mode}, dropout_mode={dropout_mode}, exclude_classification_layer={effective_exclude_classification_layer}")
+        if use_multi_strategy:
+            logger.info("Using optimized multi-strategy approach (processing all strategies simultaneously)")
+        
+        # Train networks if needed
+        if getattr(self.config.training, "train_before_dropout", True):
+            training_history = self.train_networks(networks, dataset)
+        else:
+            # Create empty training history
+            training_history = {
+                'train_loss': [],
+                'train_acc': [],
+                'test_loss': [],
+                'test_acc': []
+            }
+        
+        # DEBUGGING: Check model structures after training
+        for net_idx, network in enumerate(networks[:1]):  # Just check first network
+            logger.info(f"Network {net_idx} structure (after training):")
+            for i, layer in enumerate(network.alignment_layers):
+                if hasattr(layer, "weight") and layer.weight is not None:
+                    weights = layer.weight.data
+                    total_weights = weights.numel()
+                    
+                    # Count zero weights
+                    zero_weights = (weights == 0).sum().item()
+                    zero_percent = 100.0 * zero_weights / total_weights if total_weights > 0 else 0.0
+                    
+                    logger.info(f"Layer {i}: Shape {weights.shape}, zeros: {zero_weights}/{total_weights} ({zero_percent:.2f}%)")
+        
+        # Make deep copies of networks to preserve original for each strategy
+        networks_copy = []
+        for net_idx, net_to_copy in enumerate(networks): # Changed variable name to avoid confusion
+            net_copy = copy.deepcopy(net_to_copy)
+            _ensure_model_on_device(net_copy, self.device) # Ensure copy is on normalized device
+            # Log device of copied network for debugging
+            # if self.config.debug_mode:
+            #     copied_param_device = next(net_copy.parameters()).device
+            #     logger.info(f"Copied network {net_idx} for dropout placed on device: {copied_param_device}")
+            networks_copy.append(net_copy)
+        
+        # Initialize results structure
+        results = {
             "dropout_fractions": dropout_fractions,
             "accuracies": {"high_rq": [], "low_rq": [], "random": []},
             "losses": {"high_rq": [], "low_rq": [], "random": []},
             "stds": {"high_rq": [], "low_rq": [], "random": []},
-            "training_history": training_history
+            "training_history": training_history,
+            "pruning_details": {},
+            "pre_pruning_layer_stats": {} # New key for pre-pruning RQ stats
         }
         
-        # Call the progressive_dropout function with our trained networks
-        from alignment.dropout import progressive_dropout
+        # DEBUGGING: Create a custom test function to directly verify pruning
+        if self.debug_mode: 
+            logger.info("DEBUG_MODE: Running detailed test_pruning function.")
+            def test_pruning(strategy_name, network_idx=0, fraction_idx=5):
+                """Verify pruning is applied correctly for a specific network and fraction"""
+                fraction = dropout_fractions[fraction_idx]
+                test_net_orig = networks[network_idx] # Original network for comparison of params
+                test_net = copy.deepcopy(test_net_orig)
+                _ensure_model_on_device(test_net, self.device) # Ensure copy is on normalized device
+                
+                # Count original non-zero weights
+                orig_non_zero = {}
+                total_params = 0
+                for i, layer in enumerate(test_net.alignment_layers):
+                    if hasattr(layer, "weight") and layer.weight is not None:
+                        weights = layer.weight.data
+                        non_zero = (weights != 0).sum().item()
+                        orig_non_zero[i] = non_zero
+                        total_params += weights.numel()
+                
+                logger.info(f"Testing {strategy_name} pruning at {fraction:.2f} fraction:")
+                logger.info(f"Original non-zero weights: {sum(orig_non_zero.values())}/{total_params}")
+                
+                # Call progressive_dropout with debug_mode=True for its internal logging, 
+                # but we primarily care about the pruning effect on test_net here.
+                if strategy_name == "high_rq":
+                    progressive_dropout(
+                        [test_net], dataset, [0, fraction], self.metric, self.device,
+                        pruning_mode=pruning_mode, dropout_mode=dropout_mode, 
+                        strategy="high_rq", show_progress=False, debug_mode=True,
+                        exclude_classification_layer_config=effective_exclude_classification_layer
+                    )
+                elif strategy_name == "low_rq":
+                    progressive_dropout(
+                        [test_net], dataset, [0, fraction], self.metric, self.device,
+                        pruning_mode=pruning_mode, dropout_mode=dropout_mode, 
+                        strategy="low_rq", show_progress=False, debug_mode=True,
+                        exclude_classification_layer_config=effective_exclude_classification_layer
+                    )
+                else:  # random
+                    progressive_dropout(
+                        [test_net], dataset, [0, fraction], self.metric, self.device,
+                        pruning_mode=pruning_mode, dropout_mode=dropout_mode, 
+                        strategy="random", show_progress=False, debug_mode=True,
+                        exclude_classification_layer_config=effective_exclude_classification_layer
+                    )
+                
+                # Check if weights were pruned
+                pruned_non_zero = {}
+                for i, layer in enumerate(test_net.alignment_layers):
+                    if hasattr(layer, "weight") and layer.weight is not None:
+                        weights = layer.weight.data
+                        non_zero = (weights != 0).sum().item()
+                        pruned_non_zero[i] = non_zero
+                        reduction = (orig_non_zero[i] - non_zero) / orig_non_zero[i] * 100 if orig_non_zero[i] > 0 else 0
+                        logger.info(f"Layer {i}: Non-zero weights reduced from {orig_non_zero[i]} to {non_zero} ({reduction:.2f}% reduction)")
+                
+                total_before = sum(orig_non_zero.values())
+                total_after = sum(pruned_non_zero.values())
+                total_reduction = (total_before - total_after) / total_before * 100 if total_before > 0 else 0
+                logger.info(f"Total non-zero weights reduced from {total_before} to {total_after} ({total_reduction:.2f}% reduction)")
+                
+                # Run evaluation to verify weights remain pruned during evaluation
+                pre_eval_non_zero = sum((layer.weight.data != 0).sum().item() 
+                                       for layer in test_net.alignment_layers 
+                                       if hasattr(layer, "weight") and layer.weight is not None)
+                
+                # Double-check all tensors are on correct device before evaluation
+                for name, param in test_net.named_parameters():
+                    if param.device != self.device:
+                        logger.warning(f"Parameter {name} on wrong device: {param.device} vs {self.device}")
+                        param.data = param.data.to(self.device)
+                
+                # Evaluate the pruned test_net, passing show_progress=False to dataset.evaluate
+                # to suppress its batch-level logging during this debug step.
+                # The final accuracy/loss from test_pruning will still be logged.
+                accuracy, loss = dataset.evaluate(test_net, self.device, show_progress=False)
+                
+                # Check post-evaluation
+                post_eval_non_zero = sum((layer.weight.data != 0).sum().item() 
+                                        for layer in test_net.alignment_layers 
+                                        if hasattr(layer, "weight") and layer.weight is not None)
+                
+                logger.info(f"Non-zero weights before evaluation: {pre_eval_non_zero}")
+                logger.info(f"Non-zero weights after evaluation: {post_eval_non_zero}")
+                logger.info(f"Evaluation accuracy (after {strategy_name} pruning): {accuracy:.2f}%, loss: {loss:.4f}")
+                
+                return (pre_eval_non_zero == post_eval_non_zero)
+            
+            for strategy in ["high_rq", "low_rq", "random"]:
+                test_pruning(strategy)
+        else:
+            logger.info("Skipping detailed test_pruning function (debug_mode is False).")
         
         try:
-            # Define the strategies to run
-            strategies = ["high_rq", "low_rq", "random"]
-            
-            # Track time for benchmarking
-            start_time = time.time()
-            logger.info(f"Running pruning strategies for {len(networks)} networks")
-            
-            # Create a master progress bar for all strategies
-            strategy_pbar = tqdm(strategies, desc="Pruning strategies", position=0)
-            
-            # Process strategies sequentially (since DataLoader is not thread-safe)
-            for strategy in strategy_pbar:
-                strategy_pbar.set_description(f"Strategy: {strategy}")
-                
-                # Create copies of networks for this strategy
-                strategy_networks = [copy.deepcopy(net) for net in networks]
-                
-                # Run progressive dropout with this strategy
-                network_accuracies, network_losses = progressive_dropout(
-                    strategy_networks,
-                    dataset,
-                    dropout_fractions,
-                    self.metric,
-                    self.device,
-                    pruning_mode=pruning_mode,
-                    dropout_mode=dropout_mode,
-                    strategy=strategy,
-                    show_progress=True  # Enable progress bars
-                )
-                
-                # Process results for this strategy
-                fraction_accs = [[] for _ in range(len(dropout_fractions))]
-                fraction_losses = [[] for _ in range(len(dropout_fractions))]
-                
-                # Collect results from all networks for each fraction
-                for net_idx in network_accuracies:
-                    for frac_idx, acc in enumerate(network_accuracies[net_idx]):
-                        if frac_idx < len(fraction_accs):
-                            fraction_accs[frac_idx].append(acc)
-                    for frac_idx, loss in enumerate(network_losses[net_idx]):
-                        if frac_idx < len(fraction_losses):
-                            fraction_losses[frac_idx].append(loss)
-                
-                # Calculate statistics for each fraction
-                for frac_idx in range(len(dropout_fractions)):
-                    if fraction_accs[frac_idx]:
-                        mean_acc = np.mean(fraction_accs[frac_idx])
-                        std_acc = np.std(fraction_accs[frac_idx])
-                        mean_loss = np.mean(fraction_losses[frac_idx]) if fraction_losses[frac_idx] else 0.0
+            if use_multi_strategy:
+                start_time = time.time()
+                try:
+                    # progressive_dropout now returns a 4th item: aggregated_pre_pruning_stats
+                    network_accuracies, network_losses, pruning_details_from_dropout, pre_pruning_stats = progressive_dropout(
+                        networks_copy, 
+                        dataset,
+                        dropout_fractions,
+                        self.metric,
+                        self.device,
+                        pruning_mode=pruning_mode,
+                        dropout_mode=dropout_mode,
+                        show_progress=True,
+                        use_multi_strategy=True,
+                        debug_mode=self.debug_mode,
+                        exclude_classification_layer_config=effective_exclude_classification_layer
+                    )
+                    results["pruning_details"] = pruning_details_from_dropout
+                    results["pre_pruning_layer_stats"] = pre_pruning_stats # Store it
+                    
+                    # CRITICAL FIX: Replace original networks with pruned copies
+                    # This ensures any subsequent evaluation uses the pruned networks
+                    networks = networks_copy
+                    
+                    logger.info("Successfully completed progressive_dropout with multi-strategy mode")
+                    logger.info("Replaced original networks with pruned copies for accurate evaluation")
+                    
+                    # Add diagnostics for the returned structure
+                    logger.info(f"Return value types: network_accuracies={type(network_accuracies)}, network_losses={type(network_losses)}")
+                    
+                    # Validate the returned structure
+                    if not isinstance(network_accuracies, dict):
+                        raise ValueError(f"Expected dictionary for network_accuracies but got {type(network_accuracies)}")
+                    if not isinstance(network_losses, dict):
+                        raise ValueError(f"Expected dictionary for network_losses but got {type(network_losses)}")
                         
-                        # Store in results
-                        final_results["accuracies"][strategy].append(mean_acc)
-                        final_results["stds"][strategy].append(std_acc)
-                        final_results["losses"][strategy].append(mean_loss)
+                    # Debug the structure of returned results
+                    logger.info(f"Network accuracies keys: {list(network_accuracies.keys())}")
+                    
+                    strategies = ["high_rq", "low_rq", "random"]
+                    for strategy in strategies:
+                        if strategy not in network_accuracies:
+                            logger.warning(f"Strategy {strategy} not found in network_accuracies")
+                            continue
+                            
+                        if not isinstance(network_accuracies[strategy], dict):
+                            logger.warning(f"Expected dict for network_accuracies[{strategy}] but got {type(network_accuracies[strategy])}")
+                            continue
+                            
+                        # Check a sample network's results
+                        net_indices = list(network_accuracies[strategy].keys())
+                        if not net_indices:
+                            logger.warning(f"No network results found for strategy {strategy}")
+                            continue
+                            
+                        sample_net_idx = net_indices[0]
+                        sample_values = network_accuracies[strategy][sample_net_idx]
+                        
+                        if not isinstance(sample_values, list):
+                            logger.warning(f"Expected list for network values but got {type(sample_values)}")
+                            continue
+                            
+                        logger.info(f"Strategy {strategy}, sample network {sample_net_idx} has {len(sample_values)} accuracy values")
+                        logger.info(f"Sample accuracy values: {sample_values[:3]}...")
+                        
+                except Exception as e:
+                    logger.error(f"Error in progressive_dropout with multi-strategy: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    raise
                 
-                # Update progress bar with accuracy info
-                last_acc = final_results["accuracies"][strategy][-1] if final_results["accuracies"][strategy] else 0
-                strategy_pbar.set_postfix({"final_acc": f"{last_acc:.2f}%"})
-            
-            # Log completion time
-            end_time = time.time()
-            logger.info(f"All pruning strategies completed in {end_time - start_time:.2f} seconds")
+                elapsed_time = time.time() - start_time
+                logger.info(f"Completed multi-strategy progressive dropout in {elapsed_time:.2f} seconds")
                 
+                # Process results for each strategy
+                for strategy in ["high_rq", "low_rq", "random"]:
+                    if strategy not in network_accuracies or strategy not in network_losses:
+                        logger.warning(f"Missing results for strategy {strategy}")
+                        continue
+                        
+                    # Extract results for this strategy
+                    strategy_accuracies = network_accuracies[strategy]
+                    strategy_losses = network_losses[strategy]
+                    
+                    # Collect results for each fraction
+                    fraction_accs = [[] for _ in range(len(dropout_fractions))]
+                    fraction_losses = [[] for _ in range(len(dropout_fractions))]
+                    
+                    # Group results by fraction across all networks
+                    for net_idx, acc_list in strategy_accuracies.items():
+                        if not isinstance(acc_list, list):
+                            logger.warning(f"Expected list for accuracies but got {type(acc_list)} for network {net_idx}")
+                            continue
+                            
+                        for frac_idx, acc in enumerate(acc_list):
+                            if frac_idx < len(fraction_accs):
+                                fraction_accs[frac_idx].append(acc)
+                                
+                    for net_idx, loss_list in strategy_losses.items():
+                        if not isinstance(loss_list, list):
+                            logger.warning(f"Expected list for losses but got {type(loss_list)} for network {net_idx}")
+                            continue
+                            
+                        for frac_idx, loss in enumerate(loss_list):
+                            if frac_idx < len(fraction_losses):
+                                fraction_losses[frac_idx].append(loss)
+                    
+                    # Calculate statistics for each fraction
+                    for frac_idx in range(len(dropout_fractions)):
+                        if fraction_accs[frac_idx]:
+                            mean_acc = np.mean(fraction_accs[frac_idx])
+                            std_acc = np.std(fraction_accs[frac_idx])
+                            mean_loss = np.mean(fraction_losses[frac_idx]) if fraction_losses[frac_idx] else 0.0
+                            
+                            # Store in results
+                            results["accuracies"][strategy].append(mean_acc)
+                            results["stds"][strategy].append(std_acc)
+                            results["losses"][strategy].append(mean_loss)
+                
+                    # Log the final result for this strategy
+                    last_acc = results["accuracies"][strategy][-1] if results["accuracies"][strategy] else 0
+                    logger.info(f"Strategy {strategy}: final accuracy = {last_acc:.2f}%")
+                
+                # Add timing information
+                results["timing"] = {
+                    "total_time": elapsed_time
+                }
+                
+                # Explicitly verify pruning mechanism by re-pruning one network to max_fraction for each strategy
+                logger.info("Performing explicit verification of pruning mechanism (re-pruning one net to max_fraction)...")
+                if networks: # Ensure there's at least one network to test (networks_copy holds the originals for deepcopy)
+                    original_network_for_test = networks[0] # Use the actual original network from the list passed to progressive_dropout
+                    max_fraction = dropout_fractions[-1] if dropout_fractions else 0.9 # Default to 0.9 if list empty
+
+                    for strategy_to_verify in ["high_rq", "low_rq", "random"]:
+                        logger.info(f"Verifying pruning for strategy '{strategy_to_verify}' at {max_fraction*100:.1f}% pruning")
+                        
+                        net_for_verification = copy.deepcopy(original_network_for_test)
+                        _ensure_model_on_device(net_for_verification, self.device)
+                        net_for_verification.eval()
+
+                        # Re-compute metrics for this specific clean network copy for verification
+                        # This ensures clean scores for the verification independent of prior loops
+                        current_scores = _compute_metric_for_all_nodes(net_for_verification, self.metric, self.device, dataset.test_loader, 
+                                                                  num_batches=5, 
+                                                                  debug_mode=self.debug_mode)
+                        current_asc_indices = {l: torch.argsort(s, descending=False) for l,s in current_scores.items()}
+                        current_desc_indices = {l: torch.argsort(s, descending=True) for l,s in current_scores.items()}
+                        current_rand_indices = {l: torch.randperm(s.shape[0], device=self.device) for l,s in current_scores.items()}
+
+                        _apply_pruning_to_single_net(
+                            net_for_verification, max_fraction, strategy_to_verify, 
+                            pruning_mode, dropout_mode, self.device,
+                            current_scores,
+                            current_asc_indices,
+                            current_desc_indices,
+                            current_rand_indices,
+                            self.debug_mode,
+                            effective_exclude_classification_layer
+                        )
+                        
+                        total_weights_in_verified_net = 0
+                        zero_weights_in_verified_net = 0
+                        for i, layer in enumerate(net_for_verification.alignment_layers):
+                            if hasattr(layer, "weight") and layer.weight is not None:
+                                weights = layer.weight.data
+                                layer_total = weights.numel()
+                                layer_zeros = (weights == 0).sum().item()
+                                total_weights_in_verified_net += layer_total
+                                zero_weights_in_verified_net += layer_zeros
+                                if self.debug_mode or layer_total > 0: # Log layer details if debug or if layer is not empty
+                                    logger.info(f"Strategy '{strategy_to_verify}', Verified Layer {i}: {layer_zeros}/{layer_total} zeros ({100.0*layer_zeros/layer_total if layer_total > 0 else 0:.2f}% pruned)")
+                        
+                        total_pruned_percent_verified = 100.0*zero_weights_in_verified_net/total_weights_in_verified_net if total_weights_in_verified_net > 0 else 0
+                        logger.info(f"Strategy '{strategy_to_verify}', Verified Total: {zero_weights_in_verified_net}/{total_weights_in_verified_net} zeros ({total_pruned_percent_verified:.2f}% pruned)")
+                        
+                        # Optionally evaluate this specifically pruned network for verification
+                        if self.debug_mode: # Only evaluate if in deep debug to save time
+                            accuracy, loss = dataset.evaluate(net_for_verification, self.device, show_progress=False) # Suppress progress for this eval
+                            logger.info(f"Strategy '{strategy_to_verify}', Verified Max Pruning Eval: Accuracy={accuracy:.2f}%, Loss={loss:.4f}")
+            else:
+                # Define strategies to run sequentially (original approach)
+                strategies = ["high_rq", "low_rq", "random"]
+                
+                # Create a progress bar for strategies
+                strategy_pbar = tqdm(strategies, desc="Pruning strategies", position=0)
+                
+                # Process each strategy
+                for strategy in strategy_pbar:
+                    strategy_pbar.set_description(f"Strategy: {strategy}")
+                    
+                    # Create copies of networks for this strategy
+                    strategy_networks = []
+                    for net_to_copy_seq in networks: # Use a different loop variable
+                        net_copy_seq = copy.deepcopy(net_to_copy_seq)
+                        _ensure_model_on_device(net_copy_seq, self.device)
+                        strategy_networks.append(net_copy_seq)
+                    
+                    # progressive_dropout (single-strategy) also needs to return these stats
+                    # For now, let's assume it will also return a 4th element, or None if not implemented for single-strategy path yet
+                    _accs, _losses, _details, _stats = progressive_dropout(
+                        strategy_networks,
+                        dataset,
+                        dropout_fractions,
+                        self.metric,
+                        self.device,
+                        pruning_mode=pruning_mode,
+                        dropout_mode=dropout_mode,
+                        strategy=strategy,
+                        show_progress=True,
+                        use_multi_strategy=False, # Explicitly False for this path
+                        debug_mode=self.debug_mode,
+                        exclude_classification_layer_config=effective_exclude_classification_layer
+                    )
+                    # Store these details under the current strategy
+                    if "pruning_details" not in results: results["pruning_details"] = {}
+                    results["pruning_details"][strategy] = _details
+
+                    # Collect results for each fraction
+                    fraction_accs = [[] for _ in range(len(dropout_fractions))]
+                    fraction_losses = [[] for _ in range(len(dropout_fractions))]
+                    
+                    # Group results by fraction across all networks
+                    for net_idx in _accs:
+                        for frac_idx, acc in enumerate(_accs[net_idx]):
+                            if frac_idx < len(fraction_accs):
+                                fraction_accs[frac_idx].append(acc)
+                        for frac_idx, loss in enumerate(_losses[net_idx]):
+                            if frac_idx < len(fraction_losses):
+                                fraction_losses[frac_idx].append(loss)
+                    
+                    # Calculate statistics for each fraction
+                    for frac_idx in range(len(dropout_fractions)):
+                        if fraction_accs[frac_idx]:
+                            mean_acc = np.mean(fraction_accs[frac_idx])
+                            std_acc = np.std(fraction_accs[frac_idx])
+                            mean_loss = np.mean(fraction_losses[frac_idx]) if fraction_losses[frac_idx] else 0.0
+                            
+                            # Store in results
+                            results["accuracies"][strategy].append(mean_acc)
+                            results["stds"][strategy].append(std_acc)
+                            results["losses"][strategy].append(mean_loss)
+                    
+                    # Update progress bar
+                    last_acc = results["accuracies"][strategy][-1] if results["accuracies"][strategy] else 0
+                    strategy_pbar.set_postfix({"final_acc": f"{last_acc:.2f}%"})
+
+                    # CRITICAL FIX: Replace original networks with the pruned copies
+                    # from the final strategy to ensure subsequent evaluation uses pruned networks
+                    if strategy == strategies[-1]:  # After the last strategy
+                        networks = strategy_networks
+                        logger.info("Replaced original networks with pruned copies from final strategy")
+
+                    # If single-strategy path provides these stats
+                    if _stats:
+                        if "pre_pruning_layer_stats_by_strategy" not in results: results["pre_pruning_layer_stats_by_strategy"] = {}
+                        results["pre_pruning_layer_stats_by_strategy"][strategy] = _stats
+                    elif "pre_pruning_layer_stats" not in results: # If only multi-strategy provides global stats
+                        # This part is tricky if only multi-strategy calculates it globally. 
+                        # For simplicity, the new plot will primarily use results["pre_pruning_layer_stats"]
+                        # from the multi-strategy path, which averages over all initial networks.
+                        pass
+        
         except Exception as e:
             logger.error(f"Error running progressive dropout: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
-            return {
-                "error": f"Error running progressive dropout: {str(e)}",
-                "dropout_fractions": dropout_fractions,
-                "training_history": training_history
-            }
+            results["error"] = str(e)
         
-        # Generate dropout plots
-        try:
-            logger.info("Generating dropout plots with error bars")
-            from alignment.utils.plotting import plot_dropout_results
-            
-            saved_plots = plot_dropout_results(
-                final_results,
+        # Add training history to results (already there)
+        # results["training_history"] = training_history # Ensure this is correctly populated
+        
+        # Existing plots for accuracy/loss
+        accuracy_plot_files = plot_dropout_results(
+            results, 
+            save_dir=self.figure_path,
+            title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')} Accuracy",
+            pruning_mode=pruning_mode,
+            dropout_mode=dropout_mode
+        )
+        if accuracy_plot_files:
+            results.setdefault("plot_files", []).extend(accuracy_plot_files)
+
+        # New plot for mean RQ of pruned nodes
+        if "pruning_details" in results: # Check if data is available
+            mean_rq_plot_file = plot_mean_rq_of_pruned_nodes(
+                results, 
                 save_dir=self.figure_path,
-                title_prefix="Progressive Dropout",
-                pruning_mode=pruning_mode,
-                dropout_mode=dropout_mode
+                title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')}",
+                show_plots=getattr(self.config, 'show_all', False)
             )
-            
-            if saved_plots:
-                logger.info(f"Generated {len(saved_plots)} plots: {saved_plots}")
-                final_results["plot_files"] = saved_plots
+            if mean_rq_plot_file:
+                results.setdefault("plot_files", []).append(mean_rq_plot_file)
+
+            # New plots for per-layer pruning percentage
+            per_layer_plots = plot_per_layer_pruning_percentage(
+                results, 
+                save_dir=self.figure_path,
+                title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')}",
+                show_plots=getattr(self.config, 'show_all', False)
+            )
+            if per_layer_plots:
+                results.setdefault("plot_files", []).extend(per_layer_plots)
+
+            # New plot for layer contribution to pruning
+            layer_contribution_plot_file = plot_per_layer_contribution_to_pruning(
+                results, 
+                save_dir=self.figure_path,
+                title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')}",
+                show_plots=getattr(self.config, 'show_all', False)
+            )
+            if layer_contribution_plot_file:
+                results.setdefault("plot_files", []).append(layer_contribution_plot_file)
+
+            # New plot for pre-pruning layer RQ stats
+            if "pre_pruning_layer_stats" in results and results["pre_pruning_layer_stats"]:
+                rq_stats_plot_file = plot_rq_stats_per_layer(
+                    results, 
+                    save_dir=self.figure_path,
+                    title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')}",
+                    show_plots=getattr(self.config, 'show_all', False)
+                )
+                if rq_stats_plot_file:
+                    results.setdefault("plot_files", []).append(rq_stats_plot_file)
             else:
-                logger.warning("No plots were generated. Check your plot_dropout_results function.")
-            
-        except Exception as e:
-            logger.error(f"Error generating dropout plots: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+                logger.warning("Pre-pruning layer RQ stats not found, skipping RQ stats plot.")
+        else:
+            logger.warning("Pruning details not found in results, skipping RQ and per-layer pruning plots.")
+
+        # Save results to file (already there)
+        # self.save_results("progressive_dropout_results.pkl", results)
         
-        return final_results
+        return results
     
-    def _run_eigenvector_dropout(self, net: nn.Module) -> Dict:
+    def run_eigenvector_dropout(self, network: nn.Module, dataset) -> Dict:
         """
-        Run eigenvector dropout experiments.
-        
-        Uses the eigenvector_dropout function from alignment.dropout module 
-        instead of reimplementing the logic directly.
+        Run eigenvector dropout experiment on a network.
         
         Args:
-            net: Neural network to analyze
-            
+            network: Network to evaluate
+            dataset: Dataset object
+
         Returns:
-            Dictionary of eigenvector dropout results
+            Dictionary with eigenvector dropout results
         """
-        # Get dropout fractions from config
-        dropout_fractions = np.linspace(
-            self.config.alignment.dropout_min,
-            self.config.alignment.dropout_max,
-            self.config.alignment.dropout_steps
-        ).tolist()
+        # Get dropout parameters from config
+        dropout_min = self.config.alignment.dropout_min
+        dropout_max = self.config.alignment.dropout_max
+        num_dropout_steps = self.config.alignment.dropout_steps
+        dropout_fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
         
-        # Initialize result structure
+        # Get dropout mode from config
+        dropout_mode = getattr(self.config.extra, "dropout_mode", "scaled")
+        pruning_mode = getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
+        
+        # Initialize results
         results = {
             "dropout_fractions": dropout_fractions,
             "accuracies": {"eigenvector": []},
@@ -555,28 +802,31 @@ class AlignmentExperiment(Experiment):
             "alignment_values": {"eigenvector": []}
         }
         
-        # Prepare dataset config
-        dataset_config = {}
-        dataset_config.update(self.config.dataset)
+        # Ensure network is on the correct, normalized device before passing to eigenvector_dropout
+        _ensure_model_on_device(network, self.device)
         
         # Process each dropout fraction
-        for dropout_fraction in tqdm(dropout_fractions, desc="Eigenvector Dropout"):
+        fraction_pbar = tqdm(dropout_fractions, desc="Eigenvector Dropout", position=0)
+        for dropout_fraction in fraction_pbar:
             try:
-                # Call the eigenvector_dropout function directly
+                # Call the eigenvector_dropout function
                 accuracy, alignment_values = eigenvector_dropout(
-                    net,
-                    dataset_config,
+                    network,
+                    self.config.dataset,
                     dropout_fraction=dropout_fraction,
                     metric=self.metric,
                     device=self.device,
-                    dropout_mode=getattr(self.config.extra, "dropout_mode", "scaled"),
-                    dropout_pruning_mode=getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
+                    dropout_mode=dropout_mode,
+                    dropout_pruning_mode=pruning_mode
                 )
                 
                 # Store results
                 results["accuracies"]["eigenvector"].append(accuracy)
                 results["losses"]["eigenvector"].append(100.0 - accuracy)
                 results["alignment_values"]["eigenvector"].append(alignment_values)
+                
+                # Update progress bar
+                fraction_pbar.set_postfix({"acc": f"{accuracy:.2f}%"})
                 
             except Exception as e:
                 logger.error(f"Error in eigenvector dropout at fraction {dropout_fraction}: {str(e)}")
@@ -587,563 +837,136 @@ class AlignmentExperiment(Experiment):
         
         return results
     
-    def plot(self, results: Dict) -> Dict[str, List[str]]:
+    def main(self) -> Tuple[Dict, List[nn.Module]]:
         """
-        Plot experiment results using enhanced visualization methods.
-        
-        Args:
-            results: Dictionary containing experiment results
-            
-        Returns:
-            Dictionary of plot paths by type
-        """
-        logger.info("Generating experiment visualizations")
-        
-        # Check for results to plot
-        if not results:
-            logger.warning("No results to plot")
-            return {}
-            
-        plot_paths = {}
-        
-        # Generate experiment summary
-        try:
-            logger.info("Creating experiment summary visualization")
-            summary_path = self._generate_summary_plots(results)
-            if summary_path:
-                plot_paths["summary"] = summary_path
-            logger.info("Successfully created experiment summary visualization")
-        except Exception as e:
-            logger.error(f"Error creating summary visualization: {str(e)}", exc_info=True)
-        
-        # Generate progressive dropout plots
-        if "progressive_dropout" in results:
-            try:
-                logger.info("Generating progressive dropout visualizations")
-                prog_paths = self._plot_dropout_results(
-                    results["progressive_dropout"], 
-                    self.figure_path,
-                    "Progressive Dropout"
-                )
-                if prog_paths:
-                    plot_paths["progressive_dropout"] = prog_paths
-                logger.info("Successfully generated progressive dropout visualizations")
-            except Exception as e:
-                logger.error(f"Error generating progressive dropout visualizations: {str(e)}", exc_info=True)
-        
-        # Generate eigenvector dropout plots
-        if "eigenvector_dropout" in results:
-            try:
-                logger.info("Generating eigenvector dropout visualizations")
-                eig_paths = self._plot_dropout_results(
-                    results["eigenvector_dropout"], 
-                    self.figure_path,
-                    "Eigenvector Dropout"
-                )
-                if eig_paths:
-                    plot_paths["eigenvector_dropout"] = eig_paths
-                logger.info("Successfully generated eigenvector dropout visualizations")
-            except Exception as e:
-                logger.error(f"Error generating eigenvector dropout visualizations: {str(e)}", exc_info=True)
-        
-        # Generate combined visualizations if both types of results exist
-        if "progressive_dropout" in results and "eigenvector_dropout" in results:
-            try:
-                logger.info("Generating combined dropout comparison visualization")
-                comparison_path = self._generate_dropout_comparison(
-                    results["progressive_dropout"],
-                    results["eigenvector_dropout"]
-                )
-                if comparison_path:
-                    plot_paths["comparison"] = comparison_path
-                logger.info("Successfully generated combined dropout comparison")
-            except Exception as e:
-                logger.error(f"Error generating dropout comparison: {str(e)}", exc_info=True)
-        
-        logger.info(f"Completed experiment visualization generation: {len(plot_paths)} plot types")
-        return plot_paths
-    
-    def _plot_dropout_results(self, results, figure_path=None, title_prefix="Dropout"):
-        """
-        Plot dropout experiment results using the plotting module.
-        
-        Args:
-            results: Results dictionary from progressive_dropout
-            figure_path: Directory to save plots to
-            title_prefix: Prefix for plot titles
-            
-        Returns:
-            List of saved plot files
-        """
-        # Get pruning mode and dropout mode
-        pruning_mode = getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
-        dropout_mode = getattr(self.config.extra, "dropout_mode", "scaled")
-        
-        # Ensure figure path exists
-        if figure_path is None:
-            figure_path = self.figure_path
-            
-        # Add debug logs to understand the results
-        logger.info(f"Plotting dropout results with pruning_mode={pruning_mode}, dropout_mode={dropout_mode}")
-        logger.info(f"Results keys: {list(results.keys())}")
-        logger.info(f"Figure path: {figure_path}")
-        
-        if "accuracies" in results:
-            logger.info(f"Accuracies keys: {list(results['accuracies'].keys())}")
-            for key in results["accuracies"]:
-                logger.info(f"Strategy {key} has {len(results['accuracies'][key])} data points")
-                if results["accuracies"][key]:
-                    logger.info(f"First few values: {results['accuracies'][key][:3]}")
-                else:
-                    logger.info(f"No data for {key}")
-        
-        # Generate plots using our custom function
-        try:
-            from alignment.utils.plotting import custom_plot_dropout
-            
-            # Make a deep copy of results to prevent modification
-            import copy
-            plot_results = copy.deepcopy(results)
-            
-            # Ensure we have data for at least one strategy (preferably high_rq)
-            if not plot_results.get("accuracies", {}).get("high_rq", []):
-                # Try to use data from any strategy that has data
-                for strategy in ["low_rq", "random", "eigenvector"]:
-                    if plot_results.get("accuracies", {}).get(strategy, []):
-                        # Use this data for high_rq
-                        logger.info(f"Using {strategy} data for high_rq")
-                        plot_results["accuracies"]["high_rq"] = plot_results["accuracies"][strategy]
-                        
-                        # Also copy to losses if needed
-                        if strategy in plot_results.get("losses", {}):
-                            plot_results["losses"]["high_rq"] = plot_results["losses"][strategy]
-                        break
-            
-            # Try the numeric indices if we still don't have data
-            if not plot_results.get("accuracies", {}).get("high_rq", []) and hasattr(self, "results") and hasattr(self.results, "network_accuracies"):
-                # Look for numeric indices
-                for idx in range(3):  # Try indices 0, 1, 2
-                    if idx in self.results.network_accuracies and self.results.network_accuracies[idx]:
-                        strategy_name = {0: "high_rq", 1: "low_rq", 2: "random"}.get(idx, "high_rq")
-                        logger.info(f"Using numeric index {idx} data for {strategy_name}")
-                        
-                        # Make sure the strategy key exists
-                        if "accuracies" not in plot_results:
-                            plot_results["accuracies"] = {}
-                        
-                        # Copy the data
-                        plot_results["accuracies"][strategy_name] = self.results.network_accuracies[idx]
-            
-            # Print final plot data
-            logger.info(f"Passing the following to custom_plot_dropout:")
-            logger.info(f"- dropout_fractions: {len(plot_results.get('dropout_fractions', []))} points")
-            logger.info(f"- high_rq data: {len(plot_results.get('accuracies', {}).get('high_rq', []))} points")
-            
-            # Call the custom plotting function
-            saved_figures = custom_plot_dropout(
-                plot_results,
-                figure_path,
-                pruning_mode=pruning_mode,
-                dropout_mode=dropout_mode,
-                title_prefix=title_prefix
-            )
-            
-            # Check if any plots were generated
-            if saved_figures:
-                logger.info(f"Generated {len(saved_figures)} plots: {saved_figures}")
-                
-                # Log plots to wandb if configured
-                if hasattr(self.config.checkpointing, "use_wandb") and self.config.checkpointing.use_wandb:
-                    try:
-                        from alignment.utils.plotting import log_plots_to_wandb
-                        log_plots_to_wandb(saved_figures)
-                        logger.info(f"Logged {len(saved_figures)} dropout plots to wandb")
-                    except Exception as e:
-                        logger.warning(f"Failed to log dropout plots to wandb: {str(e)}")
-            else:
-                logger.warning("No plots were generated by custom_plot_dropout")
-                    
-            return saved_figures
-                
-        except Exception as e:
-            logger.error(f"Error generating dropout plots: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return []
-        
-    def _generate_dropout_plots(self, results, title, filename=None):
-        """
-        Generate enhanced dropout plots.
-        
-        Args:
-            results: Dropout experiment results
-            title: Plot title
-            filename: Base filename (optional)
-            
-        Returns:
-            List of saved plot files
-        """
-        # Call the _plot_dropout_results function with our figure path and title
-        return self._plot_dropout_results(results, self.figure_path, title)
-        
-    def _generate_summary_plots(self, results):
-        """
-        Generate comprehensive summary plots for the experiment using the plotting module.
-        
-        Args:
-            results: Experiment results dictionary
-            
-        Returns:
-            Path to the saved summary plot
-        """
-        try:
-            from alignment.utils.plotting import plot_experiment_summary
-            
-            # Generate the summary plot
-            experiment_name = getattr(self.config, "experiment_name", self.get_basename())
-            filepath = plot_experiment_summary(
-                results, 
-                self.figure_path,
-                experiment_name=experiment_name
-            )
-            
-            # Log to wandb if configured
-            if filepath and hasattr(self.config.checkpointing, "use_wandb") and self.config.checkpointing.use_wandb:
-                try:
-                    import wandb
-                    if wandb.run is not None:
-                        wandb.log({"experiment_summary": wandb.Image(filepath)})
-                        logger.info("Logged experiment summary to wandb")
-                except Exception as e:
-                    logger.warning(f"Failed to log experiment summary to wandb: {str(e)}")
-                    
-            return filepath
-                    
-        except Exception as e:
-            logger.error(f"Error creating summary visualization: {str(e)}")
-            return None
-            
-    def _generate_dropout_comparison(self, progressive_results, eigenvector_results):
-        """
-        Generate comparison plots between progressive and eigenvector dropout using the plotting module.
-        
-        Args:
-            progressive_results: Progressive dropout results
-            eigenvector_results: Eigenvector dropout results
-            
-        Returns:
-            Path to the saved comparison plot
-        """
-        try:
-            from alignment.utils.plotting import plot_dropout_comparison
-            
-            # Generate the comparison plot
-            experiment_name = getattr(self.config, "experiment_name", "Experiment")
-            filepath = plot_dropout_comparison(
-                progressive_results,
-                eigenvector_results,
-                self.figure_path,
-                title=f"Dropout Comparison: {experiment_name}"
-            )
-            
-            # Log to wandb if configured
-            if filepath and hasattr(self.config.checkpointing, "use_wandb") and self.config.checkpointing.use_wandb:
-                try:
-                    import wandb
-                    if wandb.run is not None:
-                        wandb.log({"dropout_comparison": wandb.Image(filepath)})
-                        logger.info("Logged dropout comparison to wandb")
-                except Exception as e:
-                    logger.warning(f"Failed to log dropout comparison to wandb: {str(e)}")
-                    
-            return filepath
-                    
-        except Exception as e:
-            logger.error(f"Error creating dropout comparison: {str(e)}")
-            return None
-
-    def _initialize_wandb(self) -> Optional[Any]:
-        """
-        Initialize wandb for experiment tracking.
+        Main experiment execution method.
         
         Returns:
-            wandb module if initialized successfully, None otherwise
+            Tuple of (results dictionary, list of networks)
         """
-        if not getattr(self.config.checkpointing, "use_wandb", False):
-            return None
-            
-        try:
-            import wandb
-            
-            # Get wandb configuration
-            entity = getattr(self.config, "wandb_entity", None)
-            project = getattr(self.config, "wandb_project", "neural_alignment")
-            
-            # Generate timestamp if it doesn't exist
-            if not hasattr(self, 'timestamp'):
-                self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Create a unique run name
-            if hasattr(self.config, "experiment_name") and self.config.experiment_name:
-                run_name = f"{self.config.experiment_name}"
-            else:
-                run_name = f"{self.config.model.model_name}_{self.config.dataset.dataset_name}_{self.timestamp}"
-                
-            # Convert the config to a dictionary for wandb
-            config_dict = self.config.to_dict() if hasattr(self.config, "to_dict") else vars(self.config)
-            
-            # Initialize wandb run
-            wandb.init(
-                project=project,
-                entity=entity,
-                name=run_name,
-                config=config_dict,
-                reinit=True  # Allow reinitializing in the same process
-            )
-            
-            # Set up wandb to watch models if available
-            if hasattr(self, "networks") and self.networks:
-                # Watch the first network
-                wandb.watch(self.networks[0], log="all", log_freq=10)
-                
-            logger.info(f"Initialized Weights & Biases tracking for run '{run_name}'")
-            return wandb
-        except Exception as e:
-            logger.warning(f"Failed to initialize wandb: {str(e)}")
-            return None
-    
-    def _log_to_wandb(self, data: Dict) -> bool:
-        """
-        Log data to wandb.
-        
-        Args:
-            data: Data to log to wandb (dict with keys corresponding to metric names)
-            
-        Returns:
-            True if logging was successful, False otherwise
-        """
-        if not getattr(self.config.checkpointing, "use_wandb", False):
-            return False
-            
-        try:
-            import wandb
-            if wandb.run is None:
-                wandb_module = self._initialize_wandb()
-                if wandb_module is None:
-                    return False
-                    
-            # Log scalar metrics
-            metrics_to_log = {}
-            for k, v in data.items():
-                # Skip non-scalar values
-                if isinstance(v, (int, float)):
-                    metrics_to_log[k] = v
-                elif isinstance(v, (list, tuple)) and len(v) == 1:
-                    # Single-element list or tuple with a scalar
-                    if isinstance(v[0], (int, float)):
-                        metrics_to_log[k] = v[0]
-                        
-            # Log the metrics to wandb
-            if metrics_to_log:
-                wandb.log(metrics_to_log)
-                
-            # Check if data contains progressive dropout results that we should plot
-            if "progressive_dropout" in data and "plot_files" in data and getattr(self.config.extra, "log_images", True):
-                # Find all plot files and log them to wandb
-                for plot_file in data["plot_files"]:
-                    if os.path.exists(plot_file):
-                        plot_name = os.path.basename(plot_file).replace(".png", "")
-                        wandb.log({plot_name: wandb.Image(plot_file)})
-                
-                # If 'accuracies' exists in the progressive_dropout results, log them as a line plot
-                if "accuracies" in data["progressive_dropout"] and "dropout_fractions" in data["progressive_dropout"]:
-                    # Create a table to log
-                    accuracies = np.array(data["progressive_dropout"]["accuracies"])
-                    dropout_fractions = data["progressive_dropout"]["dropout_fractions"]
-                    
-                    # Calculate mean and std
-                    mean_accuracies = np.mean(accuracies, axis=0)
-                    std_accuracies = np.std(accuracies, axis=0)
-                    
-                    # Prepare data table for the custom plot
-                    table_data = [[x, y, y_std] for x, y, y_std in zip(dropout_fractions, mean_accuracies, std_accuracies)]
-                    
-                    # Log the data as a custom plot
-                    wandb.log({
-                        "dropout_curve": wandb.Table(
-                            data=table_data,
-                            columns=["dropout_fraction", "mean_accuracy", "std_accuracy"]
-                        )
-                    })
-                    
-                    # Create interactive plot
-                    dropout_data = []
-                    for i, frac in enumerate(dropout_fractions):
-                        dropout_data.append([frac, mean_accuracies[i], mean_accuracies[i]-std_accuracies[i], mean_accuracies[i]+std_accuracies[i]])
-                    
-                    wandb.log({
-                        "dropout_plot_interactive": wandb.plot.line_series(
-                            xs=[x[0] for x in dropout_data],
-                            ys=[[x[1] for x in dropout_data],  # mean
-                                [x[2] for x in dropout_data],  # mean-std
-                                [x[3] for x in dropout_data]],  # mean+std
-                            keys=["Mean Accuracy", "Lower Bound", "Upper Bound"],
-                            title=f"Progressive Dropout ({self.config.extra.dropout_pruning_mode})",
-                            xname="Dropout Fraction",
-                            yname="Accuracy"
-                        )
-                    })
-                
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to log to wandb: {str(e)}")
-            return False
-
-    def run(self) -> Tuple[Dict, List[nn.Module]]:
-        """
-        Run the experiment with custom logging and wandb setup.
-        
-        Returns:
-            Tuple containing (results, networks)
-        """
-        # Setup paths for experiment
+        # Setup paths for results
         self.setup_paths()
-        self.prepare_path()
+        logger.info(f"Set up paths. Results will be saved to {self.results_path}")
+
+        # Create network models for experiment
+        networks = self.create_networks()
         
-        # Set up logging and suppress warnings
-        set_logging_level(logging.INFO)
+        # Prepare dataset
+        batch_size = getattr(self.config.dataset, "batch_size", 128)
+        dataset = load_dataset(self.config.dataset, batch_size=batch_size)
         
-        # Set random seed if configured
-        if hasattr(self.config, 'seed') and self.config.seed is not None:
-            torch.manual_seed(self.config.seed)
-            torch.cuda.manual_seed_all(self.config.seed)
-            np.random.seed(self.config.seed)
-            logger.info(f"Set random seed to {self.config.seed}")
+        # Run the experiment based on the specified type
+        experiment_type = getattr(self.config, 'experiment_type', 'alignment_analysis')
         
-        # Initialize wandb explicitly before starting experiment
-        if hasattr(self.config, 'checkpointing') and self.config.checkpointing.use_wandb:
-            self._initialize_wandb()
-        
-        # Run the main experiment
-        results, networks = self.main()
-        
-        # Store results as an attribute for saving
-        self.results = results
-        self.networks = networks
-        
-        # Ensure all plots are saved and logged
-        self.plot(results)
-        
-        # Save experiment state
-        self.save()
-        
-        # Close wandb run if it exists
-        try:
-            import wandb
-            if wandb.run is not None:
-                wandb.finish()
-                logger.info("Closed wandb run")
-        except Exception as e:
-            logger.warning(f"Error closing wandb run: {str(e)}")
+        if experiment_type == "alignment_analysis" or experiment_type == "alignment":
+            # Run alignment analysis
+            results = self.run_alignment_analysis(networks, dataset)
+            
+        elif experiment_type == "progressive_dropout":
+            # Run progressive dropout experiment
+            results = self.run_progressive_dropout(networks, dataset)
+            
+            # Generate plots
+            plot_files = plot_dropout_results(
+                results, 
+                save_dir=self.figure_path,
+                title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')}",
+                pruning_mode=getattr(self.config.extra, "dropout_pruning_mode", "global_joint"),
+                dropout_mode=getattr(self.config.extra, "dropout_mode", "scaled")
+            )
+            
+            # Save the plot files in results
+            if plot_files:
+                results["plot_files"] = plot_files
+            
+            # Save results to file
+            self.save_results("progressive_dropout_results.pkl", results)
+            
+        elif experiment_type == "eigenvector_dropout":
+            # Run eigenvector dropout experiment on first network
+            results = self.run_eigenvector_dropout(networks[0], dataset)
+            
+            # Generate plots
+            plot_files = plot_dropout_results(
+                results, 
+                save_dir=self.figure_path,
+                title_prefix="Eigenvector Dropout",
+                pruning_mode=getattr(self.config.extra, "dropout_pruning_mode", "global_joint"),
+                dropout_mode=getattr(self.config.extra, "dropout_mode", "scaled")
+            )
+            
+            # Save the plot files in results
+            if plot_files:
+                results["plot_files"] = plot_files
+            
+            # Save results to file
+            self.save_results("eigenvector_dropout_results.pkl", results)
+            
+        else:
+            raise ValueError(f"Unsupported experiment type: {experiment_type}")
+            
+        logger.info(f"Completed {getattr(self.config, 'experiment_name', experiment_type)} experiment")
         
         return results, networks
-
-    def run_alignment_analysis(self, networks: List[nn.Module]) -> Dict:
+    
+    def run_alignment_analysis(self, networks: List[nn.Module], dataset) -> Dict:
         """
-        Run alignment analysis experiment.
-        
-        This experiment analyzes alignment metrics across networks and can run
-        both progressive dropout and eigenvector dropout experiments based on
-        configuration.
+        Run a comprehensive alignment analysis with multiple experiment types.
         
         Args:
-            networks: List of neural networks to analyze
-            
+            networks: List of networks to analyze
+            dataset: Dataset object
+
         Returns:
-            Results dictionary
+            Dictionary with all results
         """
         logger.info("Running alignment analysis experiment")
         
-        # Prepare the results structure
+        # Prepare results structure
         results = {
-            "progressive_dropout": {},
-            "eigenvector_dropout": {},
             "config": self.config,
         }
         
-        # Progressive dropout experiment
+        # Run progressive dropout if configured
         if self.config.alignment.run_progressive:
-            logger.info(f"Running progressive dropout experiment (mode: {getattr(self.config.extra, 'dropout_pruning_mode', 'global_joint')})")
-            try:
-                prog_results = self._run_progressive_dropout(networks)
-                results["progressive_dropout"] = prog_results
-                
-                # Add debug logging to inspect results structure
-                if prog_results:
-                    logger.info(f"Progressive dropout results keys: {list(prog_results.keys())}")
-                    if 'accuracies' in prog_results:
-                        logger.info(f"Progressive dropout accuracies keys: {list(prog_results['accuracies'].keys())}")
-                
-                # Check if there was an error in the dataset configuration
-                if "error" in prog_results:
-                    logger.error(f"Progressive dropout experiment failed: {prog_results['error']}")
-                else:
-                    # Generate plots right after getting results
-                    try:
-                        logger.info("Generating progressive dropout visualizations")
-                        # Add debug print before and after plotting
-                        figure_path = self._plot_dropout_results(
-                            results["progressive_dropout"],
-                            self.figure_path,
-                            title_prefix="Progressive Dropout"
-                        )
-                        logger.info(f"Progressive dropout plot generated at {figure_path}")
-                    except Exception as e:
-                        logger.error(f"Error generating progressive dropout visualizations: {str(e)}", exc_info=True)
-            except Exception as e:
-                logger.error(f"Error running progressive dropout experiment: {str(e)}")
-                results["progressive_dropout"] = {"error": str(e)}
+            logger.info(f"Running progressive dropout experiment as part of alignment analysis")
+            # Results from run_progressive_dropout already include plots and pruning_details
+            results["progressive_dropout"] = self.run_progressive_dropout(networks, dataset) 
+            # No need to call plot_dropout_results again here for accuracies, it's done inside run_progressive_dropout
+            # The new plots are also generated inside run_progressive_dropout
         
-        # Eigenvector dropout experiment
+        # Run eigenvector dropout if configured
         if self.config.alignment.run_eigenvector:
             logger.info("Running eigenvector dropout experiment")
-            try:
-                # Note: For eigenvector dropout, we use just the first network
-                eig_results = self._run_eigenvector_dropout(networks[0])
-                results["eigenvector_dropout"] = eig_results
-                
-                # Add debug logging
-                if eig_results:
-                    logger.info(f"Eigenvector dropout results keys: {list(eig_results.keys())}")
-                    if 'accuracies' in eig_results:
-                        logger.info(f"Eigenvector dropout accuracies keys: {list(eig_results['accuracies'].keys())}")
-                
-                # Generate plots right after getting results
-                try:
-                    logger.info("Generating eigenvector dropout visualizations")
-                    # Use the specialized method for eigenvector dropout
-                    self._generate_dropout_plots(
-                        results["eigenvector_dropout"],
-                        "Eigenvector Dropout",
-                        "eigenvector_dropout"
-                    )
-                    logger.info("Successfully generated eigenvector dropout visualizations")
-                except Exception as e:
-                    logger.error(f"Error generating eigenvector dropout visualizations: {str(e)}", exc_info=True)
-            except Exception as e:
-                logger.error(f"Error running eigenvector dropout experiment: {str(e)}")
-                results["eigenvector_dropout"] = {"error": str(e)}
+            results["eigenvector_dropout"] = self.run_eigenvector_dropout(networks[0], dataset)
+            
+            # Generate plots for eigenvector dropout
+            plot_files = plot_dropout_results(
+                results["eigenvector_dropout"], 
+                save_dir=self.figure_path,
+                title_prefix="Eigenvector Dropout",
+                pruning_mode=getattr(self.config.extra, "dropout_pruning_mode", "global_joint"),
+                dropout_mode=getattr(self.config.extra, "dropout_mode", "scaled")
+            )
+            
+            # Add plot files to results
+            if plot_files:
+                results["eigenvector_dropout"]["plot_files"] = plot_files
         
-        # Generate and log summary plots for all experiments
-        try:
-            logger.info("Generating experiment summary")
-            self._generate_summary_plots(results)
-            logger.info("Successfully generated experiment summary")
-        except Exception as e:
-            logger.error(f"Error generating experiment summary: {str(e)}", exc_info=True)
+        # Generate summary plots if both experiment types were run
+        if "progressive_dropout" in results and "eigenvector_dropout" in results:
+            try:
+                summary_path = plot_experiment_summary(
+                    results, 
+                    self.figure_path,
+                    experiment_name=getattr(self.config, "experiment_name", "Alignment Analysis")
+                )
+                results["summary_plot"] = summary_path
+            except Exception as e:
+                logger.error(f"Error generating summary plot: {str(e)}")
         
         return results
-
+    
     def setup_paths(self):
         """
         Set up paths for experiment outputs.
@@ -1169,111 +992,100 @@ class AlignmentExperiment(Experiment):
         self.weights_path = os.path.join(base_dir, "weights")
         os.makedirs(self.weights_path, exist_ok=True)
         
-        # Set the device to use (default to CUDA if available)
-        if hasattr(self.config, "device") and self.config.device:
-            self.device = torch.device(self.config.device)
-        else:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+        # The self.device is already normalized in __init__
         logger.info(f"Set up paths: results={self.results_path}, figures={self.figure_path}, device={self.device}")
-
-    def save(self):
+    
+    def save_results(self, filename: str, results: Dict):
         """
-        Save experiment state including results and configuration.
+        Save results to file.
         
-        This method saves:
-        1. Experiment results as pickle and JSON
-        2. Configuration in YAML format
-        3. Any model checkpoints if available
+        Args:
+            filename: Name of the file to save to
+            results: Results dictionary to save
         """
+        # Create a results directory if it doesn't exist
+        os.makedirs(self.results_path, exist_ok=True)
+        
+        # Save as pickle
+        results_file = os.path.join(self.results_path, filename)
+        with open(results_file, "wb") as f:
+            pickle.dump(results, f)
+        logger.info(f"Saved experiment results to {results_file}")
+        
+        # Try to save as JSON for readability
         try:
-            # Create a results directory if it doesn't exist
-            os.makedirs(self.results_path, exist_ok=True)
+            # Helper to convert non-serializable objects
+            def clean_for_json(obj):
+                if isinstance(obj, (torch.Tensor, np.ndarray)):
+                    return obj.tolist() if hasattr(obj, 'tolist') else str(obj)
+                elif isinstance(obj, dict):
+                    return {k: clean_for_json(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [clean_for_json(item) for item in obj]
+                elif isinstance(obj, tuple):
+                    return tuple(clean_for_json(item) for item in obj)
+                else:
+                    # Return string representation for other types
+                    return str(obj) if not isinstance(obj, (str, int, float, bool, type(None))) else obj
             
-            # Save experiment results if available
-            if hasattr(self, 'results') and self.results:
-                results_file = os.path.join(self.results_path, "results.pkl")
-                with open(results_file, "wb") as f:
-                    pickle.dump(self.results, f)
-                logger.info(f"Saved experiment results to {results_file}")
-                
-                # Also try to save as JSON for human readability
-                try:
-                    # Convert tensors and other non-serializable objects
-                    def clean_for_json(obj):
-                        if isinstance(obj, (torch.Tensor, np.ndarray)):
-                            return obj.tolist() if hasattr(obj, 'tolist') else str(obj)
-                        elif isinstance(obj, dict):
-                            return {k: clean_for_json(v) for k, v in obj.items()}
-                        elif isinstance(obj, list):
-                            return [clean_for_json(item) for item in obj]
-                        elif isinstance(obj, tuple):
-                            return tuple(clean_for_json(item) for item in obj)
-                        else:
-                            # Return string representation for other types
-                            return str(obj) if not isinstance(obj, (str, int, float, bool, type(None))) else obj
-                    
-                    json_results = clean_for_json(self.results)
-                    json_file = os.path.join(self.results_path, "results.json")
-                    with open(json_file, "w") as f:
-                        json.dump(json_results, f, indent=2)
-                    logger.info(f"Saved readable results to {json_file}")
-                except Exception as e:
-                    logger.warning(f"Could not save results as JSON: {str(e)}")
+            # Convert to JSON-serializable format
+            json_results = clean_for_json(results)
             
-            # Save configuration
-            config_file = os.path.join(self.results_path, "config.yaml")
-            # Check if we can convert config to dict
-            if hasattr(self.config, 'to_dict'):
-                config_dict = self.config.to_dict()
-                with open(config_file, "w") as f:
-                    yaml.dump(config_dict, f, default_flow_style=False)
-                logger.info(f"Saved configuration to {config_file}")
-            
-            logger.info("Experiment state saved successfully")
-            
+            # Save as JSON
+            json_file = os.path.join(self.results_path, filename.replace(".pkl", ".json"))
+            with open(json_file, "w") as f:
+                json.dump(json_results, f, indent=2)
+            logger.info(f"Saved readable results to {json_file}")
         except Exception as e:
-            logger.error(f"Error saving experiment state: {str(e)}")
-            # Don't re-raise the exception, just log it
+            logger.warning(f"Could not save results as JSON: {str(e)}")
+    
+    def run(self) -> Tuple[Dict, List[nn.Module]]:
+        """
+        Run the experiment.
+        
+        Returns:
+            Tuple of (results, networks)
+        """
+        # Set up logging
+        setup_logging(log_level="INFO")
+        
+        # Set random seed if configured
+        if hasattr(self.config, 'seed') and self.config.seed is not None:
+            torch.manual_seed(self.config.seed)
+            torch.cuda.manual_seed_all(self.config.seed)
+            np.random.seed(self.config.seed)
+            logger.info(f"Set random seed to {self.config.seed}")
+        
+        # Run the main experiment
+        results, networks = self.main()
+        
+        # Store results and networks for later use
+        self.results = results
+        self.networks = networks
+        
+        # Save configuration
+        config_file = os.path.join(self.results_path, "config.yaml")
+        if hasattr(self.config, 'to_dict'):
+            config_dict = self.config.to_dict()
+            with open(config_file, "w") as f:
+                yaml.dump(config_dict, f, default_flow_style=False)
+            logger.info(f"Saved configuration to {config_file}")
+        
+        return results, networks
 
-
-def set_logging_level(level=logging.INFO):
-    """
-    Set logging level for all loggers in the alignment package.
-    
-    Args:
-        level: Logging level (default: logging.INFO)
-    """
-    # Set root logger level
-    logging.getLogger().setLevel(level)
-    
-    # Set level for alignment package loggers
-    logging.getLogger('alignment').setLevel(level)
-    
-    # Reduce verbosity for other loggers
-    logging.getLogger('matplotlib').setLevel(logging.WARNING)
-    logging.getLogger('PIL').setLevel(logging.WARNING)
-    logging.getLogger('torch').setLevel(logging.WARNING)
-    logging.getLogger('wandb').setLevel(logging.WARNING)
-    
-    # Suppress common warnings
-    import warnings
-    warnings.filterwarnings("ignore", category=UserWarning, message=".*pruning fraction.*")
-    warnings.filterwarnings("ignore", category=UserWarning, message=".*Combined pruning across layers.*")
-    warnings.filterwarnings("ignore", category=UserWarning, message=".*dropout of the entire tensor.*")
 
 def cli_main():
     """Command-line interface for running alignment experiments."""
+    import argparse
+    
     parser = argparse.ArgumentParser(description="Neural network alignment experiment")
     parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
     parser.add_argument("--quiet", action="store_true", help="Reduce logging output")
     args = parser.parse_args()
 
-    # Set logging level based on quiet flag
-    if args.quiet:
-        set_logging_level(logging.WARNING)
-    else:
-        set_logging_level(logging.INFO)
+    # Set logging level
+    log_level = "WARNING" if args.quiet else "INFO"
+    setup_logging(log_level=log_level)
 
     # Load configuration
     config = ExperimentConfig.load(args.config)

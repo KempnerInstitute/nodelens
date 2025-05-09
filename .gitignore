@@ -14,9 +14,7 @@ wandb/
 #notebooks/
 #notebooks/data/*
 #notebooks/.ipynb_checkpoints/*
-src/alignment_v2/*
-src/alignment_preref/*
-
+_archive/
 notebooks/
 # Byte-compiled / optimized / DLL files
 __pycache__/

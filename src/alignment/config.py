@@ -162,19 +162,74 @@ class ModelConfig(BaseConfig):
     """Neural network model configuration."""
     
     model_name: str = "MLP"
-    dropout_rate: float = 0.0
-    alignment_layers: Optional[Dict[str, Optional[Union[str, List[str]]]]] = None
-    
+    # Common params
+    dropout_rate: float = 0.0 # Used by MLP, CNN2P2, AlexNet (for overriding default)
+    output_dim: int = 10      # Used by MLP, CNN2P2, AlexNet (as num_classes)
+    alignment_layers: Optional[Dict[str, Any]] = None # Using Any for value type, can be int or other spec
+
+    # MLP specific
+    input_dim: Optional[int] = None # e.g., 784 for MNIST with MLP
+    hidden_dims: Optional[List[int]] = field(default_factory=lambda: [100, 100, 50])
+    activation: Optional[str] = "relu" # For MLP: relu, tanh, sigmoid, identity
+
+    # CNN2P2 specific
+    in_channels: Optional[int] = None # e.g., 1 for MNIST, 3 for CIFAR
+    conv_channels: Optional[List[int]] = field(default_factory=lambda: [32, 64])
+    kernel_sizes: Optional[List[int]] = field(default_factory=lambda: [5, 5])
+    strides: Optional[List[int]] = field(default_factory=lambda: [1, 1])
+    paddings: Optional[List[int]] = field(default_factory=lambda: [0, 0]) # Default to 0, adjust based on kernel/stride
+    pool_kernel_size: Optional[int] = 2
+    pool_stride: Optional[int] = 2
+    hidden_fc_dim: Optional[int] = 128
+    example_input_hw: Optional[List[int]] = field(default_factory=lambda: [28,28]) # For dynamic FC input calculation
+
+    # AlexNet specific (uses output_dim as num_classes, dropout_rate to override internal dropout)
+    # No extra specific params here needed beyond common ones, unless more customization is desired.
+
+    # Field for other model-specific kwargs not explicitly defined
+    extra_model_params: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Backward compatibility for "dropout" if present in config
+        if "dropout" in self.extra_model_params and self.dropout_rate == 0.0:
+            self.dropout_rate = self.extra_model_params.pop("dropout")
+        # Ensure example_input_hw is a tuple for CNN2P2
+        if self.example_input_hw is not None and not isinstance(self.example_input_hw, tuple):
+            self.example_input_hw = tuple(self.example_input_hw)
+
     def validate(self) -> bool:
         """Validate model configuration."""
-        if self.dropout_rate < 0.0 or self.dropout_rate > 1.0:
-            raise ValueError(f"Dropout must be between 0 and 1, got {self.dropout_rate}")
+        if not (0.0 <= self.dropout_rate <= 1.0):
+            raise ValueError(f"Dropout rate must be between 0 and 1, got {self.dropout_rate}")
             
-        if self.model_name not in ["MLP", "CNN", "ResNet", "VGG", "AlexNet"]:
-            # This is just a warning, not an error, as custom models might be used
-            import warnings
-            warnings.warn(f"Unusual model name: {self.model_name}")
-            
+        # Basic model name check (can be expanded)
+        known_models = ["MLP", "CNN2P2", "AlexNet"]
+        if self.model_name not in known_models:
+            logger.warning(f"Unusual model name: {self.model_name}. Ensure a corresponding create_{self.model_name.lower()} function exists.")
+        
+        if self.model_name == "MLP":
+            if self.input_dim is None:
+                logger.warning("MLP input_dim not set, model might fail if data isn't auto-flattened to a known size.")
+            if not self.hidden_dims:
+                logger.warning("MLP hidden_dims not set, will be a linear model if empty.")
+            valid_activations = ["relu", "tanh", "sigmoid", "identity"]
+            if self.activation.lower() not in valid_activations:
+                raise ValueError(f"Invalid MLP activation: {self.activation}. Valid: {valid_activations}")
+
+        if self.model_name == "CNN2P2":
+            if self.in_channels is None:
+                raise ValueError("CNN2P2 in_channels must be set.")
+            for param_name, param_list in [
+                ("conv_channels", self.conv_channels),
+                ("kernel_sizes", self.kernel_sizes),
+                ("strides", self.strides),
+                ("paddings", self.paddings)
+            ]:
+                if not (isinstance(param_list, list) and len(param_list) == 2):
+                    raise ValueError(f"CNN2P2 {param_name} must be a list of 2 elements, got {param_list}")
+            if not (isinstance(self.example_input_hw, (list, tuple)) and len(self.example_input_hw) == 2):
+                 raise ValueError(f"CNN2P2 example_input_hw must be a list/tuple of 2 elements, got {self.example_input_hw}")
+
         return True
 
 
@@ -296,6 +351,7 @@ class ExtraConfig(BaseConfig):
     dropout_pruning_mode: str = "layer_wise"
     exclude_classification_layer: bool = True
     cnn_mode: str = "unfold"
+    training_method: str = "auto"  # Options: "auto", "sequential", "tensorized", "fully_tensorized"
     
     def validate(self) -> bool:
         """Validate extra configuration."""
@@ -317,6 +373,10 @@ class ExtraConfig(BaseConfig):
         if self.cnn_mode not in ["unfold", "patchwise", "batch_patch_combined"]:
             raise ValueError(f"Invalid CNN mode: {self.cnn_mode}")
             
+        valid_training_methods = ["auto", "sequential", "tensorized", "fully_tensorized"]
+        if self.training_method not in valid_training_methods:
+            raise ValueError(f"Invalid training method: {self.training_method}. Valid options are: {valid_training_methods}")
+            
         return True
 
 
@@ -336,6 +396,7 @@ class ExperimentConfig(BaseConfig):
     save_networks: bool = False
     show_all: bool = False
     timestamp: Optional[str] = None
+    debug_mode: bool = False  # Enable debug output
     
     # Nested configurations
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
