@@ -31,8 +31,12 @@ from torch.nn import (
 
 from alignment.metrics import AlignmentMetric, get_metric
 from alignment.datasets import DataSet
-from alignment.utils.evaluation import evaluate_networks_ensemble
-from alignment.utils.model_utils import _normalize_device, _ensure_model_on_device
+from alignment.utils.evaluation import evaluate_networks_ensemble, _evaluate_model_accuracy
+from alignment.utils.model_utils import (
+    _normalize_device, _ensure_model_on_device, 
+    _flatten_layer_weights_for_node, process_cnn_weights
+)
+from alignment.utils.core import _create_mask_from_indices
 
 logger = logging.getLogger(__name__)
 
@@ -44,39 +48,6 @@ class DropoutResults:
     dropout_fractions: List[float]
     dropout_indices: Optional[Dict[int, List[int]]] = None
     timing_info: Dict[str, Union[float, List[float]]] = field(default_factory=dict)
-
-
-def _flatten_layer_weights_for_node(layer: nn.Module) -> torch.Tensor:
-    """
-    Flatten layer weights to standardized format for alignment computations.
-    
-    Handles various layer types including:
-    - Linear (2D weights)
-    - Conv1d, Conv2d, Conv3d (3D, 4D, 5D weights)
-    - ConvTranspose1d, ConvTranspose2d, ConvTranspose3d
-    
-    Args:
-        layer: PyTorch module with weights
-        
-    Returns:
-        Flattened weights with shape [out_channels, flattened_dims]
-    """
-    w = layer.weight.data
-    
-    if w.dim() == 2:  # Linear
-        return w
-    elif w.dim() == 3:  # Conv1d or ConvTranspose1d
-        outc, inc, k = w.shape
-        return w.view(outc, -1)
-    elif w.dim() == 4:  # Conv2d or ConvTranspose2d
-        outc, inc, kh, kw = w.shape
-        return w.view(outc, -1)
-    elif w.dim() == 5:  # Conv3d or ConvTranspose3d
-        outc, inc, kd, kh, kw = w.shape
-        return w.view(outc, -1)
-    else:
-        logger.warning(f"Unexpected weight shape {w.shape}, returning flattened anyway.")
-        return w.view(w.size(0), -1)
 
 
 def _compute_metric_for_all_nodes(
@@ -167,7 +138,7 @@ def _compute_metric_for_all_nodes(
             model(inputs)
             batch_count += 1
             if batch_count >= num_batches:
-                break
+            break
 
         for h in hooks:
             h.remove()
@@ -193,12 +164,12 @@ def _compute_metric_for_all_nodes(
 
         w_flat = _flatten_layer_weights_for_node(layer_mod)
         X = torch.cat(model.hidden[layer_name], dim=0)
-        
+
         if debug_mode:
             logger.info(f"Layer {layer_name}: input shape {X.shape}, weight shape {w_flat.shape}")
             
         try:
-            node_scores = metric.compute_per_node_scores(X, w_flat, device=device)
+        node_scores = metric.compute_per_node_scores(X, w_flat, device=device)
             if debug_mode:
                 # Log statistics about the scores
                 min_score = torch.min(node_scores).item()
@@ -207,7 +178,7 @@ def _compute_metric_for_all_nodes(
                 std_score = torch.std(node_scores).item()
                 logger.info(f"Layer {layer_name} score stats: min={min_score:.4f}, max={max_score:.4f}, "
                            f"mean={mean_score:.4f}, std={std_score:.4f}")
-            scores_per_layer[layer_idx] = node_scores.detach()
+        scores_per_layer[layer_idx] = node_scores.detach()
         except Exception as e:
             logger.error(f"Error computing scores for layer {layer_name}: {str(e)}")
             logger.error(traceback.format_exc())
@@ -217,24 +188,6 @@ def _compute_metric_for_all_nodes(
         model.hidden[layer_name] = None # Cleanup hidden state for this layer
 
     return scores_per_layer
-
-
-def _evaluate_model_accuracy(model: nn.Module, data_loader: DataLoader, device: torch.device) -> float:
-    model.eval()
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for inputs, targets in data_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
-            if isinstance(outputs, tuple):
-                outputs = outputs[0]
-            _, predicted = outputs.max(dim=1)
-            correct += predicted.eq(targets).sum().item()
-            total += targets.size(0)
-    if total == 0:
-        return 0.0
-    return 100.0 * correct / total
 
 
 def progressive_dropout_multi_strategy(
@@ -471,17 +424,17 @@ def progressive_dropout(
     else: # Original single-strategy path (can also be refactored or kept for specific cases)
         # ... (existing single-strategy logic from before) ...
         # This path would also benefit from evaluate_networks_ensemble if len(networks) > 1
-        logger.info(
+    logger.info(
             f"Starting progressive_dropout (single-strategy path): strategy={strategy}, "
             f"mode={pruning_mode}, dropout_mode={dropout_mode}"
-        )
-        network_accuracies: Dict[int, List[float]] = {}
-        network_losses: Dict[int, List[float]] = {}
+    )
+    network_accuracies: Dict[int, List[float]] = {}
+    network_losses: Dict[int, List[float]] = {}
         # Add pruning_details for single strategy path
         # {net_idx: {frac_idx: {layer_idx: {details}}}}
         pruning_details_single_strat: Dict[int, Dict[int, Dict[int, Dict[str, Any]]]] = {n_idx: {} for n_idx in range(len(networks))}
 
-        if not networks:
+    if not networks:
             logger.warning("No networks provided to progressive_dropout (single-strategy)")
             return network_accuracies, network_losses, pruning_details_single_strat
         
@@ -498,8 +451,8 @@ def progressive_dropout(
         for net_idx, net in enumerate(networks):
             _ensure_model_on_device(net, device)
             net.eval()
-            baseline_acc = _evaluate_model_accuracy(net, dataset.test_loader, device)
-            baseline_loss = 100.0 - baseline_acc
+        baseline_acc = _evaluate_model_accuracy(net, dataset.test_loader, device)
+        baseline_loss = 100.0 - baseline_acc
             network_accuracies[net_idx] = []
             network_losses[net_idx] = []
 
@@ -560,8 +513,8 @@ def _apply_pruning_to_single_net(
 
     classification_layer_idx = len(net_to_prune.alignment_layers) - 1
 
-    if pruning_mode == "global_joint":
-        all_nodes = []
+            if pruning_mode == "global_joint":
+                all_nodes = []
         for l_i, sc_tensor in scores_by_layer.items():
             if exclude_classification_layer and l_i == classification_layer_idx:
                 if debug_mode:
@@ -609,13 +562,13 @@ def _apply_pruning_to_single_net(
             if exclude_classification_layer and l_idx_init == classification_layer_idx:
                 if l_idx_init not in pruning_details_for_this_call["layer_info"]:
                      pruning_details_for_this_call["layer_info"][l_idx_init] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": scores_by_layer[l_idx_init].shape[0], "skipped": True}
-                continue
+                        continue
             if l_idx_init not in pruning_details_for_this_call["layer_info"]:
                  pruning_details_for_this_call["layer_info"][l_idx_init] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": scores_by_layer[l_idx_init].shape[0]}
 
         for l_idx_prune, node_indices_to_prune in drop_by_layer_indices.items():
             layer_mod = net_to_prune.alignment_layers[l_idx_prune]
-            wdat = layer_mod.weight.data
+                    wdat = layer_mod.weight.data
             out_dim_layer = wdat.shape[0]
             # Create mask and apply (vectorized if possible, or loop)
             mask = _create_mask_from_indices(wdat.shape, node_indices_to_prune, device)
@@ -624,7 +577,7 @@ def _apply_pruning_to_single_net(
                 fraction_dropped_layer = actual_dropped_count / float(out_dim_layer) if out_dim_layer > 0 else 0.0
                 scale = 1.0 / (1.0 - fraction_dropped_layer) if fraction_dropped_layer < 0.9999 else 10.0
                 layer_mod.weight.data *= mask * scale
-                if layer_mod.bias is not None:
+                        if layer_mod.bias is not None:
                     bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, node_indices_to_prune, device)
                     layer_mod.bias.data *= bias_mask * scale
             else: # zero
@@ -644,11 +597,11 @@ def _apply_pruning_to_single_net(
                     logger.info(f"Layer-Wise/Isolated Pruning: Skipping layer {l_i} (classification layer) entirely.")
                 pruning_details_for_this_call["layer_info"][l_i] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": layer_mod.weight.data.shape[0], "skipped": True}
                 continue
-            out_dim = layer_mod.weight.data.shape[0]
+                    out_dim = layer_mod.weight.data.shape[0]
             n_drop = int(round(frac_val * out_dim))
-            if n_drop <= 0:
+                    if n_drop <= 0:
                 pruning_details_for_this_call["layer_info"][l_i] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": out_dim}
-                continue
+                        continue
 
             pruned_node_indices_for_layer = [] # Initialize
             if strategy_key == "high_rq":
@@ -671,22 +624,22 @@ def _apply_pruning_to_single_net(
                     except IndexError:
                         logger.warning(f"Debug Layer-Wise: Index out of bounds while fetching scores for logging layer {l_i}")
                         scores_for_log = ["N/A"] * log_limit_layer
-                else:
+                    else:
                     scores_for_log = ["N/A"] * log_limit_layer
 
                 logger.info(f"  Layer {l_i}: Dropping {len(indices_to_log)} nodes. Indices (first {log_limit_layer}): {indices_to_log[:log_limit_layer]} with scores: {scores_for_log}")
 
-            wdat = layer_mod.weight.data
+                    wdat = layer_mod.weight.data
             mask = _create_mask_from_indices(wdat.shape, pruned_node_indices_for_layer, device)
 
             if dropout_mode_str == "scaled":
                 frac_d_layer = n_drop / float(out_dim) if out_dim > 0 else 0.0
                 scale = 1.0 / (1.0 - frac_d_layer) if frac_d_layer < 0.9999 else 10.0
                 layer_mod.weight.data *= mask * scale
-                if layer_mod.bias is not None:
+                        if layer_mod.bias is not None:
                     bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, pruned_node_indices_for_layer, device)
                     layer_mod.bias.data *= bias_mask * scale
-            else:
+                    else:
                 # Just zero out the weights without scaling
                 for node_idx in pruned_node_indices_for_layer:
                     if node_idx < out_dim:
@@ -782,7 +735,7 @@ def eigenvector_dropout(
     
     # Get alignment values
     alignment_values = []
-    
+
     # Initialize metadata dictionary
     layer_metadata_by_idx = {}
     

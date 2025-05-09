@@ -149,4 +149,49 @@ def timed(func: Callable[..., T]) -> Callable[..., Tuple[T, float]]:
         elapsed = time.time() - start
         return result, elapsed
     
-    return wrapper 
+    return wrapper
+
+
+def _create_mask_from_indices(shape, indices_to_zero, device):
+    """
+    Create a binary mask tensor with zeros at specified indices and ones elsewhere.
+    
+    Args:
+        shape: Shape of the mask tensor
+        indices_to_zero: Indices where the mask should be zero
+        device: Device to create the mask on
+        
+    Returns:
+        Binary mask tensor
+    """
+    # Ensure indices_to_zero is a tensor for indexing
+    if not isinstance(indices_to_zero, torch.Tensor):
+        # Handle cases where indices_to_zero might be a list of single-element tensors or Python numbers
+        if indices_to_zero and isinstance(indices_to_zero[0], torch.Tensor) and indices_to_zero[0].numel() == 1:
+            indices_to_zero = torch.tensor([idx.item() for idx in indices_to_zero], device=device, dtype=torch.long)
+        elif indices_to_zero and isinstance(indices_to_zero[0], int):
+            indices_to_zero = torch.tensor(indices_to_zero, device=device, dtype=torch.long)
+        # If it's already a tensor but not on the right device, move it
+        elif isinstance(indices_to_zero, torch.Tensor) and indices_to_zero.device != device:
+            indices_to_zero = indices_to_zero.to(device)
+        # If it's an empty list, create an empty long tensor
+        elif not indices_to_zero:
+             indices_to_zero = torch.tensor([], device=device, dtype=torch.long)
+        # Add other checks if necessary, or raise error for unsupported types
+
+    mask = torch.ones(shape[0], device=device) # Mask for the 0-th dimension
+    if indices_to_zero.numel() > 0: # Check if the tensor is not empty
+        # Ensure indices are within bounds for the 0-th dimension
+        valid_indices = indices_to_zero[(indices_to_zero >= 0) & (indices_to_zero < shape[0])]
+        if valid_indices.numel() > 0:
+            mask[valid_indices] = 0.0
+    
+    # Expand mask to match the full tensor shape if needed (e.g., for 2D weights, 4D conv filters)
+    if len(shape) > 1:
+        # Reshape mask to be (shape[0], 1, 1, ...) to allow broadcasting
+        mask_shape_for_expansion = [shape[0]] + [1] * (len(shape) - 1)
+        mask = mask.view(mask_shape_for_expansion)
+        # Expand to the target shape
+        mask = mask.expand(shape)
+    
+    return mask 

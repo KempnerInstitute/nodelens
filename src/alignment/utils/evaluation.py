@@ -197,3 +197,36 @@ def evaluate_networks_ensemble(
         avg_accuracies = (100.0 * sum_correct_per_network / total_samples_processed).tolist()
     
     return avg_losses, avg_accuracies 
+
+def _evaluate_model_accuracy(model: nn.Module, data_loader: torch.utils.data.DataLoader, device: torch.device) -> float:
+    """
+    Helper function to evaluate a model's accuracy on a given data loader.
+    This is used internally by progressive_dropout and other functions.
+    Args:
+        model: The PyTorch model to evaluate.
+        data_loader: DataLoader for the evaluation data.
+        device: The device to perform evaluation on.
+    Returns:
+        Accuracy in percentage.
+    """
+    model.eval() # Ensure model is in evaluation mode
+    # _ensure_model_on_device(model, device) # Assuming model is already on correct device by caller
+    # Caller of this low-level util should ensure device consistency.
+    # For safety, can add: model.to(device)
+
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for inputs, targets in data_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = model(inputs)
+            if isinstance(outputs, tuple):
+                # Common case: model returns (predictions, other_stuff)
+                outputs = outputs[0]
+            _, predicted = torch.max(outputs.data, 1)
+            total += targets.size(0)
+            correct += (predicted == targets).sum().item()
+    
+    if total == 0:
+        return 0.0 # Avoid division by zero
+    return 100.0 * correct / total 

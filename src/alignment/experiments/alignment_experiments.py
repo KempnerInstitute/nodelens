@@ -21,6 +21,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+import wandb
 
 from alignment.config import ExperimentConfig, DatasetConfig, CheckpointingConfig, AlignmentConfig
 from alignment.experiments.experiment import Experiment
@@ -35,9 +36,11 @@ from alignment.utils.plotting import (
     plot_mean_rq_of_pruned_nodes, 
     plot_per_layer_pruning_percentage,
     plot_per_layer_contribution_to_pruning,
-    plot_rq_stats_per_layer
+    plot_rq_stats_per_layer,
+    plot_layer_isolated_dropout_results
 )
 from alignment.datasets import get_dataset, load_dataset
+from alignment.dropout_manager import run_layer_isolated_dropout_experiment
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +112,26 @@ class AlignmentExperiment(Experiment):
             default_alignment_conf = AlignmentConfig()
             self.metric = get_metric(default_alignment_conf.metric)
             logger.warning(f"Falling back to default alignment metric: {default_alignment_conf.metric}")
+        
+        # Initialize Weights & Biases if configured
+        self.wandb_run = None
+        # Assuming config.wandb.use_wandb and other wandb params exist after YAML refactor
+        if hasattr(config, 'wandb') and config.wandb.use_wandb:
+            try:
+                self.wandb_run = wandb.init(
+                    project=config.wandb.wandb_project,
+                    entity=config.wandb.wandb_entity if config.wandb.wandb_entity and config.wandb.wandb_entity.lower() != "none" and config.wandb.wandb_entity.lower() != "null" else None,
+                    config=config.to_dict(), # Log the entire configuration
+                    name=config.experiment_name if hasattr(config, 'experiment_name') else None,
+                    reinit=True, # Allow reinitialization if running in a notebook multiple times
+                    settings=wandb.Settings(start_method="thread") # Good for some environments
+                )
+                logger.info(f"Weights & Biases run initialized: {self.wandb_run.url if self.wandb_run else 'Failed'}")
+            except Exception as e:
+                logger.error(f"Failed to initialize Weights & Biases: {e}")
+                self.wandb_run = None # Ensure it's None on failure
+        else:
+            logger.info("Weights & Biases logging is disabled.")
         
     def get_basename(self) -> str:
         """
@@ -763,6 +786,29 @@ class AlignmentExperiment(Experiment):
         # Save results to file (already there)
         # self.save_results("progressive_dropout_results.pkl", results)
         
+        if self.wandb_run:
+            try:
+                # Log summary metrics for progressive dropout
+                summary_metrics = {}
+                for strategy in results["accuracies"]:
+                    if results["accuracies"][strategy]: # if list is not empty
+                        summary_metrics[f"final_acc_{strategy}"] = results["accuracies"][strategy][-1]
+                        summary_metrics[f"best_acc_{strategy}"] = max(results["accuracies"][strategy])
+                if summary_metrics:
+                    wandb.log({"progressive_dropout_summary": summary_metrics})
+                
+                # Log detailed accuracy curves if needed (can be a lot of data)
+                # for strategy in results["accuracies"]:
+                #    for i, acc in enumerate(results["accuracies"][strategy]):
+                #        wandb.log({f"acc_{strategy}_frac{results["dropout_fractions"][i]:.2f}": acc}, step=i)
+                
+                # Log plots if plot_files exist in results
+                if "plot_files" in results and results["plot_files"]:
+                    log_plots_to_wandb(results["plot_files"], tags={"experiment_type": "progressive_dropout"})
+
+            except Exception as e:
+                logger.error(f"Error logging progressive dropout results to W&B: {e}")
+
         return results
     
     def run_eigenvector_dropout(self, network: nn.Module, dataset) -> Dict:
@@ -829,6 +875,56 @@ class AlignmentExperiment(Experiment):
         
         return results
     
+    def run_layer_isolated_experiment(self, networks: List[nn.Module], dataset) -> Dict:
+        logger.info("Running Layer Isolated Dropout Experiment")
+        dropout_min = self.config.alignment.dropout_min
+        dropout_max = self.config.alignment.dropout_max
+        num_dropout_steps = self.config.alignment.dropout_steps
+        if num_dropout_steps <=1:
+            _fractions = [0.0, dropout_max]
+        else:
+            _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
+        if 0.0 not in _fractions: # Ensure 0.0 is present for baseline
+            _fractions = [0.0] + _fractions
+        dropout_fractions = sorted(list(set(_fractions)))
+
+        exclude_cls_layer = getattr(self.config.alignment, "exclude_classification_layer", True)
+        dropout_mode = getattr(self.config.alignment, "dropout_mode", "scaled")
+
+        # Call the correct manager function for layer-isolated experiments
+        results = run_layer_isolated_dropout_experiment(
+            original_networks=networks, 
+            dataset=dataset,
+            dropout_fractions=dropout_fractions,
+            metric=self.metric,
+            device=self.device,
+            dropout_mode=dropout_mode,
+            show_progress=True, 
+            debug_mode=self.debug_mode,
+            exclude_classification_layer_config=exclude_cls_layer
+        )
+
+        # Call the specific plotting function for layer-isolated results
+        if results: # Check if results were successfully generated
+            isolated_plot_files = plot_layer_isolated_dropout_results(
+                results, 
+                save_dir=self.figure_path,
+                title_prefix=f"{getattr(self.config, 'experiment_name', 'Layer Isolated Pruning')}",
+                show_plots=getattr(self.config, 'show_all', False)
+            )
+            if isolated_plot_files:
+                results.setdefault("plot_files", []).extend(isolated_plot_files)
+        
+        self.save_results("layer_isolated_dropout_results.pkl", results)
+        if self.wandb_run and results:
+            try:
+                # Log a summary or simplified version for W&B if desired
+                # For layer-isolated, the structure is different, so a simple summary might be just a flag
+                wandb.log({"layer_isolated_results_generated": True if results else False})
+            except Exception as e:
+                logger.error(f"Error logging layer_isolated results to W&B: {e}")
+        return results
+    
     def main(self) -> Tuple[Dict, List[nn.Module]]:
         """
         Main experiment execution method.
@@ -893,6 +989,9 @@ class AlignmentExperiment(Experiment):
             
             # Save results to file
             self.save_results("eigenvector_dropout_results.pkl", results)
+            
+        elif experiment_type == "layer_isolated_pruning": # New experiment type option
+            results = self.run_layer_isolated_experiment(networks, dataset)
             
         else:
             raise ValueError(f"Unsupported experiment type: {experiment_type}")
@@ -1063,6 +1162,11 @@ class AlignmentExperiment(Experiment):
                 yaml.dump(config_dict, f, default_flow_style=False)
             logger.info(f"Saved configuration to {config_file}")
         
+        # Finish W&B run if it was initialized
+        if self.wandb_run:
+            wandb.finish()
+            logger.info("Weights & Biases run finished.")
+            
         return results, networks
 
 
