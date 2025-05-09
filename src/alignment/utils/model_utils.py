@@ -6,7 +6,7 @@ including functions for manipulating layers, weights, and activations.
 """
 
 import logging
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union, Dict
 
 import numpy as np
 import torch
@@ -280,3 +280,68 @@ def enhance_cnn_configuration(config):
             logger.info(f"Setting CNN mode to 'unfold' for {config.model.model_name}")
     
     return config 
+
+# --- Functions to be moved from dropout.py --- 
+def _flatten_layer_weights_for_node(layer: nn.Module) -> torch.Tensor:
+    """
+    Flatten layer weights to standardized format for alignment computations.
+    Handles various layer types including Linear, Conv1d/2d/3d, ConvTranspose1d/2d/3d.
+    Args:
+        layer: PyTorch module with weights
+    Returns:
+        Flattened weights with shape [out_channels, flattened_dims]
+    """
+    w = layer.weight.data
+    if w.dim() == 2: return w # Linear
+    elif w.dim() == 3: return w.view(w.size(0), -1) # Conv1d / ConvTranspose1d
+    elif w.dim() == 4: return w.view(w.size(0), -1) # Conv2d / ConvTranspose2d
+    elif w.dim() == 5: return w.view(w.size(0), -1) # Conv3d / ConvTranspose3d
+    else:
+        logger.warning(f"Unexpected weight shape {w.shape} in _flatten_layer_weights_for_node, returning flattened anyway.")
+        return w.view(w.size(0), -1)
+
+def process_cnn_weights(model, layer_idx: int, pruning_strategy: str ="standard") -> Tuple[torch.Tensor, Dict[str, Any]]:
+    """
+    Process CNN weights according to architecture-specific requirements.
+    This function handles special cases for different CNN architectures, such as
+    skip connections in ResNet or dense connections in DenseNet.
+    Args:
+        model: The neural network model (typically AlignmentNetwork wrapping a base_model).
+        layer_idx: Index of the layer (in model.alignment_layers) to process.
+        pruning_strategy: Strategy for pruning ("standard", "uniform", "structure-aware").
+    Returns:
+        Tuple of (processed_weights_flat, layer_metadata_dict).
+    """
+    if not hasattr(model, 'alignment_layers') or not hasattr(model, 'alignment_names') or 
+       layer_idx >= len(model.alignment_layers):
+        raise ValueError("Model missing alignment_layers/names or layer_idx out of bounds.")
+
+    layer = model.alignment_layers[layer_idx]
+    layer_name = model.alignment_names[layer_idx]
+    
+    is_conv = isinstance(layer, (nn.Conv1d, nn.Conv2d, nn.Conv3d, 
+                                nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d))
+    
+    if not is_conv:
+        return layer.weight.data, {"type": "linear", "name": layer_name}
+    
+    w_flat = _flatten_layer_weights_for_node(layer)
+    base_model = getattr(model, 'base_model', None)
+    model_name = type(base_model).__name__ if base_model else "UnknownBaseModel"
+
+    metadata = {
+        "type": "conv_standard", "name": layer_name,
+        "in_channels": getattr(layer, 'in_channels', None),
+        "out_channels": getattr(layer, 'out_channels', None),
+        "kernel_size": getattr(layer, 'kernel_size', None)
+    }
+
+    if "ResNet" in model_name: # Simple check, might need more robust ResNet block identification
+        is_residual = any(n_part in layer_name.lower() for n_part in ["shortcut", "downsample", "skip"])
+        if is_residual and pruning_strategy == "structure-aware":
+            metadata.update({"type": "conv_residual", "requires_dimensional_matching": True})
+    elif "DenseNet" in model_name: # Simple check
+        metadata.update({"type": "conv_dense", "all_outputs_required": True})
+            
+    return w_flat, metadata
+# --- End of functions moved from dropout.py --- 

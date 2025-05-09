@@ -960,3 +960,88 @@ def plot_rq_stats_per_layer(
     if show_plots: plt.show()
     plt.close()
     return plot_filename 
+
+def plot_layer_isolated_dropout_results(
+    experiment_results: Dict[str, Any],
+    save_dir: str,
+    title_prefix: str = "Layer Isolated Pruning",
+    show_plots: bool = False
+) -> List[str]: # Returns list of filenames, one per strategy
+    if ("accuracies_isolated" not in experiment_results or 
+        not isinstance(experiment_results.get("accuracies_isolated"), dict)):
+        logger.warning("'accuracies_isolated' not found or is not a dictionary. Skipping layer-isolated plot.")
+        return []
+
+    accuracies_isolated = experiment_results["accuracies_isolated"]
+    stds_isolated = experiment_results.get("stds_isolated", {})
+    dropout_fractions = experiment_results.get("dropout_fractions", [])
+
+    if not dropout_fractions:
+        logger.warning("No dropout_fractions for plotting layer-isolated results.")
+        return []
+
+    strategies_present = list(accuracies_isolated.keys())
+    if not strategies_present:
+        logger.warning("No strategies found in accuracies_isolated.")
+        return []
+
+    # Determine num_layers from the first strategy and first layer data if possible
+    num_layers = 0
+    if accuracies_isolated[strategies_present[0]]:
+        num_layers = len(accuracies_isolated[strategies_present[0]].keys())
+    
+    if num_layers == 0:
+        logger.warning("Could not determine number of layers for layer-isolated plot.")
+        return []
+
+    plot_files = []
+    
+    # Create one figure per strategy, each figure having N panels (one per isolated layer)
+    for strategy in strategies_present:
+        if not accuracies_isolated[strategy]: # No data for this strategy
+            continue
+
+        ncols_fig = 2 if num_layers > 2 else 1
+        nrows_fig = (num_layers + ncols_fig - 1) // ncols_fig
+        fig, axes = plt.subplots(nrows_fig, ncols_fig, figsize=(8 * ncols_fig, 6 * nrows_fig), sharex=True, sharey=True, squeeze=False)
+        axes_flat = axes.flatten()
+        fig.suptitle(f"{title_prefix} - Strategy: {strategy.replace('_',' ').title()}\n(Accuracy vs. Pruning Fraction of Isolated Layer)", fontsize=16)
+
+        for layer_idx in range(num_layers):
+            ax = axes_flat[layer_idx]
+            ax.set_title(f"Isolating Layer {layer_idx}")
+
+            accs_this_layer_strat = accuracies_isolated[strategy].get(layer_idx, [])
+            stds_this_layer_strat = stds_isolated.get(strategy, {}).get(layer_idx, [])
+
+            if accs_this_layer_strat:
+                # Ensure lengths match dropout_fractions for plotting
+                valid_len = min(len(dropout_fractions), len(accs_this_layer_strat))
+                plot_fractions = dropout_fractions[:valid_len]
+                plot_accs = accs_this_layer_strat[:valid_len]
+                plot_stds = stds_this_layer_strat[:valid_len] if len(stds_this_layer_strat) >= valid_len else np.zeros(valid_len)
+                
+                ax.errorbar(plot_fractions, plot_accs, yerr=plot_stds, marker='o', linestyle='-', capsize=3, label=f"Layer {layer_idx} Isolated")
+                ax.grid(True)
+                ax.set_ylim(0, 105) # Assuming accuracy percentage
+            else:
+                ax.text(0.5, 0.5, "No data", horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
+            
+            if layer_idx // ncols_fig == nrows_fig - 1 or nrows_fig == 1:
+                ax.set_xlabel("Fraction Pruned from This Layer")
+            if layer_idx % ncols_fig == 0:
+                ax.set_ylabel("Network Accuracy (%)")
+        
+        # Hide unused subplots
+        for i in range(num_layers, nrows_fig * ncols_fig):
+            fig.delaxes(axes_flat[i])
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plot_filename = os.path.join(save_dir, f"{title_prefix.lower().replace(' ', '_')}_strategy_{strategy}_isolated_layers.png")
+        plt.savefig(plot_filename)
+        logger.info(f"Saved layer-isolated plot for strategy {strategy} to {plot_filename}")
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+        plot_files.append(plot_filename)
+    return plot_files 
