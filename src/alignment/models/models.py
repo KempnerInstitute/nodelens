@@ -260,7 +260,9 @@ def create_mlp(config_model: Dict, # Expecting a dict derived from ModelConfig f
 
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names)
+    # Extract cnn_mode from config_model, default if not present
+    cnn_mode = config_model.get("cnn_mode", "unfold")
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
 
 
 @register_model("cnn2p2")
@@ -297,7 +299,8 @@ def create_cnn2p2(config_model: Dict, # Expecting a dict derived from ModelConfi
     }
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
 
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names)
+    cnn_mode = config_model.get("cnn_mode", "unfold")
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
 
 
 @register_model("alexnet")
@@ -335,7 +338,8 @@ def create_alexnet(config_model: Dict,
     }
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names)
+    cnn_mode = config_model.get("cnn_mode", "unfold") # AlexNet is a CNN
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
 
 
 # Dictionary for dataset-specific model parameters
