@@ -113,11 +113,59 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
     
     # alignment_layers is a separate argument to the create_X functions
     alignment_layers_config = config.alignment_layers
+    # cnn_mode is now part of AlignmentConfig, which is config.alignment
+    # Default to "unfold" if not found, as AlignmentNetwork expects it.
+    cnn_mode_config = "unfold" # Default
+    if hasattr(config, 'alignment') and hasattr(config.alignment, 'cnn_mode'):
+        cnn_mode_config = config.alignment.cnn_mode
+    elif hasattr(config, 'extra') and hasattr(config.extra, 'cnn_mode'): # Fallback to check old ExtraConfig location
+        logger.warning("cnn_mode found in config.extra, prefer config.alignment.cnn_mode")
+        cnn_mode_config = config.extra.cnn_mode
 
-    logger.info(f"Creating model '{config.model_name}' with dropout rate: {config.dropout_rate}")
+    logger.info(f"Creating model '{config.model_name}' with dropout rate: {config.dropout_rate}, cnn_mode: {cnn_mode_config}")
     
-    # Call the specific constructor with the dict of relevant model parameters and alignment_layers config
-    return model_constructor(config_model=model_params_dict, alignment_layers=alignment_layers_config)
+    # The create_X functions (create_mlp, create_cnn2p2) in models.py return an AlignmentNetwork
+    # They themselves now receive the base_model_params and alignment_layers.
+    # The AlignmentNetwork constructor is called within those create_X functions.
+    # We need to ensure cnn_mode is passed to AlignmentNetwork there.
+    # So, the create_X functions need to be aware of cnn_mode.
+    
+    # Modification: Add cnn_mode_config to model_params_dict so create_X functions can access it
+    # OR, pass it as a separate arg to create_X functions if they are modified to accept it.
+    # Let's pass it in model_params_dict for now for simplicity, assuming create_X will pick it up
+    # if it needs to pass it to AlignmentNetwork explicitly.
+    # However, AlignmentNetwork __init__ takes cnn_mode directly.
+    # The create_X functions in models.py already handle AlignmentNetwork creation.
+    # They need to be passed cnn_mode.
+
+    # Let's adjust create_X in models.py to accept cnn_mode and pass it to AlignmentNetwork
+    # For now, this function (create_model in registry) just calls the registered constructor.
+    # The registered constructors (create_mlp, create_cnn2p2) need to be updated.
+
+    # The constructor (e.g., create_mlp) will now be called with:
+    # model_constructor(config_model=model_params_dict, alignment_layers=alignment_layers_config, cnn_mode=cnn_mode_config)
+    # This requires changing the signature of all registered model constructor functions.
+
+    # Simpler: create_X functions get model_params_dict. They build base_model.
+    # They then get cnn_mode from model_params_dict (if we put it there) or from config for AlignmentNetwork.
+    # For now, we assume AlignmentNetwork gets cnn_mode from its own **kwargs if passed through create_X
+    # or create_X explicitly passes it.
+    
+    # The create_X functions (create_mlp, create_cnn2p2 etc.) in models.py
+    # already take **kwargs. We can pass cnn_mode via these kwargs, and they
+    # can then pass it to AlignmentNetwork.
+    # Let's add cnn_mode to the kwargs passed to the model_constructor
+    model_creation_kwargs = model_params_dict # Start with model specific params
+    # The create_X functions in models.py are registered and take `config_model: Dict` and `alignment_layers`.
+    # They then create the base_model and wrap it with AlignmentNetwork.
+    # The cnn_mode should be passed to the AlignmentNetwork constructor.
+    # So, the create_X functions need access to cnn_mode.
+    # We will pass it as part of the config_model dict to create_X functions.
+    
+    config_model_with_cnn_mode = model_params_dict.copy()
+    config_model_with_cnn_mode['cnn_mode'] = cnn_mode_config 
+
+    return model_constructor(config_model=config_model_with_cnn_mode, alignment_layers=alignment_layers_config)
 
 
 def get_available_models() -> List[str]:

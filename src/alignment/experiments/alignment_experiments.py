@@ -102,10 +102,10 @@ class AlignmentExperiment(Experiment):
             self.config.checkpointing = CheckpointingConfig()
             logger.warning("Checkpointing configuration attribute not found, initializing with defaults.")
         
-        if hasattr(self.config, 'alignment') and hasattr(self.config.alignment, 'metric'):
+        if hasattr(self.config, 'alignment') and self.config.alignment is not None:
             self.metric = get_metric(self.config.alignment.metric)
         else:
-            logger.error("Alignment metric configuration not found! Please check config.alignment.metric.")
+            logger.error("AlignmentConfig not found or metric not specified!")
             default_alignment_conf = AlignmentConfig()
             self.metric = get_metric(default_alignment_conf.metric)
             logger.warning(f"Falling back to default alignment metric: {default_alignment_conf.metric}")
@@ -224,8 +224,7 @@ class AlignmentExperiment(Experiment):
         learning_rate = getattr(self.config.training, "learning_rate", 0.001)
         optimizer_name = getattr(self.config.training, "optimizer", "Adam")
         weight_decay = getattr(self.config.training, "weight_decay", 0.0)
-        # Get training_method from config.extra
-        training_method = getattr(self.config.extra, "training_method", "auto")
+        training_method = getattr(self.config.training, "training_method", "auto")
         
         logger.info(f"Training {len(networks)} networks for {num_epochs} epochs using method: {training_method}.")
         
@@ -238,7 +237,7 @@ class AlignmentExperiment(Experiment):
             show_progress=True,
             optimizer_class=getattr(torch.optim, optimizer_name, torch.optim.Adam),
             weight_decay=weight_decay,
-            training_method=training_method # Pass the training_method to the dispatcher
+            training_method=training_method
         )
     
     def run_progressive_dropout(self, networks: List[nn.Module], dataset) -> Dict:
@@ -259,8 +258,10 @@ class AlignmentExperiment(Experiment):
         dropout_fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
         
         # Get pruning and dropout modes from config
-        pruning_mode = getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
-        dropout_mode = getattr(self.config.extra, "dropout_mode", "scaled")
+        pruning_mode = getattr(self.config.alignment, "dropout_pruning_mode", "global_joint")
+        dropout_mode = getattr(self.config.alignment, "dropout_mode", "scaled")
+        effective_exclude_classification_layer = getattr(self.config.alignment, "exclude_classification_layer", True)
+        use_multi_strategy = getattr(self.config.alignment, "use_multi_strategy_dropout", True)
         
         # IMPORTANT: Add a warning about scaled mode possibly hiding accuracy drops
         if dropout_mode == "scaled":
@@ -287,15 +288,6 @@ class AlignmentExperiment(Experiment):
                     
                     logger.info(f"Layer {i}: Shape {weights.shape}, zeros: {zero_weights}/{total_weights} ({zero_percent:.2f}%)")
             logger.info(f"Total parameters: {total_params}")
-        
-        # Get multi-strategy option
-        use_multi_strategy = getattr(self.config.extra, "use_multi_strategy_dropout", True)
-        # Get exclude_classification_layer option
-        effective_exclude_classification_layer = getattr(self.config.extra, "exclude_classification_layer", True)
-
-        logger.info(f"Running progressive dropout with pruning_mode={pruning_mode}, dropout_mode={dropout_mode}, exclude_classification_layer={effective_exclude_classification_layer}")
-        if use_multi_strategy:
-            logger.info("Using optimized multi-strategy approach (processing all strategies simultaneously)")
         
         # Train networks if needed
         if getattr(self.config.training, "train_before_dropout", True):
@@ -871,8 +863,8 @@ class AlignmentExperiment(Experiment):
                 results, 
                 save_dir=self.figure_path,
                 title_prefix=f"{getattr(self.config, 'experiment_name', 'Progressive Dropout')}",
-                pruning_mode=getattr(self.config.extra, "dropout_pruning_mode", "global_joint"),
-                dropout_mode=getattr(self.config.extra, "dropout_mode", "scaled")
+                pruning_mode=getattr(self.config.alignment, "dropout_pruning_mode", "global_joint"),
+                dropout_mode=getattr(self.config.alignment, "dropout_mode", "scaled")
             )
             
             # Save the plot files in results

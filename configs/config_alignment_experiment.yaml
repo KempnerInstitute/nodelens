@@ -27,7 +27,7 @@ model:
   model_name: "MLP"  # Or "MLP", "AlexNet"
   # Common parameters
   output_dim: 10       # MNIST/CIFAR10 classes
-  dropout_rate: 0.0    # General dropout rate
+  dropout_rate: 0.0    # Changed from 0.5 to 0.0 as a more typical default for base model before pruning.
   # alignment_layers:  # Optional: Uncomment and define if you want to override defaults
   #   "conv1.0": 0
   #   "conv2.0": 1
@@ -63,6 +63,7 @@ training:
   learning_rate: 0.001 # Learning rate for optimizer (typical range: 1e-4 to 1e-2)
   momentum: 0.9 # Momentum parameter for SGD (not used for Adam)
   loss: "cross_entropy" # Loss function to use for training
+  training_method: "auto" # MOVED HERE from extra/execution
   
 # Checkpointing configuration
 checkpointing:
@@ -73,61 +74,33 @@ checkpointing:
   save_model: true # Whether to save the final trained models
   save_interval: 1 # How often to save model (in epochs)
   
-# Alignment analysis configuration
-alignment:
-  metric: "RQ" # Alignment metric to use (options: "RQ", "NullSpace", "Delta", "R2")
-  run_progressive: true # Whether to run progressive dropout experiment (node pruning)
-  run_eigenvector: false # Whether to run eigenvector dropout experiment (feature pruning)
-  dropout_min: 0.0 # Minimum dropout fraction to test (range: 0.0-1.0)
-  dropout_max: 0.9 # Maximum dropout fraction to test (range: 0.0-1.0, <1.0 to avoid complete dropout)
-  dropout_steps: 10 # Number of steps for testing dropout fractions
-  scale_by_norm: false # Whether to scale covariance matrices by norm (can improve numerics)
+# Alignment & Pruning Configuration (Maps to AlignmentConfig in config.py)
+alignment: # Renamed from 'pruning' to match config.alignment attribute
+  metric: "RQ"
+  # run_progressive & run_eigenvector are for experiment_type logic, but belong with alignment settings
+  run_progressive: true 
+  run_eigenvector: false
+  dropout_min: 0.0 
+  dropout_max: 0.9 
+  dropout_steps: 10 
+  scale_by_norm: false # For RQ metric calculation
 
-# Extra configuration parameters
-extra:
-  dropout_mode: "scaled" # How dropout is applied:
-                        # - "scaled": Multiply remaining weights by 1/(1-p) to maintain expected output
-                        # - "unscaled": No scaling, just zero out weights
-  
-  dropout_pruning_mode: "layer_wise" # How pruning is distributed across the network:
-                                   # - "global_joint": Prune x% of nodes across all layers simultaneously based on alignment score
-                                   # - "layer_wise": Prune x% from each layer simultaneously (optionally skip classification)
-                                   # - "layer_isolated": For each layer, prune x% of that layer alone and measure accuracy
-                                   # - "cascading_layer": Prune layers progressively, using pruned layer 1 to compute RQ for layer 2, etc.
-  
-  exclude_classification_layer: true # Whether to exclude the output layer from pruning:
-                                    # - true: Skip pruning the final layer (recommended for classification tasks)
-                                    # - false: Include all layers in pruning
-  
-  cnn_mode: "unfold" # How CNN features are processed for alignment:
-                    # - "unfold": Unfold CNN features to 2D matrices
-                    # - "patchwise": Process each patch separately
-                    # - "batch_patch_combined": Combine batch and patch dimensions
-  
-  training_method: "fully_tensorized" # Method for training multiple networks:
-                               # - "auto": Automatically select the best method based on network architecture
-                               # - "sequential": Train networks one by one (original approach)
-                               # - "tensorized": Train networks in parallel with some operations batched
-                               # - "fully_tensorized": Train networks in a single ensemble (fastest)
-  
-  use_tensorized: true # Whether to use tensorized implementation for dropout:
-                       # - true: Use tensor operations for faster computation (recommended)
-                       # - false: Use sequential processing (slower but may use less memory)
-  
-  use_multi_strategy_dropout: true # Whether to process all pruning strategies (high_rq, low_rq, random) simultaneously:
-                                 # - true: Process all strategies at once (much faster, recommended)
-                                 # - false: Process strategies sequentially (original approach)
-  
-  track_metrics: ["accuracy", "loss", "alignment", "time"] # Metrics to track during experiments
-  
-  log_frequency: 1 # How often to log metrics during training (in epochs)
-  
-  log_images: true # Whether to log images to wandb for visualization
-  
-  detailed_logging: true # Whether to enable detailed metric logging:
-                        # - true: Log comprehensive metrics (more disk space)
-                        # - false: Log minimal metrics (lighter files)
-                      
+  # Pruning execution options (previously in extra, now part of AlignmentConfig)
+  dropout_mode: "scaled"
+  dropout_pruning_mode: "global_joint"
+  exclude_classification_layer: true
+  use_multi_strategy_dropout: true # For progressive_dropout: runs strategies efficiently
+
+  # CNN processing for metrics (previously in extra, now part of AlignmentConfig)
+  cnn_mode: "unfold"
+
+# Other Miscellaneous Execution Options (Maps to ExtraConfig in config.py)
+extra: # Renamed back from other_execution_options to match ExtraConfig attribute
+  log_frequency: 1 
+  log_images: true 
+  detailed_logging: true
+  # dummy_extra_param: null # Example if ExtraConfig had a field for this
+
 # Experiment name for identification
 experiment_name: "layer_wise_pruning_test" # Descriptive name for this experiment
 wandb_project: "neural_alignment" # Weights & Biases project name

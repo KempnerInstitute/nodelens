@@ -267,6 +267,11 @@ class TrainingConfig(BaseConfig):
     optimizer: str = "Adam"
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
+    loss: str = "cross_entropy" # From your YAML
+    momentum: float = 0.9 # From your YAML
+    
+    # MOVED from ExtraConfig
+    training_method: str = "auto"  # Options: "auto", "sequential", "fully_tensorized"
     
     def validate(self) -> bool:
         """Validate training configuration."""
@@ -287,21 +292,31 @@ class TrainingConfig(BaseConfig):
             import warnings
             warnings.warn(f"Unusual optimizer name: {self.optimizer}")
             
+        valid_training_methods = ["auto", "sequential", "fully_tensorized"]
+        if self.training_method not in valid_training_methods:
+            raise ValueError(f"Invalid training method: {self.training_method}. Valid options: {valid_training_methods}")
+            
         return True
 
 
 @dataclass
 class AlignmentConfig(BaseConfig):
-    """Alignment measurement configuration."""
-    
+    """Alignment measurement and Pruning configuration.""" # Renamed for clarity
     metric: str = "RQ"
     run_progressive: bool = True
-    run_eigenvector: bool = True
+    run_eigenvector: bool = True # Corresponds to experiment_type, maybe remove from here if redundant
     dropout_min: float = 0.0
-    dropout_max: float = 0.95
+    dropout_max: float = 0.9
     dropout_steps: int = 40
     scale_by_norm: bool = False
-    
+
+    # MOVED from ExtraConfig (related to pruning execution and CNN processing for metrics)
+    dropout_mode: str = "scaled" 
+    dropout_pruning_mode: str = "global_joint"
+    exclude_classification_layer: bool = True
+    cnn_mode: str = "unfold"
+    use_multi_strategy_dropout: bool = True # For progressive_dropout execution
+
     def validate(self) -> bool:
         """Validate alignment configuration."""
         valid_metrics = ["RQ", "NullSpace", "MI", "weight_similarity", "redundancy", "delta_alignment"]
@@ -323,6 +338,25 @@ class AlignmentConfig(BaseConfig):
         if self.dropout_steps <= 0:
             raise ValueError(f"Dropout steps must be positive, got {self.dropout_steps}")
             
+        valid_pruning_modes = [
+            "global_joint", "layer_wise", "layer_isolated", "cascading_layer"
+        ]
+        if self.dropout_pruning_mode not in valid_pruning_modes:
+            # Allow old names for backward compatibility by mapping them
+            old_pruning_map = {
+                "global": "global_joint", "per_layer_combined": "layer_wise", 
+                "per_layer_independent": "layer_isolated", "global_joint_legacy": "global_joint",
+                "layer_wise_legacy": "layer_wise", "layer_isolated_legacy": "layer_isolated"
+            }
+            if self.dropout_pruning_mode in old_pruning_map:
+                self.dropout_pruning_mode = old_pruning_map[self.dropout_pruning_mode]
+            else:
+                raise ValueError(f"Invalid dropout pruning mode: {self.dropout_pruning_mode}. Valid: {valid_pruning_modes}")
+
+        if self.dropout_mode not in ["scaled", "unscaled"]:
+            raise ValueError(f"Invalid dropout mode: {self.dropout_mode}")
+        if self.cnn_mode not in ["unfold", "patchwise", "batch_patch_combined"]:
+            raise ValueError(f"Invalid CNN mode: {self.cnn_mode}")
         return True
 
 
@@ -345,38 +379,13 @@ class CheckpointingConfig(BaseConfig):
 
 @dataclass
 class ExtraConfig(BaseConfig):
-    """Extra configuration parameters."""
-    
-    dropout_mode: str = "scaled"
-    dropout_pruning_mode: str = "layer_wise"
-    exclude_classification_layer: bool = True
-    cnn_mode: str = "unfold"
-    training_method: str = "auto"  # Options: "auto", "sequential", "tensorized", "fully_tensorized"
-    
+    """Extra configuration parameters - now mostly for logging or less critical options."""
+    # Parameters like log_frequency, log_images, detailed_logging from your YAML's old extra can go here.
+    # For now, keeping it minimal if other params were moved.
+    # If all params are moved, this class might become obsolete or be used for truly ad-hoc additions.
+    dummy_extra_param: Optional[str] = None # Placeholder if it becomes empty
+
     def validate(self) -> bool:
-        """Validate extra configuration."""
-        valid_pruning_modes = [
-            # Original modes
-            "global", "per_layer_combined", "per_layer_independent",
-            # New names for backward compatibility
-            "global_joint", "layer_wise", "layer_isolated",
-            # New progressive pruning mode
-            "cascading_layer"
-        ]
-        
-        if self.dropout_pruning_mode not in valid_pruning_modes:
-            raise ValueError(f"Invalid dropout pruning mode: {self.dropout_pruning_mode}")
-            
-        if self.dropout_mode not in ["scaled", "unscaled"]:
-            raise ValueError(f"Invalid dropout mode: {self.dropout_mode}")
-            
-        if self.cnn_mode not in ["unfold", "patchwise", "batch_patch_combined"]:
-            raise ValueError(f"Invalid CNN mode: {self.cnn_mode}")
-            
-        valid_training_methods = ["auto", "sequential", "tensorized", "fully_tensorized"]
-        if self.training_method not in valid_training_methods:
-            raise ValueError(f"Invalid training method: {self.training_method}. Valid options are: {valid_training_methods}")
-            
         return True
 
 
