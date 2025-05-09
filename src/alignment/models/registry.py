@@ -76,21 +76,48 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
     Create a model instance from configuration.
     
     Args:
-        config: Model configuration containing model type and parameters
+        config: ModelConfig instance (not a raw dict anymore for clarity here)
         
     Returns:
         Configured AlignmentNetwork instance
     """
     model_constructor = get_model_constructor(config.model_name)
     
-    # Extract the necessary parameters for the model constructor
-    model_params = {
-        "dropout_rate": config.dropout_rate,
-        "alignment_layers": config.alignment_layers
+    # Prepare a dictionary from ModelConfig to pass to the specific create_X function
+    # The specific create_X function will then extract what it needs.
+    # This avoids passing the whole ModelConfig object if create_X functions 
+    # are designed to take simpler dicts, or we can pass config directly if they take ModelConfig.
+    # The current refactor of create_mlp/cnn2p2 in models.py expects a dict.
+    
+    model_params_dict = {
+        "model_name": config.model_name,
+        "dropout_rate": config.dropout_rate, # Common
+        "output_dim": config.output_dim,   # Common
+        # MLP specific
+        "input_dim": config.input_dim,
+        "hidden_dims": config.hidden_dims,
+        "activation": config.activation,
+        # CNN2P2 specific
+        "in_channels": config.in_channels,
+        "conv_channels": config.conv_channels,
+        "kernel_sizes": config.kernel_sizes,
+        "strides": config.strides,
+        "paddings": config.paddings,
+        "pool_kernel_size": config.pool_kernel_size,
+        "pool_stride": config.pool_stride,
+        "hidden_fc_dim": config.hidden_fc_dim,
+        "example_input_hw": config.example_input_hw,
+        # Include extra_model_params for any other values
+        **config.extra_model_params 
     }
     
+    # alignment_layers is a separate argument to the create_X functions
+    alignment_layers_config = config.alignment_layers
+
     logger.info(f"Creating model '{config.model_name}' with dropout rate: {config.dropout_rate}")
-    return model_constructor(**model_params)
+    
+    # Call the specific constructor with the dict of relevant model parameters and alignment_layers config
+    return model_constructor(config_model=model_params_dict, alignment_layers=alignment_layers_config)
 
 
 def get_available_models() -> List[str]:

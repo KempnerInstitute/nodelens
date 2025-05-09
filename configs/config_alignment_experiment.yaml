@@ -6,7 +6,8 @@
 experiment_type: "progressive_dropout" # Type of experiment to run (options: "alignment", "progressive_dropout", "eigenvector_dropout")
 results_path: "results" # Base path for saving results (can be relative or absolute path)
 use_timestamp: true # Whether to include timestamp in result paths for unique experiment tracking
-
+debug_mode: false  
+     
 # Core execution options
 device: "cuda" # Device to run on (options: "cuda", "cpu", or specific GPU like "cuda:0")
 no_save: false # If true, don't save any results to disk (useful for debug runs)
@@ -23,19 +24,42 @@ dataset:
 
 # Model configuration
 model:
-  model_name: "MLP" # Model architecture to use (options: "MLP", "CNN2P2", "alexnet")
-  input_dim: 784 # Input dimension (MNIST: 784, CIFAR10: 3072)
-  hidden_dims: [100, 100] # Sizes of hidden layers
-  activation: "relu" # Activation function (options: "relu", "tanh", "sigmoid")
-  dropout: 0.0 # Dropout rate during training (0.0 means no dropout)
-  output_dim: 10 # Output dimension (number of classes)
-  bias: true # Whether to include bias terms in linear layers
+  model_name: "MLP"  # Or "MLP", "AlexNet"
+  # Common parameters
+  output_dim: 10       # MNIST/CIFAR10 classes
+  dropout_rate: 0.0    # General dropout rate
+  # alignment_layers:  # Optional: Uncomment and define if you want to override defaults
+  #   "conv1.0": 0
+  #   "conv2.0": 1
+  #   "fc_layers.1": 2
+  #   "fc_layers.4": 3
+
+  # MLP specific (these are ignored if model_name is not MLP, but good to have defaults)
+  input_dim: 784       # Used by MLP (e.g., MNIST). For CNN, in_channels is used.
+  hidden_dims: [128, 64] # Used by MLP
+  activation: "relu"     # For MLP: "relu", "tanh", "sigmoid", "identity"
+
+  # CNN2P2 specific (used if model_name is CNN2P2)
+  in_channels: 1       # 1 for MNIST, 3 for CIFAR10/100
+  conv_channels: [32, 64]
+  kernel_sizes: [5, 5]
+  strides: [1, 1]        # Strides for conv layers
+  paddings: [2, 2]       # Padding for conv layers (k=5,s=1,p=2 keeps size same)
+  pool_kernel_size: 2
+  pool_stride: 2
+  hidden_fc_dim: 128
+  example_input_hw: [28, 28] # [Height, Width] e.g., [28,28] for MNIST, [32,32] for CIFAR
+
+  # AlexNet specific: output_dim is used as num_classes.
+  # dropout_rate can override internal AlexNet dropout if different from 0.5.
+
+  # extra_model_params: {} # For any other params not explicitly listed, passed as **kwargs
 
 # Training configuration
 training:
   epochs: 10 # Number of training epochs (more epochs can improve performance but take longer)
   replicates: 5 # Number of network replicates to run for statistical analysis
-  optimizer: "adam" # Optimizer to use (options: "Adam", "SGD", "RMSprop")
+  optimizer: "Adam" # Optimizer to use (options: "Adam", "SGD", "RMSprop")
   learning_rate: 0.001 # Learning rate for optimizer (typical range: 1e-4 to 1e-2)
   momentum: 0.9 # Momentum parameter for SGD (not used for Adam)
   loss: "cross_entropy" # Loss function to use for training
@@ -51,7 +75,7 @@ checkpointing:
   
 # Alignment analysis configuration
 alignment:
-  metric: "rq" # Alignment metric to use (options: "RQ", "NullSpace", "Delta", "R2")
+  metric: "RQ" # Alignment metric to use (options: "RQ", "NullSpace", "Delta", "R2")
   run_progressive: true # Whether to run progressive dropout experiment (node pruning)
   run_eigenvector: false # Whether to run eigenvector dropout experiment (feature pruning)
   dropout_min: 0.0 # Minimum dropout fraction to test (range: 0.0-1.0)
@@ -80,6 +104,20 @@ extra:
                     # - "patchwise": Process each patch separately
                     # - "batch_patch_combined": Combine batch and patch dimensions
   
+  training_method: "fully_tensorized" # Method for training multiple networks:
+                               # - "auto": Automatically select the best method based on network architecture
+                               # - "sequential": Train networks one by one (original approach)
+                               # - "tensorized": Train networks in parallel with some operations batched
+                               # - "fully_tensorized": Train networks in a single ensemble (fastest)
+  
+  use_tensorized: true # Whether to use tensorized implementation for dropout:
+                       # - true: Use tensor operations for faster computation (recommended)
+                       # - false: Use sequential processing (slower but may use less memory)
+  
+  use_multi_strategy_dropout: true # Whether to process all pruning strategies (high_rq, low_rq, random) simultaneously:
+                                 # - true: Process all strategies at once (much faster, recommended)
+                                 # - false: Process strategies sequentially (original approach)
+  
   track_metrics: ["accuracy", "loss", "alignment", "time"] # Metrics to track during experiments
   
   log_frequency: 1 # How often to log metrics during training (in epochs)
@@ -89,12 +127,8 @@ extra:
   detailed_logging: true # Whether to enable detailed metric logging:
                         # - true: Log comprehensive metrics (more disk space)
                         # - false: Log minimal metrics (lighter files)
-  
-  use_tensorized: true # Whether to use tensorized implementation:
-                       # - true: Use tensor operations for faster computation (recommended)
-                       # - false: Use sequential processing (slower but may use less memory)
-  
+                      
 # Experiment name for identification
 experiment_name: "layer_wise_pruning_test" # Descriptive name for this experiment
 wandb_project: "neural_alignment" # Weights & Biases project name
-wandb_entity: null # Weights & Biases entity (team or username), set to null for default 
+wandb_entity: houman_safaai@harvaard.edu # Weights & Biases entity (team or username), set to null for default 

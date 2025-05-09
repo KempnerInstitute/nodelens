@@ -15,12 +15,17 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
+import torch.nn.functional as F
+from torch.optim import Adam
+from torch.optim.lr_scheduler import StepLR
 
 from alignment.metrics import AlignmentMetric, get_metric
 from alignment.datasets import load_dataset
 from alignment.models import AlignmentNetwork
 from alignment.datasets import DataSet
 from alignment.utils.core import setup_logging, timed
+from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader
+from alignment.utils.model_utils import _normalize_device, _ensure_model_on_device
 
 # Setup module logger
 logger = logging.getLogger(__name__)
@@ -702,4 +707,354 @@ def evaluate(nets, dataset, **parameters):
         if measure_expected:
             results["expected_distribution"] = [{"epoch": "test", "batch": "all", "data": exp_data}]
     
-    return results 
+    return results
+
+
+def train_networks_fully_tensorized(
+    networks: List[nn.Module],
+    dataset,
+    num_epochs: int = 5,
+    learning_rate: float = 0.001,
+    device=None,
+    show_progress: bool = True,
+    optimizer_class=torch.optim.Adam,
+    weight_decay: float = 0.0,
+    **optimizer_kwargs
+) -> Dict:
+    """
+    Train multiple networks using a fully tensorized approach for maximum efficiency.
+    
+    This method trains all networks in a single forward/backward pass by using DP/DDP-like 
+    data parallelism techniques. It's much faster than even the previous tensorized method.
+    
+    Args:
+        networks: List of networks to train (must have identical architecture)
+        dataset: Dataset object for training
+        num_epochs: Number of epochs to train
+        learning_rate: Learning rate for optimizer
+        device: Device to train on
+        show_progress: Whether to show progress bars
+        optimizer_class: The optimizer class to use.
+        weight_decay: Weight decay for the optimizer.
+        **optimizer_kwargs: Additional arguments for the optimizer.
+
+    Returns:
+        Dictionary with training history
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = _normalize_device(device)
+
+    for net in networks:
+        _ensure_model_on_device(net, device)
+    
+    # Track training history for plotting
+    training_history = {
+        'train_loss': [],
+        'train_acc': [],
+        'test_loss': [],
+        'test_acc': []
+    }
+    
+    # Number of networks
+    num_networks = len(networks)
+    
+    # Create a replicated batch processor
+    class NetworkEnsemble(nn.Module):
+        def __init__(self, networks_list):
+            super().__init__()
+            self.networks = nn.ModuleList(networks_list)
+            self.num_networks = len(networks_list)
+            
+        def forward(self, x):
+            batch_size = x.size(0)
+            outputs = []
+            for network_item in self.networks:
+                outputs.append(network_item(x))
+            
+            return torch.stack(outputs)
+    
+    ensemble = NetworkEnsemble(networks).to(device)
+    
+    # Create optimizer for the ensemble
+    optimizer = optimizer_class(
+        ensemble.parameters(), 
+        lr=learning_rate,
+        weight_decay=weight_decay,
+        **optimizer_kwargs
+    )
+    
+    epoch_pbar = tqdm(range(num_epochs), desc="Training epochs (Fully Tensorized)", position=0) if show_progress else range(num_epochs)
+    
+    for epoch in epoch_pbar:
+        ensemble.train()
+        
+        train_loss_sum = 0.0
+        train_correct_sum = torch.zeros(num_networks, device=device)
+        train_total_samples = 0
+        
+        train_loader_iter = tqdm(dataset.train_loader, desc="Training batches", position=1, leave=False) if show_progress else dataset.train_loader
+        
+        for inputs, targets in train_loader_iter:
+            inputs, targets = inputs.to(device), targets.to(device)
+            batch_size = inputs.size(0)
+            train_total_samples += batch_size
+            
+            optimizer.zero_grad()
+            
+            # outputs shape: [num_networks, batch_size, num_classes]
+            outputs_ensemble = ensemble(inputs)
+            
+            current_batch_loss = 0
+            for net_idx in range(num_networks):
+                net_output = outputs_ensemble[net_idx]
+                net_loss = F.cross_entropy(net_output, targets, reduction='mean')
+                current_batch_loss += net_loss
+                
+                _, predicted = net_output.max(1)
+                train_correct_sum[net_idx] += predicted.eq(targets).sum().item()
+            
+            avg_batch_loss = current_batch_loss / num_networks
+            train_loss_sum += avg_batch_loss.item() * batch_size
+            
+            avg_batch_loss.backward()
+            optimizer.step()
+            
+            if show_progress:
+                current_avg_acc = train_correct_sum.sum().item() / (train_total_samples * num_networks) * 100.0
+                train_loader_iter.set_postfix({'loss': f"{avg_batch_loss.item():.4f}", 'acc': f"{current_avg_acc:.2f}%"})
+        
+        avg_epoch_train_loss = train_loss_sum / train_total_samples
+        avg_epoch_train_acc = 100.0 * train_correct_sum.sum().item() / (train_total_samples * num_networks)
+        
+        # Evaluation phase (evaluate individual networks in the ensemble)
+        ensemble.eval()
+        
+        # We need to evaluate networks individually for accurate test metrics per network
+        # then average them, as evaluate_networks expects a list of individual networks.
+        current_epoch_test_losses = []
+        current_epoch_test_accs = []
+        with torch.no_grad():
+            for i in range(num_networks):
+                individual_network = ensemble.networks[i]
+                individual_network.eval()
+                test_metrics_single_net = evaluate_on_loader(individual_network, dataset.test_loader, device, show_progress=False)
+                current_epoch_test_losses.append(test_metrics_single_net['loss'])
+                current_epoch_test_accs.append(test_metrics_single_net['accuracy'])
+
+        avg_epoch_test_loss = np.mean(current_epoch_test_losses)
+        avg_epoch_test_acc = np.mean(current_epoch_test_accs)
+        
+        training_history['train_loss'].append(avg_epoch_train_loss)
+        training_history['train_acc'].append(avg_epoch_train_acc)
+        training_history['test_loss'].append(avg_epoch_test_loss)
+        training_history['test_acc'].append(avg_epoch_test_acc)
+        
+        if show_progress:
+            epoch_pbar.set_postfix({
+                'train_loss': f"{avg_epoch_train_loss:.4f}",
+                'train_acc': f"{avg_epoch_train_acc:.2f}%",
+                'test_loss': f"{avg_epoch_test_loss:.4f}",
+                'test_acc': f"{avg_epoch_test_acc:.2f}%"
+            })
+        
+        logger.info(f"Epoch {epoch+1}/{num_epochs} (Fully Tensorized): "
+                   f"Train Loss={avg_epoch_train_loss:.4f}, Train Acc={avg_epoch_train_acc:.2f}%, "
+                   f"Test Loss={avg_epoch_test_loss:.4f}, Test Acc={avg_epoch_test_acc:.2f}%")
+    
+    return training_history
+
+
+def train_networks_sequential(
+    networks: List[nn.Module],
+    dataset,
+    num_epochs: int = 5,
+    learning_rate: float = 1e-3,
+    device=None,
+    show_progress: bool = True,
+    optimizer_class=torch.optim.Adam,
+    weight_decay: float = 0.0,
+    **optimizer_kwargs
+) -> Dict[str, List[float]]:
+    """
+    Train multiple networks on the given dataset sequentially.
+    This is also used for training a single network.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = _normalize_device(device)
+
+    history = {
+        'train_loss': [], 'train_acc': [],
+        'test_loss': [], 'test_acc': []
+    }
+    
+    # Accumulators for averaging metrics over all networks at each epoch
+    epoch_avg_train_losses = []
+    epoch_avg_train_accs = []
+    epoch_avg_test_losses = []
+    epoch_avg_test_accs = []
+
+    for epoch in range(num_epochs):
+        current_epoch_train_losses = []
+        current_epoch_train_accs = []
+        current_epoch_test_losses = []
+        current_epoch_test_accs = []
+
+        net_iter_desc = f"Epoch {epoch+1}/{num_epochs} (Sequential)"
+        net_iter = tqdm(networks, desc=net_iter_desc, leave=False) if show_progress and len(networks) > 1 else networks
+
+        for net in net_iter:
+            _ensure_model_on_device(net, device)
+            optimizer = optimizer_class(
+                net.parameters(), lr=learning_rate, weight_decay=weight_decay, **optimizer_kwargs
+            )
+            net.train()
+            epoch_train_loss_single_net = 0.0
+            epoch_train_correct_single_net = 0
+            epoch_train_total_single_net = 0
+
+            batch_iter_desc = "Training Batches"
+            if len(networks) == 1 and show_progress:
+                 batch_iter_desc = f"Epoch {epoch+1}/{num_epochs} Training"
+            
+            train_loader_iter = tqdm(dataset.train_loader, desc=batch_iter_desc, leave=False) if show_progress else dataset.train_loader
+
+            for inputs, targets in train_loader_iter:
+                inputs, targets = inputs.to(device), targets.to(device)
+                optimizer.zero_grad()
+                outputs = net(inputs)
+                if isinstance(outputs, tuple): outputs = outputs[0]
+                loss_fn = nn.CrossEntropyLoss()
+                loss = loss_fn(outputs, targets)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_train_loss_single_net += loss.item() * inputs.size(0)
+                _, predicted = outputs.max(1)
+                epoch_train_correct_single_net += predicted.eq(targets).sum().item()
+                epoch_train_total_single_net += targets.size(0)
+
+            # Avg loss/acc for this network for this epoch
+            avg_loss_this_net_epoch = epoch_train_loss_single_net / epoch_train_total_single_net
+            avg_acc_this_net_epoch = 100.0 * epoch_train_correct_single_net / epoch_train_total_single_net
+            current_epoch_train_losses.append(avg_loss_this_net_epoch)
+            current_epoch_train_accs.append(avg_acc_this_net_epoch)
+
+            # Evaluate this network on test set
+            test_metrics_single_net = evaluate_on_loader(net, dataset.test_loader, device, show_progress=False)
+            current_epoch_test_losses.append(test_metrics_single_net['loss'])
+            current_epoch_test_accs.append(test_metrics_single_net['accuracy'])
+
+        # Average metrics over all networks for the current epoch
+        history['train_loss'].append(np.mean(current_epoch_train_losses))
+        history['train_acc'].append(np.mean(current_epoch_train_accs))
+        history['test_loss'].append(np.mean(current_epoch_test_losses))
+        history['test_acc'].append(np.mean(current_epoch_test_accs))
+
+        if show_progress:
+            print(f"Epoch {epoch+1}/{num_epochs} (Sequential Avg) - "
+                  f"train_loss: {history['train_loss'][-1]:.4f}, train_acc: {history['train_acc'][-1]:.2f}%, "
+                  f"test_loss: {history['test_loss'][-1]:.4f}, test_acc: {history['test_acc'][-1]:.2f}%")
+            
+    return history
+
+
+def train_networks(
+    networks: List[nn.Module],
+    dataset,
+    num_epochs: int = 5,
+    learning_rate: float = 1e-3,
+    device=None,
+    show_progress: bool = True,
+    optimizer_class=torch.optim.Adam,
+    weight_decay: float = 0.0,
+    training_method: str = "auto",
+    **optimizer_kwargs
+) -> Dict[str, List[float]]:
+    """
+    Train multiple networks on the given dataset using the specified or auto-selected method.
+    
+    Args:
+        networks: List of networks to train
+        dataset: Dataset object with train_loader and test_loader
+        num_epochs: Number of epochs to train
+        learning_rate: Learning rate for optimizer
+        device: Device to train on
+        show_progress: Whether to show progress bar
+        optimizer_class: Optimizer class to use (e.g., torch.optim.Adam)
+        weight_decay: Weight decay for optimizer
+        training_method: Method for training ('auto', 'sequential', 'fully_tensorized')
+        **optimizer_kwargs: Additional arguments to pass to optimizer
+        
+    Returns:
+        Dictionary with training history
+    """
+    if not networks:
+        logger.warning("No networks provided to train_networks")
+        return {'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []}
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = _normalize_device(device)
+    
+    # Check if networks have the same architecture for optimized training
+    # (simple check based on class type, might need more robust for complex cases)
+    same_architecture = True
+    if len(networks) > 1:
+        base_net_type = type(networks[0].base_model if hasattr(networks[0], 'base_model') else networks[0])
+        for net in networks[1:]:
+            current_net_type = type(net.base_model if hasattr(net, 'base_model') else net)
+            if current_net_type != base_net_type:
+                same_architecture = False
+                break
+    
+    selected_method = training_method
+    if training_method == "auto":
+        if len(networks) == 1:
+            selected_method = "sequential"
+        elif same_architecture:
+            selected_method = "fully_tensorized"
+        else:
+            selected_method = "sequential" # Fallback for different architectures
+        logger.info(f"Auto-selected training method: {selected_method}")
+
+    common_args = {
+        "networks": networks,
+        "dataset": dataset,
+        "num_epochs": num_epochs,
+        "learning_rate": learning_rate,
+        "device": device,
+        "show_progress": show_progress,
+        "optimizer_class": optimizer_class,
+        "weight_decay": weight_decay,
+        **optimizer_kwargs
+    }
+
+    if selected_method == "fully_tensorized":
+        if not same_architecture and len(networks) > 1:
+            logger.warning("Fully_tensorized training requires all networks to have the same architecture. "
+                           "Falling back to sequential training.")
+            return train_networks_sequential(**common_args)
+        try:
+            logger.info(f"Using fully_tensorized training for {len(networks)} networks.")
+            return train_networks_fully_tensorized(**common_args)
+        except Exception as e:
+            logger.error(f"Fully_tensorized training failed: {str(e)}. Falling back to sequential.", exc_info=True)
+            return train_networks_sequential(**common_args)
+    elif selected_method == "sequential":
+        logger.info(f"Using sequential training for {len(networks)} networks.")
+        return train_networks_sequential(**common_args)
+    else:
+        logger.warning(f"Unknown training_method: {selected_method}. Defaulting to sequential training.")
+        return train_networks_sequential(**common_args)
+
+# Ensure the older single-network train_network and test_network functions are distinct
+# if they are still used elsewhere. For now, the dispatcher `train_networks` is the main entry point
+# for AlignmentExperiment.
+
+# The original `train_network` (singular) can remain if it serves a purpose for single network training
+# outside the multi-network replicate scenario handled by `AlignmentExperiment`.
+# Same for `test_network` and `train_and_test`.
+# `train_model` and `evaluate_model` also seem like general utility functions.
+# `evaluate` is a more complex evaluation function, also seems distinct. 

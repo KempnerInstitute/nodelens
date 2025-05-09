@@ -206,34 +206,35 @@ def test_pruning_strategies(network, dataset, device="cuda"):
                     
                     # Compute neuron importance scores (using weight magnitude as proxy)
                     weights = layer.weight.data
-                    input_dim = weights.shape[1]
-                    total_neurons += input_dim
+                    output_dim = weights.shape[0]  # Get output dimension - actual neurons
+                    total_neurons += output_dim
                     
-                    neuron_scores = [torch.norm(weights[:, j]).item() for j in range(input_dim)]
+                    # Calculate importance using row-wise norm (each row is a neuron)
+                    neuron_scores = [torch.norm(weights[j, :]).item() for j in range(output_dim)]
                     
                     # Calculate how many neurons to prune
-                    num_to_drop = max(1, int(input_dim * prune_percent)) if prune_percent > 0 else 0
+                    num_to_drop = int(output_dim * prune_percent)
                     total_pruned += num_to_drop
                     
                     if num_to_drop > 0:
                         # Get indices to drop based on strategy
-                        if strategy == "high_rq":  # Drop highest alignment neurons
+                        if strategy == "high_rq":  # Prune highest alignment neurons
                             sorted_indices = np.argsort(neuron_scores)[::-1]  # Sort descending
                             to_drop = sorted_indices[:num_to_drop]
-                        elif strategy == "low_rq":  # Drop lowest alignment neurons
+                        elif strategy == "low_rq":  # Prune lowest alignment neurons
                             sorted_indices = np.argsort(neuron_scores)  # Sort ascending
                             to_drop = sorted_indices[:num_to_drop]
                         else:  # Random pruning
-                            all_indices = list(range(input_dim))
+                            all_indices = list(range(output_dim))
                             np.random.shuffle(all_indices)
                             to_drop = all_indices[:num_to_drop]
                         
-                        # Zero out weights for these neurons
+                        # Zero out weights for these neurons (rows)
                         for idx in to_drop:
-                            if idx < weights.shape[1]:
-                                layer.weight.data[:, idx] = 0.0
+                            if idx < weights.shape[0]:
+                                layer.weight.data[idx, :] = 0.0  # Zero entire row (neuron)
                                 if hasattr(layer, "bias") and layer.bias is not None and idx < layer.bias.data.shape[0]:
-                                    layer.bias.data[idx] = 0.0
+                                    layer.bias.data[idx] = 0.0  # Zero corresponding bias
                 
                 # Evaluate the pruned network
                 acc, loss = evaluate_network(network, dataset, device)

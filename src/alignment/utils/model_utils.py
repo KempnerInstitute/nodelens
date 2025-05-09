@@ -17,6 +17,55 @@ from alignment.utils.core import to_numpy, check_iterable
 
 logger = logging.getLogger(__name__)
 
+# Moved from dropout.py to break circular import
+def _normalize_device(device):
+    """
+    Normalize device specification to avoid mismatches between 'cuda' and 'cuda:0'.
+    
+    Args:
+        device: Device specification
+        
+    Returns:
+        Normalized device
+    """
+    if isinstance(device, str) and device == "cuda":
+        return torch.device("cuda:0")
+    elif isinstance(device, torch.device) and device.type == "cuda" and device.index is None:
+        return torch.device("cuda:0")
+    return device
+
+# Moved from dropout.py to break circular import
+def _ensure_model_on_device(model, device):
+    """
+    Ensure all model parameters are on the specified device.
+    
+    Args:
+        model: PyTorch model
+        device: Target device
+    """
+    normalized_device = _normalize_device(device) # Ensure target device is normalized
+    current_param_device = None
+    
+    try:
+        current_param_device = next(model.parameters()).device
+    except StopIteration:
+        # Model has no parameters, nothing to do
+        return
+
+    # Check if all parameters are on the same device
+    all_params_on_same_device = True
+    for param in model.parameters():
+        if param.device != current_param_device:
+            all_params_on_same_device = False
+            break
+    
+    if not all_params_on_same_device:
+        # If parameters are on mixed devices, move the whole model
+        model.to(normalized_device)
+    elif current_param_device != normalized_device:
+        # If all parameters are on one device, but it's not the target normalized device
+        model.to(normalized_device)
+
 
 def get_device(tensor_or_module: Union[Tensor, nn.Module]) -> torch.device:
     """
@@ -198,4 +247,36 @@ def smart_pca(matrix: Union[np.ndarray, torch.Tensor], n_components: Optional[in
             eigenvalues = eigenvalues.to(device)
             eigenvectors = eigenvectors.to(device)
     
-    return eigenvalues, eigenvectors 
+    return eigenvalues, eigenvectors
+
+
+def enhance_cnn_configuration(config):
+    """
+    Enhance CNN configuration with specific parameters based on model type.
+    
+    This function detects CNN-type models and applies optimized settings.
+    
+    Args:
+        config: The experiment configuration object
+        
+    Returns:
+        Modified configuration with CNN-specific enhancements
+    """
+    # Detect CNN models from model name
+    cnn_model_types = ["CNN", "CNN2P2", "ResNet", "VGG", "AlexNet"]
+    is_cnn_model = any(cnn_type in config.model.model_name for cnn_type in cnn_model_types)
+    
+    if is_cnn_model:
+        logger.info(f"Detected CNN model: {config.model.model_name}")
+        
+        # Set appropriate CNN mode based on model architecture
+        if "ResNet" in config.model.model_name or "VGG" in config.model.model_name:
+            # More complex architectures benefit from batch_patch_combined
+            config.extra.cnn_mode = "batch_patch_combined"
+            logger.info(f"Setting CNN mode to 'batch_patch_combined' for {config.model.model_name}")
+        else:
+            # Simpler CNN architectures use the standard unfold approach
+            config.extra.cnn_mode = "unfold"
+            logger.info(f"Setting CNN mode to 'unfold' for {config.model.model_name}")
+    
+    return config 

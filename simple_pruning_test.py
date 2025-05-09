@@ -1,351 +1,249 @@
+#!/usr/bin/env python
 """
-Minimal pruning test script using PyTorch directly.
+Simple Pruning Test
+
+This script tests pruning functionality with a minimal standalone implementation.
 """
 
 import os
+import sys
+import copy
+import logging
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-import numpy as np
-import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from tqdm import tqdm
 
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('pruning_test_output.log', mode='w')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Create a simple model with alignment layers
 class SimpleMLP(nn.Module):
-    def __init__(self):
-        super(SimpleMLP, self).__init__()
-        self.fc1 = nn.Linear(784, 512)
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, 128)
-        self.fc4 = nn.Linear(128, 10)
+    def __init__(self, input_dim=784, hidden_dim=100, output_dim=10):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, output_dim)
+        self.relu = nn.ReLU()
         
-        # Create alignment_layers list for pruning
-        self.alignment_layers = [self.fc1, self.fc2, self.fc3, self.fc4]
+        # Define alignment layers for pruning
+        self.alignment_layers = [self.fc1, self.fc2, self.fc3]
+        self.alignment_names = ['layer1', 'layer2', 'layer3']
+        self.hidden = {}
         
     def forward(self, x):
-        # Input shape: [batch, 1, 28, 28]
-        x = x.view(-1, 784)  # Flatten
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        x = self.fc4(x)
-        return x
+        # First layer
+        self.hidden['layer1'] = x
+        x = self.relu(self.fc1(x))
+        
+        # Second layer
+        self.hidden['layer2'] = x
+        x = self.relu(self.fc2(x))
+        
+        # Final layer
+        self.hidden['layer3'] = x
+        out = self.fc3(x)
+        
+        return out
 
-def load_mnist_data(batch_size=128):
-    """Load MNIST dataset."""
-    # Define transformations
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
-    
-    # Load datasets
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('./data', train=False, transform=transform)
-    
-    # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
-    return {'train_loader': train_loader, 'test_loader': test_loader}
+# Generate synthetic data
+def generate_data(batch_size=32, input_dim=784, num_classes=10):
+    x = torch.randn(batch_size, input_dim)
+    y = torch.randint(0, num_classes, (batch_size,))
+    return x, y
 
-def train_network(network, data_loaders, device="cuda", epochs=5):
-    """Train a network on the given dataset."""
-    print(f"\nTraining network for {epochs} epochs:")
-    print("-" * 40)
+# Count zero and non-zero weights in a model
+def count_weights(model):
+    zero_weights = 0
+    total_weights = 0
+    for name, param in model.named_parameters():
+        if 'weight' in name:
+            zero_count = (param.data == 0).sum().item()
+            total_count = param.data.numel()
+            zero_weights += zero_count
+            total_weights += total_count
+            logger.info(f"{name}: {zero_count}/{total_count} zeros "
+                      f"({100.0*zero_count/total_count:.2f}%)")
     
-    network.train()
-    network = network.to(device)
+    if total_weights > 0:
+        logger.info(f"Total: {zero_weights}/{total_weights} zeros "
+                  f"({100.0*zero_weights/total_weights:.2f}%)")
     
-    # Get train loader
-    train_loader = data_loaders['train_loader']
-    
-    # Create optimizer
-    optimizer = optim.Adam(network.parameters(), lr=0.001)
-    
-    # Track training history
-    history = {
-        'train_loss': [],
-        'train_acc': [],
-        'test_loss': [],
-        'test_acc': []
-    }
-    
-    # Training loop
-    for epoch in range(epochs):
-        running_loss = 0.0
-        correct = 0
-        total = 0
-        
-        for inputs, targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
-            inputs, targets = inputs.to(device), targets.to(device)
-            
-            # Zero the parameter gradients
-            optimizer.zero_grad()
-            
-            # Forward pass
-            outputs = network(inputs)
-            loss = F.cross_entropy(outputs, targets)
-            
-            # Backward pass and optimize
-            loss.backward()
-            optimizer.step()
-            
-            # Track statistics
-            running_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
-        
-        # Print epoch statistics
-        train_loss = running_loss / len(train_loader)
-        train_acc = 100.0 * correct / total
-        
-        # Evaluate on test set
-        test_acc, test_loss = evaluate_network(network, data_loaders, device)
-        
-        # Store history
-        history['train_loss'].append(train_loss)
-        history['train_acc'].append(train_acc)
-        history['test_loss'].append(test_loss)
-        history['test_acc'].append(test_acc)
-        
-        print(f"Epoch {epoch+1}: Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Test Acc: {test_acc:.2f}%")
-    
-    # Create a training curve plot
-    plt.figure(figsize=(12, 4))
-    
-    plt.subplot(1, 2, 1)
-    plt.plot(history['train_loss'], label='Train Loss')
-    plt.plot(history['test_loss'], label='Test Loss')
-    plt.title('Loss Curves')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(history['train_acc'], label='Train Accuracy')
-    plt.plot(history['test_acc'], label='Test Accuracy')
-    plt.title('Accuracy Curves')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy (%)')
-    plt.legend()
-    
-    os.makedirs("debug_output", exist_ok=True)
-    plt.savefig("debug_output/simple_training_curves.png")
-    print(f"Saved training curves to debug_output/simple_training_curves.png")
-    
-    return network
+    return zero_weights, total_weights
 
-def evaluate_network(network, data_loaders, device="cuda"):
-    """Evaluate a network's accuracy and loss on a dataset."""
-    network.eval()
-    network = network.to(device)
+# Directly prune weights in a model
+def prune_model(model, strategy='low_rq', fraction=0.5, is_scaled=False):
+    """Apply pruning to a model directly."""
+    logger.info(f"Pruning with strategy={strategy}, fraction={fraction}, scaled={is_scaled}")
     
-    # Get test loader
-    test_loader = data_loaders['test_loader']
+    # Clone the model to avoid modifying the original
+    pruned_model = copy.deepcopy(model)
     
-    # Track metrics
+    # Apply pruning to each alignment layer
+    for layer_idx, layer in enumerate(pruned_model.alignment_layers):
+        if not hasattr(layer, 'weight') or layer.weight is None:
+            continue
+        
+        # Get layer dimensions
+        weights = layer.weight.data
+        output_dim = weights.shape[0]  # Number of neurons (rows)
+        
+        # Calculate how many neurons to prune
+        num_to_drop = int(output_dim * fraction)
+        logger.info(f"Layer {layer_idx}: Pruning {num_to_drop}/{output_dim} neurons ({fraction*100:.1f}%)")
+        
+        if num_to_drop == 0:
+            continue
+            
+        # Calculate neuron importance (L2 norm of each neuron's weights)
+        neuron_scores = [torch.norm(weights[j, :]).item() for j in range(output_dim)]
+        
+        # Determine which neurons to drop based on strategy
+        if strategy == 'high_rq':  # Highest weight magnitudes
+            sorted_indices = np.argsort(neuron_scores)[::-1]
+            to_drop = sorted_indices[:num_to_drop]
+        elif strategy == 'low_rq':  # Lowest weight magnitudes
+            sorted_indices = np.argsort(neuron_scores)
+            to_drop = sorted_indices[:num_to_drop]
+        else:  # Random
+            all_indices = list(range(output_dim))
+            np.random.shuffle(all_indices)
+            to_drop = all_indices[:num_to_drop]
+        
+        # Apply pruning - zero out weights for selected neurons
+        if is_scaled:
+            # Create a mask tensor
+            mask = torch.ones_like(weights)
+            mask[to_drop, :] = 0
+            
+            # Calculate scaling factor
+            scaling_factor = len(to_drop) / output_dim
+            scale = 1.0 / (1.0 - scaling_factor) if scaling_factor < 0.9 else 10.0
+            
+            # Apply mask and scaling
+            layer.weight.data = layer.weight.data * mask * scale
+            
+            # Zero out biases if present
+            if hasattr(layer, 'bias') and layer.bias is not None:
+                bias_mask = torch.ones_like(layer.bias)
+                bias_mask[to_drop] = 0
+                layer.bias.data = layer.bias.data * bias_mask * scale
+        else:
+            # Simply zero out weights (no scaling)
+            for idx in to_drop:
+                layer.weight.data[idx, :] = 0.0
+                if hasattr(layer, 'bias') and layer.bias is not None:
+                    layer.bias.data[idx] = 0.0
+    
+    return pruned_model
+
+# Evaluate a model on data
+def evaluate(model, data_loader, device):
+    model.eval()
     correct = 0
     total = 0
+    loss_fn = nn.CrossEntropyLoss()
     total_loss = 0.0
     
-    # Evaluation loop
     with torch.no_grad():
-        for inputs, targets in test_loader:
+        for inputs, targets in data_loader:
             inputs, targets = inputs.to(device), targets.to(device)
-            outputs = network(inputs)
+            outputs = model(inputs)
+            loss = loss_fn(outputs, targets)
             
-            # Compute accuracy
+            total_loss += loss.item() * inputs.size(0)
             _, predicted = outputs.max(1)
-            correct += predicted.eq(targets).sum().item()
             total += targets.size(0)
-            
-            # Compute loss
-            loss = F.cross_entropy(outputs, targets, reduction='sum')
-            total_loss += loss.item()
+            correct += predicted.eq(targets).sum().item()
     
-    # Calculate metrics
     accuracy = 100.0 * correct / total if total > 0 else 0.0
     avg_loss = total_loss / total if total > 0 else 0.0
     
     return accuracy, avg_loss
 
-def test_pruning_strategies(network, data_loaders, device="cuda"):
-    """Test different pruning strategies on a trained network."""
-    print("\nTesting pruning strategies on trained network")
-    print("=" * 50)
+# Main testing function
+def test_pruning(pruning_fractions=[0.0, 0.3, 0.5, 0.7, 0.9],
+                strategy='low_rq', scaled=False):
+    """Test pruning functionality with various fractions."""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logger.info(f"Using device: {device}")
     
-    # Define pruning percentages to test
-    pruning_percents = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+    # Create a simple model
+    input_dim = 784
+    hidden_dim = 100
+    output_dim = 10
+    model = SimpleMLP(input_dim, hidden_dim, output_dim).to(device)
     
-    # Initialize results dictionary
-    results = {
-        'pruning_percents': pruning_percents,
-        'high_rq_acc': [],
-        'low_rq_acc': [],
-        'random_acc': [],
-        'high_rq_loss': [],
-        'low_rq_loss': [],
-        'random_loss': []
-    }
+    # Generate synthetic data
+    batch_size = 64
+    num_batches = 10
+    data_loader = [generate_data(batch_size, input_dim, output_dim) for _ in range(num_batches)]
+    data_loader = [(x.to(device), y.to(device)) for x, y in data_loader]
     
-    # Original network evaluation
-    orig_accuracy, orig_loss = evaluate_network(network, data_loaders, device)
-    print(f"Original network (0% pruning): Accuracy: {orig_accuracy:.2f}%, Loss: {orig_loss:.4f}")
+    # Evaluate original model
+    logger.info("Evaluating original model...")
+    orig_accuracy, orig_loss = evaluate(model, data_loader, device)
+    logger.info(f"Original model: accuracy={orig_accuracy:.2f}%, loss={orig_loss:.4f}")
     
-    # Save original weights
-    original_weights = {}
-    original_biases = {}
+    # Count weights in original model
+    logger.info("Weights in original model:")
+    count_weights(model)
     
-    for i, layer in enumerate(network.alignment_layers):
-        if hasattr(layer, "weight") and layer.weight is not None:
-            original_weights[i] = layer.weight.data.clone()
-            if hasattr(layer, "bias") and layer.bias is not None:
-                original_biases[i] = layer.bias.data.clone()
-    
-    # Test each pruning percentage
-    for prune_percent in pruning_percents:
-        print(f"\nPruning {prune_percent*100:.1f}% of neurons:")
-        print("-" * 40)
+    # Test each pruning fraction
+    results = []
+    for fraction in pruning_fractions:
+        logger.info(f"\nTesting pruning fraction: {fraction}")
         
-        # Test each strategy
-        for strategy in ["high_rq", "low_rq", "random"]:
-            # Restore original weights
-            for i, layer in enumerate(network.alignment_layers):
-                if i in original_weights:
-                    layer.weight.data = original_weights[i].clone()
-                    if i in original_biases and hasattr(layer, "bias") and layer.bias is not None:
-                        layer.bias.data = original_biases[i].clone()
-            
-            # Skip pruning for 0% case
-            if prune_percent == 0.0:
-                acc = orig_accuracy
-                loss = orig_loss
-            else:
-                # Apply pruning based on strategy
-                total_neurons = 0
-                total_pruned = 0
-                
-                for i, layer in enumerate(network.alignment_layers):
-                    if i not in original_weights:
-                        continue
-                    
-                    # Compute neuron importance scores (using weight magnitude as proxy)
-                    weights = layer.weight.data
-                    input_dim = weights.shape[1]
-                    total_neurons += input_dim
-                    
-                    neuron_scores = [torch.norm(weights[:, j]).item() for j in range(input_dim)]
-                    
-                    # Calculate how many neurons to prune
-                    num_to_drop = max(1, int(input_dim * prune_percent)) if prune_percent > 0 else 0
-                    total_pruned += num_to_drop
-                    
-                    if num_to_drop > 0:
-                        # Get indices to drop based on strategy
-                        if strategy == "high_rq":  # Drop highest alignment neurons
-                            sorted_indices = np.argsort(neuron_scores)[::-1]  # Sort descending
-                            to_drop = sorted_indices[:num_to_drop]
-                        elif strategy == "low_rq":  # Drop lowest alignment neurons
-                            sorted_indices = np.argsort(neuron_scores)  # Sort ascending
-                            to_drop = sorted_indices[:num_to_drop]
-                        else:  # Random pruning
-                            all_indices = list(range(input_dim))
-                            np.random.shuffle(all_indices)
-                            to_drop = all_indices[:num_to_drop]
-                        
-                        # Zero out weights for these neurons
-                        for idx in to_drop:
-                            if idx < weights.shape[1]:
-                                layer.weight.data[:, idx] = 0.0
-                                if hasattr(layer, "bias") and layer.bias is not None and idx < layer.bias.data.shape[0]:
-                                    layer.bias.data[idx] = 0.0
-                
-                # Evaluate the pruned network
-                acc, loss = evaluate_network(network, data_loaders, device)
-            
-            # Store results
-            if strategy == "high_rq":
-                results['high_rq_acc'].append(acc)
-                results['high_rq_loss'].append(loss)
-            elif strategy == "low_rq":
-                results['low_rq_acc'].append(acc)
-                results['low_rq_loss'].append(loss)
-            else:
-                results['random_acc'].append(acc)
-                results['random_loss'].append(loss)
-            
-            # Print results
-            print(f"{strategy.ljust(8)}: Accuracy: {acc:.2f}%, Loss: {loss:.4f}")
+        # Apply pruning
+        pruned_model = prune_model(model, strategy, fraction, scaled)
+        
+        # Count weights in pruned model
+        logger.info("Weights in pruned model:")
+        zero_weights, total_weights = count_weights(pruned_model)
+        
+        # Evaluate pruned model
+        pruned_accuracy, pruned_loss = evaluate(pruned_model, data_loader, device)
+        logger.info(f"Pruned model: accuracy={pruned_accuracy:.2f}%, loss={pruned_loss:.4f}")
+        
+        # Calculate weight change
+        pruning_percent = 100.0 * zero_weights / total_weights if total_weights > 0 else 0.0
+        
+        # Store results
+        results.append({
+            'fraction': fraction,
+            'accuracy': pruned_accuracy,
+            'loss': pruned_loss,
+            'pruning_percent': pruning_percent
+        })
     
-    # Restore original weights
-    for i, layer in enumerate(network.alignment_layers):
-        if i in original_weights:
-            layer.weight.data = original_weights[i].clone()
-            if i in original_biases and hasattr(layer, "bias") and layer.bias is not None:
-                layer.bias.data = original_biases[i].clone()
-    
-    # Create plots
-    plt.figure(figsize=(12, 5))
-    
-    # Accuracy plot
-    plt.subplot(1, 2, 1)
-    plt.plot(pruning_percents, results['high_rq_acc'], 'o-', label='high_rq (prune highest)')
-    plt.plot(pruning_percents, results['low_rq_acc'], 's-', label='low_rq (prune lowest)')
-    plt.plot(pruning_percents, results['random_acc'], '^-', label='random')
-    plt.xlabel('Pruning Percentage')
-    plt.ylabel('Accuracy (%)')
-    plt.title('Impact of Pruning on Accuracy')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Loss plot
-    plt.subplot(1, 2, 2)
-    plt.plot(pruning_percents, results['high_rq_loss'], 'o-', label='high_rq (prune highest)')
-    plt.plot(pruning_percents, results['low_rq_loss'], 's-', label='low_rq (prune lowest)')
-    plt.plot(pruning_percents, results['random_loss'], '^-', label='random')
-    plt.xlabel('Pruning Percentage')
-    plt.ylabel('Loss')
-    plt.title('Impact of Pruning on Loss')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    os.makedirs("debug_output", exist_ok=True)
-    plt.savefig("debug_output/simple_pruning_comparison.png")
-    print(f"Saved pruning comparison to debug_output/simple_pruning_comparison.png")
+    # Print summary
+    logger.info("\nSUMMARY:")
+    logger.info(f"Strategy: {strategy}")
+    logger.info(f"Scaled: {scaled}")
+    logger.info(f"{'-'*40}")
+    for result in results:
+        logger.info(f"{result['fraction']:10.2f} {result['accuracy']:10.2f} {result['loss']:10.4f} {result['pruning_percent']:10.2f}")
     
     return results
 
-def main():
-    """Main function to run the pruning test."""
-    # Set random seed for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
-    
-    # Set device
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    
-    # Load dataset
-    print("Loading MNIST dataset")
-    data_loaders = load_mnist_data(batch_size=128)
-    
-    # Create model
-    print("Creating model")
-    network = SimpleMLP()
-    
-    # Train the network
-    trained_network = train_network(network, data_loaders, device, epochs=3)
-    
-    # Test pruning strategies
-    results = test_pruning_strategies(trained_network, data_loaders, device)
-    
-    print("\nPruning experiment completed successfully!")
-    print("Results saved to debug_output/simple_pruning_comparison.png")
-
 if __name__ == "__main__":
-    main() 
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Test pruning functionality")
+    parser.add_argument("--strategy", type=str, default="low_rq", 
+                      choices=["high_rq", "low_rq", "random"],
+                      help="Pruning strategy")
+    parser.add_argument("--scaled", action="store_true", 
+                      help="Use scaled pruning (rescale remaining weights)")
+    
+    args = parser.parse_args()
+    
+    # Run test
+    test_pruning(strategy=args.strategy, scaled=args.scaled) 
