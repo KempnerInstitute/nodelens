@@ -2,7 +2,7 @@
 Callbacks for use during training.
 """
 import logging
-from typing import Dict, List, Any, Callable
+from typing import Dict, List, Any, Callable, Optional
 
 import torch
 from torch.utils.data import DataLoader

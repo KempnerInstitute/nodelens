@@ -242,7 +242,8 @@ def evaluate_model(
     with_alignment: bool = False,
     # Adding metric_name and num_batches here if they were from extra_config or implicit
     metric_name_for_eval: str = "RQ",
-    num_batches_for_eval: Optional[int] = None # For sampling if loader is large
+    num_batches_for_eval: Optional[int] = None, # For sampling if loader is large
+    show_progress: bool = True  # ADDED: show_progress parameter
 ) -> Dict[str, Any]:
     """
     Evaluate a neural network model.
@@ -254,6 +255,7 @@ def evaluate_model(
         with_alignment: Whether to measure alignment metrics.
         metric_name_for_eval: Name of the alignment metric if with_alignment is True.
         num_batches_for_eval: Number of batches from loader to use for evaluation (None for all).
+        show_progress: Whether to display a progress bar during evaluation.
     Returns:
         Dictionary containing evaluation metrics (loss, accuracy, optional alignment).
     """

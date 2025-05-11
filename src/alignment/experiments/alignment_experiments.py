@@ -27,7 +27,7 @@ from alignment.config import ExperimentConfig, DatasetConfig, CheckpointingConfi
 from alignment.experiments.experiment import Experiment
 from alignment.metrics import AlignmentMetric, get_metric, compute_all_node_scores
 from alignment.models.registry import create_model
-from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _ensure_model_on_device, _compute_metric_for_all_nodes, _apply_pruning_to_single_net
+from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _ensure_model_on_device, _apply_pruning_to_single_net
 from alignment.training import train_networks
 from alignment.utils.core import setup_logging
 from alignment.utils.plotting import (

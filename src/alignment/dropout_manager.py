@@ -17,7 +17,7 @@ from tqdm import tqdm
 import random
 
 from alignment.metrics import AlignmentMetric, compute_all_node_scores
-from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _compute_metric_for_all_nodes, _create_mask_from_indices, _evaluate_model_accuracy, _ensure_model_on_device
+from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _create_mask_from_indices, _evaluate_model_accuracy, _ensure_model_on_device
 from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader
 
 logger = logging.getLogger(__name__)
@@ -327,7 +327,14 @@ def run_layer_isolated_dropout_experiment(
     for net_idx, net_rep in enumerate(original_networks):
         _ensure_model_on_device(net_rep, device)
         net_rep.eval()
-        scores_this_rep = _compute_metric_for_all_nodes(net_rep, metric, device, dataset.test_loader, debug_mode=debug_mode, num_batches=5)
+        scores_this_rep = compute_all_node_scores( 
+            model=net_rep, 
+            metric_instance=metric,
+            device=device, 
+            data_loader=dataset.test_loader,
+            debug_mode=debug_mode, 
+            num_batches=5 # Consider making num_batches configurable here too
+        )
         
         asc_indices_this_rep = {}
         desc_indices_this_rep = {}

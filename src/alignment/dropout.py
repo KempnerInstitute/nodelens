@@ -43,147 +43,207 @@ class DropoutResults:
     timing_info: Dict[str, Union[float, List[float]]] = field(default_factory=dict)
 
 
-def _compute_metric_for_all_nodes(
-    model: nn.Module, metric: AlignmentMetric, device: torch.device, data_loader: DataLoader, num_batches: int = 5, debug_mode: bool = False
-) -> Dict[int, torch.Tensor]:
-    if not hasattr(model, "alignment_layers") or not hasattr(model, "alignment_names"):
-        raise ValueError("Model must define alignment_layers and alignment_names.")
+def eigenvector_dropout(
+    model: nn.Module,
+    dataset_config: Any,
+    dropout_fraction: float = 0.1,
+    metric: Optional[AlignmentMetric] = None,
+    batch_size: int = 128,
+    num_batches: int = 10,
+    device: Optional[torch.device] = None,
+    dropout_mode: str = "scaled",
+    dropout_pruning_mode: str = "layer_wise",
+    debug_mode: bool = False,
+) -> Tuple[float, List[float]]:
+    """
+    Apply eigenvector-based pruning to a model.
 
-    if metric is None:
-        raise ValueError("A valid AlignmentMetric instance is required for computing per-node alignment scores.")
+    This method prunes nodes based on the top eigenvector of the alignment metric.
 
-    # Normalize device and ensure model is on correct device
+    Args:
+        model: Neural network model to prune
+        dataset_config: Dataset configuration
+        dropout_fraction: Fraction of nodes to prune
+        metric: Alignment metric to use
+        batch_size: Batch size for evaluation
+        num_batches: Number of batches to use for alignment computation
+        device: Device to run on
+        dropout_mode: "scaled" or "unscaled"
+        dropout_pruning_mode: "layer_wise" or "global_joint"
+        debug_mode: If True, print detailed debug information
+
+    Returns:
+        Tuple of (accuracy after pruning, alignment values per layer)
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Normalize device
     device = _normalize_device(device)
+
+    from alignment.datasets import load_dataset
+
+    dataset = load_dataset(dataset_config, batch_size=batch_size)
+    test_loader = dataset.test_loader
+
+    logger.info(f"[Eigenvector Dropout] fraction={dropout_fraction}, mode={dropout_mode}, pruning_mode={dropout_pruning_mode}")
+
+    # Evaluate baseline accuracy
+    model.to(device)
     model.eval()
-    _ensure_model_on_device(model, device)
+    base_acc = _evaluate_model_accuracy(model, test_loader, device)
 
-    # Print debug information about the model and its layers
-    if debug_mode:
-        logger.info(f"Computing node scores for model with {len(model.alignment_layers)} alignment layers on device {device}")
-        for i, (layer_mod, layer_name) in enumerate(zip(model.alignment_layers, model.alignment_names)):
-            logger.info(f"Layer {i}: {layer_name} - {type(layer_mod).__name__} - Shape: {layer_mod.weight.shape}")
+    # Get alignment values
+    alignment_values = []
 
-    if not hasattr(model, "hidden"):
-        model.hidden = {}
+    # Initialize metadata dictionary
+    layer_metadata_by_idx = {}
 
-    batch_count = 0
-    with torch.no_grad():
-        hooks = []
+    # First, get architecture-specific metadata for all layers
+    for layer_idx, layer_mod in enumerate(model.alignment_layers):
+        # Process weights with architecture-specific awareness
+        layer_weights, layer_metadata = process_cnn_weights(
+            model, layer_idx, pruning_strategy="structure-aware"  # Eigenvector dropout uses structure-aware strategy
+        )
 
-        def get_activation_hook(layer_name):
-            def hook(module, layer_input, layer_output):
-                x = layer_input[0]
-                if x.dim() > 2:
-                    if x.dim() == 3:  # Conv1d input: [batch, channels, width]
-                        batch_size = x.size(0)
-                        x = x.view(batch_size, -1)
-                    elif x.dim() == 4:  # Conv2d input: [batch, channels, height, width]
-                        batch_size = x.size(0)
-                        x = x.view(batch_size, -1)
-                    elif x.dim() == 5:  # Conv3d input: [batch, channels, depth, height, width]
-                        batch_size = x.size(0)
-                        x = x.view(batch_size, -1)
-                    else:
-                        logger.warning(f"Unusual input dimension: {x.dim()}, flattening to 2D")
-                        batch_size = x.size(0)
-                        x = x.view(batch_size, -1)
+        # Store metadata for later use
+        layer_metadata_by_idx[layer_idx] = layer_metadata
 
-                # Robust initialization of model.hidden[layer_name]
-                current_value = model.hidden.get(layer_name)
-                if not isinstance(current_value, list):
-                    if current_value is not None and debug_mode:
-                        logger.warning(
-                            f"Hook for layer '{layer_name}': model.hidden['{layer_name}'] was {type(current_value)}, re-initializing to list."
-                        )
-                    model.hidden[layer_name] = []
+        # Log meaningful information about CNN-specific processing
+        if layer_metadata.get("type", "").startswith("conv_"):
+            logger.info(f"CNN layer detected: {layer_idx} ({layer_metadata['name']}) - {layer_metadata['type']}")
 
-                try:
-                    model.hidden[layer_name].append(x.detach())
-                except AttributeError as e:
-                    # This block should ideally not be reached if the above initialization works.
-                    logger.error(
-                        f"CRITICAL HOOK AttributeError for layer '{layer_name}': model.hidden['{layer_name}'] is type {type(model.hidden.get(layer_name))}. Error: {e}"
-                    )
-                    logger.error(f"Model hidden dict right before error: {model.hidden}")
-                    # Attempt re-initialization and append one last time if it became None unexpectedly
-                    if model.hidden.get(layer_name) is None:
-                        model.hidden[layer_name] = []
-                        model.hidden[layer_name].append(x.detach())
-                    else:
-                        raise  # Re-raise if it's not a NoneType issue after all
+            if layer_metadata.get("requires_dimensional_matching"):
+                logger.info(f"  Residual connection detected: Ensuring dimensional compatibility")
 
-                if debug_mode and len(model.hidden[layer_name]) == 1:
-                    logger.info(f"Layer {layer_name} input shape: {x.shape}, stored in hidden.")
+            if layer_metadata.get("all_outputs_required"):
+                logger.info(f"  Dense connection detected: Preserving channel connectivity")
 
-            return hook
+    # Compute node scores using the metric
+    node_scores_by_layer = compute_all_node_scores(
+        model=model, metric_instance=metric, device=device, data_loader=test_loader, num_batches=num_batches, debug_mode=debug_mode
+    )
 
-        for i, layer_mod in enumerate(model.alignment_layers):
-            layer_name = model.alignment_names[i]
-            hooks.append(layer_mod.register_forward_hook(get_activation_hook(layer_name)))
+    # Save original weights
+    original_w = {}
+    original_b = {}
+    for l_i, layer_mod in enumerate(model.alignment_layers):
+        original_w[l_i] = layer_mod.weight.data.clone()
+        if layer_mod.bias is not None:
+            original_b[l_i] = layer_mod.bias.data.clone()
 
-        # Log batch processing progress if in debug mode
-        batch_iter = data_loader
-        if debug_mode:
-            batch_iter = tqdm(data_loader, desc="Processing batches")
+    # Apply pruning based on the pruning mode
+    if dropout_pruning_mode == "global_joint":
+        # Gather all nodes' alignment scores
+        all_nodes = []
+        for l_i, scores in node_scores_by_layer.items():
+            for node_idx, score in enumerate(scores):
+                all_nodes.append((l_i, node_idx, score.item()))
 
-        for inputs, _targets in batch_iter:
-            inputs = inputs.to(device)
-            model(inputs)
-            batch_count += 1
-            if batch_count >= num_batches:
-                break
+        # Sort by score (highest first - we're using eigenvector alignment)
+        all_nodes.sort(key=lambda x: x[2], reverse=True)
 
-        for h in hooks:
-            h.remove()
+        # Determine how many nodes to drop
+        total_nodes = len(all_nodes)
+        nodes_to_drop = int(round(dropout_fraction * total_nodes))
 
-    scores_per_layer = {}
+        # Get nodes to drop
+        drop_list = all_nodes[:nodes_to_drop]
 
-    # Process each layer to compute scores
-    layer_iter = enumerate(model.alignment_layers)
-    if debug_mode:
-        layer_iter = tqdm(list(enumerate(model.alignment_layers)), desc="Computing layer scores")
+        # Group by layer
+        drop_by_layer = {}
+        for layer_idx, node_idx, _ in drop_list:
+            if layer_idx not in drop_by_layer:
+                drop_by_layer[layer_idx] = []
+            drop_by_layer[layer_idx].append(node_idx)
 
-    for layer_idx, layer_mod in layer_iter:
-        layer_name = model.alignment_names[layer_idx]
+        # Apply dropout to each layer
+        for layer_idx, nodes in drop_by_layer.items():
+            layer_mod = model.alignment_layers[layer_idx]
+            w_data = layer_mod.weight.data
+            out_dim = w_data.shape[0]
 
-        if layer_name not in model.hidden or not model.hidden[layer_name]:
-            node_count = layer_mod.weight.shape[0]
-            scores_per_layer[layer_idx] = torch.zeros(node_count, device=device)
-            if debug_mode:
-                logger.warning(
-                    f"No hooking data or empty activation list for layer '{layer_name}'. Setting scores to zero. Model hidden keys: {list(model.hidden.keys())}"
-                )
-            if layer_name in model.hidden:
-                model.hidden[layer_name] = None
-            continue
+            # Record alignment values for this layer
+            alignment_values.append(float(torch.mean(node_scores_by_layer[layer_idx])))
 
-        # Unpack the tuple returned by process_cnn_weights
-        w_flat, layer_metadata = process_cnn_weights(model, layer_idx, pruning_strategy="structure-aware")
-        X = torch.cat(model.hidden[layer_name], dim=0)
+            if dropout_mode == "scaled":
+                # Create mask using vectorized operations
+                mask = _create_mask_from_indices(w_data.shape, nodes, device)
 
-        if debug_mode:
-            logger.info(f"Layer {layer_name}: input shape {X.shape}, weight shape {w_flat.shape}")
+                # Scale the remaining weights
+                drop_frac = len(nodes) / float(out_dim)
+                scale = 1.0 / (1.0 - drop_frac) if drop_frac < 0.9999 else 10.0
+                layer_mod.weight.data = w_data * mask * scale
 
-        try:
-            node_scores = metric.compute_per_node_scores(X, w_flat, device=device)
-            if debug_mode:
-                min_score = torch.min(node_scores).item()
-                max_score = torch.max(node_scores).item()
-                mean_score = torch.mean(node_scores).item()
-                std_score = torch.std(node_scores).item()
-                logger.info(
-                    f"Layer {layer_name} score stats: min={min_score:.4f}, max={max_score:.4f}, " f"mean={mean_score:.4f}, std={std_score:.4f}"
-                )
-            scores_per_layer[layer_idx] = node_scores.detach()
-        except Exception as e:
-            logger.error(f"Error computing scores for layer {layer_name}: {str(e)}")
-            logger.error(traceback.format_exc())
-            node_count = layer_mod.weight.shape[0]
-            scores_per_layer[layer_idx] = torch.zeros(node_count, device=device)
+                # Handle bias
+                if layer_mod.bias is not None:
+                    bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, [i for i in nodes if i < layer_mod.bias.data.shape[0]], device)
+                    layer_mod.bias.data = layer_mod.bias.data * bias_mask * scale
+            else:
+                # Just zero out the weights without scaling
+                for node_idx in nodes:
+                    if node_idx < out_dim:
+                        w_data[node_idx] = 0.0
+                        if layer_mod.bias is not None and node_idx < layer_mod.bias.data.shape[0]:
+                            layer_mod.bias.data[node_idx] = 0.0
 
-        model.hidden[layer_name] = None  # Cleanup hidden state for this layer
+    elif dropout_pruning_mode == "layer_wise":
+        # Apply pruning to each layer independently
+        for l_i, layer_mod in enumerate(model.alignment_layers):
+            w_data = layer_mod.weight.data
+            out_dim = w_data.shape[0]
+            nodes_to_drop = int(round(dropout_fraction * out_dim))
 
-    return scores_per_layer
+            if nodes_to_drop <= 0:
+                alignment_values.append(0.0)
+                continue
+
+            # Get scores for this layer
+            scores = node_scores_by_layer[l_i]
+
+            # Record alignment value
+            alignment_values.append(float(torch.mean(scores)))
+
+            # Sort indices by score (highest first)
+            sorted_indices = torch.argsort(scores, descending=True)
+            to_drop = sorted_indices[:nodes_to_drop]
+
+            if dropout_mode == "scaled":
+                # Create mask using vectorized operations
+                mask = _create_mask_from_indices(w_data.shape, to_drop, device)
+
+                # Scale the remaining weights
+                drop_frac = nodes_to_drop / float(out_dim)
+                scale = 1.0 / (1.0 - drop_frac) if drop_frac < 0.9999 else 10.0
+                layer_mod.weight.data = w_data * mask * scale
+
+                # Handle bias
+                if layer_mod.bias is not None:
+                    bmask = _create_mask_from_indices(layer_mod.bias.data.shape, [i for i in to_drop if i < layer_mod.bias.data.shape[0]], device)
+                    layer_mod.bias.data = layer_mod.bias.data * bmask * scale
+            else:
+                # Just zero out the weights without scaling
+                for node_idx in to_drop:
+                    if node_idx < out_dim:
+                        w_data[node_idx] = 0.0
+                        if layer_mod.bias is not None and node_idx < layer_mod.bias.data.shape[0]:
+                            layer_mod.bias.data[node_idx] = 0.0
+
+    else:
+        logger.warning(f"Unsupported pruning mode for eigenvector dropout: {dropout_pruning_mode}")
+        return base_acc, []
+
+    # Evaluate accuracy after pruning
+    final_acc = _evaluate_model_accuracy(model, test_loader, device)
+
+    # Restore original weights if needed
+    # (Uncomment below if you want the model to be restored to original state after evaluation)
+    # for l_i, layer_mod in enumerate(model.alignment_layers):
+    #     layer_mod.weight.data = original_w[l_i].clone()
+    #     if layer_mod.bias is not None and l_i in original_b:
+    #         layer_mod.bias.data = original_b[l_i].clone()
+
+    return final_acc, alignment_values
 
 
 def progressive_dropout_multi_strategy(
@@ -413,209 +473,6 @@ def progressive_dropout(
                 pruning_details_single_strat[net_idx][frac_idx_enum] = single_net_pruning_details_here["layer_info"]
 
         return network_accuracies, network_losses, pruning_details_single_strat
-
-
-def eigenvector_dropout(
-    model: nn.Module,
-    dataset_config: Any,
-    dropout_fraction: float = 0.1,
-    metric: Optional[AlignmentMetric] = None,
-    batch_size: int = 128,
-    num_batches: int = 10,
-    device: Optional[torch.device] = None,
-    dropout_mode: str = "scaled",
-    dropout_pruning_mode: str = "layer_wise",
-    debug_mode: bool = False,
-) -> Tuple[float, List[float]]:
-    """
-    Apply eigenvector-based pruning to a model.
-
-    This method prunes nodes based on the top eigenvector of the alignment metric.
-
-    Args:
-        model: Neural network model to prune
-        dataset_config: Dataset configuration
-        dropout_fraction: Fraction of nodes to prune
-        metric: Alignment metric to use
-        batch_size: Batch size for evaluation
-        num_batches: Number of batches to use for alignment computation
-        device: Device to run on
-        dropout_mode: "scaled" or "unscaled"
-        dropout_pruning_mode: "layer_wise" or "global_joint"
-        debug_mode: If True, print detailed debug information
-
-    Returns:
-        Tuple of (accuracy after pruning, alignment values per layer)
-    """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Normalize device
-    device = _normalize_device(device)
-
-    from alignment.datasets import load_dataset
-
-    dataset = load_dataset(dataset_config, batch_size=batch_size)
-    test_loader = dataset.test_loader
-
-    logger.info(f"[Eigenvector Dropout] fraction={dropout_fraction}, mode={dropout_mode}, pruning_mode={dropout_pruning_mode}")
-
-    # Evaluate baseline accuracy
-    model.to(device)
-    model.eval()
-    base_acc = _evaluate_model_accuracy(model, test_loader, device)
-
-    # Get alignment values
-    alignment_values = []
-
-    # Initialize metadata dictionary
-    layer_metadata_by_idx = {}
-
-    # First, get architecture-specific metadata for all layers
-    for layer_idx, layer_mod in enumerate(model.alignment_layers):
-        # Process weights with architecture-specific awareness
-        layer_weights, layer_metadata = process_cnn_weights(
-            model, layer_idx, pruning_strategy="structure-aware"  # Eigenvector dropout uses structure-aware strategy
-        )
-
-        # Store metadata for later use
-        layer_metadata_by_idx[layer_idx] = layer_metadata
-
-        # Log meaningful information about CNN-specific processing
-        if layer_metadata.get("type", "").startswith("conv_"):
-            logger.info(f"CNN layer detected: {layer_idx} ({layer_metadata['name']}) - {layer_metadata['type']}")
-
-            if layer_metadata.get("requires_dimensional_matching"):
-                logger.info(f"  Residual connection detected: Ensuring dimensional compatibility")
-
-            if layer_metadata.get("all_outputs_required"):
-                logger.info(f"  Dense connection detected: Preserving channel connectivity")
-
-    # Compute node scores using the metric
-    node_scores_by_layer = compute_all_node_scores(
-        model=model, metric_instance=metric, device=device, data_loader=test_loader, num_batches=num_batches, debug_mode=debug_mode
-    )
-
-    # Save original weights
-    original_w = {}
-    original_b = {}
-    for l_i, layer_mod in enumerate(model.alignment_layers):
-        original_w[l_i] = layer_mod.weight.data.clone()
-        if layer_mod.bias is not None:
-            original_b[l_i] = layer_mod.bias.data.clone()
-
-    # Apply pruning based on the pruning mode
-    if dropout_pruning_mode == "global_joint":
-        # Gather all nodes' alignment scores
-        all_nodes = []
-        for l_i, scores in node_scores_by_layer.items():
-            for node_idx, score in enumerate(scores):
-                all_nodes.append((l_i, node_idx, score.item()))
-
-        # Sort by score (highest first - we're using eigenvector alignment)
-        all_nodes.sort(key=lambda x: x[2], reverse=True)
-
-        # Determine how many nodes to drop
-        total_nodes = len(all_nodes)
-        nodes_to_drop = int(round(dropout_fraction * total_nodes))
-
-        # Get nodes to drop
-        drop_list = all_nodes[:nodes_to_drop]
-
-        # Group by layer
-        drop_by_layer = {}
-        for layer_idx, node_idx, _ in drop_list:
-            if layer_idx not in drop_by_layer:
-                drop_by_layer[layer_idx] = []
-            drop_by_layer[layer_idx].append(node_idx)
-
-        # Apply dropout to each layer
-        for layer_idx, nodes in drop_by_layer.items():
-            layer_mod = model.alignment_layers[layer_idx]
-            w_data = layer_mod.weight.data
-            out_dim = w_data.shape[0]
-
-            # Record alignment values for this layer
-            alignment_values.append(float(torch.mean(node_scores_by_layer[layer_idx])))
-
-            if dropout_mode == "scaled":
-                # Create mask using vectorized operations
-                mask = _create_mask_from_indices(w_data.shape, nodes, device)
-
-                # Scale the remaining weights
-                drop_frac = len(nodes) / float(out_dim)
-                scale = 1.0 / (1.0 - drop_frac) if drop_frac < 0.9999 else 10.0
-                layer_mod.weight.data = w_data * mask * scale
-
-                # Handle bias
-                if layer_mod.bias is not None:
-                    bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, [i for i in nodes if i < layer_mod.bias.data.shape[0]], device)
-                    layer_mod.bias.data = layer_mod.bias.data * bias_mask * scale
-            else:
-                # Just zero out the weights without scaling
-                for node_idx in nodes:
-                    if node_idx < out_dim:
-                        w_data[node_idx] = 0.0
-                        if layer_mod.bias is not None and node_idx < layer_mod.bias.data.shape[0]:
-                            layer_mod.bias.data[node_idx] = 0.0
-
-    elif dropout_pruning_mode == "layer_wise":
-        # Apply pruning to each layer independently
-        for l_i, layer_mod in enumerate(model.alignment_layers):
-            w_data = layer_mod.weight.data
-            out_dim = w_data.shape[0]
-            nodes_to_drop = int(round(dropout_fraction * out_dim))
-
-            if nodes_to_drop <= 0:
-                alignment_values.append(0.0)
-                continue
-
-            # Get scores for this layer
-            scores = node_scores_by_layer[l_i]
-
-            # Record alignment value
-            alignment_values.append(float(torch.mean(scores)))
-
-            # Sort indices by score (highest first)
-            sorted_indices = torch.argsort(scores, descending=True)
-            to_drop = sorted_indices[:nodes_to_drop]
-
-            if dropout_mode == "scaled":
-                # Create mask using vectorized operations
-                mask = _create_mask_from_indices(w_data.shape, to_drop, device)
-
-                # Scale the remaining weights
-                drop_frac = nodes_to_drop / float(out_dim)
-                scale = 1.0 / (1.0 - drop_frac) if drop_frac < 0.9999 else 10.0
-                layer_mod.weight.data = w_data * mask * scale
-
-                # Handle bias
-                if layer_mod.bias is not None:
-                    bmask = _create_mask_from_indices(layer_mod.bias.data.shape, [i for i in to_drop if i < layer_mod.bias.data.shape[0]], device)
-                    layer_mod.bias.data = layer_mod.bias.data * bmask * scale
-            else:
-                # Just zero out the weights without scaling
-                for node_idx in to_drop:
-                    if node_idx < out_dim:
-                        w_data[node_idx] = 0.0
-                        if layer_mod.bias is not None and node_idx < layer_mod.bias.data.shape[0]:
-                            layer_mod.bias.data[node_idx] = 0.0
-
-    else:
-        logger.warning(f"Unsupported pruning mode for eigenvector dropout: {dropout_pruning_mode}")
-        return base_acc, []
-
-    # Evaluate accuracy after pruning
-    final_acc = _evaluate_model_accuracy(model, test_loader, device)
-
-    # Restore original weights if needed
-    # (Uncomment below if you want the model to be restored to original state after evaluation)
-    # for l_i, layer_mod in enumerate(model.alignment_layers):
-    #     layer_mod.weight.data = original_w[l_i].clone()
-    #     if layer_mod.bias is not None and l_i in original_b:
-    #         layer_mod.bias.data = original_b[l_i].clone()
-
-    return final_acc, alignment_values
 
 
 # Helper function to contain the actual pruning logic for a single network

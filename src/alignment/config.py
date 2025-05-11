@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from typing import cast, List, Dict, Union, Type, TypeVar, Optional, Any
 from omegaconf import OmegaConf
 from omegaconf.errors import OmegaConfBaseException
+import logging
+
+# Define T = TypeVar('T', bound='BaseConfig') for classmethod return types if needed later
+config_logger = logging.getLogger(__name__)
 
 @dataclass
 class BaseConfig:
@@ -331,6 +335,41 @@ class PruningConfig(BaseConfig):
 
 
 @dataclass
+class MetricTrackerConfig(BaseConfig):
+    name: str = "RQ"  # Name of the metric (e.g., "RQ", "MI")
+    num_batches: int = 5 # Number of batches from the dataloader to use
+
+    def validate(self) -> bool:
+        if not self.name:
+            raise ValueError("MetricTrackerConfig 'name' cannot be empty.")
+        # Ensure metric name is known/valid if possible (might require access to a registry, or leave to runtime check)
+        if self.num_batches <= 0:
+            raise ValueError(f"MetricTrackerConfig 'num_batches' must be positive, got {self.num_batches}")
+        return True
+
+
+@dataclass
+class CallbackSettings(BaseConfig):
+    alignment_metrics: List[MetricTrackerConfig] = field(default_factory=list)
+
+    def __post_init__(self):
+        # Ensure elements of alignment_metrics are MetricTrackerConfig instances
+        if self.alignment_metrics and isinstance(self.alignment_metrics, list):
+            self.alignment_metrics = [
+                MetricTrackerConfig(**item) if isinstance(item, dict) else item
+                for item in self.alignment_metrics
+            ]
+            for item in self.alignment_metrics:
+                if not isinstance(item, MetricTrackerConfig):
+                    raise ValueError(f"Invalid item in alignment_metrics: {item}. Expected MetricTrackerConfig or dict.")
+
+    def validate(self) -> bool:
+        for item_config in self.alignment_metrics:
+            item_config.validate()
+        return True
+
+
+@dataclass
 class AlignmentConfig(BaseConfig):
     """Configuration for alignment metric calculation."""
     metric: str = "RQ"
@@ -338,6 +377,15 @@ class AlignmentConfig(BaseConfig):
     cnn_mode: str = "unfold"
     run_progressive: bool = True 
     run_eigenvector: bool = False
+    callbacks: Optional[CallbackSettings] = None
+
+    def __post_init__(self):
+        if self.callbacks is not None and isinstance(self.callbacks, dict):
+            try:
+                self.callbacks = CallbackSettings(**self.callbacks)
+            except Exception as e:
+                config_logger.error(f"Failed to cast AlignmentConfig.callbacks to CallbackSettings in __post_init__: {e}. Setting to None.")
+                self.callbacks = None
 
     def validate(self) -> bool:
         import warnings 
@@ -348,6 +396,19 @@ class AlignmentConfig(BaseConfig):
         if self.cnn_mode not in ["unfold", "patchwise", "batch_patch_combined"]:
             raise ValueError(f"Invalid CNN mode: {self.cnn_mode}. Supported: ['unfold', 'patchwise', 'batch_patch_combined']")
         
+        if self.callbacks is not None:
+            # Attempt conversion if it's still a dict (e.g., if __post_init__ wasn't effective due to instantiation order)
+            if isinstance(self.callbacks, dict):
+                config_logger.info(f"AlignmentConfig.callbacks is a dict in validate(), attempting conversion.")
+                try:
+                    self.callbacks = CallbackSettings(**self.callbacks)
+                except Exception as e:
+                    config_logger.error(f"Failed to cast AlignmentConfig.callbacks from dict to CallbackSettings during validate: {e}")
+                    raise ValueError(f"AlignmentConfig.callbacks dict could not be cast to CallbackSettings: {e}") from e
+            
+            if not isinstance(self.callbacks, CallbackSettings):
+                 raise ValueError(f"AlignmentConfig.callbacks is not a CallbackSettings instance after attempted conversion. Type: {type(self.callbacks)}")
+            self.callbacks.validate()
         return True
 
 
