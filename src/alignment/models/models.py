@@ -232,15 +232,16 @@ class CNN2P2(nn.Module):
 
 # Register model constructors
 @register_model("mlp")
-def create_mlp(config_model: Dict, # Expecting a dict derived from ModelConfig fields
-               alignment_layers: Optional[Dict[str, Any]] = None) -> AlignmentNetwork:
+def create_mlp(config_model: Dict, 
+               alignment_layers: Optional[Dict[str, Any]] = None,
+               cnn_mode: str = "unfold") -> AlignmentNetwork:
     
     # Parameters from your YAML mapped to the new MLP class
     mlp_params = {
         "input_dim": config_model.get("input_dim", 784),
         "hidden_dims": config_model.get("hidden_dims", [100, 100, 50]),
         "output_dim": config_model.get("output_dim", 10),
-        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.5)), # aLlows "dropout" or "dropout_rate"
+        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.0)), 
         "activation_type": config_model.get("activation", "relu")
     }
     base_model = MLP(**mlp_params)
@@ -260,14 +261,14 @@ def create_mlp(config_model: Dict, # Expecting a dict derived from ModelConfig f
 
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    # Extract cnn_mode from config_model, default if not present
-    cnn_mode = config_model.get("cnn_mode", "unfold")
+    # Use the passed cnn_mode for AlignmentNetwork
     return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
 
 
 @register_model("cnn2p2")
-def create_cnn2p2(config_model: Dict, # Expecting a dict derived from ModelConfig fields
-                  alignment_layers: Optional[Dict[str, Any]] = None) -> AlignmentNetwork:
+def create_cnn2p2(config_model: Dict, 
+                  alignment_layers: Optional[Dict[str, Any]] = None,
+                  cnn_mode: str = "unfold") -> AlignmentNetwork:
     # Parameters from your YAML mapped to the new CNN2P2 class
     # Need to add these to ModelConfig and YAML if not present
     cnn_params = {
@@ -280,7 +281,7 @@ def create_cnn2p2(config_model: Dict, # Expecting a dict derived from ModelConfi
         "pool_kernel_size": config_model.get("pool_kernel_size", 2),
         "pool_stride": config_model.get("pool_stride", 2),
         "hidden_fc_dim": config_model.get("hidden_fc_dim", 128), # Your v2 num_hidden[1]
-        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.5)),
+        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.0)),
         "example_input_hw": tuple(config_model.get("example_input_hw", [28,28])) # e.g. (28,28) for MNIST
     }
     # Determine input_dim for fc layer based on conv output and example_input_hw
@@ -299,14 +300,15 @@ def create_cnn2p2(config_model: Dict, # Expecting a dict derived from ModelConfi
     }
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
 
-    cnn_mode = config_model.get("cnn_mode", "unfold")
+    # Use the passed cnn_mode for AlignmentNetwork
     return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
 
 
 @register_model("alexnet")
 def create_alexnet(config_model: Dict,
-                   alignment_layers: Optional[Dict[str, Any]] = None) -> AlignmentNetwork:
-    dropout_rate = config_model.get("dropout_rate", config_model.get("dropout", 0.5))
+                   alignment_layers: Optional[Dict[str, Any]] = None,
+                   cnn_mode: str = "unfold") -> AlignmentNetwork:
+    dropout_rate = config_model.get("dropout_rate", config_model.get("dropout", 0.0))
     num_classes = config_model.get("output_dim", 1000) # AlexNet torchvision default is 1000
 
     base_model = alexnet(weights=None, progress=False, num_classes=num_classes) # Use num_classes
@@ -338,7 +340,7 @@ def create_alexnet(config_model: Dict,
     }
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    cnn_mode = config_model.get("cnn_mode", "unfold") # AlexNet is a CNN
+    # Use the passed cnn_mode for AlignmentNetwork
     return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
 
 

@@ -30,7 +30,7 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
-from alignment.config import Config, ExperimentConfig
+from alignment.config import Config, ExperimentConfig, WandbConfig
 from alignment.datasets import DataSet, load_dataset
 from alignment.models import load_model, load_model_family
 from alignment.metrics import get_metric
@@ -140,8 +140,9 @@ class Experiment(ABC):
         # Save config
         self._save_config()
         
-        # Set up WandB if requested
-        self._setup_wandb()
+        # Unified W&B setup call
+        self.wandb_run = None # Initialize attribute
+        self._setup_wandb()      # Uses self.config.wandb and self.config.experiment_name
         
         logger.info(f"Initialized experiment in {self.working_dir}")
     
@@ -155,14 +156,23 @@ class Experiment(ABC):
             return "experiment"
     
     def _set_random_seeds(self) -> None:
-        """Set random seeds for reproducibility."""
-        seed = getattr(self.config, "seed", 42)
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-        logger.info(f"Set random seed to {seed}")
+        """Set random seeds for reproducibility if a seed is provided in the config."""
+        # Check if seed is present and is not None
+        if hasattr(self.config, "seed") and self.config.seed is not None:
+            seed = self.config.seed
+            try:
+                # Ensure seed can be converted to int, though Optional[int] should handle it
+                seed_int = int(seed)
+                random.seed(seed_int)
+                np.random.seed(seed_int)
+                torch.manual_seed(seed_int)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(seed_int)
+                logger.info(f"Set random seed to {seed_int}")
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid seed value: {seed}. Must be an integer. Seeds will not be set. Error: {e}")
+        else:
+            logger.info("No specific seed provided or seed is null. Using random initialization.")
     
     def _save_config(self) -> None:
         """Save the configuration to a file."""
@@ -197,65 +207,39 @@ class Experiment(ABC):
     
     def _setup_wandb(self) -> None:
         """Set up Weights & Biases for experiment tracking if configured."""
-        if not hasattr(self.config, "checkpointing") or not hasattr(self.config.checkpointing, "use_wandb"):
-            return
-            
-        if not self.config.checkpointing.use_wandb:
+        if not (hasattr(self.config, "wandb") and self.config.wandb and isinstance(self.config.wandb, WandbConfig) and self.config.wandb.use_wandb):
+            logger.info("W&B usage not specified or disabled in config.wandb.use_wandb")
             return
             
         if not WANDB_AVAILABLE:
-            logger.warning("wandb not installed, skipping wandb initialization")
+            logger.warning("wandb library not installed/found, skipping wandb initialization.")
             return
         
-        wandb_config = {
-            "experiment_name": getattr(self.config, "experiment_name", self.get_basename()),
-            "seed": getattr(self.config, "seed", 42),
-        }
+        config_dict_for_wandb = self.config.to_dict() if hasattr(self.config, 'to_dict') else vars(self.config)
+        experiment_name_for_wandb = getattr(self.config, "experiment_name", self.get_basename())
+        project_name = self.config.wandb.wandb_project
+        entity = self.config.wandb.wandb_entity
         
-        # Add other relevant config items
-        if hasattr(self.config, "model"):
-            # Check if we can convert to dict
-            if hasattr(self.config.model, 'to_dict'):
-                wandb_config["model"] = self.config.model.to_dict()
+        if entity and entity.lower() in ["none", "null", "your_wandb_entity"]:
+            entity = None # Let W&B client use default entity (requires user to be logged in)
+
+        try:
+            self.wandb_run = wandb.init(
+                project=project_name,
+                entity=entity,
+                config=config_dict_for_wandb,
+                name=experiment_name_for_wandb,
+                dir=self.working_dir, # Save W&B files locally within experiment results directory
+                reinit=True, 
+                settings=wandb.Settings(start_method="thread")
+            )
+            if self.wandb_run:
+                logger.info(f"W&B run initialized: {self.wandb_run.url}. Name: {self.wandb_run.name}, Project: {project_name}, Entity: {entity or self.wandb_run.entity}")
             else:
-                # Fallback to direct attribute extraction
-                model_dict = {k: v for k, v in vars(self.config.model).items() 
-                             if not k.startswith('_') and not callable(v)}
-                wandb_config["model"] = model_dict
-        
-        if hasattr(self.config, "dataset"):
-            # Check if we can convert to dict
-            if hasattr(self.config.dataset, 'to_dict'):
-                wandb_config["dataset"] = self.config.dataset.to_dict()
-            else:
-                # Fallback to direct attribute extraction
-                dataset_dict = {k: v for k, v in vars(self.config.dataset).items()
-                                if not k.startswith('_') and not callable(v)}
-                wandb_config["dataset"] = dataset_dict
-        
-        if hasattr(self.config, "training"):
-            # Check if we can convert to dict
-            if hasattr(self.config.training, 'to_dict'):
-                wandb_config["training"] = self.config.training.to_dict()
-            else:
-                # Fallback to direct attribute extraction
-                training_dict = {k: v for k, v in vars(self.config.training).items()
-                                if not k.startswith('_') and not callable(v)}
-                wandb_config["training"] = training_dict
-        
-        # Start WandB run
-        project_name = getattr(self.config.checkpointing, "wandb_project", "alignment")
-        entity = getattr(self.config.checkpointing, "wandb_entity", None)
-        
-        wandb.init(
-            project=project_name,
-            entity=entity,
-            config=wandb_config,
-            name=getattr(self.config, "experiment_name", None),
-            dir=self.working_dir,
-        )
-        
-        logger.info(f"Initialized WandB for project {project_name}")
+                logger.error("wandb.init() returned None, W&B run failed to initialize properly.")
+        except Exception as e:
+            logger.error(f"Failed to initialize Weights & Biases: {e}", exc_info=True)
+            self.wandb_run = None # Ensure it's None on failure
 
     @abstractmethod
     def run(self) -> Dict[str, Any]:
@@ -334,12 +318,10 @@ class Experiment(ABC):
     
     def cleanup(self) -> None:
         """Clean up resources used by the experiment."""
-        # Close WandB if it was used
-        if hasattr(self.config, "checkpointing") and hasattr(self.config.checkpointing, "use_wandb"):
-            if self.config.checkpointing.use_wandb and WANDB_AVAILABLE and wandb.run is not None:
-                wandb.finish()
-        
-        logger.info("Experiment cleanup complete")
+        if self.wandb_run:
+            self.wandb_run.finish()
+            logger.info("W&B run finished.")
+        # logger.info("Experiment cleanup complete") # Already logged by run usually
     
     def __del__(self) -> None:
         """Destructor to ensure cleanup."""

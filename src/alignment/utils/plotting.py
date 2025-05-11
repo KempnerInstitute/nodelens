@@ -728,14 +728,39 @@ def plot_per_layer_pruning_percentage(
     # Determine num_networks and num_layers from the data structure
     num_networks = 0
     num_layers = 0
+    if not strategies_to_plot:
+        logger.warning("No strategies to plot for per-layer pruning percentages.")
+        return [] # Already handled, but good to be explicit
+
     first_valid_strategy = strategies_to_plot[0]
+    # Check if the strategy key exists and its value (dict of net_idx) is not empty
     if first_valid_strategy in pruning_details and pruning_details[first_valid_strategy]:
-        first_net_idx = list(pruning_details[first_valid_strategy].keys())[0]
-        num_networks = len(pruning_details[first_valid_strategy])
-        if pruning_details[first_valid_strategy][first_net_idx]:
-            first_frac_idx = list(pruning_details[first_valid_strategy][first_net_idx].keys())[0]
-            if pruning_details[first_valid_strategy][first_net_idx][first_frac_idx]:
-                num_layers = len(pruning_details[first_valid_strategy][first_net_idx][first_frac_idx].keys())
+        network_data_for_strategy = pruning_details[first_valid_strategy]
+        valid_net_indices = list(network_data_for_strategy.keys())
+        if valid_net_indices:
+            first_net_idx = valid_net_indices[0]
+            num_networks = len(network_data_for_strategy)
+            
+            # Check if this net_idx has entries for fractions (and the entry is not empty)
+            fraction_data_for_net = network_data_for_strategy.get(first_net_idx)
+            if fraction_data_for_net: # Check if dict for fractions is not empty
+                valid_frac_indices = list(fraction_data_for_net.keys())
+                if valid_frac_indices:
+                    first_frac_idx = valid_frac_indices[0]
+                    layer_info_dict = fraction_data_for_net.get(first_frac_idx)
+                    
+                    if layer_info_dict and isinstance(layer_info_dict, dict):
+                        num_layers = len(layer_info_dict.keys())
+                    else:
+                        logger.warning(f"Plotting: layer_info_dict for strategy '{first_valid_strategy}', net {first_net_idx}, frac {first_frac_idx} is None or not a dict: {layer_info_dict}. Cannot determine num_layers.")
+                else:
+                    logger.warning(f"Plotting: No fraction data found for strategy '{first_valid_strategy}', net {first_net_idx}. Cannot determine num_layers.")
+            else:
+                logger.warning(f"Plotting: No fraction data (or empty dict) found for strategy '{first_valid_strategy}', net {first_net_idx}. Cannot determine num_layers.")
+        else:
+            logger.warning(f"Plotting: No network data found for strategy '{first_valid_strategy}'. Cannot determine num_layers.")
+    else:
+        logger.warning(f"Plotting: Strategy '{first_valid_strategy}' not found in pruning_details or has no data. Cannot determine num_layers.")
 
     if num_networks == 0 or num_layers == 0:
         logger.warning("Could not determine num_networks/num_layers for per-layer pruning plot.")

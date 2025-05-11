@@ -11,6 +11,11 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from typing import Dict, List, Tuple, Union, Optional, Any, Callable
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+import logging
+import traceback
 
 # Import core implementations from utils.metrics_utils
 from alignment.utils.metrics_utils import (
@@ -23,6 +28,10 @@ from alignment.utils.metrics_utils import (
     alignment
 )
 
+# If these utils are used by the moved function, ensure they are accessible
+from alignment.utils.model_utils import _normalize_device, _ensure_model_on_device, _flatten_layer_weights_for_node
+
+logger = logging.getLogger(__name__)
 
 class RankAlignmentMetric(AlignmentMetricBase):
     """
@@ -461,3 +470,132 @@ def alignment(inputs: torch.Tensor, weights: torch.Tensor,
     """
     kwargs["relative"] = relative
     return AlignmentMetrics.measure(inputs, weights, method=method, **kwargs) 
+
+
+# Function to be moved from dropout.py
+def compute_all_node_scores(
+    model: nn.Module,
+    metric_instance: 'AlignmentMetric',
+    device: torch.device,
+    data_loader: DataLoader,
+    num_batches: int = 5,
+    debug_mode: bool = False,
+) -> Dict[int, torch.Tensor]:
+    """
+    Computes per-node scores for all specified alignment layers in a model.
+    This function orchestrates activation hooking and per-layer metric computation.
+    It no longer has logic to exclude classification layers from score computation itself;
+    that responsibility lies with the calling application (e.g., pruning).
+
+    Args:
+        model: The model (expected to have .alignment_layers and .alignment_names attributes, 
+               typically an AlignmentNetwork instance).
+        metric_instance: An instantiated AlignmentMetric object (e.g., AlignmentMetric(name="RQ")).
+        device: The torch.device to run computations on.
+        data_loader: DataLoader for providing input data to the model for activation hooking.
+        num_batches: Number of batches from data_loader to use for collecting activations.
+        debug_mode: If True, enables verbose logging.
+
+    Returns:
+        A dictionary mapping layer_idx to a 1D tensor of per-node scores for that layer.
+    """
+    if not hasattr(model, "alignment_layers") or not hasattr(model, "alignment_names"):
+        raise ValueError("Model must define .alignment_layers and .alignment_names attributes (typically an AlignmentNetwork).")
+    if not isinstance(metric_instance, AlignmentMetric):
+        raise ValueError("metric_instance must be an instance of AlignmentMetric.")
+
+    normalized_device = _normalize_device(device)
+    model.eval()
+    _ensure_model_on_device(model, normalized_device)
+
+    if debug_mode:
+        logger.info(f"Computing node scores for model with {len(model.alignment_layers)} alignment layers on device {normalized_device}")
+        for i, (layer_mod, layer_name) in enumerate(zip(model.alignment_layers, model.alignment_names)):
+            if hasattr(layer_mod, 'weight') and layer_mod.weight is not None:
+                 logger.info(f"Layer {i}: {layer_name} - {type(layer_mod).__name__} - Shape: {layer_mod.weight.shape}")
+            else:
+                 logger.info(f"Layer {i}: {layer_name} - {type(layer_mod).__name__} - No weight attribute or weight is None")
+
+
+    if not hasattr(model, "hidden"):
+        model.hidden = {}
+    else: # Clear any stale hidden states from previous calls or other uses
+        model.hidden.clear()
+
+    batch_count = 0
+    hooks = []
+    try:
+        def get_activation_hook(name_for_hook): # Use a distinct name for the closure variable
+            def hook(module, layer_input, layer_output):
+                x = layer_input[0]
+                if x.dim() > 2:
+                    if x.dim() == 3: x = x.view(x.size(0), -1)
+                    elif x.dim() == 4: x = x.view(x.size(0), -1)
+                    elif x.dim() == 5: x = x.view(x.size(0), -1)
+                    else:
+                        logger.warning(f"Unusual input dimension: {x.dim()} for layer {name_for_hook}, flattening to 2D")
+                        x = x.view(x.size(0), -1)
+                
+                current_val = model.hidden.get(name_for_hook)
+                if not isinstance(current_val, list):
+                    if current_val is not None and debug_mode:
+                        logger.warning(f"Hook for layer '{name_for_hook}': model.hidden was {type(current_val)}, re-initializing to list.")
+                    model.hidden[name_for_hook] = []
+                
+                model.hidden[name_for_hook].append(x.detach())
+                if debug_mode and len(model.hidden[name_for_hook]) == 1:
+                    logger.info(f"Layer {name_for_hook} input shape: {x.shape}, stored in hidden.")
+            return hook
+
+        for i, layer_mod_hook in enumerate(model.alignment_layers):
+            hook_layer_name = model.alignment_names[i]
+            hooks.append(layer_mod_hook.register_forward_hook(get_activation_hook(hook_layer_name)))
+
+        batch_iter = tqdm(data_loader, desc="Processing batches for metrics", disable=not debug_mode, leave=False)
+        for inputs, _targets in batch_iter:
+            inputs = inputs.to(normalized_device)
+            model(inputs) # This triggers hooks, populating model.hidden
+            batch_count += 1
+            if batch_count >= num_batches:
+                break
+    finally:
+        for h in hooks:
+            h.remove()
+        hooks.clear() # Clear the list of hooks
+
+    scores_per_layer = {}
+    layer_iter = enumerate(model.alignment_layers)
+    if debug_mode:
+        layer_iter = tqdm(list(layer_iter), desc="Computing layer scores from activations")
+
+    for layer_idx, layer_mod_scores in layer_iter:
+        layer_name_scores = model.alignment_names[layer_idx]
+
+        if layer_name_scores not in model.hidden or not model.hidden[layer_name_scores]:
+            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
+            scores_per_layer[layer_idx] = torch.zeros(node_count, device=normalized_device)
+            if debug_mode:
+                logger.warning(f"No/empty hooking data for layer '{layer_name_scores}'. Scores set to zero.")
+            if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None
+            continue
+        
+        w_flat = _flatten_layer_weights_for_node(layer_mod_scores)
+        X_acts = torch.cat(model.hidden[layer_name_scores], dim=0)
+        
+        if debug_mode:
+            logger.info(f"Layer {layer_name_scores}: Activations X shape {X_acts.shape}, Weights w_flat shape {w_flat.shape}")
+            
+        try:
+            node_scores = metric_instance.compute_per_node_scores(X_acts, w_flat, device=normalized_device)
+            if debug_mode and node_scores is not None and node_scores.numel() > 0:
+                logger.info(f"Layer {layer_name_scores} score stats: min={torch.min(node_scores).item():.4f}, max={torch.max(node_scores).item():.4f}, mean={torch.mean(node_scores).item():.4f}, std={torch.std(node_scores).item():.4f}")
+            scores_per_layer[layer_idx] = node_scores.detach() if node_scores is not None else torch.zeros(w_flat.shape[0], device=normalized_device)
+        except Exception as e_comp:
+            logger.error(f"Error computing scores for layer {layer_name_scores}: {e_comp}", exc_info=debug_mode)
+            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
+            scores_per_layer[layer_idx] = torch.zeros(node_count, device=normalized_device)
+        
+        model.hidden[layer_name_scores] = None # Cleanup specific layer hidden data
+    
+    model.hidden.clear() # Final cleanup of the hidden dict itself
+    return scores_per_layer 

@@ -5,143 +5,140 @@
 # -----------------------------------------------------------------------------
 # I. Experiment Metadata & Core Execution
 # -----------------------------------------------------------------------------
-experiment_name: "mlp_mnist_global_joint_test" # Descriptive name for this specific experiment run (e.g., "mlp_mnist_layerwise_pruning")
+experiment_name: "mlp_mnist_global_joint_test" # Descriptive name for this specific experiment run
 experiment_type: "progressive_dropout"    # Options: 
                                         #   "progressive_dropout" - Prunes nodes iteratively and measures performance.
-                                        #   "eigenvector_dropout" - Prunes based on eigenvectors of alignment metric (less commonly used now).
+                                        #   "eigenvector_dropout" - Prunes based on eigenvectors of alignment metric.
                                         #   "alignment_analysis"  - Runs both progressive and (if configured) eigenvector dropout.
-results_path: "results"                   # Base path for saving all outputs (figures, logs, model weights, result pickles).
-use_timestamp: true                     # If true, appends a YYYYMMDD_HHMMSS timestamp to `results_path` to create unique run directories.
-debug_mode: false                       # If true, enables extensive debug logging, including detailed pruning steps and score statistics.
+                                        #   "layer_isolated_pruning" - Prunes/evaluates one layer at a time (generates N plots).
+results_path: "results"                   # Base path for saving all outputs.
+use_timestamp: true                     # If true, appends a YYYYMMDD_HHMMSS timestamp to `results_path`.
+debug_mode: false                       # If true, enables extensive debug logging.
 
-device: "cuda"                          # Device for computation. Options: "cuda" (uses default CUDA device, e.g., cuda:0), "cuda:X" (specific GPU), "cpu".
-save_networks: true                     # If true, final trained/pruned network models (from each replicate) are saved in the `weights` subfolder of the experiment results.
-no_save: false                          # Master switch. If true, nothing is saved to disk (results, plots, networks), useful for quick tests.
-just_plot: false                        # If true, script attempts to load existing `progressive_dropout_results.pkl` (or similar) from a previous run and only generate plots.
-show_all: false                         # If true, matplotlib plots will be displayed interactively during/after generation (behavior depends on environment).
+device: "cuda"                          # "cuda", "cuda:0", "cpu".
+save_networks: true                     # If true, final trained/pruned network models are saved.
+no_save: false                          # Master switch: if true, nothing is saved to disk.
+just_plot: false                        # If true, loads existing results and only generates plots.
+show_all: false                         # If true, matplotlib plots will be displayed interactively.
+seed: null                              # Optional: Integer for random seed for reproducibility (e.g., 42). If null, no specific seed is set globally beyond individual network initializations.
 
 # -----------------------------------------------------------------------------
 # II. Dataset Configuration
 # -----------------------------------------------------------------------------
+# Maps to DatasetConfig in config.py
 dataset:
-  dataset_name: "MNIST"                 # Name of the dataset. Options: "MNIST", "CIFAR10", "CIFAR100", "ImageNet".
-  data_path: "data"                     # Root directory where dataset files are stored or will be downloaded.
-  batch_size: 1024                      # Batch size for training, evaluation, and metric computation data loaders.
-  num_workers: 4                        # Number of worker processes for data loading (0 means main process).
+  dataset_name: "MNIST"                 # Options: "MNIST", "CIFAR10", "CIFAR100", "ImageNet".
+  data_path: "data"                     # Root directory for dataset files.
+  batch_size: 1024                      # Batch size for DataLoaders.
+  num_workers: 4                        # Number of worker processes for DataLoader.
 
 # -----------------------------------------------------------------------------
 # III. Model Configuration
 # -----------------------------------------------------------------------------
+# Maps to ModelConfig in config.py
 model:
   model_name: "MLP"                     # Registered model name. Options: "MLP", "CNN2P2", "AlexNet".
-  # Common parameters applicable to most models
-  output_dim: 10                        # Number of output classes (e.g., 10 for MNIST/CIFAR10, 100 for CIFAR100).
-  dropout_rate: 0.0                     # Dropout rate for nn.Dropout layers *within the base model architecture itself* during its construction.
-                                        # This is separate from experimental pruning/dropout. For pruning experiments, typically 0.0 unless studying models trained with dropout.
+  output_dim: 10                        # Number of output classes.
+  dropout_rate: 0.0                     # Dropout for nn.Dropout layers in model constructor (usually 0.0 for pruning experiments).
 
-  # MLP Specific (used if model_name is "MLP")
-  input_dim: 784                        # Input feature dimension (e.g., MNIST: 28*28=784). Ignored by CNNs which infer from `in_channels` and `example_input_hw`.
-  hidden_dims: [128, 64]                # List of integers defining the size of each hidden layer.
-  activation: "relu"                    # Activation function for MLP hidden layers. Options: "relu", "tanh", "sigmoid", "identity".
+  # MLP Specific (used if model_name: "MLP")
+  input_dim: 784
+  hidden_dims: [128, 64]
+  activation: "relu"                    # Options: "relu", "tanh", "sigmoid", "identity".
 
-  # CNN2P2 Specific (used if model_name is "CNN2P2")
-  in_channels: 1                        # Number of input channels for the first convolutional layer (e.g., MNIST: 1, CIFAR: 3).
-  conv_channels: [32, 64]               # List of output channels for the two convolutional layers (e.g., [out_conv1, out_conv2]).
-  kernel_sizes: [5, 5]                  # List of kernel sizes for the two convolutional layers.
-  strides: [1, 1]                       # List of strides for the two convolutional layers.
-  paddings: [2, 2]                      # List of paddings for the two convolutional layers (e.g., padding=2 for kernel=5, stride=1 keeps spatial dimensions same for that conv op).
-  pool_kernel_size: 2                   # Kernel size for MaxPool2d layers.
-  pool_stride: 2                        # Stride for MaxPool2d layers.
-  hidden_fc_dim: 128                    # Dimension of the hidden fully connected layer after convolutions.
-  example_input_hw: [28, 28]            # [Height, Width] of an example input image (e.g., MNIST: [28,28], CIFAR: [32,32]). Used to dynamically calculate flattened size for FC layers.
+  # CNN2P2 Specific (used if model_name: "CNN2P2")
+  in_channels: 1
+  conv_channels: [32, 64]
+  kernel_sizes: [5, 5]
+  strides: [1, 1]
+  paddings: [2, 2]
+  pool_kernel_size: 2
+  pool_stride: 2
+  hidden_fc_dim: 128
+  example_input_hw: [28, 28]
+ 
+  # Optional: Specify layers for AlignmentNetwork. If None, defaults in models.py are used.
+  # Names must match base_model.named_modules(). Values are arbitrary unique IDs for AlignmentNetwork.
+  alignment_layers: null 
+  #   "network.0": 0
+  #   "conv1.0": 0 
 
-  # AlexNet Specific (used if model_name is "AlexNet")
-  # - `output_dim` is used as `num_classes` for AlexNet.
-  # - `dropout_rate` (if > 0.0 and not the AlexNet default of 0.5) will override dropout p-values in the torchvision AlexNet model.
-
-  # Optional: Specify which layers from the base_model are used for alignment/pruning by the AlignmentNetwork wrapper.
-  # Names must match module names from `base_model.named_modules()`.
-  # If None (or commented out), defaults are used from the `create_X` functions in `models/models.py`.
-  # alignment_layers:  
-  #   "network.0": 0      # Example for MLP's first Linear layer (if unnamed in Sequential)
-  #   "conv1.0": 0        # Example for CNN2P2's first Conv2d in its conv1 Sequential block
-  #   "features.0": 0     # Example for AlexNet's first Conv2d in its features block
-  
-  extra_model_params: {}                # For any other keyword arguments to pass directly to the base model's __init__ constructor.
+  extra_model_params: {}                # For other kwargs to pass to base model constructor.
 
 # -----------------------------------------------------------------------------
 # IV. Training Configuration
 # -----------------------------------------------------------------------------
+# Maps to TrainingConfig in config.py
 training:
-  epochs: 10                            # Number of training epochs if networks are trained before pruning (see `train_before_dropout`).
-  replicates: 5                         # Number of independent network initializations/runs for statistical robustness.
-  optimizer: "Adam"                     # Optimizer for training. Options: "Adam", "SGD", "RMSprop" (must match `torch.optim` class names).
-  learning_rate: 0.001                  # Learning rate for the optimizer.
-  momentum: 0.9                         # Momentum factor for SGD optimizer (ignored by Adam/RMSprop).
-  loss: "cross_entropy"                 # Loss function for training. Currently, nn.CrossEntropyLoss is primarily used internally.
-  training_method: "auto"               # Method for training multiple network replicates:
-                                        #   "auto": Chooses "fully_tensorized" if network architectures are identical, else "sequential".
-                                        #   "sequential": Train network replicates one by one (slower).
-                                        #   "fully_tensorized": Train all replicates as a single ensemble (fastest if applicable, requires identical architectures).
-  # train_before_dropout: true          # This is implicitly handled by AlignmentExperiment; if epochs > 0, training occurs.
+  epochs: 10
+  replicates: 5
+  optimizer: "Adam"                     # Options: "Adam", "SGD", "RMSprop", "AdamW" (case-sensitive).
+  learning_rate: 0.001
+  momentum: 0.9                         # For SGD.
+  loss: "cross_entropy"                 # Currently nn.CrossEntropyLoss used internally.
+  training_method: "auto"               # Method for training multiple replicates:
+                                        #   "auto": Chooses "fully_tensorized" if architectures are same, else "sequential".
+                                        #   "sequential": Train one by one.
+                                        #   "fully_tensorized": Train all as a single ensemble (fastest).
 
 # -----------------------------------------------------------------------------
-# V. Pruning & Alignment Metric Configuration
+# V. Alignment Metric Calculation Settings
 # -----------------------------------------------------------------------------
-alignment: # Maps to AlignmentConfig in config.py
-  metric: "RQ"                          # Alignment metric for guiding pruning. Options: "RQ", "NullSpace", "MI", "WeightSimilarity", "NodeRedundancy", "RankAlignment".
-  # run_progressive & run_eigenvector are typically controlled by `experiment_type` at the top level.
-  # If experiment_type is "alignment_analysis", these flags determine which sub-experiments run.
-  run_progressive: true                 # If true and experiment_type="alignment_analysis", run progressive dropout.
-  run_eigenvector: false                # If true and experiment_type="alignment_analysis", run eigenvector dropout.
+# Maps to alignment_settings: AlignmentConfig in config.py
+alignment_settings:
+  metric: "RQ"                          # Alignment metric to use. Options: "RQ", "NullSpace", "MI", "WeightSimilarity", "NodeRedundancy", "RankAlignment".
+  scale_by_norm: false                  # For RQ metric: if true, scales input covariance matrix by its norm.
+  cnn_mode: "unfold"                    # How CNN features are processed for metrics. Options:
+                                        #   "unfold": Uses `torch.nn.functional.unfold` to create patches, then flattens.
+                                        #   "patchwise": Processes each patch separately.
+                                        #   "batch_patch_combined": Combines batch and patch dimensions after unfolding.
+  # Flags for experiment_type: "alignment_analysis"
+  run_progressive: true                 # If true and exp_type="alignment_analysis", run progressive dropout part.
+  run_eigenvector: false                # If true and exp_type="alignment_analysis", run eigenvector dropout part.
+
+# -----------------------------------------------------------------------------
+# VI. Pruning Experiment Settings
+# -----------------------------------------------------------------------------
+# Maps to pruning_settings: PruningConfig in config.py
+pruning_settings:
+  dropout_min: 0.0
+  dropout_max: 0.9
+  dropout_steps: 40
   
-  dropout_min: 0.0                      # Minimum pruning fraction (0.0 to 1.0) for experiments.
-  dropout_max: 0.9                      # Maximum pruning fraction (0.0 to 1.0). Usually < 1.0 to avoid full pruning.
-  dropout_steps: 40                     # Number of discrete pruning fraction steps between min and max.
-  
-  scale_by_norm: false                  # For RQ metric: if true, scales the input covariance matrix by its norm during RQ calculation.
-  
-  # Pruning execution options (moved from old 'extra')
   dropout_mode: "scaled"                # How weights are treated after pruning nodes/connections:
-                                        #   "scaled": Remaining weights are scaled by 1/(1-p) to maintain expected output magnitude (Inverted Dropout principle).
-                                        #   "unscaled" (or "zero"): Weights are simply zeroed out; no scaling.
-                                        
-  dropout_pruning_mode: "layer_isolated"  # Strategy for distributing pruning across layers:
-                                        #   "global_joint": Considers all nodes from all prunable layers together. Ranks them globally by score and prunes top X% overall.
-                                        #   "layer_wise": Prunes X% of nodes from *each* prunable layer independently, based on scores within that layer.
-                                        #   "layer_isolated": (More for analysis) Prunes X% in one layer, evaluates, restores, then moves to next layer. Not for typical end-to-end pruning.
-                                        #   "cascading_layer": Prunes layer L1, its output (and potentially re-computed scores) influences pruning of L2, etc. (complex, current batched impl. has limitations).
+                                        #   "scaled": Remaining weights are scaled by 1/(1-p) (Inverted Dropout principle).
+                                        #   "unscaled" (or "zero"): Weights are simply zeroed out.
+                                
+  dropout_pruning_mode: "layer_wise"  # Strategy for distributing pruning across layers:
+                                        #   "global_joint": Considers all nodes from all prunable layers together. Ranks globally by score and prunes top X% overall.
+                                        #   "layer_wise": Prunes X% from *each* prunable layer independently, based on scores within that layer.
+                                        #   "layer_isolated": (For experiment_type="layer_isolated_pruning") Prunes X% in one layer, evaluates, restores, then moves to next layer.
+                                        #   "cascading_layer": Prunes L1, its output influences pruning of L2, etc. (Note: current batched impl. has limitations).
   
-  exclude_classification_layer: true    # If true, the final classification layer (assumed last in `alignment_layers`) is not subjected to pruning.
+  exclude_classification_layer: true    # If true, the final classification layer is not pruned.
   
   use_multi_strategy_dropout: true      # For `progressive_dropout` experiment type: 
-                                        #   If true, processes high_rq, low_rq, random pruning strategies more efficiently together for each network replicate (enables faster batched evaluation of replicates).
-                                        #   If false, strategies are processed sequentially for each replicate (slower).
-
-  # CNN processing for metrics (moved from old 'extra')
-  cnn_mode: "unfold"                    # How input activations to CNN layers are processed before metric calculation (e.g., for RQ):
-                                        #   "unfold": Uses `torch.nn.functional.unfold` to create patches, then flattens them.
-                                        #   "patchwise": Processes each patch separately (output of unfold may be 3D).
-                                        #   "batch_patch_combined": Combines batch and patch dimensions after unfolding.
+                                        #   If true, processes high_rq, low_rq, random strategies more efficiently together for each network replicate.
+                                        #   If false, strategies are processed sequentially for each replicate.
 
 # -----------------------------------------------------------------------------
-# VI. Checkpointing & Logging Configuration
+# VII. Checkpointing & Logging Configuration
 # -----------------------------------------------------------------------------
+# Maps to checkpointing: CheckpointingConfig in config.py
 checkpointing:
-  save_checkpoints: false               # If true, save full training checkpoints (model, optimizer state) during `train_networks`.
-  checkpoint_frequency: 1               # Epoch frequency for saving training checkpoints (if `save_checkpoints` is true).
-  load_checkpoint: false                # Path to a specific checkpoint file to load and resume training or for evaluation (not fully implemented for all scenarios).
-  # save_model: true                    # This was from original YAML; `save_networks` at top level now serves a similar purpose for final models.
-  # save_interval: 1                    # (If implementing periodic model saving during training beyond checkpoints)
+  save_checkpoints: false
+  checkpoint_frequency: 1
+  load_checkpoint: false
 
+# Maps to wandb: WandbConfig (if you create this dataclass in config.py) or loaded as dict
 wandb:
-  use_wandb: true                       # Enable/disable logging to Weights & Biases.
-  wandb_project: "neural_alignment"     # Your W&B project name.
-  wandb_entity: "your_wandb_entity"     # Your W&B username or team name. Set to null or remove for default entity.
+  use_wandb: true
+  wandb_project: "neural_alignment"
+  wandb_entity: "your_wandb_entity"
 
-# Other Miscellaneous Execution Options (Maps to ExtraConfig in config.py)
-extra: 
-  log_frequency: 1                      # (Example) Placeholder if you add custom interval logging to W&B or console during training.
-  log_images: true                      # (Example) Placeholder if you implement image logging to W&B during evaluation.
-  detailed_logging: true                # (Example) Placeholder for a flag that might control verbosity of metric files or specific log details not covered by `debug_mode`.
-  # dummy_extra_param: null             # Placeholder for any truly ad-hoc parameters not fitting elsewhere. 
+# Maps to extra: ExtraConfig in config.py
+extra:
+  log_frequency: 1
+  log_images: true
+  detailed_logging: true
+  # dummy_extra_param: null 

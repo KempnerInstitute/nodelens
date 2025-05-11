@@ -300,80 +300,89 @@ class TrainingConfig(BaseConfig):
 
 
 @dataclass
-class AlignmentConfig(BaseConfig):
-    """Alignment measurement and Pruning configuration.""" # Renamed for clarity
-    metric: str = "RQ"
-    run_progressive: bool = True
-    run_eigenvector: bool = True # Corresponds to experiment_type, maybe remove from here if redundant
+class PruningConfig(BaseConfig):
+    """Configuration specific to pruning experiments."""
     dropout_min: float = 0.0
     dropout_max: float = 0.9
     dropout_steps: int = 40
-    scale_by_norm: bool = False
-
-    # MOVED from ExtraConfig (related to pruning execution and CNN processing for metrics)
-    dropout_mode: str = "scaled" 
+    dropout_mode: str = "scaled"
     dropout_pruning_mode: str = "global_joint"
     exclude_classification_layer: bool = True
-    cnn_mode: str = "unfold"
-    use_multi_strategy_dropout: bool = True # For progressive_dropout execution
+    use_multi_strategy_dropout: bool = True
 
     def validate(self) -> bool:
-        """Validate alignment configuration."""
-        valid_metrics = ["RQ", "NullSpace", "MI", "weight_similarity", "redundancy", "delta_alignment"]
+        if not (0.0 <= self.dropout_min <= 1.0):
+            raise ValueError(f"Pruning dropout_min must be between 0 and 1, got {self.dropout_min}")
+        if not (0.0 <= self.dropout_max <= 1.0):
+            raise ValueError(f"Pruning dropout_max must be between 0 and 1, got {self.dropout_max}")
+        if self.dropout_min > self.dropout_max:
+            raise ValueError(f"Pruning dropout_min must be less than or equal to dropout_max, got min={self.dropout_min}, max={self.dropout_max}")
+        if self.dropout_steps <= 0 and not (self.dropout_min == self.dropout_max):
+            if self.dropout_min == self.dropout_max and self.dropout_steps ==0: pass
+            else: raise ValueError(f"Pruning dropout_steps must be positive, got {self.dropout_steps}")
         
-        if self.metric not in valid_metrics:
-            # This is just a warning, not an error, as custom methods might be added
-            import warnings
-            warnings.warn(f"Unusual alignment metric: {self.metric}")
-            
-        if self.dropout_min < 0.0 or self.dropout_min > 1.0:
-            raise ValueError(f"Dropout min must be between 0 and 1, got {self.dropout_min}")
-            
-        if self.dropout_max < 0.0 or self.dropout_max > 1.0:
-            raise ValueError(f"Dropout max must be between 0 and 1, got {self.dropout_max}")
-            
-        if self.dropout_min >= self.dropout_max:
-            raise ValueError(f"Dropout min must be less than dropout max, got {self.dropout_min} >= {self.dropout_max}")
-            
-        if self.dropout_steps <= 0:
-            raise ValueError(f"Dropout steps must be positive, got {self.dropout_steps}")
-            
-        valid_pruning_modes = [
-            "global_joint", "layer_wise", "layer_isolated", "cascading_layer"
-        ]
-        if self.dropout_pruning_mode not in valid_pruning_modes:
-            # Allow old names for backward compatibility by mapping them
-            old_pruning_map = {
-                "global": "global_joint", "per_layer_combined": "layer_wise", 
-                "per_layer_independent": "layer_isolated", "global_joint_legacy": "global_joint",
-                "layer_wise_legacy": "layer_wise", "layer_isolated_legacy": "layer_isolated"
-            }
-            if self.dropout_pruning_mode in old_pruning_map:
-                self.dropout_pruning_mode = old_pruning_map[self.dropout_pruning_mode]
-            else:
-                raise ValueError(f"Invalid dropout pruning mode: {self.dropout_pruning_mode}. Valid: {valid_pruning_modes}")
+        current_valid_pruning_modes = ["global_joint", "layer_wise", "layer_isolated", "cascading_layer"]
+        if self.dropout_pruning_mode not in current_valid_pruning_modes:
+            raise ValueError(f"Invalid dropout_pruning_mode: '{self.dropout_pruning_mode}'. Valid are: {current_valid_pruning_modes}")
 
         if self.dropout_mode not in ["scaled", "unscaled"]:
-            raise ValueError(f"Invalid dropout mode: {self.dropout_mode}")
+            raise ValueError(f"Invalid dropout_mode: '{self.dropout_mode}'. Valid are: ['scaled', 'unscaled']")
+        return True
+
+
+@dataclass
+class AlignmentConfig(BaseConfig):
+    """Configuration for alignment metric calculation."""
+    metric: str = "RQ"
+    scale_by_norm: bool = False
+    cnn_mode: str = "unfold"
+    run_progressive: bool = True 
+    run_eigenvector: bool = False
+
+    def validate(self) -> bool:
+        import warnings 
+        valid_metrics = ["RQ", "NullSpace", "MI", "WeightSimilarity", "NodeRedundancy", "RankAlignment"]
+        if self.metric not in valid_metrics:
+            warnings.warn(f"Unusual alignment metric: {self.metric}. Supported: {valid_metrics}")
+        
         if self.cnn_mode not in ["unfold", "patchwise", "batch_patch_combined"]:
-            raise ValueError(f"Invalid CNN mode: {self.cnn_mode}")
+            raise ValueError(f"Invalid CNN mode: {self.cnn_mode}. Supported: ['unfold', 'patchwise', 'batch_patch_combined']")
+        
+        return True
+
+
+@dataclass
+class WandbConfig(BaseConfig):
+    """Configuration for Weights & Biases logging."""
+    use_wandb: bool = False # Default to False, set to true in YAML if needed
+    wandb_project: Optional[str] = "neural_alignment"
+    wandb_entity: Optional[str] = None # User should fill this or it defaults to None (W&B default entity)
+    # log_frequency: int = 1 # These were in your YAML under extra, could move here
+    # log_images: bool = False
+    # detailed_logging: bool = False 
+
+    def validate(self) -> bool:
+        if self.use_wandb and not self.wandb_project:
+            # logger.warning("wandb_project not set, using default 'neural_alignment'.") # or raise error
+            # self.wandb_project = "neural_alignment" # Already has a default
+            pass 
+        # wandb_entity can be None to use default W&B entity.
         return True
 
 
 @dataclass
 class CheckpointingConfig(BaseConfig):
     """Checkpointing configuration."""
-    
     save_checkpoints: bool = False
     checkpoint_frequency: int = 1
-    use_wandb: bool = False
+    # use_wandb: bool = False # REMOVED - Moved to WandbConfig
     load_checkpoint: bool = False
+    # save_model: true - this is save_networks at top level now
+    # save_interval: 1 - this is checkpoint_frequency
     
     def validate(self) -> bool:
-        """Validate checkpointing configuration."""
-        if self.checkpoint_frequency <= 0:
-            raise ValueError(f"Checkpoint frequency must be positive, got {self.checkpoint_frequency}")
-            
+        if self.save_checkpoints and self.checkpoint_frequency <= 0:
+            raise ValueError(f"Checkpoint frequency must be positive if save_checkpoints is true, got {self.checkpoint_frequency}")
         return True
 
 
@@ -394,7 +403,8 @@ class ExperimentConfig(BaseConfig):
     """Main experiment configuration."""
     
     # Experiment metadata
-    experiment_type: str = "alignment"
+    experiment_name: str = "default_experiment" # Added for clarity
+    experiment_type: str = "progressive_dropout"
     results_path: str = "results"
     use_timestamp: bool = True
     
@@ -406,15 +416,29 @@ class ExperimentConfig(BaseConfig):
     show_all: bool = False
     timestamp: Optional[str] = None
     debug_mode: bool = False  # Enable debug output
+    seed: Optional[int] = None # Added seed for reproducibility
     
     # Nested configurations
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
-    alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
+    alignment_settings: AlignmentConfig = field(default_factory=AlignmentConfig) 
+    pruning_settings: PruningConfig = field(default_factory=PruningConfig)
     checkpointing: CheckpointingConfig = field(default_factory=CheckpointingConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
     extra: ExtraConfig = field(default_factory=ExtraConfig)
     
+    def __post_init__(self):
+        # No longer need to handle wandb as a dict here if it's properly typed
+        if self.wandb is not None and not isinstance(self.wandb, WandbConfig):
+             # This might happen if loaded from an old config dict not using WandbConfig structure
+             logger.warning(f"ExperimentConfig.wandb was type {type(self.wandb)}, attempting to cast to WandbConfig.")
+             try:
+                 self.wandb = WandbConfig(**self.wandb) if isinstance(self.wandb, dict) else WandbConfig()
+             except TypeError as e:
+                 logger.error(f"Failed to cast self.wandb to WandbConfig: {e}. Using default WandbConfig.")
+                 self.wandb = WandbConfig()
+
     def validate(self) -> bool:
         """
         Validate all configuration components.
@@ -449,8 +473,10 @@ class ExperimentConfig(BaseConfig):
             self.model = ModelConfig()
         if not isinstance(self.training, TrainingConfig):
             self.training = TrainingConfig()
-        if not isinstance(self.alignment, AlignmentConfig):
-            self.alignment = AlignmentConfig()
+        if not isinstance(self.alignment_settings, AlignmentConfig):
+            self.alignment_settings = AlignmentConfig()
+        if not isinstance(self.pruning_settings, PruningConfig):
+            self.pruning_settings = PruningConfig()
         if not isinstance(self.checkpointing, CheckpointingConfig):
             self.checkpointing = CheckpointingConfig()
         if not isinstance(self.extra, ExtraConfig):
@@ -461,8 +487,10 @@ class ExperimentConfig(BaseConfig):
             self.dataset.validate()
             self.model.validate()
             self.training.validate()
-            self.alignment.validate()
+            self.alignment_settings.validate()
+            self.pruning_settings.validate()
             self.checkpointing.validate()
+            if self.wandb: self.wandb.validate()
             self.extra.validate()
         except Exception as e:
             raise ValueError(f"Nested config validation error: {str(e)}")

@@ -24,7 +24,7 @@ from alignment.datasets import load_dataset
 from alignment.models import AlignmentNetwork
 from alignment.datasets import DataSet
 from alignment.utils.core import setup_logging, timed
-from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader
+from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader, evaluate_model
 from alignment.utils.model_utils import _normalize_device, _ensure_model_on_device
 
 # Setup module logger
@@ -280,7 +280,8 @@ def train_model(
     device: Optional[torch.device] = None,
     checkpoint_dir: Optional[str] = None,
     checkpoint_freq: int = 1,
-    return_history: bool = False
+    return_history: bool = False,
+    callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None
 ) -> Dict[str, Any]:
     """
     Train a neural network model.
@@ -295,6 +296,8 @@ def train_model(
         checkpoint_dir: Directory to save checkpoints
         checkpoint_freq: Frequency to save checkpoints (in epochs)
         return_history: Whether to return training history
+        callbacks: Optional list of callback functions to call at the end of each epoch. 
+                   Each callback will receive a dictionary with epoch context.
         
     Returns:
         Dictionary containing training metrics and results
@@ -369,7 +372,7 @@ def train_model(
         if val_loader is not None:
             val_results = evaluate_model(
                 model=model,
-                data_loader=val_loader,
+                dataset_config=None,
                 device=device
             )
             
@@ -401,6 +404,25 @@ def train_model(
                 'val_loss': history['val_loss'][-1] if val_loader is not None else None,
                 'val_accuracy': history['val_accuracy'][-1] if val_loader is not None else None
             }, checkpoint_file)
+
+        # Execute callbacks at the end of the epoch
+        if callbacks:
+            epoch_context = {
+                "epoch": epoch + 1,
+                "model": model,
+                "train_loss": epoch_loss,
+                "train_accuracy": epoch_accuracy,
+                "val_loss": history['val_loss'][-1] if val_loader is not None and history['val_loss'] else None,
+                "val_accuracy": history['val_accuracy'][-1] if val_loader is not None and history['val_accuracy'] else None,
+                "learning_rate": current_lr,
+                "optimizer": optimizer,
+                "history": history # Provides access to the full history so far
+            }
+            for callback_fn in callbacks:
+                try:
+                    callback_fn(epoch_context)
+                except Exception as e:
+                    logger.error(f"Error in callback function during epoch {epoch+1}: {e}", exc_info=True)
     
     # Return training history if requested
     if return_history:
@@ -415,120 +437,6 @@ def train_model(
         'val_loss': history['val_loss'][-1] if val_loader is not None else None,
         'val_accuracy': history['val_accuracy'][-1] if val_loader is not None else None
     }
-
-
-def evaluate_model(
-    model: nn.Module,
-    dataset_config: Any,
-    device: Optional[torch.device] = None,
-    loader_name: str = 'test_loader',
-    extra_config: Optional[Any] = None,
-    with_alignment: bool = False
-) -> Dict[str, Any]:
-    """
-    Evaluate a neural network model.
-    
-    Args:
-        model: Model to evaluate
-        dataset_config: Configuration for the dataset
-        device: Device to evaluate on
-        loader_name: Name of the loader to use ('test_loader', 'val_loader', etc.)
-        extra_config: Additional configuration
-        with_alignment: Whether to measure alignment metrics
-        
-    Returns:
-        Dictionary containing evaluation metrics
-    """
-    if device is None:
-        device = next(model.parameters()).device
-    
-    # Load dataset
-    batch_size = dataset_config.batch_size if hasattr(dataset_config, 'batch_size') else 128
-    dataset = load_dataset(dataset_config, batch_size=batch_size)
-    
-    # Get the specified data loader
-    loader = getattr(dataset, loader_name, None)
-    if loader is None:
-        raise ValueError(f"Data loader '{loader_name}' not found in dataset")
-    
-    # Set model to evaluation mode
-    model.eval()
-    
-    # Initialize metrics
-    total_loss = 0.0
-    correct = 0
-    total = 0
-    
-    # Measure alignment if requested
-    alignment_metrics = {}
-    metric = None
-    
-    if with_alignment or (extra_config and hasattr(extra_config, 'measure_alignment')):
-        metric_name = 'RQ'  # Default
-        if extra_config and hasattr(extra_config, 'alignment') and hasattr(extra_config.alignment, 'metric'):
-            metric_name = extra_config.alignment.metric
-        
-        metric = get_metric(metric_name)
-    
-    # Collect alignment values if measuring
-    alignment_values = []
-    
-    # Evaluation loop
-    with torch.no_grad():
-        for inputs, targets in tqdm(loader, desc="Evaluating"):
-            inputs, targets = inputs.to(device), targets.to(device)
-            
-            # Forward pass with store_hidden if measuring alignment
-            store_hidden = metric is not None
-            if store_hidden:
-                model.forward(inputs, store_hidden=True)
-                outputs = model(inputs)
-            else:
-                outputs = model(inputs)
-            
-            # Handle tuple output (predictions, hidden_activations)
-            if isinstance(outputs, tuple):
-                outputs = outputs[0]
-            
-            # Compute loss
-            loss = torch.nn.functional.cross_entropy(outputs, targets)
-            
-            # Update metrics
-            total_loss += loss.item() * inputs.size(0)
-            _, predicted = outputs.max(1)
-            correct += predicted.eq(targets).sum().item()
-            total += targets.size(0)
-            
-            # Measure alignment if requested
-            if store_hidden:
-                # For AlignmentNetwork models
-                if hasattr(model, 'measure_alignment'):
-                    batch_alignment = model.measure_alignment(inputs, precomputed=True, method=metric_name)
-                    alignment_values.append(batch_alignment)
-    
-    # Calculate final metrics
-    metrics = {
-        'loss': total_loss / total,
-        'accuracy': 100. * correct / total
-    }
-    
-    # Process alignment metrics if measured
-    if alignment_values:
-        # Average alignment values across batches for each layer
-        avg_alignment = []
-        for layer_idx in range(len(alignment_values[0])):
-            layer_values = [batch[layer_idx] for batch in alignment_values]
-            avg_alignment.append(sum(layer_values) / len(layer_values))
-        
-        metrics['alignment'] = avg_alignment
-    
-    # Log results
-    logger.info(f"Evaluation: Loss: {metrics['loss']:.4f}, Accuracy: {metrics['accuracy']:.2f}%")
-    if 'alignment' in metrics:
-        alignment_str = ', '.join([f"{val:.4f}" for val in metrics['alignment']])
-        logger.info(f"Alignment: [{alignment_str}]")
-    
-    return metrics
 
 
 def load_checkpoint(
@@ -671,7 +579,7 @@ def evaluate(nets, dataset, **parameters):
             net.forward(images, store_hidden=True)
             
             # Measure alignment metrics
-            metrics = AlignmentMetrics.measure_methods(net, images, methods=alignment_methods, precomputed=False)
+            metrics = net.measure_alignment_methods(images, methods=alignment_methods, precomputed=True)
             align_data.append(metrics)
             
             # Compute distributions of alignment values
@@ -874,6 +782,7 @@ def train_networks_sequential(
     show_progress: bool = True,
     optimizer_class=torch.optim.Adam,
     weight_decay: float = 0.0,
+    callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
     **optimizer_kwargs
 ) -> Dict[str, List[float]]:
     """
@@ -884,80 +793,70 @@ def train_networks_sequential(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = _normalize_device(device)
 
-    history = {
+    # History structure to store average metrics across all networks per epoch
+    # For detailed history of each network, it would be more complex or rely on callbacks saving their own data.
+    aggregated_history = {
         'train_loss': [], 'train_acc': [],
         'test_loss': [], 'test_acc': []
     }
+
+    all_individual_histories = [] # To store history from each train_model call
+
+    net_iter_desc = "Training Networks Sequentially"
+    net_iter = tqdm(networks, desc=net_iter_desc, leave=False) if show_progress and len(networks) > 1 else networks
+
+    for net_idx, net in enumerate(net_iter):
+        if show_progress and len(networks) > 1:
+            net_iter.set_description(f"{net_iter_desc} (Network {net_idx+1}/{len(networks)})")
+
+        _ensure_model_on_device(net, device)
+        
+        # Setup optimizer for the current network
+        optimizer = optimizer_class(
+            net.parameters(), lr=learning_rate, weight_decay=weight_decay, **optimizer_kwargs
+        )
+
+        # Use the dataset's train_loader and test_loader
+        # train_model expects DataLoaders, DataSet has .train_loader and .test_loader
+        # The original train_networks_sequential used dataset.train_loader directly.
+        
+        # Call train_model for the current network
+        # train_model handles its own progress bar for epochs if show_progress is True (implicitly via tqdm in train_loader)
+        # We might want to adjust progress bar descriptions if show_progress is True.
+        # For simplicity, train_model's default progress bar will show.
+        individual_history = train_model(
+            model=net,
+            train_loader=dataset.train_loader,
+            val_loader=dataset.test_loader, # Assuming DataSet provides a test_loader for validation
+            optimizer=optimizer,
+            num_epochs=num_epochs,
+            device=device,
+            checkpoint_dir=None, # Checkpointing handled at a higher level or disabled here
+            return_history=True,
+            callbacks=callbacks # Pass down the callbacks
+        )
+        all_individual_histories.append(individual_history)
+
+    # Aggregate histories: For each epoch, average the metrics from all networks
+    if all_individual_histories:
+        num_epochs_trained = len(all_individual_histories[0]['train_loss']) # Assuming all trained for same epochs
+        for epoch_idx in range(num_epochs_trained):
+            epoch_train_losses = [h['train_loss'][epoch_idx] for h in all_individual_histories if len(h['train_loss']) > epoch_idx]
+            epoch_train_accs = [h['train_accuracy'][epoch_idx] for h in all_individual_histories if len(h['train_accuracy']) > epoch_idx]
+            epoch_val_losses = [h['val_loss'][epoch_idx] for h in all_individual_histories if h.get('val_loss') and len(h['val_loss']) > epoch_idx]
+            epoch_val_accs = [h['val_accuracy'][epoch_idx] for h in all_individual_histories if h.get('val_accuracy') and len(h['val_accuracy']) > epoch_idx]
+
+            if epoch_train_losses: aggregated_history['train_loss'].append(np.mean(epoch_train_losses))
+            if epoch_train_accs: aggregated_history['train_acc'].append(np.mean(epoch_train_accs))
+            if epoch_val_losses: aggregated_history['test_loss'].append(np.mean(epoch_val_losses)) # Renaming to test_loss for consistency
+            if epoch_val_accs: aggregated_history['test_acc'].append(np.mean(epoch_val_accs)) # Renaming to test_acc
+
+        if show_progress and aggregated_history['train_loss']: # Log final aggregated results
+            logger.info(f"Sequential Training Avg (Epoch {num_epochs_trained}/{num_epochs}) - "
+                        f"train_loss: {aggregated_history['train_loss'][-1]:.4f}, train_acc: {aggregated_history['train_acc'][-1]:.2f}%, "
+                        f"test_loss: {aggregated_history['test_loss'][-1]:.4f}, test_acc: {aggregated_history['test_acc'][-1]:.2f}%")
     
-    # Accumulators for averaging metrics over all networks at each epoch
-    epoch_avg_train_losses = []
-    epoch_avg_train_accs = []
-    epoch_avg_test_losses = []
-    epoch_avg_test_accs = []
-
-    for epoch in range(num_epochs):
-        current_epoch_train_losses = []
-        current_epoch_train_accs = []
-        current_epoch_test_losses = []
-        current_epoch_test_accs = []
-
-        net_iter_desc = f"Epoch {epoch+1}/{num_epochs} (Sequential)"
-        net_iter = tqdm(networks, desc=net_iter_desc, leave=False) if show_progress and len(networks) > 1 else networks
-
-        for net in net_iter:
-            _ensure_model_on_device(net, device)
-            optimizer = optimizer_class(
-                net.parameters(), lr=learning_rate, weight_decay=weight_decay, **optimizer_kwargs
-            )
-            net.train()
-            epoch_train_loss_single_net = 0.0
-            epoch_train_correct_single_net = 0
-            epoch_train_total_single_net = 0
-
-            batch_iter_desc = "Training Batches"
-            if len(networks) == 1 and show_progress:
-                 batch_iter_desc = f"Epoch {epoch+1}/{num_epochs} Training"
-            
-            train_loader_iter = tqdm(dataset.train_loader, desc=batch_iter_desc, leave=False) if show_progress else dataset.train_loader
-
-            for inputs, targets in train_loader_iter:
-                inputs, targets = inputs.to(device), targets.to(device)
-                optimizer.zero_grad()
-                outputs = net(inputs)
-                if isinstance(outputs, tuple): outputs = outputs[0]
-                loss_fn = nn.CrossEntropyLoss()
-                loss = loss_fn(outputs, targets)
-                loss.backward()
-                optimizer.step()
-                
-                epoch_train_loss_single_net += loss.item() * inputs.size(0)
-                _, predicted = outputs.max(1)
-                epoch_train_correct_single_net += predicted.eq(targets).sum().item()
-                epoch_train_total_single_net += targets.size(0)
-
-            # Avg loss/acc for this network for this epoch
-            avg_loss_this_net_epoch = epoch_train_loss_single_net / epoch_train_total_single_net
-            avg_acc_this_net_epoch = 100.0 * epoch_train_correct_single_net / epoch_train_total_single_net
-            current_epoch_train_losses.append(avg_loss_this_net_epoch)
-            current_epoch_train_accs.append(avg_acc_this_net_epoch)
-
-            # Evaluate this network on test set
-            test_metrics_single_net = evaluate_on_loader(net, dataset.test_loader, device, show_progress=False)
-            current_epoch_test_losses.append(test_metrics_single_net['loss'])
-            current_epoch_test_accs.append(test_metrics_single_net['accuracy'])
-
-        # Average metrics over all networks for the current epoch
-        history['train_loss'].append(np.mean(current_epoch_train_losses))
-        history['train_acc'].append(np.mean(current_epoch_train_accs))
-        history['test_loss'].append(np.mean(current_epoch_test_losses))
-        history['test_acc'].append(np.mean(current_epoch_test_accs))
-
-        if show_progress:
-            print(f"Epoch {epoch+1}/{num_epochs} (Sequential Avg) - "
-                  f"train_loss: {history['train_loss'][-1]:.4f}, train_acc: {history['train_acc'][-1]:.2f}%, "
-                  f"test_loss: {history['test_loss'][-1]:.4f}, test_acc: {history['test_acc'][-1]:.2f}%")
-            
-    return history
+    return aggregated_history
 
 
 def train_networks(
@@ -970,6 +869,7 @@ def train_networks(
     optimizer_class=torch.optim.Adam,
     weight_decay: float = 0.0,
     training_method: str = "auto",
+    callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
     **optimizer_kwargs
 ) -> Dict[str, List[float]]:
     """
@@ -985,6 +885,7 @@ def train_networks(
         optimizer_class: Optimizer class to use (e.g., torch.optim.Adam)
         weight_decay: Weight decay for optimizer
         training_method: Method for training ('auto', 'sequential', 'fully_tensorized')
+        callbacks: Optional list of callback functions to call at the end of each epoch for each model (primarily for sequential).
         **optimizer_kwargs: Additional arguments to pass to optimizer
         
     Returns:
@@ -1028,6 +929,7 @@ def train_networks(
         "show_progress": show_progress,
         "optimizer_class": optimizer_class,
         "weight_decay": weight_decay,
+        # Callbacks will be passed selectively
         **optimizer_kwargs
     }
 
@@ -1035,19 +937,24 @@ def train_networks(
         if not same_architecture and len(networks) > 1:
             logger.warning("Fully_tensorized training requires all networks to have the same architecture. "
                            "Falling back to sequential training.")
-            return train_networks_sequential(**common_args)
+            return train_networks_sequential(**common_args, callbacks=callbacks)
         try:
             logger.info(f"Using fully_tensorized training for {len(networks)} networks.")
+            # Callbacks are tricky for fully_tensorized if they are model-specific.
+            # For now, train_networks_fully_tensorized does not accept model-specific callbacks.
+            # If general ensemble-level callbacks were needed, its signature would change.
+            if callbacks:
+                logger.warning("Model-specific callbacks are not currently supported with 'fully_tensorized' training method. Callbacks will be ignored.")
             return train_networks_fully_tensorized(**common_args)
         except Exception as e:
             logger.error(f"Fully_tensorized training failed: {str(e)}. Falling back to sequential.", exc_info=True)
-            return train_networks_sequential(**common_args)
+            return train_networks_sequential(**common_args, callbacks=callbacks)
     elif selected_method == "sequential":
         logger.info(f"Using sequential training for {len(networks)} networks.")
-        return train_networks_sequential(**common_args)
+        return train_networks_sequential(**common_args, callbacks=callbacks)
     else:
         logger.warning(f"Unknown training_method: {selected_method}. Defaulting to sequential training.")
-        return train_networks_sequential(**common_args)
+        return train_networks_sequential(**common_args, callbacks=callbacks)
 
 # Ensure the older single-network train_network and test_network functions are distinct
 # if they are still used elsewhere. For now, the dispatcher `train_networks` is the main entry point
