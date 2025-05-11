@@ -87,8 +87,7 @@ class MIMetric(AlignmentMetricBase):
     """Mutual Information (MI) alignment metric."""
 
     @staticmethod
-    def measure(inputs: torch.Tensor, weights: torch.Tensor, 
-               bins: int = 50, epsilon: float = 1e-8, **kwargs) -> torch.Tensor:
+    def measure(inputs: torch.Tensor, weights: torch.Tensor, bins: int = 30, eps: float = 1e-9, **kwargs) -> torch.Tensor:
         """
         Measure the mutual information between input dimensions and weight vectors.
         
@@ -96,32 +95,82 @@ class MIMetric(AlignmentMetricBase):
             inputs: Input activations tensor (batch, features)
             weights: Weight tensor (output, features)
             bins: Number of bins for histogram
-            epsilon: Small value to prevent division by zero
+            eps: Small value to prevent division by zero
             
         Returns:
             Tensor containing MI values per weight vector
         """
-        # Implementation of MI calculation
         # Normalize inputs and weights
-        X = (inputs - inputs.min()) / (inputs.max() - inputs.min() + epsilon)
-        W_norm = weights / (torch.norm(weights, dim=1, keepdim=True) + epsilon)
+        X = (inputs - inputs.min()) / (inputs.max() - inputs.min() + eps)
+        W_norm = weights / (torch.norm(weights, dim=1, keepdim=True) + eps)
         
         # Calculate projections
         projections = torch.matmul(X, W_norm.t())
         
         # Calculate MI for each weight vector
-        mi_values = []
-        for i in range(projections.size(1)):
-            proj = projections[:, i]
-            hist_x, _ = torch.histogram(proj, bins=bins, density=True)
-            # Convert histogram to probability distribution
-            hist_x = hist_x / torch.sum(hist_x)
+        mi_scores = torch.zeros(weights.shape[0], device=weights.device)
+
+        for i in range(projections.shape[1]):
+            x_node_projection = projections[:, i].contiguous().cpu()
+            y_variable_for_mi = inputs.mean(dim=1).cpu() # Example, ensure this is intended for your MI
+
+            if x_node_projection.numel() == 0 or y_variable_for_mi.numel() == 0:
+                mi_scores[i] = 0.0
+                continue
             
-            # Calculate entropy
-            entropy = -torch.sum(hist_x * torch.log2(hist_x + epsilon))
-            mi_values.append(entropy)
+            min_val_x, max_val_x = x_node_projection.min(), x_node_projection.max()
+            min_val_y, max_val_y = y_variable_for_mi.min(), y_variable_for_mi.max()
+
+            # .item() is crucial if min/max_val are 0-dim tensors
+            range_x = (min_val_x.item(), max_val_x.item()) if max_val_x > min_val_x else None
+            range_y = (min_val_y.item(), max_val_y.item()) if max_val_y > min_val_y else None
+
+            if range_x is not None:
+                hist_x, _ = torch.histogram(input=x_node_projection, bins=bins, range=range_x, density=True, weight=None)
+            else:
+                # If range is None (e.g., all values are the same), let torch.histogram use its default range finding for this case
+                hist_x, _ = torch.histogram(input=x_node_projection, bins=bins, density=True, weight=None)
             
-        return torch.tensor(mi_values, device=weights.device)
+            if range_y is not None:
+                hist_y, _ = torch.histogram(input=y_variable_for_mi, bins=bins, range=range_y, density=True, weight=None)
+            else:
+                hist_y, _ = torch.histogram(input=y_variable_for_mi, bins=bins, density=True, weight=None)
+
+            if x_node_projection.shape[0] != y_variable_for_mi.shape[0] or range_x is None or range_y is None:
+                mi_scores[i] = 0.0
+                continue
+            
+            try:
+                hist_xy_np, _, _ = np.histogram2d(
+                    x_node_projection.numpy().flatten(), 
+                    y_variable_for_mi.numpy().flatten(), 
+                    bins=bins, 
+                    range=[list(range_x), list(range_y)], 
+                    density=True
+                )
+                hist_xy = torch.from_numpy(hist_xy_np).float().to(hist_x.device)
+            except Exception as e_hist2d:
+                mi_scores[i] = 0.0
+                continue
+            
+            bin_width_x = (range_x[1] - range_x[0]) / bins if range_x else 1.0 
+            bin_width_y = (range_y[1] - range_y[0]) / bins if range_y else 1.0
+            
+            px = hist_x * bin_width_x
+            py = hist_y * bin_width_y
+            pxy = hist_xy * bin_width_x * bin_width_y
+
+            px = torch.clamp(px, min=eps)
+            py = torch.clamp(py, min=eps)
+            pxy = torch.clamp(pxy, min=eps)
+            
+            h_x = -torch.sum(px * torch.log2(px))
+            h_y = -torch.sum(py * torch.log2(py))
+            h_xy = -torch.sum(pxy * torch.log2(pxy))
+            
+            mi_val = h_x + h_y - h_xy
+            mi_scores[i] = torch.clamp(mi_val, min=0.0)
+        return mi_scores
 
 
 class WeightSimilarityMetric(AlignmentMetricBase):

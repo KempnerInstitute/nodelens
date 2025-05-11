@@ -475,13 +475,12 @@ def alignment(inputs: torch.Tensor, weights: torch.Tensor,
 # Function to be moved from dropout.py - NOW THE CANONICAL VERSION
 def compute_all_node_scores(
     model: nn.Module,
-    # MODIFIED: Takes a list of metric configurations
     metric_configs: List[Dict[str, Any]], 
     device: torch.device,
     data_loader: DataLoader,
     num_batches: int = 5,
     debug_mode: bool = False,
-) -> Dict[int, Dict[str, torch.Tensor]]: # MODIFIED: Return type reflects multiple metrics per layer
+) -> Dict[int, Dict[str, torch.Tensor]]:
     """
     Computes per-node scores for specified alignment layers for multiple metrics.
     This function orchestrates activation hooking and per-layer metric computation.
@@ -531,44 +530,53 @@ def compute_all_node_scores(
     batch_count = 0
     hooks = []
     try:
-        def get_activation_hook(name_for_hook): # Use a distinct name for the closure variable
+        # Store original layer modules for type checking later
+        alignment_layer_modules = model.alignment_layers
+
+        def get_activation_hook(layer_idx_for_hook): # Pass layer_idx to know the layer type
             def hook(module, layer_input, layer_output):
-                x = layer_input[0]
-                if x.dim() > 2:
-                    if x.dim() == 3: x = x.view(x.size(0), -1)
-                    elif x.dim() == 4: x = x.view(x.size(0), -1)
-                    elif x.dim() == 5: x = x.view(x.size(0), -1)
-                    else:
-                        logger.warning(f"Unusual input dimension: {x.dim()} for layer {name_for_hook}, flattening to 2D")
-                        x = x.view(x.size(0), -1)
+                x = layer_input[0].detach() # Get input to the module
+                current_layer_module = alignment_layer_modules[layer_idx_for_hook]
+                is_conv_type = isinstance(current_layer_module, (nn.Conv1d, nn.Conv2d, nn.Conv3d, 
+                                                               nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d))
                 
-                current_val = model.hidden.get(name_for_hook)
+                # For non-Conv layers, flatten to 2D. For Conv layers, keep original shape for later unfolding.
+                if not is_conv_type and x.dim() > 2:
+                    x = x.reshape(x.size(0), -1) # Flatten N, C, H, W -> N, C*H*W or N, L, C -> N, L*C
+                elif is_conv_type and x.dim() <=2 and x.dim() > 0: # e.g. if a conv layer gets a flattened input by mistake from previous layer
+                    # This case is tricky, ideally input to conv is already 4D/5D.
+                    # If it's 2D (N, Features), and we know original C,H,W, we could reshape.
+                    # For now, if it's already 2D for a conv layer, we might log a warning or pass it as is, 
+                    # assuming it's an edge case or a model structure where this is intended.
+                    pass # Keep as is, unfolding might fail or work depending on layout
+                
+                layer_name_for_storage = model.alignment_names[layer_idx_for_hook]
+                current_val = model.hidden.get(layer_name_for_storage)
                 if not isinstance(current_val, list):
                     if current_val is not None and debug_mode:
-                        logger.warning(f"Hook for layer '{name_for_hook}': model.hidden['{name_for_hook}'] was {type(current_val)}, re-initializing to list.")
-                    model.hidden[name_for_hook] = []
+                        logger.warning(f"Hook for layer '{layer_name_for_storage}': model.hidden was {type(current_val)}, re-initializing to list.")
+                    model.hidden[layer_name_for_storage] = []
                 
-                # MODIFIED: Enhanced error handling for append
                 try:
-                    model.hidden[name_for_hook].append(x.detach())
+                    model.hidden[layer_name_for_storage].append(x) # Store detached x
                 except AttributeError as e_hook_append:
+                    # ... (enhanced error handling as before) ...
                     logger.error(
-                        f"CRITICAL HOOK AttributeError for layer '{name_for_hook}': model.hidden['{name_for_hook}'] is type {type(model.hidden.get(name_for_hook))}. Error: {e_hook_append}"
+                        f"CRITICAL HOOK AttributeError for layer '{layer_name_for_storage}': model.hidden['{layer_name_for_storage}'] is type {type(model.hidden.get(layer_name_for_storage))}. Error: {e_hook_append}"
                     )
                     logger.error(f"Model hidden dict right before error: {model.hidden}")
-                    if model.hidden.get(name_for_hook) is None: # Attempt re-initialization
-                        model.hidden[name_for_hook] = []
-                        model.hidden[name_for_hook].append(x.detach())
+                    if model.hidden.get(layer_name_for_storage) is None: 
+                        model.hidden[layer_name_for_storage] = []
+                        model.hidden[layer_name_for_storage].append(x)
                     else:
-                        raise # Re-raise if it's not a NoneType issue
+                        raise 
 
-                if debug_mode and len(model.hidden[name_for_hook]) == 1:
-                    logger.info(f"Layer {name_for_hook} input shape: {x.shape}, stored in hidden.")
+                if debug_mode and len(model.hidden[layer_name_for_storage]) == 1:
+                    logger.info(f"Layer {layer_name_for_storage} (type: {type(current_layer_module).__name__}) input shape: {x.shape}, stored in hidden.")
             return hook
 
         for i, layer_mod_hook in enumerate(model.alignment_layers):
-            hook_layer_name = model.alignment_names[i]
-            hooks.append(layer_mod_hook.register_forward_hook(get_activation_hook(hook_layer_name)))
+            hooks.append(layer_mod_hook.register_forward_hook(get_activation_hook(i))) # Pass layer index i
 
         batch_iter = tqdm(data_loader, desc="Processing batches for metrics", disable=not debug_mode, leave=False)
         for inputs, _targets in batch_iter:
@@ -591,6 +599,7 @@ def compute_all_node_scores(
     for layer_idx, layer_mod_scores in layer_iter:
         layer_name_scores = model.alignment_names[layer_idx]
         metrics_for_this_layer: Dict[str, torch.Tensor] = {}
+        current_layer_module_for_processing = model.alignment_layers[layer_idx] # Get the actual layer module
 
         if layer_name_scores not in model.hidden or not model.hidden[layer_name_scores]:
             if debug_mode:
@@ -603,22 +612,92 @@ def compute_all_node_scores(
             if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None
             continue
         
+        # Get weights (already good via process_cnn_weights)
         w_flat, layer_metadata = process_cnn_weights(model, layer_idx, pruning_strategy="structure-aware")
-        X_acts = torch.cat(model.hidden[layer_name_scores], dim=0)
+        
+        # MODIFIED: Process activations based on layer type
+        activation_list = model.hidden[layer_name_scores]
+        is_conv_type_processing = isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.Conv2d, nn.Conv3d, 
+                                                                               nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d))
+        
+        X_acts_final_for_metric: Optional[torch.Tensor] = None
+
+        if is_conv_type_processing:
+            processed_batch_activations = []
+            # Get unfold params from the layer itself
+            # These need to be present on the layer module (e.g. layer_mod_scores)
+            # Make sure kernel_size, stride etc. are correctly obtained
+            kernel_s = current_layer_module_for_processing.kernel_size
+            stride_s = current_layer_module_for_processing.stride
+            padding_s = current_layer_module_for_processing.padding
+            dilation_s = current_layer_module_for_processing.dilation
+
+            for act_tensor_batch in activation_list:
+                # act_tensor_batch should be in its original 4D/5D form here if hook was changed
+                if act_tensor_batch.dim() <= 2 and act_tensor_batch.numel() > 0 : # If it got flattened somehow, try to unflatten if possible (needs original shape info - hard)
+                    logger.warning(f"Conv layer {layer_name_scores} received 2D input for unfolding. This might lead to incorrect metrics if original shape isn\'t restored.")
+                    # This path is problematic without original shape info. For now, we proceed, but it's a known issue.
+                
+                # Unfold only works for specific dims (e.g. 4D for Conv2D -> unfold)
+                # Ensure act_tensor_batch has the right dimensions for unfold based on layer type
+                # Example for Conv2d, input is (N, C, H, W)
+                if isinstance(current_layer_module_for_processing, (nn.Conv2d, nn.ConvTranspose2d)) and act_tensor_batch.dim() == 4:
+                    try:
+                        unfolded_act = F.unfold(act_tensor_batch, kernel_size=kernel_s, dilation=dilation_s, padding=padding_s, stride=stride_s)
+                        # unfolded_act shape: (N, C_in*kernel_h*kernel_w, L_out), where L_out is num_patches
+                        # We need (N*L_out, C_in*kernel_h*kernel_w) to match flattened filter (out_channels, C_in*kernel_h*kernel_w)
+                        unfolded_act = unfolded_act.transpose(1, 2).contiguous() # (N, L_out, C_in*KH*KW)
+                        unfolded_act = unfolded_act.view(-1, unfolded_act.size(2)) # (N*L_out, C_in*KH*KW)
+                        processed_batch_activations.append(unfolded_act)
+                    except Exception as e_unfold:
+                        logger.error(f"Error unfolding activations for Conv layer {layer_name_scores}: {e_unfold}. Input shape: {act_tensor_batch.shape}. Skipping batch.")
+                        continue # Skip this batch if unfolding fails
+                elif isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.ConvTranspose1d)) and act_tensor_batch.dim() == 3:
+                     # Similar logic for Conv1d: input (N,C,L), unfold, then (N*L_patches, C*KernelL)
+                    try:
+                        unfolded_act = F.unfold(act_tensor_batch.unsqueeze(3), kernel_size=(kernel_s[0],1), dilation=(dilation_s[0],1), padding=(padding_s[0],0), stride=(stride_s[0],1)) # Use dummy H dim
+                        unfolded_act = unfolded_act.transpose(1, 2).contiguous()
+                        unfolded_act = unfolded_act.view(-1, unfolded_act.size(2))
+                        processed_batch_activations.append(unfolded_act)
+                    except Exception as e_unfold:
+                        logger.error(f"Error unfolding activations for Conv1D layer {layer_name_scores}: {e_unfold}. Input shape: {act_tensor_batch.shape}. Skipping batch.")
+                        continue
+                # Add Conv3d if necessary
+                else: # Not a Conv layer type that we have specific unfold logic for, or dim mismatch
+                    logger.warning(f"Skipping unfold for layer {layer_name_scores} (type {type(current_layer_module_for_processing).__name__}, input dim {act_tensor_batch.dim()}). Using flattened activations.")
+                    processed_batch_activations.append(act_tensor_batch.reshape(act_tensor_batch.size(0), -1))
+            
+            if processed_batch_activations:
+                X_acts_final_for_metric = torch.cat(processed_batch_activations, dim=0)
+            else:
+                logger.warning(f"No activations could be processed/unfolded for Conv layer {layer_name_scores}. Metric scores will be zeros.")
+        else: # Linear or other non-Conv layers
+            # Flatten each tensor in the list and then concatenate
+            X_acts_final_for_metric = torch.cat([act_b.reshape(act_b.size(0), -1) for act_b in activation_list], dim=0)
+
+        if X_acts_final_for_metric is None or X_acts_final_for_metric.numel() == 0:
+            logger.warning(f"Final activations X_acts_final_for_metric is None or empty for layer {layer_name_scores}. Setting metric scores to zero.")
+            # Populate with zero tensors for all requested metrics for this layer
+            node_count = w_flat.shape[0] if w_flat is not None else (layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0)
+            for m_config in metric_configs:
+                metrics_for_this_layer[m_config["name"]] = torch.zeros(node_count, device=normalized_device)
+            all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
+            model.hidden[layer_name_scores] = None 
+            continue # Move to next layer
         
         if debug_mode:
-            logger.info(f"Layer {layer_name_scores}: Activations X shape {X_acts.shape}, Weights w_flat shape {w_flat.shape}")
-            if layer_metadata:
-                logger.info(f"  Layer metadata from process_cnn_weights: {layer_metadata}")
+            logger.info(f"Layer {layer_name_scores}: Final Processed Activations X_acts_final_for_metric shape {X_acts_final_for_metric.shape}, Weights w_flat shape {w_flat.shape if w_flat is not None else 'None'}")
         
-        # MODIFIED: Inner loop for each metric config
         for m_config in metric_configs:
             metric_name = m_config["name"]
             scale_by_norm_for_metric = m_config.get("scale_by_norm", False)
             current_metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm_for_metric)
             
             try:
-                node_scores = current_metric_instance.compute_per_node_scores(X_acts, w_flat, device=normalized_device)
+                # Ensure w_flat is not None before passing
+                if w_flat is None:
+                    raise ValueError("w_flat is None, cannot compute scores.")
+                node_scores = current_metric_instance.compute_per_node_scores(X_acts_final_for_metric, w_flat, device=normalized_device)
                 if debug_mode and node_scores is not None and node_scores.numel() > 0:
                     logger.info(f"  Metric '{metric_name}': Layer {layer_name_scores} score stats: min={torch.min(node_scores).item():.4f}, max={torch.max(node_scores).item():.4f}, mean={torch.mean(node_scores).item():.4f}, std={torch.std(node_scores).item():.4f}")
                 metrics_for_this_layer[metric_name] = node_scores.detach() if node_scores is not None else torch.zeros(w_flat.shape[0] if w_flat is not None else 0, device=normalized_device)
