@@ -281,7 +281,8 @@ def train_model(
     checkpoint_dir: Optional[str] = None,
     checkpoint_freq: int = 1,
     return_history: bool = False,
-    callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None
+    callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
+    dataset_config_for_eval: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Train a neural network model.
@@ -298,6 +299,7 @@ def train_model(
         return_history: Whether to return training history
         callbacks: Optional list of callback functions to call at the end of each epoch. 
                    Each callback will receive a dictionary with epoch context.
+        dataset_config_for_eval: Optional dataset configuration for the validation loader.
         
     Returns:
         Dictionary containing training metrics and results
@@ -372,7 +374,7 @@ def train_model(
         if val_loader is not None:
             val_results = evaluate_model(
                 model=model,
-                dataset_config=None,
+                dataset_config=dataset_config_for_eval,
                 device=device
             )
             
@@ -833,7 +835,8 @@ def train_networks_sequential(
             device=device,
             checkpoint_dir=None, # Checkpointing handled at a higher level or disabled here
             return_history=True,
-            callbacks=callbacks # Pass down the callbacks
+            callbacks=callbacks, # Pass down the callbacks
+            dataset_config_for_eval=dataset.config_object # MODIFIED: Use dataset.config_object
         )
         all_individual_histories.append(individual_history)
 

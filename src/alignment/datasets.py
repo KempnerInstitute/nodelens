@@ -60,10 +60,12 @@ class DataSet(ABC):
         dataset_parameters={},
         transform_parameters={},
         loader_parameters={},
+        config_object: Optional[Any] = None
     ):
         self.set_properties()
         self.check_properties()
 
+        self.config_object = config_object
         self.device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
         self.distributed = distributed
 
@@ -384,6 +386,7 @@ def get_dataset(
     dataset_parameters={},
     transform_parameters={},
     loader_parameters={},
+    config_object: Optional[Any] = None,
     **kwargs,
 ):
     """
@@ -395,6 +398,7 @@ def get_dataset(
         dataset_parameters: Parameters to pass to the dataset constructor
         transform_parameters: Parameters for transforms
         loader_parameters: Parameters for data loaders
+        config_object: Configuration object for the dataset
         **kwargs: Additional arguments for dataset
         
     Returns:
@@ -406,12 +410,14 @@ def get_dataset(
     if build:
         if not isinstance(transform_parameters, dict):
             raise TypeError("transform_parameters must be a dictionary")
-        return dataset(
-            dataset_parameters=dataset_parameters,
-            transform_parameters=transform_parameters,
-            loader_parameters=loader_parameters,
-            **kwargs,
-        )
+        final_kwargs = kwargs.copy()
+        final_kwargs.update({
+            'dataset_parameters': dataset_parameters,
+            'transform_parameters': transform_parameters,
+            'loader_parameters': loader_parameters,
+            'config_object': config_object
+        })
+        return dataset(**final_kwargs)
     return dataset
 
 
@@ -480,7 +486,8 @@ def load_dataset(
         dataset_parameters={'root': dataset_path, 'download': True},
         transform_parameters=transform_params,
         loader_parameters=loader_params,
-        device=device
+        device=device,
+        config_object=dataset_config
     )
     
     # Log at debug level instead of info to reduce console output

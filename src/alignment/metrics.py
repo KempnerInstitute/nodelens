@@ -29,7 +29,7 @@ from alignment.utils.metrics_utils import (
 )
 
 # If these utils are used by the moved function, ensure they are accessible
-from alignment.utils.model_utils import _normalize_device, _ensure_model_on_device, _flatten_layer_weights_for_node
+from alignment.utils.model_utils import _normalize_device, _ensure_model_on_device, _flatten_layer_weights_for_node, process_cnn_weights
 
 logger = logging.getLogger(__name__)
 
@@ -516,7 +516,6 @@ def compute_all_node_scores(
             else:
                  logger.info(f"Layer {i}: {layer_name} - {type(layer_mod).__name__} - No weight attribute or weight is None")
 
-
     if not hasattr(model, "hidden"):
         model.hidden = {}
     else: # Clear any stale hidden states from previous calls or other uses
@@ -539,10 +538,23 @@ def compute_all_node_scores(
                 current_val = model.hidden.get(name_for_hook)
                 if not isinstance(current_val, list):
                     if current_val is not None and debug_mode:
-                        logger.warning(f"Hook for layer '{name_for_hook}': model.hidden was {type(current_val)}, re-initializing to list.")
+                        logger.warning(f"Hook for layer '{name_for_hook}': model.hidden['{name_for_hook}'] was {type(current_val)}, re-initializing to list.")
                     model.hidden[name_for_hook] = []
                 
-                model.hidden[name_for_hook].append(x.detach())
+                # MODIFIED: Enhanced error handling for append
+                try:
+                    model.hidden[name_for_hook].append(x.detach())
+                except AttributeError as e_hook_append:
+                    logger.error(
+                        f"CRITICAL HOOK AttributeError for layer '{name_for_hook}': model.hidden['{name_for_hook}'] is type {type(model.hidden.get(name_for_hook))}. Error: {e_hook_append}"
+                    )
+                    logger.error(f"Model hidden dict right before error: {model.hidden}")
+                    if model.hidden.get(name_for_hook) is None: # Attempt re-initialization
+                        model.hidden[name_for_hook] = []
+                        model.hidden[name_for_hook].append(x.detach())
+                    else:
+                        raise # Re-raise if it's not a NoneType issue
+
                 if debug_mode and len(model.hidden[name_for_hook]) == 1:
                     logger.info(f"Layer {name_for_hook} input shape: {x.shape}, stored in hidden.")
             return hook
@@ -579,21 +591,28 @@ def compute_all_node_scores(
             if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None
             continue
         
-        w_flat = _flatten_layer_weights_for_node(layer_mod_scores)
+        # MODIFIED: Use process_cnn_weights
+        # Assuming pruning_strategy="structure-aware" is a reasonable default for general metric calculation context.
+        # This might need to become a parameter if different strategies are needed for metric calculation itself.
+        w_flat, layer_metadata = process_cnn_weights(model, layer_idx, pruning_strategy="structure-aware")
         X_acts = torch.cat(model.hidden[layer_name_scores], dim=0)
         
         if debug_mode:
             logger.info(f"Layer {layer_name_scores}: Activations X shape {X_acts.shape}, Weights w_flat shape {w_flat.shape}")
+            if layer_metadata:
+                logger.info(f"  Layer metadata from process_cnn_weights: {layer_metadata}") # Log metadata
             
         try:
             node_scores = metric_instance.compute_per_node_scores(X_acts, w_flat, device=normalized_device)
             if debug_mode and node_scores is not None and node_scores.numel() > 0:
                 logger.info(f"Layer {layer_name_scores} score stats: min={torch.min(node_scores).item():.4f}, max={torch.max(node_scores).item():.4f}, mean={torch.mean(node_scores).item():.4f}, std={torch.std(node_scores).item():.4f}")
-            scores_per_layer[layer_idx] = node_scores.detach() if node_scores is not None else torch.zeros(w_flat.shape[0], device=normalized_device)
+            scores_per_layer[layer_idx] = node_scores.detach() if node_scores is not None else torch.zeros(w_flat.shape[0] if w_flat is not None else 0, device=normalized_device)
         except Exception as e_comp:
             logger.error(f"Error computing scores for layer {layer_name_scores}: {e_comp}", exc_info=debug_mode)
             node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
-            scores_per_layer[layer_idx] = torch.zeros(node_count, device=normalized_device)
+            # Check if w_flat was successfully created before trying to access its shape for zeros fallback
+            fallback_zeros_shape = w_flat.shape[0] if w_flat is not None and hasattr(w_flat, 'shape') else node_count
+            scores_per_layer[layer_idx] = torch.zeros(fallback_zeros_shape, device=normalized_device)
         
         model.hidden[layer_name_scores] = None # Cleanup specific layer hidden data
     
