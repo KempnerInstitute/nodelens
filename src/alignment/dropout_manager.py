@@ -16,7 +16,7 @@ import torch.nn as nn
 from tqdm import tqdm
 import random
 
-from alignment.metrics import AlignmentMetric
+from alignment.metrics import AlignmentMetric, compute_all_node_scores
 from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _compute_metric_for_all_nodes, _create_mask_from_indices, _evaluate_model_accuracy, _ensure_model_on_device
 from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader
 
@@ -27,12 +27,13 @@ def run_progressive_dropout_experiment(
     networks: List[nn.Module],
     dataset,
     dropout_fractions: List[float],
-    metric,
+    metric_instance: AlignmentMetric,
     device="cuda",
     pruning_mode: str = "global_joint",
     dropout_mode: str = "scaled",
     show_progress: bool = True,
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    exclude_classification_layer_config: bool = True
 ) -> Dict:
     """
     Run progressive dropout experiment on multiple networks with multiple strategies.
@@ -41,83 +42,173 @@ def run_progressive_dropout_experiment(
         networks: List of networks to evaluate
         dataset: Dataset object
         dropout_fractions: List of dropout fractions to test
-        metric: Alignment metric to use
+        metric_instance: Alignment metric to use
         device: Device to run on
         pruning_mode: Pruning mode to use
         dropout_mode: Dropout mode to use
         show_progress: Whether to show progress bars
         debug_mode: Whether to print additional debug information
+        exclude_classification_layer_config: Whether to exclude the classification layer from the experiment
         
     Returns:
         Dictionary with dropout experiment results
     """
-    # Normalize device
     device = _normalize_device(device)
-    
     results = {
         "dropout_fractions": dropout_fractions,
         "accuracies": {"high_rq": [], "low_rq": [], "random": []},
         "losses": {"high_rq": [], "low_rq": [], "random": []},
-        "stds": {"high_rq": [], "low_rq": [], "random": []}
+        "stds": {"high_rq": [], "low_rq": [], "random": []},
+        "pruning_details": {st: {} for st in ["high_rq", "low_rq", "random"]},
+        "pre_pruning_layer_stats": {}
     }
+
+    if not networks:
+        logger.warning("No networks provided to run_progressive_dropout_experiment.")
+        return results
+
+    # --- Pre-compute scores and indices for ALL networks ONCE --- 
+    all_networks_scores_by_layer_list = []
+    all_networks_ascend_indices_list = []
+    all_networks_descend_indices_list = []
+    all_networks_random_indices_list = []
     
+    pre_pruning_stats_accumulator = {}
+
+    logger.info(f"Pre-computing scores & indices for {len(networks)} network replicates.")
+    for net_idx, net_rep in enumerate(tqdm(networks, desc="Preparing Network Metrics", disable=not show_progress)):
+        _ensure_model_on_device(net_rep, device)
+        net_rep.eval()
+        
+        current_net_scores = compute_all_node_scores(
+            model=net_rep, 
+            metric_instance=metric_instance, 
+            device=device, 
+            data_loader=dataset.test_loader,
+            num_batches=5, # Consider making this configurable
+            debug_mode=debug_mode
+        )
+        all_networks_scores_by_layer_list.append(current_net_scores)
+
+        asc_indices, desc_indices, rand_indices = {}, {}, {}
+        for l_idx, scores_tensor in current_net_scores.items():
+            count = scores_tensor.shape[0]
+            asc_indices[l_idx] = torch.argsort(scores_tensor, descending=False)
+            desc_indices[l_idx] = torch.argsort(scores_tensor, descending=True)
+            all_layer_node_indices = list(range(count))
+            random.shuffle(all_layer_node_indices)
+            rand_indices[l_idx] = torch.tensor(all_layer_node_indices, device=device, dtype=torch.long)
+            
+            if l_idx not in pre_pruning_stats_accumulator:
+                pre_pruning_stats_accumulator[l_idx] = {"means": [], "stds": []}
+            pre_pruning_stats_accumulator[l_idx]["means"].append(torch.mean(scores_tensor).item())
+            pre_pruning_stats_accumulator[l_idx]["stds"].append(torch.std(scores_tensor).item())
+
+        all_networks_ascend_indices_list.append(asc_indices)
+        all_networks_descend_indices_list.append(desc_indices)
+        all_networks_random_indices_list.append(rand_indices)
+
+    for l_idx, stats_lists in pre_pruning_stats_accumulator.items():
+        results["pre_pruning_layer_stats"][l_idx] = {
+            "avg_mean_rq": np.mean(stats_lists["means"]) if stats_lists["means"] else np.nan,
+            "avg_std_rq": np.mean(stats_lists["stds"]) if stats_lists["stds"] else np.nan
+        }
+    # --- End of Pre-computation --- 
+
     try:
         strategies = ["high_rq", "low_rq", "random"]
-        strategy_pbar = tqdm(strategies, desc="Pruning strategies", position=0) if show_progress else strategies
+        strategy_pbar = tqdm(strategies, desc="Processing Strategies", position=0, disable=not show_progress)
         
-        for strategy in strategy_pbar:
-            if show_progress:
-                strategy_pbar.set_description(f"Strategy: {strategy}")
-            
-            strategy_networks = [copy.deepcopy(net) for net in networks]
-            
-            if debug_mode:
-                logger.info(f"Running progressive_dropout with strategy={strategy}, pruning_mode={pruning_mode}, dropout_mode={dropout_mode}")
-            
-            network_accuracies, network_losses = progressive_dropout(
-                strategy_networks,
-                dataset,
-                dropout_fractions,
-                metric,
-                device,
-                pruning_mode=pruning_mode,
-                dropout_mode=dropout_mode,
-                strategy=strategy,
-                show_progress=show_progress,
-                debug_mode=debug_mode
-            )
-            
-            fraction_accs = [[] for _ in range(len(dropout_fractions))]
-            fraction_losses = [[] for _ in range(len(dropout_fractions))]
-            
-            for net_idx in network_accuracies:
-                for frac_idx, acc in enumerate(network_accuracies[net_idx]):
-                    if frac_idx < len(fraction_accs):
-                        fraction_accs[frac_idx].append(acc)
-                for frac_idx, loss in enumerate(network_losses[net_idx]):
-                    if frac_idx < len(fraction_losses):
-                        fraction_losses[frac_idx].append(loss)
-            
-            for frac_idx in range(len(dropout_fractions)):
-                if fraction_accs[frac_idx]:
-                    mean_acc = np.mean(fraction_accs[frac_idx])
-                    std_acc = np.std(fraction_accs[frac_idx])
-                    mean_loss = np.mean(fraction_losses[frac_idx]) if fraction_losses[frac_idx] else 0.0
-                    
-                    results["accuracies"][strategy].append(mean_acc)
-                    results["stds"][strategy].append(std_acc)
-                    results["losses"][strategy].append(mean_loss)
-                    
-                    if debug_mode:
-                        logger.info(f"  {strategy}, fraction={dropout_fractions[frac_idx]:.2f}: "
-                                   f"acc={mean_acc:.2f}±{std_acc:.2f}%, loss={mean_loss:.2f}")
-            
-            if show_progress:
-                last_acc = results["accuracies"][strategy][-1] if results["accuracies"][strategy] else 0
-                strategy_pbar.set_postfix({"final_acc": f"{last_acc:.2f}%"})
-        
+        # If AlignmentExperiment.use_multi_strategy_dropout is True, we can call progressive_dropout ONCE.
+        # Otherwise, we loop here and call it per strategy.
+        # The `use_multi_strategy_dropout` flag is in AlignmentConfig, read by AlignmentExperiment.
+        # This manager function should ideally receive that flag or be simplified.
+        # For now, let's assume this manager is called when multi-strategy is DESIRED for the overall experiment.
+        # So, call progressive_dropout ONCE with use_multi_strategy=True.
+
+        # Create deep copies of original networks to pass to progressive_dropout, 
+        # as progressive_dropout will modify them (or its own copies).
+        networks_for_pruning = [copy.deepcopy(net) for net in networks]
+        for net in networks_for_pruning: # Ensure copies are on device
+            _ensure_model_on_device(net, device)
+
+        logger.info("Calling progressive_dropout with use_multi_strategy=True for all strategies.")
+        accuracies_all_strategies, losses_all_strategies, details_all_strategies = progressive_dropout(
+            networks_for_pruning, # Pass copies
+            all_networks_scores_by_layer_list,
+            all_networks_ascend_indices_list,
+            all_networks_descend_indices_list,
+            all_networks_random_indices_list,
+            dataset=dataset,
+            dropout_fractions=dropout_fractions,
+            device=device,
+            pruning_mode=pruning_mode,
+            dropout_mode=dropout_mode,
+            strategy='high_rq', # strategy arg ignored if use_multi_strategy=True
+            show_progress=show_progress, 
+            use_multi_strategy=True, # Key change: leverage multi-strategy path in progressive_dropout
+            debug_mode=debug_mode,
+            exclude_classification_layer_config=exclude_classification_layer_config
+        )
+
+        # `accuracies_all_strategies` is {strategy: {net_idx: [values_for_each_dropout_fraction]}}
+        # `details_all_strategies` is {strategy: {net_idx: {frac_idx_pruned: layer_info}}}
+        results["pruning_details"] = details_all_strategies
+
+        num_fractions_total = len(dropout_fractions) # This includes the baseline 0.0
+
+        for strategy_key in strategies: # strategies = ["high_rq", "low_rq", "random"]
+            if strategy_key in accuracies_all_strategies:
+                # This dict contains {net_idx: [acc_baseline, acc_frac1, acc_frac2, ...]}
+                accs_per_net_for_this_strategy = accuracies_all_strategies[strategy_key]
+                
+                # Initialize lists for mean/std accuracies for this strategy for each fraction
+                mean_accuracies_for_strategy = []
+                std_accuracies_for_strategy = []
+
+                for frac_idx_overall in range(num_fractions_total):
+                    # For this specific fraction index, gather accuracies from all network replicates
+                    accuracies_this_frac_all_replicates = []
+                    for net_idx_rep in range(len(networks)): # Iterate 0 to num_replicates-1
+                        if net_idx_rep in accs_per_net_for_this_strategy and \
+                           len(accs_per_net_for_this_strategy[net_idx_rep]) > frac_idx_overall:
+                            accuracies_this_frac_all_replicates.append(accs_per_net_for_this_strategy[net_idx_rep][frac_idx_overall])
+                        else:
+                            # This case (missing data for a specific net/fraction) should ideally not happen 
+                            # if progressive_dropout populates results for all nets and all fractions (incl. baseline).
+                            # Adding NaN allows np.nanmean/np.nanstd to work gracefully.
+                            accuracies_this_frac_all_replicates.append(np.nan)
+                            if debug_mode:
+                                logger.warning(f"Missing accuracy data for strategy '{strategy_key}', net {net_idx_rep}, fraction_idx {frac_idx_overall}")
+
+                    if accuracies_this_frac_all_replicates:
+                        mean_acc = np.nanmean(accuracies_this_frac_all_replicates)
+                        std_acc = np.nanstd(accuracies_this_frac_all_replicates)
+                        mean_accuracies_for_strategy.append(mean_acc)
+                        std_accuracies_for_strategy.append(std_acc)
+                        
+                        # Optional: Log losses similarly if losses_all_strategies is processed
+                        # For now, focusing on accuracies and stds as per original results structure.
+                        if debug_mode:
+                            actual_frac_val_log = dropout_fractions[frac_idx_overall]
+                            logger.info(f"  Aggregated for {strategy_key}, fraction={actual_frac_val_log:.2f}: "
+                                       f"acc={mean_acc:.2f} ± {std_acc:.2f}%")
+                    else:
+                        # All replicates had missing data for this fraction (highly unlikely for baseline)
+                        mean_accuracies_for_strategy.append(np.nan)
+                        std_accuracies_for_strategy.append(np.nan)
+                
+                results["accuracies"][strategy_key] = mean_accuracies_for_strategy
+                results["stds"][strategy_key] = std_accuracies_for_strategy
+                # results["losses"][strategy_key] would be populated similarly if losses are tracked
+
+            else:
+                logger.warning(f"Strategy {strategy_key} not found in progressive_dropout results. Filling with NaNs.")
+                results["accuracies"][strategy_key] = [np.nan] * num_fractions_total
+                results["stds"][strategy_key] = [np.nan] * num_fractions_total
+
     except Exception as e:
-        logger.error(f"Error running progressive dropout: {str(e)}")
+        logger.error(f"Error in run_progressive_dropout_experiment: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         results["error"] = str(e)

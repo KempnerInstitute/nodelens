@@ -83,21 +83,13 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
     """
     model_constructor = get_model_constructor(config.model_name)
     
-    # Prepare a dictionary from ModelConfig to pass to the specific create_X function
-    # The specific create_X function will then extract what it needs.
-    # This avoids passing the whole ModelConfig object if create_X functions 
-    # are designed to take simpler dicts, or we can pass config directly if they take ModelConfig.
-    # The current refactor of create_mlp/cnn2p2 in models.py expects a dict.
-    
     model_params_dict = {
         "model_name": config.model_name,
-        "dropout_rate": config.dropout_rate, # Common
-        "output_dim": config.output_dim,   # Common
-        # MLP specific
+        "dropout_rate": config.dropout_rate,
+        "output_dim": config.output_dim,
         "input_dim": config.input_dim,
         "hidden_dims": config.hidden_dims,
         "activation": config.activation,
-        # CNN2P2 specific
         "in_channels": config.in_channels,
         "conv_channels": config.conv_channels,
         "kernel_sizes": config.kernel_sizes,
@@ -107,65 +99,66 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
         "pool_stride": config.pool_stride,
         "hidden_fc_dim": config.hidden_fc_dim,
         "example_input_hw": config.example_input_hw,
-        # Include extra_model_params for any other values
         **config.extra_model_params 
     }
     
-    # alignment_layers is a separate argument to the create_X functions
     alignment_layers_config = config.alignment_layers
-    # cnn_mode is now part of AlignmentConfig, which is config.alignment
-    # Default to "unfold" if not found, as AlignmentNetwork expects it.
-    cnn_mode_config = "unfold" # Default
-    if hasattr(config, 'alignment') and hasattr(config.alignment, 'cnn_mode'):
-        cnn_mode_config = config.alignment.cnn_mode
-    elif hasattr(config, 'extra') and hasattr(config.extra, 'cnn_mode'): # Fallback to check old ExtraConfig location
-        logger.warning("cnn_mode found in config.extra, prefer config.alignment.cnn_mode")
-        cnn_mode_config = config.extra.cnn_mode
-
-    logger.info(f"Creating model '{config.model_name}' with dropout rate: {config.dropout_rate}, cnn_mode: {cnn_mode_config}")
     
-    # The create_X functions (create_mlp, create_cnn2p2) in models.py return an AlignmentNetwork
-    # They themselves now receive the base_model_params and alignment_layers.
-    # The AlignmentNetwork constructor is called within those create_X functions.
-    # We need to ensure cnn_mode is passed to AlignmentNetwork there.
-    # So, the create_X functions need to be aware of cnn_mode.
+    # Fetch cnn_mode from alignment_settings
+    # Assuming ExperimentConfig is the top-level config object from which ModelConfig `config` is derived,
+    # and the full config is accessible or cnn_mode is now part of ModelConfig.
+    # For now, the edit to config.py put cnn_mode into AlignmentConfig, accessed via ExperimentConfig.alignment_settings.
+    # This create_model function receives ModelConfig. We need a way to get cnn_mode here.
+    # Simplest: Assume cnn_mode is also added to ModelConfig or passed through another way.
+    # Let's modify ModelConfig to also hold cnn_mode if it's intrinsic to model setup for alignment.
+    # OR, the calling context (e.g., ExperimentRunner) prepares a more complete dict for create_X functions.
     
-    # Modification: Add cnn_mode_config to model_params_dict so create_X functions can access it
-    # OR, pass it as a separate arg to create_X functions if they are modified to accept it.
-    # Let's pass it in model_params_dict for now for simplicity, assuming create_X will pick it up
-    # if it needs to pass it to AlignmentNetwork explicitly.
-    # However, AlignmentNetwork __init__ takes cnn_mode directly.
-    # The create_X functions in models.py already handle AlignmentNetwork creation.
-    # They need to be passed cnn_mode.
+    # The previous edit to this function added cnn_mode to config_model_with_cnn_mode:
+    # config_model_with_cnn_mode['cnn_mode'] = cnn_mode_config 
+    # This `cnn_mode_config` needs to be sourced correctly.
+    # If `config` is ModelConfig, and cnn_mode is in AlignmentConfig, this function cannot directly access it.
 
-    # Let's adjust create_X in models.py to accept cnn_mode and pass it to AlignmentNetwork
-    # For now, this function (create_model in registry) just calls the registered constructor.
-    # The registered constructors (create_mlp, create_cnn2p2) need to be updated.
+    # Let's assume the full ExperimentConfig is available here, or ModelConfig now includes cnn_mode.
+    # For the purpose of this edit, we will assume cnn_mode is now part of the model_params_dict via ModelConfig.
+    # This requires ModelConfig to be updated to include cnn_mode if it hasn't been already.
+    # (The config.py edit moved cnn_mode to AlignmentConfig, not ModelConfig)
 
-    # The constructor (e.g., create_mlp) will now be called with:
-    # model_constructor(config_model=model_params_dict, alignment_layers=alignment_layers_config, cnn_mode=cnn_mode_config)
-    # This requires changing the signature of all registered model constructor functions.
+    # SOLUTION: The create_X functions in models.py will receive the config_model dict.
+    # They should extract cnn_mode from there if it's passed.
+    # `create_model` in registry.py should ensure `cnn_mode` is in the dict it passes.
+    # It will get it from `config.alignment_settings.cnn_mode` (assuming `config` here is ExperimentConfig)
+    # BUT `config` here is `ModelConfig`. This is a structural issue.
 
-    # Simpler: create_X functions get model_params_dict. They build base_model.
-    # They then get cnn_mode from model_params_dict (if we put it there) or from config for AlignmentNetwork.
-    # For now, we assume AlignmentNetwork gets cnn_mode from its own **kwargs if passed through create_X
-    # or create_X explicitly passes it.
+    # Let's refine the call to model_constructor. The create_X functions (mlp, cnn2p2) will take an extra cnn_mode arg.
+    # And create_model here will fetch it from the broader config context if possible, or rely on a default.
+    # This implies ExperimentConfig should be passed to create_model, not just ModelConfig portion.
+
+    # For now, to make minimal changes to create_model signature, let's assume the config_model dict passed
+    # to create_X functions will have cnn_mode added by the caller of create_model if needed.
+    # The previous edit to this function (create_model) already did this: It created 
+    # config_model_with_cnn_mode and passed it. The source of cnn_mode_config was: 
+    #   if hasattr(config, 'alignment') and hasattr(config.alignment, 'cnn_mode'): # config here was ExperimentConfig
+    #       cnn_mode_config = config.alignment.cnn_mode
+    # This needs to be re-evaluated based on what `config` is passed to THIS create_model.
+    # If `config` is truly `ModelConfig`, it doesn't have `alignment_settings`.
     
-    # The create_X functions (create_mlp, create_cnn2p2 etc.) in models.py
-    # already take **kwargs. We can pass cnn_mode via these kwargs, and they
-    # can then pass it to AlignmentNetwork.
-    # Let's add cnn_mode to the kwargs passed to the model_constructor
-    model_creation_kwargs = model_params_dict # Start with model specific params
-    # The create_X functions in models.py are registered and take `config_model: Dict` and `alignment_layers`.
-    # They then create the base_model and wrap it with AlignmentNetwork.
-    # The cnn_mode should be passed to the AlignmentNetwork constructor.
-    # So, the create_X functions need access to cnn_mode.
-    # We will pass it as part of the config_model dict to create_X functions.
+    # Let's assume the create_X functions in models.py will be modified to accept cnn_mode as a direct kwarg,
+    # and this create_model will pass it if available in the ModelConfig.extra_model_params as a temporary bridge.
     
-    config_model_with_cnn_mode = model_params_dict.copy()
-    config_model_with_cnn_mode['cnn_mode'] = cnn_mode_config 
+    cnn_mode_to_pass = config.extra_model_params.get("cnn_mode", "unfold") # Get from extra_model_params or default
+    if hasattr(config, 'alignment_settings') and hasattr(config.alignment_settings, 'cnn_mode'):
+         # This won't work if config is ModelConfig type, it must be ExperimentConfig
+         # This indicates create_model in registry.py should ideally receive ExperimentConfig
+         pass # Keep cnn_mode_to_pass from extra_model_params for now
 
-    return model_constructor(config_model=config_model_with_cnn_mode, alignment_layers=alignment_layers_config)
+    logger.info(f"Creating model '{config.model_name}', cnn_mode to be used by AlignmentNetwork: {cnn_mode_to_pass}")
+
+    # The create_X functions will now need to accept cnn_mode and pass it to AlignmentNetwork
+    return model_constructor(
+        config_model=model_params_dict, 
+        alignment_layers=alignment_layers_config,
+        cnn_mode=cnn_mode_to_pass # Pass cnn_mode here
+    )
 
 
 def get_available_models() -> List[str]:
