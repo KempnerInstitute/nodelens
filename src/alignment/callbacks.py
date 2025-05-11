@@ -85,8 +85,14 @@ class AlignmentMetricTracker:
         if self.experiment_config and hasattr(self.experiment_config, 'debug_mode'):
             debug_mode_callback = self.experiment_config.debug_mode
         
+        # Get the global force_cpu flag from the experiment_config
+        force_cpu_flag = True # Default to True if not found
+        if self.experiment_config and hasattr(self.experiment_config, 'alignment_settings') and \
+           hasattr(self.experiment_config.alignment_settings, 'force_cpu_for_large_metric_ops'):
+            force_cpu_flag = self.experiment_config.alignment_settings.force_cpu_for_large_metric_ops
+        
         metric_names_str = ", ".join([mc['name'] for mc in self.metric_configs])
-        logger.info(f"Epoch {current_epoch}: Computing alignment metrics ({metric_names_str})...")
+        logger.info(f"Epoch {current_epoch}: Computing alignment metrics ({metric_names_str}). Force CPU: {force_cpu_flag}")
         
         original_training_state = model.training
         try:
@@ -100,7 +106,8 @@ class AlignmentMetricTracker:
                 num_batches=self.num_batches,
                 debug_mode=debug_mode_callback,
                 configured_cnn_mode=self.global_cnn_mode,
-                configured_cnn_rq_op=self.global_cnn_rq_aggregation_op
+                configured_cnn_rq_op=self.global_cnn_rq_aggregation_op,
+                force_cpu_for_large_metric_ops=force_cpu_flag # Pass the flag
             )
             
             self.metrics_evolution.append({
