@@ -21,8 +21,10 @@ class AlignmentMetricTracker:
                  metric_configs: List[Dict[str, Any]], 
                  data_loader: DataLoader, 
                  device: torch.device,
-                 num_batches: int = 5,
-                 experiment_config: Optional[BaseConfig] = None):
+                 num_batches: Optional[int] = 5,
+                 experiment_config: Optional[BaseConfig] = None,
+                 global_cnn_mode: Optional[str] = "unfold",
+                 global_cnn_rq_aggregation_op: Optional[str] = "mean"):
         """
         Args:
             metric_configs: List of metric configurations (dicts). Each dict should have "name"
@@ -32,6 +34,8 @@ class AlignmentMetricTracker:
             device: The torch.device to run computations on.
             num_batches: Number of batches from data_loader to use for collecting activations.
             experiment_config: Optional experiment configuration object to access global settings like debug_mode.
+            global_cnn_mode: Global CNN mode for RQ metric if used in callbacks
+            global_cnn_rq_aggregation_op: Global CNN RQ aggregation operation if used in callbacks
         """
         if not isinstance(metric_configs, list) or not all(isinstance(mc, dict) and "name" in mc for mc in metric_configs):
             raise ValueError("metric_configs must be a list of dictionaries, each with at least a 'name' key.")
@@ -44,6 +48,8 @@ class AlignmentMetricTracker:
         self.num_batches = num_batches
         self.experiment_config = experiment_config
         self.metrics_evolution: List[Dict[str, Any]] = [] # Stores history: {epoch: X, all_scores_per_layer: {layer: {metric: scores}}} 
+        self.global_cnn_mode = global_cnn_mode
+        self.global_cnn_rq_aggregation_op = global_cnn_rq_aggregation_op
 
     def __call__(self, epoch_context: Dict[str, Any]):
         """
@@ -86,17 +92,17 @@ class AlignmentMetricTracker:
         try:
             model.eval() # Set to eval mode for consistent activation collection
             
-            # MODIFIED: Call with self.metric_configs
             all_scores_data = compute_all_node_scores(
                 model=model,
-                metric_configs=self.metric_configs, # Pass the list of configs
+                metric_configs=self.metric_configs, 
                 device=self.device,
                 data_loader=self.data_loader,
                 num_batches=self.num_batches,
-                debug_mode=debug_mode_callback 
+                debug_mode=debug_mode_callback,
+                configured_cnn_mode=self.global_cnn_mode,
+                configured_cnn_rq_op=self.global_cnn_rq_aggregation_op
             )
             
-            # MODIFIED: Store the new structure
             self.metrics_evolution.append({
                 "epoch": current_epoch,
                 "all_scores_per_layer": all_scores_data 

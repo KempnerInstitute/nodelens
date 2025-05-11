@@ -307,7 +307,10 @@ class AlignmentMetric:
         self,
         layer_input: torch.Tensor,
         layer_weights: Optional[torch.Tensor] = None,
-        device: Optional[torch.device] = None
+        device: Optional[torch.device] = None,
+        is_conv_layer: bool = False,
+        cnn_mode_for_metric: Optional[str] = "unfold",
+        cnn_rq_aggregation_op: Optional[str] = "mean"
     ) -> torch.Tensor:
         """
         Compute a per-node alignment score for each node's weight vector w_i.
@@ -316,6 +319,9 @@ class AlignmentMetric:
             layer_input: 2D tensor of shape (N, input_dim) with the data
             layer_weights: 2D tensor (#nodes, input_dim), or None to use identity
             device: PyTorch device to ensure everything is on the correct device
+            is_conv_layer: True if the current layer_input/layer_weights are for a convolutional layer.
+            cnn_mode_for_metric: Specifies how CNN activations/weights should be interpreted by the metric (e.g., "filter_patch_summary" for RQ).
+            cnn_rq_aggregation_op: If using summary for CNN RQ, specifies op ('mean', 'max').
             
         Returns:
             A 1D tensor (#nodes,) of alignment scores
@@ -328,10 +334,13 @@ class AlignmentMetric:
             layer_input = layer_input.to(device)
         
         # Basic checks
-        if layer_input.dim() != 2:
-            # For CNN, flatten the input
-            orig_shape = layer_input.shape
-            layer_input = layer_input.reshape(orig_shape[0], -1)
+        if layer_input.dim() != 2 and not (is_conv_layer and cnn_mode_for_metric == "filter_patch_summary"):
+            # For filter_patch_summary, layer_input might be (Patches, Features_per_patch)
+            # For other cases, it expects (N_samples, D_features)
+            if layer_input.dim() > 2:
+                layer_input = layer_input.reshape(layer_input.size(0), -1)
+            elif layer_input.dim() == 1 and layer_input.size(0) == layer_weights.size(1): # Single sample case
+                layer_input = layer_input.unsqueeze(0)
         
         # If weights are not provided, use identity matrix
         if layer_weights is None:
@@ -343,24 +352,31 @@ class AlignmentMetric:
         
         # Dispatch to appropriate method based on metric name
         if self.name.lower() == "rq":
-            return self._compute_rq(layer_input, layer_weights, device)
+            return self._compute_rq(layer_input, layer_weights, device, 
+                                    is_conv_layer=is_conv_layer, 
+                                    cnn_mode=cnn_mode_for_metric, 
+                                    cnn_rq_aggregation_op=cnn_rq_aggregation_op)
         elif self.name.lower().startswith("mi"):
             return self._compute_mi(layer_input, layer_weights, device)
         elif self.name.lower() == "rank":
-            metric = RankAlignmentMetric()
-            return metric.measure(layer_input, layer_weights)
+            metric_cls_instance = RankAlignmentMetric()
+            return metric_cls_instance.measure(layer_input, layer_weights)
         elif self.name.lower() == "null_space":
-            metric = NullSpaceAlignmentMetric()
-            return metric.measure(layer_input, layer_weights)
+            metric_cls_instance = NullSpaceAlignmentMetric()
+            return metric_cls_instance.measure(layer_input, layer_weights)
         else:
-            # Default to RQ as a fallback
-            return self._compute_rq(layer_input, layer_weights, device)
+            # Default to RQ as a fallback, passing default CNN flags
+            return self._compute_rq(layer_input, layer_weights, device, 
+                                    is_conv_layer=False, cnn_mode="unfold", cnn_rq_aggregation_op="mean")
     
     def _compute_rq(
         self,
         X: torch.Tensor,
         W: torch.Tensor,
-        device: torch.device
+        device: torch.device,
+        is_conv_layer: bool = False,
+        cnn_mode: Optional[str] = "unfold",
+        cnn_rq_aggregation_op: Optional[str] = "mean"
     ) -> torch.Tensor:
         """
         Compute Rayleigh Quotient per node.
@@ -369,40 +385,113 @@ class AlignmentMetric:
             X: Input data (N, input_dim)
             W: Weight matrix (num_nodes, input_dim)
             device: Compute device
+            is_conv_layer: True if the current layer_input/layer_weights are for a convolutional layer.
+            cnn_mode: Specifies how CNN activations/weights should be interpreted by the metric (e.g., "filter_patch_summary" for RQ).
+            cnn_rq_aggregation_op: If using summary for CNN RQ, specifies op ('mean', 'max').
             
         Returns:
             Per-node RQ scores (num_nodes,)
         """
-        # Center the input
         N = X.size(0)
         if N < 2:
-            # fallback if dataset is extremely small
             return torch.zeros(W.size(0), device=device)
 
-        X_centered = X - X.mean(dim=0, keepdim=True)
-        # sample covariance => (input_dim x input_dim)
-        cov_x = (X_centered.t() @ X_centered) / (N - 1)
+        if is_conv_layer and cnn_mode == "filter_patch_summary":
+            # X is (num_total_patches_for_batch, filter_input_dims)
+            # W is (out_channels, filter_input_dims)
+            # logger.info(f"RQ using filter_patch_summary for Conv. X: {X.shape}, W: {W.shape}, op: {cnn_rq_aggregation_op}")
+            num_filters = W.shape[0]
+            filter_scores = torch.zeros(num_filters, device=device)
+            eps = 1e-12
 
-        # Possibly scale by norm
+            # Potentially offload to CPU if X is huge, even for patch-wise ops
+            perform_on_cpu_patchwise = False
+            if X.is_cuda and X.numel() > 10_000_000: # Simpler heuristic for patchwise
+                # logger.info(f"RQ PatchSummary: Large X ({X.shape}) on CUDA, using CPU for patch ops.")
+                perform_on_cpu_patchwise = True
+            
+            X_op = X.cpu() if perform_on_cpu_patchwise else X
+            W_op = W.cpu() if perform_on_cpu_patchwise else W
+
+            for j in range(num_filters):
+                w_j = W_op[j, :] 
+                w_j_norm_sq = (w_j * w_j).sum()
+                if w_j_norm_sq < eps:
+                    filter_scores[j] = 0.0
+                    continue
+
+                # Projections of all patches onto this filter: p_k^T w_j  (or w_j^T p_k)
+                # X_op is (N_patches, D_filter_in), w_j is (D_filter_in)
+                # Result proj_val_for_filter_j is (N_patches)
+                proj_val_for_filter_j = X_op @ w_j.T 
+                
+                # Squared cosine similarity: (w_j^T p_k)^2 / (||w_j||^2 ||p_k||^2)
+                # Equivalent to (proj_val_for_filter_j)^2 / (w_j_norm_sq * ||p_k||^2)
+                patch_norms_sq = (X_op * X_op).sum(dim=1)
+                
+                # Avoid division by zero for patch_norms_sq
+                valid_patches_mask = patch_norms_sq > eps
+                if not valid_patches_mask.any():
+                    filter_scores[j] = 0.0
+                    continue
+
+                # Select only valid patches
+                valid_proj_val = proj_val_for_filter_j[valid_patches_mask]
+                valid_patch_norms_sq = patch_norms_sq[valid_patches_mask]
+
+                patch_level_rqs = (valid_proj_val**2) / (w_j_norm_sq * valid_patch_norms_sq + eps)
+                
+                if patch_level_rqs.numel() == 0:
+                    filter_scores[j] = 0.0
+                    continue
+
+                if cnn_rq_aggregation_op == "mean":
+                    agg_score = patch_level_rqs.mean()
+                elif cnn_rq_aggregation_op == "max":
+                    agg_score = patch_level_rqs.max()
+                elif cnn_rq_aggregation_op == "var":
+                    agg_score = patch_level_rqs.var()
+                elif cnn_rq_aggregation_op == "sum":
+                    agg_score = patch_level_rqs.sum()
+                else: # Default to mean
+                    agg_score = patch_level_rqs.mean()
+                filter_scores[j] = agg_score
+            
+            return filter_scores.to(device) # Ensure result is on original device
+
+        # Existing logic for Linear layers or cnn_mode='unfold' (global covariance on unfolded patches)
+        perform_on_cpu_cov = False
+        if X.is_cuda and ( (X.shape[0] > 500_000 and X.shape[1] > 100) or (X.numel() > 20_000_000) ):
+            # logger.info(f"RQ: Large input tensor X ({X.shape}) for covariance on CUDA. Offloading to CPU.")
+            perform_on_cpu_cov = True
+
+        if perform_on_cpu_cov:
+            # ... (CPU offload logic for covariance as before) ...
+            X_cpu = X.cpu(); W_cpu = W.cpu()
+            mean_X_cpu = X_cpu.mean(dim=0, keepdim=True); X_centered_cpu = X_cpu - mean_X_cpu
+            cov_x = (X_centered_cpu.t() @ X_centered_cpu) / (N - 1)
+            # cov_x = cov_x.to(device) # Keep cov_x on CPU if W_op is CPU
+            W_op_cov = W_cpu
+        else:
+            mean_X = X.mean(dim=0, keepdim=True); X_centered = X - mean_X 
+            cov_x = (X_centered.t() @ X_centered) / (N - 1)
+            W_op_cov = W
+
         if self.scale_by_norm:
             norm_val = cov_x.norm(p=2)
-            if norm_val > 1e-12:
-                cov_x = cov_x / norm_val
-
-        # W shape (#nodes, input_dim)
-        # Let's do a row-by-row RQ:
-        w_norm_sq = (W * W).sum(dim=1)  # (#nodes,)
-        wCov = W @ cov_x               # (#nodes, input_dim)
-        numerator = (wCov * W).sum(dim=1)  # dot with W row wise => (#nodes,)
-
-        eps = 1e-12
-        rq_scores = numerator / (w_norm_sq + eps)
+            if norm_val > 1e-12: cov_x = cov_x / norm_val
         
-        # Scale by sqrt(d) if using relative RQ
-        if False:  # TODO: Add a relative parameter
-            d = W.size(1)
-            rq_scores = rq_scores * np.sqrt(d)
-            
+        # Ensure cov_x is on the same device as W_op_cov for matmul
+        cov_x = cov_x.to(W_op_cov.device)
+
+        w_norm_sq_cov = (W_op_cov * W_op_cov).sum(dim=1)  
+        wCov_cov = W_op_cov @ cov_x               
+        numerator_cov = (wCov_cov * W_op_cov).sum(dim=1)  
+        eps_cov = 1e-12
+        rq_scores = numerator_cov / (w_norm_sq_cov + eps_cov)
+        
+        if perform_on_cpu_cov:
+            rq_scores = rq_scores.to(device)
         return rq_scores
 
     def _compute_mi(
@@ -478,35 +567,21 @@ def compute_all_node_scores(
     metric_configs: List[Dict[str, Any]], 
     device: torch.device,
     data_loader: DataLoader,
-    num_batches: int = 5,
+    num_batches: Optional[int] = 5,
     debug_mode: bool = False,
+    configured_cnn_mode: Optional[str] = "unfold", 
+    configured_cnn_rq_op: Optional[str] = "mean"
 ) -> Dict[int, Dict[str, torch.Tensor]]:
     """
     Computes per-node scores for specified alignment layers for multiple metrics.
-    This function orchestrates activation hooking and per-layer metric computation.
-    It no longer has logic to exclude classification layers from score computation itself;
-    that responsibility lies with the calling application (e.g., pruning).
-
-    Args:
-        model: The model (expected to have .alignment_layers and .alignment_names attributes, 
-               typically an AlignmentNetwork instance).
-        metric_configs: List of metric configurations (dicts). Each dict should have at least a "name"
-                        key, and can optionally have "scale_by_norm" (defaults to False).
-        device: The torch.device to run computations on.
-        data_loader: DataLoader for providing input data to the model for activation hooking.
-        num_batches: Number of batches from data_loader to use for collecting activations.
-        debug_mode: If True, enables verbose logging.
-
-    Returns:
-        A dictionary mapping layer_idx to another dictionary, which maps metric_name 
-        to a 1D tensor of per-node scores for that layer and metric.
+    Activations are processed per batch for each metric to manage memory, 
+    and then scores are averaged across batches.
     """
     if not hasattr(model, "alignment_layers") or not hasattr(model, "alignment_names"):
         raise ValueError("Model must define .alignment_layers and .alignment_names attributes (typically an AlignmentNetwork).")
-    # MODIFIED: Validation for metric_configs
     if not isinstance(metric_configs, list) or not all(isinstance(mc, dict) and "name" in mc for mc in metric_configs):
         raise ValueError("metric_configs must be a list of dictionaries, each with a 'name' key.")
-    if not metric_configs: # No metrics to compute
+    if not metric_configs: 
         logger.warning("compute_all_node_scores called with empty metric_configs. Returning empty dict.")
         return {}
 
@@ -515,7 +590,7 @@ def compute_all_node_scores(
     _ensure_model_on_device(model, normalized_device)
 
     if debug_mode:
-        logger.info(f"Computing node scores for model with {len(model.alignment_layers)} alignment layers on device {normalized_device}")
+        logger.info(f"Computing node scores for {len(metric_configs)} metrics, using {num_batches} batches, for model with {len(model.alignment_layers)} alignment layers on device {normalized_device}")
         for i, (layer_mod, layer_name) in enumerate(zip(model.alignment_layers, model.alignment_names)):
             if hasattr(layer_mod, 'weight') and layer_mod.weight is not None:
                  logger.info(f"Layer {i}: {layer_name} - {type(layer_mod).__name__} - Shape: {layer_mod.weight.shape}")
@@ -524,188 +599,172 @@ def compute_all_node_scores(
 
     if not hasattr(model, "hidden"):
         model.hidden = {}
-    else: # Clear any stale hidden states from previous calls or other uses
+    else: 
         model.hidden.clear()
 
-    batch_count = 0
+    # Determine effective number of batches to process
+    effective_num_batches = num_batches
+    if effective_num_batches is None or effective_num_batches < 0: # Treat None or <0 as all batches
+        effective_num_batches = len(data_loader)
+        if debug_mode:
+            logger.info(f"num_batches is None or <0, using all {effective_num_batches} batches from data_loader.")
+    elif effective_num_batches == 0:
+        logger.warning("num_batches is 0, no batches will be processed for activation hooking.")
+        # Populate with zeros based on expected structure if no batches ran but layers exist
+        # (This logic is duplicated below, can be refactored if needed)
+        all_scores_per_layer_all_metrics_empty: Dict[int, Dict[str, torch.Tensor]] = {}
+        for layer_idx_empty, layer_mod_scores_empty in enumerate(model.alignment_layers):
+            metrics_for_this_layer_empty = {}
+            node_count_empty = layer_mod_scores_empty.weight.shape[0] if hasattr(layer_mod_scores_empty, 'weight') and layer_mod_scores_empty.weight is not None else 0
+            for m_config_empty in metric_configs:
+                metrics_for_this_layer_empty[m_config_empty["name"]] = torch.zeros(node_count_empty, device=normalized_device)
+            all_scores_per_layer_all_metrics_empty[layer_idx_empty] = metrics_for_this_layer_empty
+        return all_scores_per_layer_all_metrics_empty
+
+    processed_batch_count = 0
     hooks = []
     try:
-        # Store original layer modules for type checking later
-        alignment_layer_modules = model.alignment_layers
-
-        def get_activation_hook(layer_idx_for_hook): # Pass layer_idx to know the layer type
+        alignment_layer_modules = model.alignment_layers # For type checking in hook
+        def get_activation_hook(layer_idx_for_hook):
             def hook(module, layer_input, layer_output):
-                x = layer_input[0].detach() # Get input to the module
-                current_layer_module = alignment_layer_modules[layer_idx_for_hook]
-                is_conv_type = isinstance(current_layer_module, (nn.Conv1d, nn.Conv2d, nn.Conv3d, 
-                                                               nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d))
-                
-                # For non-Conv layers, flatten to 2D. For Conv layers, keep original shape for later unfolding.
-                if not is_conv_type and x.dim() > 2:
-                    x = x.reshape(x.size(0), -1) # Flatten N, C, H, W -> N, C*H*W or N, L, C -> N, L*C
-                elif is_conv_type and x.dim() <=2 and x.dim() > 0: # e.g. if a conv layer gets a flattened input by mistake from previous layer
-                    # This case is tricky, ideally input to conv is already 4D/5D.
-                    # If it's 2D (N, Features), and we know original C,H,W, we could reshape.
-                    # For now, if it's already 2D for a conv layer, we might log a warning or pass it as is, 
-                    # assuming it's an edge case or a model structure where this is intended.
-                    pass # Keep as is, unfolding might fail or work depending on layout
-                
+                x = layer_input[0].detach()
                 layer_name_for_storage = model.alignment_names[layer_idx_for_hook]
-                current_val = model.hidden.get(layer_name_for_storage)
-                if not isinstance(current_val, list):
-                    if current_val is not None and debug_mode:
-                        logger.warning(f"Hook for layer '{layer_name_for_storage}': model.hidden was {type(current_val)}, re-initializing to list.")
+                if not model.hidden.get(layer_name_for_storage):
                     model.hidden[layer_name_for_storage] = []
-                
-                try:
-                    model.hidden[layer_name_for_storage].append(x) # Store detached x
-                except AttributeError as e_hook_append:
-                    # ... (enhanced error handling as before) ...
-                    logger.error(
-                        f"CRITICAL HOOK AttributeError for layer '{layer_name_for_storage}': model.hidden['{layer_name_for_storage}'] is type {type(model.hidden.get(layer_name_for_storage))}. Error: {e_hook_append}"
-                    )
-                    logger.error(f"Model hidden dict right before error: {model.hidden}")
-                    if model.hidden.get(layer_name_for_storage) is None: 
-                        model.hidden[layer_name_for_storage] = []
-                        model.hidden[layer_name_for_storage].append(x)
-                    else:
-                        raise 
-
-                if debug_mode and len(model.hidden[layer_name_for_storage]) == 1:
-                    logger.info(f"Layer {layer_name_for_storage} (type: {type(current_layer_module).__name__}) input shape: {x.shape}, stored in hidden.")
+                model.hidden[layer_name_for_storage].append(x) # Store raw input tensor for this batch
+                if debug_mode and len(model.hidden[layer_name_for_storage]) == 1 and processed_batch_count < 1: # Log shape only for first batch fully processed by hooks for this layer
+                    logger.info(f"Layer {layer_name_for_storage} (hook for batch {processed_batch_count+1}) input shape: {x.shape}")
             return hook
 
         for i, layer_mod_hook in enumerate(model.alignment_layers):
-            hooks.append(layer_mod_hook.register_forward_hook(get_activation_hook(i))) # Pass layer index i
+            hooks.append(layer_mod_hook.register_forward_hook(get_activation_hook(i)))
 
-        batch_iter = tqdm(data_loader, desc="Processing batches for metrics", disable=not debug_mode, leave=False)
+        # MODIFIED: Use effective_num_batches for tqdm total and loop break condition
+        batch_iter = tqdm(data_loader, desc="Processing batches for activation hooking", total=effective_num_batches, disable=not debug_mode, leave=False)
         for inputs, _targets in batch_iter:
+            if processed_batch_count >= effective_num_batches:
+                break # Ensure we don't process more than intended
             inputs = inputs.to(normalized_device)
-            model(inputs) # This triggers hooks, populating model.hidden
-            batch_count += 1
-            if batch_count >= num_batches:
-                break
+            for layer_name_clear in model.alignment_names:
+                 model.hidden[layer_name_clear] = [] 
+            model(inputs) 
+            processed_batch_count += 1
+            # No need for a second check of processed_batch_count >= effective_num_batches here if tqdm handles total correctly
     finally:
         for h in hooks:
             h.remove()
-        hooks.clear() # Clear the list of hooks
+        hooks.clear()
 
-    # MODIFIED: Outer dictionary stores results per layer
     all_scores_per_layer_all_metrics: Dict[int, Dict[str, torch.Tensor]] = {}
+    if processed_batch_count == 0:
+        logger.warning("No batches were actually processed for activation hooking (effective_num_batches might have been 0 or loader empty). Returning empty scores.")
+        # ... (populate with zeros as above) ...
+        for layer_idx_empty, layer_mod_scores_empty in enumerate(model.alignment_layers):
+            metrics_for_this_layer_empty = {}
+            node_count_empty = layer_mod_scores_empty.weight.shape[0] if hasattr(layer_mod_scores_empty, 'weight') and layer_mod_scores_empty.weight is not None else 0
+            for m_config_empty in metric_configs:
+                metrics_for_this_layer_empty[m_config_empty["name"]] = torch.zeros(node_count_empty, device=normalized_device)
+            all_scores_per_layer_all_metrics[layer_idx_empty] = metrics_for_this_layer_empty
+        return all_scores_per_layer_all_metrics
+
     layer_iter = enumerate(model.alignment_layers)
     if debug_mode:
-        layer_iter = tqdm(list(layer_iter), desc="Computing layer scores from activations for multiple metrics")
+        layer_iter = tqdm(list(layer_iter), desc="Computing layer scores (batch-wise avg) for multiple metrics")
 
     for layer_idx, layer_mod_scores in layer_iter:
         layer_name_scores = model.alignment_names[layer_idx]
         metrics_for_this_layer: Dict[str, torch.Tensor] = {}
-        current_layer_module_for_processing = model.alignment_layers[layer_idx] # Get the actual layer module
+        current_layer_module_for_processing = model.alignment_layers[layer_idx]
+        is_conv_type_processing = isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d))
 
         if layer_name_scores not in model.hidden or not model.hidden[layer_name_scores]:
-            if debug_mode:
-                logger.warning(f"No/empty hooking data for layer '{layer_name_scores}'. Scores set to zero for all metrics.")
-            # Populate with zero tensors for all requested metrics for this layer
+            # ... (handle missing data as before) ...
+            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
+            for m_config in metric_configs:
+                metrics_for_this_layer[m_config["name"]] = torch.zeros(node_count, device=normalized_device)
+            all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
+            if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None 
+            continue
+        
+        w_flat, layer_metadata = process_cnn_weights(model, layer_idx, pruning_strategy="structure-aware")
+        if w_flat is None:
+            logger.error(f"Failed to get weights for layer {layer_name_scores}. Skipping metric computation for this layer.")
             node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
             for m_config in metric_configs:
                 metrics_for_this_layer[m_config["name"]] = torch.zeros(node_count, device=normalized_device)
             all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
             if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None
             continue
-        
-        # Get weights (already good via process_cnn_weights)
-        w_flat, layer_metadata = process_cnn_weights(model, layer_idx, pruning_strategy="structure-aware")
-        
-        # MODIFIED: Process activations based on layer type
-        activation_list = model.hidden[layer_name_scores]
-        is_conv_type_processing = isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.Conv2d, nn.Conv3d, 
-                                                                               nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d))
-        
-        X_acts_final_for_metric: Optional[torch.Tensor] = None
 
-        if is_conv_type_processing:
-            processed_batch_activations = []
-            # Get unfold params from the layer itself
-            # These need to be present on the layer module (e.g. layer_mod_scores)
-            # Make sure kernel_size, stride etc. are correctly obtained
-            kernel_s = current_layer_module_for_processing.kernel_size
-            stride_s = current_layer_module_for_processing.stride
-            padding_s = current_layer_module_for_processing.padding
-            dilation_s = current_layer_module_for_processing.dilation
+        activation_batches_for_layer = model.hidden[layer_name_scores] # List of tensors, each from a batch
 
-            for act_tensor_batch in activation_list:
-                # act_tensor_batch should be in its original 4D/5D form here if hook was changed
-                if act_tensor_batch.dim() <= 2 and act_tensor_batch.numel() > 0 : # If it got flattened somehow, try to unflatten if possible (needs original shape info - hard)
-                    logger.warning(f"Conv layer {layer_name_scores} received 2D input for unfolding. This might lead to incorrect metrics if original shape isn\'t restored.")
-                    # This path is problematic without original shape info. For now, we proceed, but it's a known issue.
-                
-                # Unfold only works for specific dims (e.g. 4D for Conv2D -> unfold)
-                # Ensure act_tensor_batch has the right dimensions for unfold based on layer type
-                # Example for Conv2d, input is (N, C, H, W)
-                if isinstance(current_layer_module_for_processing, (nn.Conv2d, nn.ConvTranspose2d)) and act_tensor_batch.dim() == 4:
-                    try:
-                        unfolded_act = F.unfold(act_tensor_batch, kernel_size=kernel_s, dilation=dilation_s, padding=padding_s, stride=stride_s)
-                        # unfolded_act shape: (N, C_in*kernel_h*kernel_w, L_out), where L_out is num_patches
-                        # We need (N*L_out, C_in*kernel_h*kernel_w) to match flattened filter (out_channels, C_in*kernel_h*kernel_w)
-                        unfolded_act = unfolded_act.transpose(1, 2).contiguous() # (N, L_out, C_in*KH*KW)
-                        unfolded_act = unfolded_act.view(-1, unfolded_act.size(2)) # (N*L_out, C_in*KH*KW)
-                        processed_batch_activations.append(unfolded_act)
-                    except Exception as e_unfold:
-                        logger.error(f"Error unfolding activations for Conv layer {layer_name_scores}: {e_unfold}. Input shape: {act_tensor_batch.shape}. Skipping batch.")
-                        continue # Skip this batch if unfolding fails
-                elif isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.ConvTranspose1d)) and act_tensor_batch.dim() == 3:
-                     # Similar logic for Conv1d: input (N,C,L), unfold, then (N*L_patches, C*KernelL)
-                    try:
-                        unfolded_act = F.unfold(act_tensor_batch.unsqueeze(3), kernel_size=(kernel_s[0],1), dilation=(dilation_s[0],1), padding=(padding_s[0],0), stride=(stride_s[0],1)) # Use dummy H dim
-                        unfolded_act = unfolded_act.transpose(1, 2).contiguous()
-                        unfolded_act = unfolded_act.view(-1, unfolded_act.size(2))
-                        processed_batch_activations.append(unfolded_act)
-                    except Exception as e_unfold:
-                        logger.error(f"Error unfolding activations for Conv1D layer {layer_name_scores}: {e_unfold}. Input shape: {act_tensor_batch.shape}. Skipping batch.")
-                        continue
-                # Add Conv3d if necessary
-                else: # Not a Conv layer type that we have specific unfold logic for, or dim mismatch
-                    logger.warning(f"Skipping unfold for layer {layer_name_scores} (type {type(current_layer_module_for_processing).__name__}, input dim {act_tensor_batch.dim()}). Using flattened activations.")
-                    processed_batch_activations.append(act_tensor_batch.reshape(act_tensor_batch.size(0), -1))
-            
-            if processed_batch_activations:
-                X_acts_final_for_metric = torch.cat(processed_batch_activations, dim=0)
-            else:
-                logger.warning(f"No activations could be processed/unfolded for Conv layer {layer_name_scores}. Metric scores will be zeros.")
-        else: # Linear or other non-Conv layers
-            # Flatten each tensor in the list and then concatenate
-            X_acts_final_for_metric = torch.cat([act_b.reshape(act_b.size(0), -1) for act_b in activation_list], dim=0)
-
-        if X_acts_final_for_metric is None or X_acts_final_for_metric.numel() == 0:
-            logger.warning(f"Final activations X_acts_final_for_metric is None or empty for layer {layer_name_scores}. Setting metric scores to zero.")
-            # Populate with zero tensors for all requested metrics for this layer
-            node_count = w_flat.shape[0] if w_flat is not None else (layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0)
-            for m_config in metric_configs:
-                metrics_for_this_layer[m_config["name"]] = torch.zeros(node_count, device=normalized_device)
-            all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
-            model.hidden[layer_name_scores] = None 
-            continue # Move to next layer
-        
-        if debug_mode:
-            logger.info(f"Layer {layer_name_scores}: Final Processed Activations X_acts_final_for_metric shape {X_acts_final_for_metric.shape}, Weights w_flat shape {w_flat.shape if w_flat is not None else 'None'}")
-        
         for m_config in metric_configs:
             metric_name = m_config["name"]
             scale_by_norm_for_metric = m_config.get("scale_by_norm", False)
             current_metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm_for_metric)
             
-            try:
-                # Ensure w_flat is not None before passing
-                if w_flat is None:
-                    raise ValueError("w_flat is None, cannot compute scores.")
-                node_scores = current_metric_instance.compute_per_node_scores(X_acts_final_for_metric, w_flat, device=normalized_device)
-                if debug_mode and node_scores is not None and node_scores.numel() > 0:
-                    logger.info(f"  Metric '{metric_name}': Layer {layer_name_scores} score stats: min={torch.min(node_scores).item():.4f}, max={torch.max(node_scores).item():.4f}, mean={torch.mean(node_scores).item():.4f}, std={torch.std(node_scores).item():.4f}")
-                metrics_for_this_layer[metric_name] = node_scores.detach() if node_scores is not None else torch.zeros(w_flat.shape[0] if w_flat is not None else 0, device=normalized_device)
-            except Exception as e_comp:
-                logger.error(f"Error computing scores for metric '{metric_name}' on layer {layer_name_scores}: {e_comp}", exc_info=debug_mode)
-                node_count_fallback = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
-                fallback_zeros_shape = w_flat.shape[0] if w_flat is not None and hasattr(w_flat, 'shape') else node_count_fallback
-                metrics_for_this_layer[metric_name] = torch.zeros(fallback_zeros_shape, device=normalized_device)
+            per_batch_node_scores_for_metric = []
+
+            for batch_idx_act, act_tensor_one_batch in enumerate(activation_batches_for_layer):
+                X_processed_one_batch: Optional[torch.Tensor] = None
+                if is_conv_type_processing:
+                    # ... (unfolding logic as implemented in previous step, ensure kernel_s etc. are defined)
+                    kernel_s = current_layer_module_for_processing.kernel_size
+                    stride_s = current_layer_module_for_processing.stride
+                    padding_s = current_layer_module_for_processing.padding
+                    dilation_s = current_layer_module_for_processing.dilation
+                    # act_tensor_one_batch should be NCHW or NCL from the hook
+                    if isinstance(current_layer_module_for_processing, (nn.Conv2d, nn.ConvTranspose2d)) and act_tensor_one_batch.dim() == 4:
+                        try:
+                            unfolded_act = F.unfold(act_tensor_one_batch, kernel_size=kernel_s, dilation=dilation_s, padding=padding_s, stride=stride_s)
+                            unfolded_act = unfolded_act.transpose(1, 2).contiguous().view(-1, unfolded_act.size(1))
+                            X_processed_one_batch = unfolded_act
+                        except Exception as e_unfold:
+                            logger.error(f"Batch {batch_idx_act}: Error unfolding for Conv2D layer {layer_name_scores}: {e_unfold}. Input: {act_tensor_one_batch.shape}")
+                    elif isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.ConvTranspose1d)) and act_tensor_one_batch.dim() == 3:
+                        try:
+                            # Ensure kernel_s, dilation_s etc. are 1-element tuples for 1D conv if they are ints
+                            k_s = (kernel_s[0],1) if isinstance(kernel_s, tuple) else (kernel_s,1)
+                            d_s = (dilation_s[0],1) if isinstance(dilation_s, tuple) else (dilation_s,1)
+                            p_s = (padding_s[0],0) if isinstance(padding_s, tuple) else (padding_s,0)
+                            st_s = (stride_s[0],1) if isinstance(stride_s, tuple) else (stride_s,1)
+                            unfolded_act = F.unfold(act_tensor_one_batch.unsqueeze(3), kernel_size=k_s, dilation=d_s, padding=p_s, stride=st_s)
+                            unfolded_act = unfolded_act.transpose(1, 2).contiguous().view(-1, unfolded_act.size(1))
+                            X_processed_one_batch = unfolded_act
+                        except Exception as e_unfold:
+                            logger.error(f"Batch {batch_idx_act}: Error unfolding for Conv1D layer {layer_name_scores}: {e_unfold}. Input: {act_tensor_one_batch.shape}")
+                    else:
+                        logger.warning(f"Batch {batch_idx_act}: Skipping unfold for {layer_name_scores} (type {type(current_layer_module_for_processing).__name__}, dim {act_tensor_one_batch.dim()}). Using flattened.")
+                        X_processed_one_batch = act_tensor_one_batch.reshape(act_tensor_one_batch.size(0), -1)
+                else: # Linear layer
+                    X_processed_one_batch = act_tensor_one_batch.reshape(act_tensor_one_batch.size(0), -1)
+
+                if X_processed_one_batch is not None and X_processed_one_batch.numel() > 0:
+                    try:
+                        node_scores_this_batch = current_metric_instance.compute_per_node_scores(
+                            X_processed_one_batch, 
+                            w_flat, 
+                            device=normalized_device, 
+                            is_conv_layer=is_conv_type_processing, 
+                            cnn_mode_for_metric=configured_cnn_mode,
+                            cnn_rq_aggregation_op=configured_cnn_rq_op
+                        )
+                        if node_scores_this_batch is not None:
+                             per_batch_node_scores_for_metric.append(node_scores_this_batch)
+                    except Exception as e_comp_batch:
+                        logger.error(f"Batch {batch_idx_act}: Error computing scores for metric '{metric_name}' on layer {layer_name_scores}: {e_comp_batch}", exc_info=debug_mode)
+                # else: logger.warning if X_processed_one_batch is None or empty for a batch
+            
+            # Average scores across batches for this metric and layer
+            if per_batch_node_scores_for_metric:
+                final_scores_for_metric = torch.stack(per_batch_node_scores_for_metric).mean(dim=0)
+                if debug_mode:
+                    logger.info(f"  Metric '{metric_name}': Layer {layer_name_scores} avg score stats: min={torch.min(final_scores_for_metric).item():.4f}, max={torch.max(final_scores_for_metric).item():.4f}, mean={torch.mean(final_scores_for_metric).item():.4f}, std={torch.std(final_scores_for_metric).item():.4f}")
+                metrics_for_this_layer[metric_name] = final_scores_for_metric.detach()
+            else:
+                logger.warning(f"No batch scores computed for metric '{metric_name}' on layer {layer_name_scores}. Setting to zeros.")
+                node_count_fallback = w_flat.shape[0] if w_flat is not None else (layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0)
+                metrics_for_this_layer[metric_name] = torch.zeros(node_count_fallback, device=normalized_device)
         
         all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
         model.hidden[layer_name_scores] = None 

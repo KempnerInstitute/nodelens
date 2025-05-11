@@ -9,155 +9,117 @@ import os
 from os import PathLike
 from dataclasses import dataclass, field
 from typing import cast, List, Dict, Union, Type, TypeVar, Optional, Any
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, DictConfig, ListConfig
 from omegaconf.errors import OmegaConfBaseException
 import logging
 
-# Define T = TypeVar('T', bound='BaseConfig') for classmethod return types if needed later
 config_logger = logging.getLogger(__name__)
+T = TypeVar('T', bound='BaseConfig')
 
 @dataclass
 class BaseConfig:
     """Base class for all configuration classes."""
     
     @classmethod
-    def load(cls, path: Union[str, PathLike]):
+    def load(cls: Type[T], path: Union[str, PathLike]) -> T:
         """
-        Load configuration from YAML file.
-        
-        Args:
-            path: Path to YAML file
-            
-        Returns:
-            Configuration object
-            
-        Raises:
-            ValueError: If configuration is invalid
+        Load configuration from YAML file using OmegaConf structured capabilities.
         """
         try:
-            # Load the YAML file with OmegaConf
-            conf = OmegaConf.load(str(path))
+            yaml_conf = OmegaConf.load(str(path))
+            # Create a schema from the dataclass itself. This will include defaults.
+            schema = OmegaConf.structured(cls) 
+            # Merge the schema with the loaded YAML. YAML values override schema defaults.
+            # OmegaConf handles type validation and conversion based on schema type hints.
+            merged_conf = OmegaConf.merge(schema, yaml_conf)
             
-            # Create an instance of the class
-            obj = cls()
+            # Resolve any variable interpolations (e.g., ${oc.env:SOME_VAR})
+            OmegaConf.resolve(merged_conf)
             
-            # Convert OmegaConf to regular dict
-            config_dict = OmegaConf.to_container(conf)
+            # Convert the merged OmegaConf object to an instance of the dataclass.
+            # This should recursively instantiate nested dataclasses correctly.
+            obj: T = OmegaConf.to_object(merged_conf)
             
-            # Update the object with top-level values from the config
-            for key, value in config_dict.items():
-                if hasattr(obj, key):
-                    current_val = getattr(obj, key)
-                    
-                    # For nested configurations, create new instances
-                    if hasattr(current_val, '__class__') and issubclass(current_val.__class__, BaseConfig) and isinstance(value, dict):
-                        # Create a new instance of the nested config
-                        nested_config = current_val.__class__()
-                        
-                        # Update its fields
-                        for k, v in value.items():
-                            if hasattr(nested_config, k):
-                                setattr(nested_config, k, v)
-                        
-                        # Set the nested config on the parent
-                        setattr(obj, key, nested_config)
-                    else:
-                        # Direct assignment for simple values
-                        setattr(obj, key, value)
-            
-            # Validate top-level config (nested validation happens inside)
-            if hasattr(obj, "validate"):
+            if not isinstance(obj, cls):
+                # This is unexpected if OmegaConf.to_object works correctly with a structured schema.
+                # It might indicate a very complex type hint that OmegaConf didn't fully resolve
+                # to the exact cls type, or an issue in older OmegaConf versions.
+                config_logger.critical(
+                    f"OmegaConf.to_object did not return an instance of {cls.__name__}. "
+                    f"Got {type(obj)}. Configuration loading might be incomplete or incorrect."
+                )
+                # Depending on strictness, one might raise an error here.
+                # For now, we proceed and rely on subsequent validation.
+
+            # Call custom validation method if defined on the class.
+            # __post_init__ of the dataclass (and nested ones) should have run during OmegaConf.to_object.
+            if hasattr(obj, "validate") and callable(getattr(obj, "validate")):
                 obj.validate()
                 
             return obj
-        except Exception as e:
-            raise ValueError(f"Error loading config from {path}: {str(e)}")
+        except OmegaConfBaseException as e:
+            raise ValueError(f"Error processing config from {path} with OmegaConf: {str(e)}") from e
+        except Exception as e: # Catch other errors (e.g., from our custom validate)
+            raise ValueError(f"Error loading or validating config from {path}: {str(e)}") from e
     
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]):
+    def from_dict(cls: Type[T], config_dict: Dict[str, Any]) -> T:
         """
-        Create a configuration from a dictionary.
-        
-        Args:
-            config_dict: Dictionary containing configuration values
-            
-        Returns:
-            Configuration object
-            
-        Raises:
-            ValueError: If configuration is invalid
+        Create a configuration from a dictionary using OmegaConf structured capabilities.
         """
         try:
-            # Create an instance of the class
-            obj = cls()
+            # Create an OmegaConf object from the dictionary
+            # This allows OmegaConf to then merge it with a typed schema.
+            dict_conf = OmegaConf.create(config_dict)
+
+            # Create a schema from the dataclass itself.
+            schema = OmegaConf.structured(cls)
+
+            # Merge schema (defaults) with the dict_conf.
+            merged_conf = OmegaConf.merge(schema, dict_conf)
             
-            # Update the object with values from the dictionary
-            for key, value in config_dict.items():
-                if hasattr(obj, key):
-                    current_val = getattr(obj, key)
-                    
-                    # For nested configurations, create new instances
-                    if hasattr(current_val, '__class__') and issubclass(current_val.__class__, BaseConfig) and isinstance(value, dict):
-                        # Create a new instance of the nested config
-                        nested_config = current_val.__class__()
-                        
-                        # Update its fields
-                        for k, v in value.items():
-                            if hasattr(nested_config, k):
-                                setattr(nested_config, k, v)
-                        
-                        # Set the nested config on the parent
-                        setattr(obj, key, nested_config)
-                    else:
-                        # Direct assignment for simple values
-                        setattr(obj, key, value)
-            
-            # Validate the configuration
-            if hasattr(obj, "validate"):
+            OmegaConf.resolve(merged_conf)
+
+            obj: T = OmegaConf.to_object(merged_conf)
+
+            if not isinstance(obj, cls):
+                config_logger.critical(
+                    f"OmegaConf.to_object did not return an instance of {cls.__name__} from dict. "
+                    f"Got {type(obj)}. Configuration loading might be incomplete or incorrect."
+                )
+
+            if hasattr(obj, "validate") and callable(getattr(obj, "validate")):
                 obj.validate()
-                
+            
             return obj
+        except OmegaConfBaseException as e:
+            raise ValueError(f"Error creating config from dictionary with OmegaConf: {str(e)}") from e
         except Exception as e:
-            raise ValueError(f"Error creating config from dictionary: {str(e)}")
+            raise ValueError(f"Error creating or validating config from dictionary: {str(e)}") from e
             
     def validate(self) -> bool:
-        """
-        Validate configuration.
-        
-        Returns:
-            True if configuration is valid
-            
-        Raises:
-            ValueError: If configuration is invalid
-        """
+        # This base validate can be overridden by subclasses.
+        # For simple dataclasses without cross-field validation, it might not be needed
+        # if OmegaConf handles type validation during structured loading.
         return True
 
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert configuration to dictionary.
-        
-        Returns:
-            Dictionary representation of configuration
-        """
-        result = {}
-        for k, v in vars(self).items():
-            if isinstance(v, BaseConfig):
-                result[k] = v.to_dict()
-            else:
-                result[k] = v
-        return result
+        try:
+            # Convert self (which is a dataclass instance) to an OmegaConf config,
+            # then to a primitive container (dict, list, etc.).
+            # resolve=True ensures any interpolations are resolved.
+            return OmegaConf.to_container(OmegaConf.create(self), resolve=True)
+        except Exception as e:
+            config_logger.warning(f"Error converting config to dict using OmegaConf: {e}. Falling back to vars().")
+            result = {}
+            for k, v in vars(self).items():
+                if isinstance(v, BaseConfig):
+                    result[k] = v.to_dict() # Recursive call
+                else:
+                    result[k] = v
+            return result
 
     def get(self, key: str, default: Any = None) -> Any:
-        """
-        Get a configuration value by key, returning default if not found.
-        
-        Args:
-            key: Key to look up
-            default: Default value to return if key not found
-            
-        Returns:
-            Configuration value or default
-        """
         return getattr(self, key, default)
 
 
@@ -244,6 +206,7 @@ class DatasetConfig(BaseConfig):
     dataset_name: str = "MNIST"
     data_path: Optional[str] = None
     batch_size: int = 128
+    num_workers: int = 4  # ADDED: num_workers field, default to 4 as in YAML
     
     def validate(self) -> bool:
         """Validate dataset configuration."""
@@ -314,6 +277,7 @@ class PruningConfig(BaseConfig):
     dropout_pruning_mode: str = "global_joint"
     exclude_classification_layer: bool = True
     use_multi_strategy_dropout: bool = True
+    num_batches_for_scores: Optional[int] = 5  # MODIFIED: Allow None for all batches, default to 5
 
     def validate(self) -> bool:
         if not (0.0 <= self.dropout_min <= 1.0):
@@ -332,20 +296,21 @@ class PruningConfig(BaseConfig):
 
         if self.dropout_mode not in ["scaled", "unscaled"]:
             raise ValueError(f"Invalid dropout_mode: '{self.dropout_mode}'. Valid are: ['scaled', 'unscaled']")
+        if self.num_batches_for_scores is not None and self.num_batches_for_scores <= 0:
+            raise ValueError(f"PruningConfig num_batches_for_scores must be positive if specified, got {self.num_batches_for_scores}")
         return True
 
 
 @dataclass
 class MetricTrackerConfig(BaseConfig):
-    name: str = "RQ"  # Name of the metric (e.g., "RQ", "MI")
-    num_batches: int = 5 # Number of batches from the dataloader to use
+    name: str = "RQ"  
+    num_batches: Optional[int] = 5 # MODIFIED: Allow None for all batches, default to 5
 
     def validate(self) -> bool:
         if not self.name:
             raise ValueError("MetricTrackerConfig 'name' cannot be empty.")
-        # Ensure metric name is known/valid if possible (might require access to a registry, or leave to runtime check)
-        if self.num_batches <= 0:
-            raise ValueError(f"MetricTrackerConfig 'num_batches' must be positive, got {self.num_batches}")
+        if self.num_batches is not None and self.num_batches <= 0:
+            raise ValueError(f"MetricTrackerConfig 'num_batches' must be positive if specified, got {self.num_batches}")
         return True
 
 
@@ -376,17 +341,26 @@ class AlignmentConfig(BaseConfig):
     metric: str = "RQ"
     scale_by_norm: bool = False
     cnn_mode: str = "unfold"
+    cnn_rq_aggregation_op: str = "mean"
     run_progressive: bool = True 
     run_eigenvector: bool = False
     callbacks: Optional[CallbackSettings] = None
+    force_cpu_for_large_metric_ops: bool = True
 
     def __post_init__(self):
+        # If OmegaConf.to_object correctly instantiates CallbackSettings from a dict
+        # based on the type hint, this explicit cast might not be strictly necessary.
+        # However, it's a good safeguard for cases where `callbacks` might be populated
+        # as a dict through other means or if older OmegaConf versions are less robust.
         if self.callbacks is not None and isinstance(self.callbacks, dict):
+            config_logger.debug(f"AlignmentConfig.__post_init__: self.callbacks is a dict, attempting to cast to CallbackSettings.")
             try:
                 self.callbacks = CallbackSettings(**self.callbacks)
             except Exception as e:
                 config_logger.error(f"Failed to cast AlignmentConfig.callbacks to CallbackSettings in __post_init__: {e}. Setting to None.")
                 self.callbacks = None
+        elif self.callbacks is not None and not isinstance(self.callbacks, CallbackSettings):
+            config_logger.warning(f"AlignmentConfig.__post_init__: self.callbacks is not a dict but also not CallbackSettings. Type: {type(self.callbacks)}. Leaving as is.")
 
     def validate(self) -> bool:
         import warnings 
@@ -394,21 +368,18 @@ class AlignmentConfig(BaseConfig):
         if self.metric not in valid_metrics:
             warnings.warn(f"Unusual alignment metric: {self.metric}. Supported: {valid_metrics}")
         
-        if self.cnn_mode not in ["unfold", "patchwise", "batch_patch_combined"]:
-            raise ValueError(f"Invalid CNN mode: {self.cnn_mode}. Supported: ['unfold', 'patchwise', 'batch_patch_combined']")
+        valid_cnn_modes = ["unfold", "patchwise", "batch_patch_combined", "filter_patch_summary"]
+        if self.cnn_mode not in valid_cnn_modes:
+            raise ValueError(f"Invalid CNN mode: {self.cnn_mode}. Supported: {valid_cnn_modes}")
+
+        valid_rq_ops = ["mean", "max", "var", "sum"]
+        if self.cnn_rq_aggregation_op not in valid_rq_ops:
+            raise ValueError(f"Invalid cnn_rq_aggregation_op: {self.cnn_rq_aggregation_op}. Supported: {valid_rq_ops}")
         
         if self.callbacks is not None:
-            # Attempt conversion if it's still a dict (e.g., if __post_init__ wasn't effective due to instantiation order)
-            if isinstance(self.callbacks, dict):
-                config_logger.info(f"AlignmentConfig.callbacks is a dict in validate(), attempting conversion.")
-                try:
-                    self.callbacks = CallbackSettings(**self.callbacks)
-                except Exception as e:
-                    config_logger.error(f"Failed to cast AlignmentConfig.callbacks from dict to CallbackSettings during validate: {e}")
-                    raise ValueError(f"AlignmentConfig.callbacks dict could not be cast to CallbackSettings: {e}") from e
-            
             if not isinstance(self.callbacks, CallbackSettings):
-                 raise ValueError(f"AlignmentConfig.callbacks is not a CallbackSettings instance after attempted conversion. Type: {type(self.callbacks)}")
+                 # This should ideally be caught by __post_init__ or OmegaConf.to_object instantiation
+                raise ValueError(f"AlignmentConfig.callbacks is not a CallbackSettings instance after __post_init__. Type: {type(self.callbacks)}")
             self.callbacks.validate()
         return True
 
@@ -452,11 +423,17 @@ class CheckpointingConfig(BaseConfig):
 class ExtraConfig(BaseConfig):
     """Extra configuration parameters - now mostly for logging or less critical options."""
     # Parameters like log_frequency, log_images, detailed_logging from your YAML's old extra can go here.
-    # For now, keeping it minimal if other params were moved.
-    # If all params are moved, this class might become obsolete or be used for truly ad-hoc additions.
+    log_frequency: int = 1
+    log_images: bool = True 
+    detailed_logging: bool = True
     dummy_extra_param: Optional[str] = None # Placeholder if it becomes empty
 
     def validate(self) -> bool:
+        if self.log_frequency <= 0:
+            # Allow 0 if it means "log never" or handle appropriately, for now positive
+            # Or make it Optional[int] if it can be absent.
+            # Based on typical usage, 1 might be "every epoch/step", so >0 is reasonable.
+            pass # Or raise ValueError if it must be strictly positive
         return True
 
 
@@ -491,15 +468,15 @@ class ExperimentConfig(BaseConfig):
     extra: ExtraConfig = field(default_factory=ExtraConfig)
     
     def __post_init__(self):
-        # No longer need to handle wandb as a dict here if it's properly typed
-        if self.wandb is not None and not isinstance(self.wandb, WandbConfig):
-             # This might happen if loaded from an old config dict not using WandbConfig structure
-             logger.warning(f"ExperimentConfig.wandb was type {type(self.wandb)}, attempting to cast to WandbConfig.")
+        if self.wandb is not None and isinstance(self.wandb, dict):
+             config_logger.debug(f"ExperimentConfig.__post_init__: self.wandb is a dict, attempting to cast to WandbConfig.")
              try:
-                 self.wandb = WandbConfig(**self.wandb) if isinstance(self.wandb, dict) else WandbConfig()
+                 self.wandb = WandbConfig(**self.wandb)
              except TypeError as e:
-                 logger.error(f"Failed to cast self.wandb to WandbConfig: {e}. Using default WandbConfig.")
+                 config_logger.error(f"Failed to cast self.wandb to WandbConfig: {e}. Using default WandbConfig.")
                  self.wandb = WandbConfig()
+        elif self.wandb is not None and not isinstance(self.wandb, WandbConfig):
+            config_logger.warning(f"ExperimentConfig.__post_init__: self.wandb is not a dict but also not WandbConfig. Type: {type(self.wandb)}. Leaving as is.")
 
     def validate(self) -> bool:
         """

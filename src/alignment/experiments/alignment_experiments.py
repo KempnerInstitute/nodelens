@@ -297,13 +297,16 @@ class AlignmentExperiment(Experiment):
                 'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []
             }
         
+        num_batches_for_metric_calc = self.config.pruning_settings.num_batches_for_scores
+
         results_from_manager = {}
         try:
             results_from_manager = run_progressive_dropout_experiment(
                 networks, dataset, dropout_fractions, metric_to_use, self.device,
                 pruning_mode=pruning_mode, dropout_mode=dropout_mode_val, 
                 show_progress=True, debug_mode=self.debug_mode,
-                exclude_classification_layer_config=effective_exclude_classification_layer
+                exclude_classification_layer_config=effective_exclude_classification_layer,
+                num_batches_for_pre_scoring=num_batches_for_metric_calc
             )
         except Exception as e:
             logger.error(f"Error during run_progressive_dropout_experiment call: {str(e)}")
@@ -394,6 +397,7 @@ class AlignmentExperiment(Experiment):
 
         exclude_cls_layer = self.config.pruning_settings.exclude_classification_layer
         dropout_mode_val = self.config.pruning_settings.dropout_mode
+        num_batches_for_metric_calc_isolated = self.config.pruning_settings.num_batches_for_scores
         metric_instance_for_isolated = self.metric
 
         results_from_manager = run_layer_isolated_dropout_experiment(
@@ -405,7 +409,8 @@ class AlignmentExperiment(Experiment):
             dropout_mode=dropout_mode_val,
             show_progress=True, 
             debug_mode=self.debug_mode,
-            exclude_classification_layer_config=exclude_cls_layer
+            exclude_classification_layer_config=exclude_cls_layer,
+            num_batches_for_pre_scoring=num_batches_for_metric_calc_isolated
         )
 
         # Call the specific plotting function for layer-isolated results
@@ -481,19 +486,17 @@ class AlignmentExperiment(Experiment):
                     dict_metric_configs.append(conf_dict)
 
                 tracker = AlignmentMetricTracker(
-                    metric_configs=dict_metric_configs, # Pass list of config dicts
+                    metric_configs=dict_metric_configs, 
                     data_loader=metric_dataloader, 
                     device=self.device,
-                    # num_batches is now per metric_config, AlignmentMetricTracker needs one num_batches for all.
-                    # Let's use the num_batches from the first metric config for the tracker's overall data pass.
-                    # This is a simplification; ideally, compute_all_node_scores would manage this internally if it differs per metric.
-                    # For now, the tracker's num_batches applies to the single data pass for all its configured metrics.
                     num_batches=metric_configs_to_track[0].num_batches if metric_configs_to_track else 5,
-                    experiment_config=self.config 
+                    experiment_config=self.config, 
+                    global_cnn_mode=self.config.alignment_settings.cnn_mode,
+                    global_cnn_rq_aggregation_op=self.config.alignment_settings.cnn_rq_aggregation_op
                 )
                 callbacks_list.append(tracker)
-                self.metric_tracker_instance = tracker # Store the single instance
-                logger.info(f"Added single AlignmentMetricTracker for metrics: {[mc.name for mc in metric_configs_to_track]}.")
+                self.metric_tracker_instance = tracker 
+                logger.info(f"Added single AlignmentMetricTracker for metrics: {[mc['name'] for mc in dict_metric_configs]}.")
 
         if self.config.training.epochs > 0:
             if self.config.training.train_before_dropout:

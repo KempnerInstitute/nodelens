@@ -100,76 +100,97 @@ class MIMetric(AlignmentMetricBase):
         Returns:
             Tensor containing MI values per weight vector
         """
-        # Normalize inputs and weights
-        X = (inputs - inputs.min()) / (inputs.max() - inputs.min() + eps)
-        W_norm = weights / (torch.norm(weights, dim=1, keepdim=True) + eps)
-        
-        # Calculate projections
-        projections = torch.matmul(X, W_norm.t())
-        
-        # Calculate MI for each weight vector
-        mi_scores = torch.zeros(weights.shape[0], device=weights.device)
+        # `inputs` is X_processed_one_batch (potentially (N_patches, D_filter_features))
+        # `weights` is w_flat (potentially (Out_filters, D_filter_features))
+        # All metric-specific computations should ideally happen on CPU if inputs are large to avoid OOM.
 
-        for i in range(projections.shape[1]):
-            x_node_projection = projections[:, i].contiguous().cpu()
-            y_variable_for_mi = inputs.mean(dim=1).cpu() # Example, ensure this is intended for your MI
+        original_device = inputs.device # Device of the incoming processed activations
+        mi_scores_device = weights.device # Final scores should be on original weights device
+
+        # Determine if processing should be forced to CPU based on input size
+        perform_on_cpu = False
+        if inputs.is_cuda and ((inputs.shape[0] > 200_000 and inputs.shape[1] > 50) or (inputs.numel() > 10_000_000)):
+            # logger.info(f"MI: Large input tensor X ({inputs.shape}) detected on CUDA. Offloading to CPU.") # Ensure logger is available
+            perform_on_cpu = True
+
+        current_inputs = inputs.cpu() if perform_on_cpu else inputs
+        current_weights = weights.cpu() if perform_on_cpu else weights # Weights for projections
+        
+        # Normalization of inputs (on CPU if offloaded)
+        min_in = current_inputs.min()
+        max_in = current_inputs.max()
+        # Handle cases where max_in == min_in to avoid division by zero or NaN
+        if max_in == min_in:
+            X_normalized = torch.zeros_like(current_inputs)
+        else:
+            X_normalized = (current_inputs - min_in) / (max_in - min_in + eps)
+        
+        # Normalize weights (on CPU if offloaded)
+        norm_W = torch.norm(current_weights, dim=1, keepdim=True)
+        W_norm = current_weights / (norm_W + eps)
+        
+        projections = torch.matmul(X_normalized, W_norm.t()) # Result is on CPU if offloaded
+        
+        mi_scores = torch.zeros(weights.shape[0], device=mi_scores_device) # Final scores on original device
+
+        for i in range(projections.shape[1]):  
+            x_node_projection = projections[:, i].contiguous().cpu() # Ensure it's on CPU for histogram
+            # y_variable_for_mi needs to be on CPU for np.histogram2d
+            y_variable_for_mi = current_inputs.mean(dim=1).cpu() # current_inputs is already on CPU if offloaded
 
             if x_node_projection.numel() == 0 or y_variable_for_mi.numel() == 0:
-                mi_scores[i] = 0.0
-                continue
+                # Score already 0, correctly placed on mi_scores_device by initialization
+                continue 
             
-            min_val_x, max_val_x = x_node_projection.min(), x_node_projection.max()
-            min_val_y, max_val_y = y_variable_for_mi.min(), y_variable_for_mi.max()
+            min_val_x, max_val_x = x_node_projection.min().item(), x_node_projection.max().item()
+            min_val_y, max_val_y = y_variable_for_mi.min().item(), y_variable_for_mi.max().item()
 
-            # .item() is crucial if min/max_val are 0-dim tensors
-            range_x = (min_val_x.item(), max_val_x.item()) if max_val_x > min_val_x else None
-            range_y = (min_val_y.item(), max_val_y.item()) if max_val_y > min_val_y else None
+            range_x_tuple = (min_val_x, max_val_x) if max_val_x > min_val_x + eps else None
+            range_y_tuple = (min_val_y, max_val_y) if max_val_y > min_val_y + eps else None
 
-            if range_x is not None:
-                hist_x, _ = torch.histogram(input=x_node_projection, bins=bins, range=range_x, density=True, weight=None)
+            # torch.histogram expects CPU inputs if not implemented for CUDA for certain args
+            if range_x_tuple is not None:
+                hist_x, _ = torch.histogram(input=x_node_projection, bins=bins, range=range_x_tuple, density=True)
             else:
-                # If range is None (e.g., all values are the same), let torch.histogram use its default range finding for this case
-                hist_x, _ = torch.histogram(input=x_node_projection, bins=bins, density=True, weight=None)
+                hist_x, _ = torch.histogram(input=x_node_projection, bins=bins, density=True)
             
-            if range_y is not None:
-                hist_y, _ = torch.histogram(input=y_variable_for_mi, bins=bins, range=range_y, density=True, weight=None)
+            if range_y_tuple is not None:
+                hist_y, _ = torch.histogram(input=y_variable_for_mi, bins=bins, range=range_y_tuple, density=True)
             else:
-                hist_y, _ = torch.histogram(input=y_variable_for_mi, bins=bins, density=True, weight=None)
+                hist_y, _ = torch.histogram(input=y_variable_for_mi, bins=bins, density=True)
 
-            if x_node_projection.shape[0] != y_variable_for_mi.shape[0] or range_x is None or range_y is None:
-                mi_scores[i] = 0.0
-                continue
+            if x_node_projection.shape[0] != y_variable_for_mi.shape[0] or range_x_tuple is None or range_y_tuple is None:
+                continue # Score already 0
             
             try:
                 hist_xy_np, _, _ = np.histogram2d(
                     x_node_projection.numpy().flatten(), 
                     y_variable_for_mi.numpy().flatten(), 
                     bins=bins, 
-                    range=[list(range_x), list(range_y)], 
+                    range=[list(range_x_tuple), list(range_y_tuple)], 
                     density=True
                 )
-                hist_xy = torch.from_numpy(hist_xy_np).float().to(hist_x.device)
+                hist_xy = torch.from_numpy(hist_xy_np).float() # CPU tensor
             except Exception as e_hist2d:
-                mi_scores[i] = 0.0
-                continue
+                # logger.warning(f"MI node {i}: Error in np.histogram2d: {e_hist2d}")
+                continue # Score already 0
             
-            bin_width_x = (range_x[1] - range_x[0]) / bins if range_x else 1.0 
-            bin_width_y = (range_y[1] - range_y[0]) / bins if range_y else 1.0
+            bin_width_x = (range_x_tuple[1] - range_x_tuple[0]) / bins if range_x_tuple else 1.0 
+            bin_width_y = (range_y_tuple[1] - range_y_tuple[0]) / bins if range_y_tuple else 1.0
             
-            px = hist_x * bin_width_x
-            py = hist_y * bin_width_y
-            pxy = hist_xy * bin_width_x * bin_width_y
+            px = hist_x * bin_width_x 
+            py = hist_y * bin_width_y 
+            pxy = hist_xy * bin_width_x * bin_width_y 
 
-            px = torch.clamp(px, min=eps)
-            py = torch.clamp(py, min=eps)
-            pxy = torch.clamp(pxy, min=eps)
+            px = torch.clamp(px, min=eps); py = torch.clamp(py, min=eps); pxy = torch.clamp(pxy, min=eps)
             
-            h_x = -torch.sum(px * torch.log2(px))
-            h_y = -torch.sum(py * torch.log2(py))
-            h_xy = -torch.sum(pxy * torch.log2(pxy))
+            h_x = -torch.sum(px[px>0] * torch.log2(px[px>0]))
+            h_y = -torch.sum(py[py>0] * torch.log2(py[py>0]))
+            h_xy = -torch.sum(pxy[pxy>0] * torch.log2(pxy[pxy>0]))
             
             mi_val = h_x + h_y - h_xy
-            mi_scores[i] = torch.clamp(mi_val, min=0.0)
+            mi_scores[i] = torch.clamp(mi_val, min=0.0).to(mi_scores_device) # Move final scalar score to original device
+
         return mi_scores
 
 
