@@ -33,7 +33,8 @@ def run_progressive_dropout_experiment(
     dropout_mode: str = "scaled",
     show_progress: bool = True,
     debug_mode: bool = False,
-    exclude_classification_layer_config: bool = True
+    exclude_classification_layer_config: bool = True,
+    num_batches_for_pre_scoring: int = 5
 ) -> Dict:
     """
     Run progressive dropout experiment on multiple networks with multiple strategies.
@@ -49,6 +50,7 @@ def run_progressive_dropout_experiment(
         show_progress: Whether to show progress bars
         debug_mode: Whether to print additional debug information
         exclude_classification_layer_config: Whether to exclude the classification layer from the experiment
+        num_batches_for_pre_scoring: Number of batches to use for pre-scoring
         
     Returns:
         Dictionary with dropout experiment results
@@ -91,32 +93,38 @@ def run_progressive_dropout_experiment(
             metric_configs=metric_config_for_pruning, 
             device=device, 
             data_loader=dataset.test_loader,
-            num_batches=5, 
+            num_batches=num_batches_for_pre_scoring,
             debug_mode=debug_mode
         )
         
-        current_net_scores = {} # Default to empty dict
-        # Try to get scores for the specifically requested metric_instance.name
-        # scores_dict_of_dict is {layer_idx: {metric_name: tensor}}
-        if scores_dict_of_dict: # Ensure it's not empty
-            # Check if the expected metric_name is present in the results for the first layer (as a proxy)
-            first_layer_idx = next(iter(scores_dict_of_dict), None)
-            if first_layer_idx is not None and metric_instance.name in scores_dict_of_dict[first_layer_idx]:
-                for layer_idx_key, metrics_in_layer_val in scores_dict_of_dict.items():
-                    current_net_scores[layer_idx_key] = metrics_in_layer_val.get(metric_instance.name)
-            else: # Fallback: if the primary metric name isn't found, try using the first available metric
-                logger.warning(f"Progressive Dropout: Could not find primary metric '{metric_instance.name}' in scores for network {net_idx}. Attempting fallback.")
+        current_net_scores = {} 
+        if scores_dict_of_dict:
+            # Try to get scores for the specifically requested metric_instance.name
+            # scores_dict_of_dict is {layer_idx: {metric_name: tensor}}
+            # First, check if the primary metric is available in any layer
+            metric_found = False
+            for layer_idx_key in scores_dict_of_dict:
+                if metric_instance.name in scores_dict_of_dict[layer_idx_key]:
+                    metric_found = True
+                    current_net_scores[layer_idx_key] = scores_dict_of_dict[layer_idx_key][metric_instance.name]
+                else:
+                    # If metric not in this layer, fill with None or zeros (current logic in compute_all_node_scores might do zeros)
+                    current_net_scores[layer_idx_key] = None # Or torch.zeros_like(some_other_tensor_from_this_layer)
+            
+            if not metric_found:
+                logger.warning(f"Progressive Dropout: Primary metric '{metric_instance.name}' not found in any layer for network {net_idx}. Attempting fallback.")
                 first_metric_name_found = None
-                if first_layer_idx is not None and scores_dict_of_dict[first_layer_idx]:
-                    first_metric_name_found = next(iter(scores_dict_of_dict[first_layer_idx].keys()), None)
+                first_layer_idx_for_fallback = next(iter(scores_dict_of_dict), None)
+                if first_layer_idx_for_fallback is not None and scores_dict_of_dict[first_layer_idx_for_fallback]:
+                    first_metric_name_found = next(iter(scores_dict_of_dict[first_layer_idx_for_fallback].keys()), None)
                 
                 if first_metric_name_found:
                     logger.warning(f"Progressive Dropout: Using fallback metric '{first_metric_name_found}' for pruning scores for network {net_idx}.")
+                    current_net_scores = {} # Reset and rebuild
                     for layer_idx_key, metrics_in_layer_val in scores_dict_of_dict.items():
                         current_net_scores[layer_idx_key] = metrics_in_layer_val.get(first_metric_name_found)
                 else:
-                    logger.error(f"Progressive Dropout: Failed to obtain any scores for network {net_idx} for metric '{metric_instance.name}' or any fallback metric.")
-                    # current_net_scores remains empty. This might cause issues if downstream code strictly expects scores.
+                    logger.error(f"Progressive Dropout: Failed to obtain any scores for network {net_idx} for any metric.")
         else:
             logger.error(f"Progressive Dropout: compute_all_node_scores returned empty dict for network {net_idx}.")
 
@@ -335,7 +343,8 @@ def run_layer_isolated_dropout_experiment(
     dropout_mode: str = "scaled",
     show_progress: bool = True,
     debug_mode: bool = False,
-    exclude_classification_layer_config: bool = True
+    exclude_classification_layer_config: bool = True,
+    num_batches_for_pre_scoring: int = 5
 ) -> Dict:
     logger.info("Starting Layer Isolated Dropout Experiment")
     device = _normalize_device(device)
@@ -371,27 +380,33 @@ def run_layer_isolated_dropout_experiment(
             device=device, 
             data_loader=dataset.test_loader,
             debug_mode=debug_mode, 
-            num_batches=5 
+            num_batches=num_batches_for_pre_scoring
         )
         
-        scores_this_rep_single_metric = {} # Default to empty dict
+        scores_this_rep_single_metric = {} 
         if scores_dict_this_rep:
-            first_layer_idx = next(iter(scores_dict_this_rep), None)
-            if first_layer_idx is not None and metric.name in scores_dict_this_rep[first_layer_idx]:
-                for layer_idx_key, metrics_in_layer_val in scores_dict_this_rep.items():
-                    scores_this_rep_single_metric[layer_idx_key] = metrics_in_layer_val.get(metric.name)
-            else:
-                logger.warning(f"Layer Isolated: Could not find primary metric '{metric.name}' in scores for network {net_idx}. Attempting fallback.")
-                first_metric_name_found = None
-                if first_layer_idx is not None and scores_dict_this_rep[first_layer_idx]:
-                    first_metric_name_found = next(iter(scores_dict_this_rep[first_layer_idx].keys()), None)
-                
-                if first_metric_name_found:
-                    logger.warning(f"Layer Isolated: Using fallback metric '{first_metric_name_found}' for network {net_idx}.")
-                    for layer_idx_key, metrics_in_layer_val in scores_dict_this_rep.items():
-                        scores_this_rep_single_metric[layer_idx_key] = metrics_in_layer_val.get(first_metric_name_found)
+            metric_found_isolated = False
+            for layer_idx_key in scores_dict_this_rep:
+                if metric.name in scores_dict_this_rep[layer_idx_key]:
+                    metric_found_isolated = True
+                    scores_this_rep_single_metric[layer_idx_key] = scores_dict_this_rep[layer_idx_key][metric.name]
                 else:
-                    logger.error(f"Layer Isolated: Failed to obtain any scores for network {net_idx} for metric '{metric.name}' or any fallback metric.")
+                    scores_this_rep_single_metric[layer_idx_key] = None
+
+            if not metric_found_isolated:
+                logger.warning(f"Layer Isolated: Primary metric '{metric.name}' not found for network {net_idx}. Attempting fallback.")
+                first_metric_name_found_iso = None
+                first_layer_idx_for_fallback_iso = next(iter(scores_dict_this_rep), None)
+                if first_layer_idx_for_fallback_iso is not None and scores_dict_this_rep[first_layer_idx_for_fallback_iso]:
+                    first_metric_name_found_iso = next(iter(scores_dict_this_rep[first_layer_idx_for_fallback_iso].keys()), None)
+                
+                if first_metric_name_found_iso:
+                    logger.warning(f"Layer Isolated: Using fallback metric '{first_metric_name_found_iso}' for network {net_idx}.")
+                    scores_this_rep_single_metric = {} # Reset and rebuild
+                    for layer_idx_key, metrics_in_layer_val in scores_dict_this_rep.items():
+                        scores_this_rep_single_metric[layer_idx_key] = metrics_in_layer_val.get(first_metric_name_found_iso)
+                else:
+                    logger.error(f"Layer Isolated: Failed to obtain any scores for network {net_idx} for any metric.")
         else:
             logger.error(f"Layer Isolated: compute_all_node_scores returned empty dict for network {net_idx}.")
 
@@ -399,14 +414,14 @@ def run_layer_isolated_dropout_experiment(
         desc_indices_this_rep = {}
         rand_indices_this_rep = {}
         for l_idx_scores, score_tensor in scores_this_rep_single_metric.items():
-            if score_tensor is not None and score_tensor.numel() > 0: # Check if tensor is valid
+            if score_tensor is not None and isinstance(score_tensor, torch.Tensor) and score_tensor.numel() > 0:
                 count = score_tensor.shape[0]
                 asc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=False)
                 desc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=True)
                 allidx_layer = list(range(count))
                 random.shuffle(allidx_layer)
                 rand_indices_this_rep[l_idx_scores] = torch.tensor(allidx_layer, device=device, dtype=torch.long)
-            else: # Handle case where score_tensor might be None or empty due to fallback failure
+            else:
                 asc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)
                 desc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)
                 rand_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)

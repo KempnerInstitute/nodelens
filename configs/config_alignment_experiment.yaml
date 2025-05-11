@@ -88,7 +88,7 @@ training:
 alignment_settings:
   metric: "RQ"                          # Alignment metric to use. Options: "RQ", "NullSpace", "MI", "WeightSimilarity", "NodeRedundancy", "RankAlignment".
   scale_by_norm: false                  # For RQ metric: if true, scales input covariance matrix by its norm.
-  cnn_mode: "unfold"                    # How CNN features are processed for metrics. Options:
+  cnn_mode: "batch_patch_combined"                    # How CNN features are processed for metrics. Options:
                                         #   "unfold": Uses `torch.nn.functional.unfold` to create patches, then flattens.
                                         #   "patchwise": Processes each patch separately.
                                         #   "batch_patch_combined": Combines batch and patch dimensions after unfolding.
@@ -96,15 +96,15 @@ alignment_settings:
   run_progressive: true                 # If true and exp_type="alignment_analysis", run progressive dropout part.
   run_eigenvector: false                # If true and exp_type="alignment_analysis", run eigenvector dropout part.
   # NEW: Callbacks for tracking alignment metrics during training
-  callbacks:
-    alignment_metrics:
-      - name: "RQ"             # Metric to track (must be a valid metric name)
-        num_batches: 3       # Number of batches from test_loader to use for this metric per epoch
-      - name: "MI"             # Another metric to track
-        num_batches: 3
+  callbacks: {}
+    # alignment_metrics:
+    #   - name: "RQ"             # Metric to track (must be a valid metric name)
+    #     num_batches: 3       # Number of batches from test_loader to use for this metric per epoch
+    #   - name: "MI"             # Another metric to track
+    #     num_batches: 3
       # - name: "RankAlignment" # Example for another metric
       #   num_batches: 3 
-
+      
 # -----------------------------------------------------------------------------
 # VI. Pruning Experiment Settings
 # -----------------------------------------------------------------------------
