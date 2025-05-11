@@ -276,6 +276,7 @@ class TrainingConfig(BaseConfig):
     
     # MOVED from ExtraConfig
     training_method: str = "auto"  # Options: "auto", "sequential", "fully_tensorized"
+    train_before_dropout: bool = True  # ADDED: Controls initial training before dropout experiments
     
     def validate(self) -> bool:
         """Validate training configuration."""

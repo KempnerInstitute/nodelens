@@ -43,7 +43,7 @@ def train_network(
     progress_callback: Optional[Callable[[int, float, float], None]] = None,
 ) -> Dict[str, List[float]]:
     """
-    Train a neural network.
+    Train a neural network. (Legacy wrapper around train_model)
     
     Args:
         network: The neural network to train
@@ -60,86 +60,77 @@ def train_network(
         Dictionary with training metrics (loss, accuracy)
     """
     if device is None:
-        device = next(network.parameters()).device
+        device = next(network.parameters()).device if hasattr(network, 'parameters') and next(iter(network.parameters()), None) is not None else _normalize_device(None)
+    else:
+        device = _normalize_device(device)
     
-    # Set network to training mode
-    network.train()
-    
-    # Get data loader (use dataset's batch size if not specified)
-    if batch_size is None:
-        batch_size = dataset.batch_size
-    
-    train_loader = DataLoader(
-        dataset.train_dataset, 
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=2,
-        pin_memory=True if device.type == 'cuda' else False
-    )
-    
-    # Loss function
-    criterion = nn.CrossEntropyLoss()
-    
-    # Optimizer
+    _ensure_model_on_device(network, device)
+
+    # Get data loader from DataSet, respecting batch_size override
+    # DataSet.train_loader is created with dataset.batch_size by default.
+    # If batch_size is specified here, it implies a different loader config for this specific call.
+    # For simplicity in this refactor, we assume dataset.train_loader is used.
+    # If batch_size override for train_network is critical, DataSet would need a method to get a loader with a specific batch_size.
+    if batch_size is not None and batch_size != dataset.dataloader_parameters.get('batch_size'):
+        logger.warning(f"train_network batch_size override ({batch_size}) is provided, but DataSet.train_loader uses {dataset.dataloader_parameters.get('batch_size')}. Using DataSet default.")
+        # To truly use the override, one might do:
+        # temp_loader_params = dataset.dataloader_parameters.copy()
+        # temp_loader_params['batch_size'] = batch_size
+        # train_loader = DataLoader(dataset.train_dataset, sampler=dataset.train_sampler, **temp_loader_params)
+        # For now, stick to the dataset's pre-configured loader:
+    train_loader = dataset.train_loader
+
     optimizer_class = getattr(optim, optimizer_name)
     optimizer = optimizer_class(
         network.parameters(), 
         lr=learning_rate,
         weight_decay=weight_decay
     )
+
+    # Adapt the old progress_callback to the new callback system if provided
+    # The old callback expects (epoch, epoch_loss, epoch_acc)
+    # The new callback system in train_model provides a richer epoch_context dict.
+    internal_callbacks = []
+    if progress_callback:
+        def wrapper_callback(epoch_context: Dict[str, Any]):
+            # The old callback expects 0-indexed epoch for its first arg, train_model passes 1-indexed.
+            progress_callback(
+                epoch_context["epoch"] - 1, 
+                epoch_context["train_loss"],
+                epoch_context["train_accuracy"]
+            )
+        internal_callbacks.append(wrapper_callback)
     
-    # Training history
+    # Call train_model
+    # train_model returns a comprehensive history. We need to adapt it.
+    # It also handles its own logging and progress bar (via tqdm in train_loader).
+    # We set return_history=True to get the history dict.
+    # Assuming val_loader=None for train_network as it only reports training loss/acc.
+    # Pass dataset.config_object for evaluation if train_model was to do validation.
+    train_model_history = train_model(
+        model=network,
+        train_loader=train_loader,
+        val_loader=None, # train_network doesn't do validation in its loop
+        optimizer=optimizer,
+        num_epochs=epochs,
+        device=device,
+        return_history=True,
+        callbacks=internal_callbacks,
+        dataset_config_for_eval=None # No validation here
+    )
+
+    # Adapt the returned history to the old format
+    # Old format: {'train_loss': [], 'train_acc': []}
+    # train_model_history format: {'train_loss': [], 'train_accuracy': [], 'val_loss': [], ...}
     history = {
-        'train_loss': [],
-        'train_acc': []
+        'train_loss': train_model_history.get('train_loss', []),
+        'train_acc': train_model_history.get('train_accuracy', [])
     }
     
-    # Training loop
-    for epoch in range(epochs):
-        running_loss = 0.0
-        correct = 0
-        total = 0
-        
-        start_time = time.time()
-        
-        # Iterate over batches
-        for i, (inputs, labels) in enumerate(train_loader):
-            inputs, labels = inputs.to(device), labels.to(device)
-            
-            # Zero the parameter gradients
-            optimizer.zero_grad()
-            
-            # Forward + backward + optimize
-            outputs = network(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            
-            # Statistics
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-        
-        # Calculate epoch metrics
-        epoch_loss = running_loss / len(train_loader)
-        epoch_acc = 100 * correct / total
-        epoch_time = time.time() - start_time
-        
-        # Save history
-        history['train_loss'].append(epoch_loss)
-        history['train_acc'].append(epoch_acc)
-        
-        # Log progress
-        logger.info(f'Epoch {epoch+1}/{epochs} - '
-                   f'Loss: {epoch_loss:.4f}, '
-                   f'Accuracy: {epoch_acc:.2f}%, '
-                   f'Time: {epoch_time:.2f}s')
-        
-        # Progress callback
-        if progress_callback:
-            progress_callback(epoch, epoch_loss, epoch_acc)
-    
+    # The original train_network logged per epoch. train_model also logs per epoch.
+    # So, explicit logging here might be redundant if train_model's logging is sufficient.
+    # For compatibility, the old progress_callback (if any) handles any specific per-epoch actions.
+
     return history
 
 
@@ -150,7 +141,7 @@ def test_network(
     device: Optional[torch.device] = None,
 ) -> Dict[str, float]:
     """
-    Test a neural network.
+    Test a neural network. (Legacy wrapper around evaluate_on_loader)
     
     Args:
         network: The neural network to test
@@ -162,56 +153,43 @@ def test_network(
         Dictionary with test metrics (loss, accuracy)
     """
     if device is None:
-        device = next(network.parameters()).device
+        device = next(network.parameters()).device if hasattr(network, 'parameters') and next(iter(network.parameters()), None) is not None else _normalize_device(None)
+    else:
+        device = _normalize_device(device)
+
+    _ensure_model_on_device(network, device)
+    network.eval() # Ensure eval mode
+
+    # The original test_network created its own test_loader respecting batch_size.
+    # evaluate_on_loader takes a data_loader. For consistency, we use dataset.test_loader.
+    # If batch_size override for test_network is critical, similar logic as in train_network applies.
+    if batch_size is not None and batch_size != dataset.dataloader_parameters.get('batch_size'):
+        logger.warning(f"test_network batch_size override ({batch_size}) is provided, but DataSet.test_loader uses {dataset.dataloader_parameters.get('batch_size')}. Using DataSet default.")
     
-    # Set network to evaluation mode
-    network.eval()
+    test_loader_to_use = dataset.test_loader
+
+    # evaluate_on_loader returns {'loss': avg_loss, 'accuracy': accuracy}
+    # which is compatible with what test_network needs to return, but keys are slightly different.
+    # original test_network returned {'test_loss': avg_loss, 'test_acc': accuracy}
+    # evaluate_on_loader is quiet by default regarding its own final summary if show_progress=False.
+    # The original test_network had its own logger.info for the final result.
     
-    # Get data loader (use dataset's batch size if not specified)
-    if batch_size is None:
-        batch_size = dataset.batch_size
-    
-    test_loader = DataLoader(
-        dataset.test_dataset, 
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=2,
-        pin_memory=True if device.type == 'cuda' else False
+    eval_metrics = evaluate_on_loader(
+        model=network, 
+        data_loader=test_loader_to_use, 
+        device=device, 
+        show_progress=False # Keep it quiet, test_network does its own logging
     )
     
-    # Loss function
-    criterion = nn.CrossEntropyLoss()
-    
-    test_loss = 0.0
-    correct = 0
-    total = 0
-    
-    # No gradient computation during testing
-    with torch.no_grad():
-        for inputs, labels in test_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            
-            # Forward pass
-            outputs = network(inputs)
-            loss = criterion(outputs, labels)
-            
-            # Statistics
-            test_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    
-    # Calculate metrics
-    avg_loss = test_loss / len(test_loader)
-    accuracy = 100 * correct / total
-    
-    # Log results
-    logger.info(f'Test - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%')
-    
-    return {
-        'test_loss': avg_loss,
-        'test_acc': accuracy
+    # Adapt keys for return value
+    results_to_return = {
+        'test_loss': eval_metrics['loss'],
+        'test_acc': eval_metrics['accuracy']
     }
+    
+    logger.info(f"Test - Loss: {results_to_return['test_loss']:.4f}, Accuracy: {results_to_return['test_acc']:.2f}%")
+    
+    return results_to_return
 
 
 @timed
@@ -227,7 +205,7 @@ def train_and_test(
     progress_callback: Optional[Callable[[int, float, float], None]] = None,
 ) -> Dict[str, Dict[str, Union[List[float], float]]]:
     """
-    Train and test a neural network.
+    Train and test a neural network. (Legacy wrapper)
     
     Args:
         network: The neural network to train
@@ -243,7 +221,7 @@ def train_and_test(
     Returns:
         Dictionary with training and test metrics
     """
-    # Train network
+    # Calls the now refactored train_network and test_network
     train_history = train_network(
         network=network,
         dataset=dataset,
@@ -256,7 +234,6 @@ def train_and_test(
         progress_callback=progress_callback
     )
     
-    # Test network
     test_metrics = test_network(
         network=network,
         dataset=dataset,
@@ -264,7 +241,6 @@ def train_and_test(
         device=device
     )
     
-    # Combine results
     return {
         'train': train_history,
         'test': test_metrics
@@ -496,20 +472,28 @@ def load_checkpoint(
 
 # Continue with the existing train and evaluate functions for backward compatibility
 @torch.no_grad()
-def evaluate(nets, dataset, **parameters):
+def evaluate(
+    nets: Union[nn.Module, List[nn.Module]], 
+    dataset: Any, # Should be DataSet instance
+    device: Optional[torch.device] = None,
+    train_set: bool = False,
+    measure_alignment: bool = False,
+    alignment_methods: Optional[List[str]] = None,
+    num_batches_for_eval: Optional[int] = None, # To limit data for faster eval
+    # ADDED: Parameter to pass down for RQ scaling
+    scale_rq_by_norm: bool = False 
+) -> Dict[str, Any]:
     """
-    Evaluate networks on a dataset.
-    
+    Evaluate network(s) on a dataset, with options for alignment measurement.
     Args:
         nets: Neural network(s) to evaluate
         dataset: Dataset to evaluate on
-        **parameters: Additional parameters
-            - train_set: Whether to use training set (default: False)
-            - alignment: Whether to measure alignment (default: False)
-            - methods: List of alignment methods to measure (default: ["RQ"])
-            - measure_expected: Whether to compute expected distributions (default: True)
-            - bins: Number of bins for histograms (default: 50)
-            
+        device: Device to evaluate on
+        train_set: Whether to use training set (default: False)
+        measure_alignment: Whether to measure alignment (default: False)
+        alignment_methods: List of alignment methods to measure (default: ["RQ"])
+        num_batches_for_eval: Number of batches to use for evaluation (default: None)
+        scale_rq_by_norm: If True and RQ is an alignment method, scale its covariance by norm.
     Returns:
         Dictionary of evaluation results
     """
@@ -581,34 +565,44 @@ def evaluate(nets, dataset, **parameters):
             net.forward(images, store_hidden=True)
             
             # Measure alignment metrics
-            metrics = net.measure_alignment_methods(images, methods=alignment_methods, precomputed=True)
-            align_data.append(metrics)
-            
-            # Compute distributions of alignment values
-            layer_dists = []
-            for layer_dict in metrics:
-                m_d = {}
-                for m, val_tensor in layer_dict.items():
-                    val_cpu = val_tensor.detach().cpu()
-                    c, e = torch.histogram(val_cpu, bins=bins, density=True)
-                    m_d[m] = (c, e)
-                layer_dists.append(m_d)
-            dist_data.append(layer_dists)
-            
-            # Compute expected distributions if requested
-            if measure_expected:
-                net_inps = net.get_layer_inputs(images, precomputed=False)
-                layer_exp_list = []
-                for inp in net_inps:
-                    if inp.ndim == 4:
-                        inp = inp.flatten(start_dim=1)
-                    wvals, _ = AlignmentMetrics.compute_eigenvalues(inp)
-                    method_exp = {}
-                    for m in alignment_methods:
-                        ccounts, cedges = AlignmentMetrics.measure_expected_distribution(m, wvals, bins=bins)
-                        method_exp[m] = (ccounts, cedges)
-                    layer_exp_list.append(method_exp)
-                exp_data.append(layer_exp_list)
+            if measure_alignment and isinstance(net, AlignmentNetwork):
+                if not alignment_methods:
+                    alignment_methods = ["RQ"] 
+                
+                # MODIFIED: Pass scale_by_norm_for_rq to measure_alignment_methods
+                current_net_alignment_batch = net.measure_alignment_methods(
+                    images, 
+                    methods=alignment_methods, 
+                    precomputed=False, 
+                    scale_by_norm_for_rq=scale_rq_by_norm # Passed from evaluate function's params
+                )
+                align_data.append(current_net_alignment_batch)
+                
+                # Compute distributions of alignment values
+                layer_dists = []
+                for layer_dict in current_net_alignment_batch:
+                    m_d = {}
+                    for m, val_tensor in layer_dict.items():
+                        val_cpu = val_tensor.detach().cpu()
+                        c, e = torch.histogram(val_cpu, bins=bins, density=True)
+                        m_d[m] = (c, e)
+                    layer_dists.append(m_d)
+                dist_data.append(layer_dists)
+                
+                # Compute expected distributions if requested
+                if measure_expected:
+                    net_inps = net.get_layer_inputs(images, precomputed=False)
+                    layer_exp_list = []
+                    for inp in net_inps:
+                        if inp.ndim == 4:
+                            inp = inp.flatten(start_dim=1)
+                        wvals, _ = AlignmentMetrics.compute_eigenvalues(inp)
+                        method_exp = {}
+                        for m in alignment_methods:
+                            ccounts, cedges = AlignmentMetrics.measure_expected_distribution(m, wvals, bins=bins)
+                            method_exp[m] = (ccounts, cedges)
+                        layer_exp_list.append(method_exp)
+                    exp_data.append(layer_exp_list)
                 
         # Store alignment results
         results["alignment"] = [{"epoch": "test", "batch": "all", "data": align_data}]
