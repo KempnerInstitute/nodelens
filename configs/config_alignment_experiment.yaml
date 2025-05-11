@@ -5,7 +5,7 @@
 # -----------------------------------------------------------------------------
 # I. Experiment Metadata & Core Execution
 # -----------------------------------------------------------------------------
-experiment_name: "mlp_mnist_global_joint_test" # Descriptive name for this specific experiment run
+experiment_name: "mlp_mnist_global_joint_test_callback_test" # MODIFIED: Added callback_test for clarity
 experiment_type: "progressive_dropout"    # Options: 
                                         #   "progressive_dropout" - Prunes nodes iteratively and measures performance.
                                         #   "eigenvector_dropout" - Prunes based on eigenvectors of alignment metric.
@@ -13,14 +13,14 @@ experiment_type: "progressive_dropout"    # Options:
                                         #   "layer_isolated_pruning" - Prunes/evaluates one layer at a time (generates N plots).
 results_path: "results"                   # Base path for saving all outputs.
 use_timestamp: true                     # If true, appends a YYYYMMDD_HHMMSS timestamp to `results_path`.
-debug_mode: false                       # If true, enables extensive debug logging.
+debug_mode: true                       # MODIFIED: Set to true for testing callbacks
 
 device: "cuda"                          # "cuda", "cuda:0", "cpu".
 save_networks: true                     # If true, final trained/pruned network models are saved.
 no_save: false                          # Master switch: if true, nothing is saved to disk.
 just_plot: false                        # If true, loads existing results and only generates plots.
 show_all: false                         # If true, matplotlib plots will be displayed interactively.
-seed: null                              # Optional: Integer for random seed for reproducibility (e.g., 42). If null, no specific seed is set globally beyond individual network initializations.
+seed: 42                              # MODIFIED: Set a seed for reproducibility during testing
 
 # -----------------------------------------------------------------------------
 # II. Dataset Configuration
@@ -70,8 +70,8 @@ model:
 # -----------------------------------------------------------------------------
 # Maps to TrainingConfig in config.py
 training:
-  epochs: 10
-  replicates: 5
+  epochs: 5  # MODIFIED: Reduced epochs for faster testing
+  replicates: 1 # MODIFIED: Reduced replicates for faster testing
   optimizer: "Adam"                     # Options: "Adam", "SGD", "RMSprop", "AdamW" (case-sensitive).
   learning_rate: 0.001
   momentum: 0.9                         # For SGD.
@@ -95,6 +95,15 @@ alignment_settings:
   # Flags for experiment_type: "alignment_analysis"
   run_progressive: true                 # If true and exp_type="alignment_analysis", run progressive dropout part.
   run_eigenvector: false                # If true and exp_type="alignment_analysis", run eigenvector dropout part.
+  # NEW: Callbacks for tracking alignment metrics during training
+  callbacks:
+    alignment_metrics:
+      - name: "RQ"             # Metric to track (must be a valid metric name)
+        num_batches: 3       # Number of batches from test_loader to use for this metric per epoch
+      - name: "MI"             # Another metric to track
+        num_batches: 3
+      # - name: "RankAlignment" # Example for another metric
+      #   num_batches: 3 
 
 # -----------------------------------------------------------------------------
 # VI. Pruning Experiment Settings
@@ -103,7 +112,7 @@ alignment_settings:
 pruning_settings:
   dropout_min: 0.0
   dropout_max: 0.9
-  dropout_steps: 40
+  dropout_steps: 10 # MODIFIED: Reduced steps for faster testing
   
   dropout_mode: "scaled"                # How weights are treated after pruning nodes/connections:
                                         #   "scaled": Remaining weights are scaled by 1/(1-p) (Inverted Dropout principle).
@@ -117,7 +126,7 @@ pruning_settings:
   
   exclude_classification_layer: true    # If true, the final classification layer is not pruned.
   
-  use_multi_strategy_dropout: true      # For `progressive_dropout` experiment type: 
+  use_multi_strategy_dropout: false      # MODIFIED: Set to false for simpler sequential callback logic during this test.
                                         #   If true, processes high_rq, low_rq, random strategies more efficiently together for each network replicate.
                                         #   If false, strategies are processed sequentially for each replicate.
 

@@ -467,12 +467,12 @@ class AlignmentExperiment(Experiment):
         callbacks_list = []
         self.metric_trackers_history = [] # Store tracker instances to retrieve history later
 
-        if hasattr(self.config, 'training_settings') and \
-           hasattr(self.config.training_settings, 'callbacks') and \
-           hasattr(self.config.training_settings.callbacks, 'alignment_metrics') and \
-           self.config.training_settings.callbacks.alignment_metrics:
+        if hasattr(self.config, 'alignment_settings') and \
+           hasattr(self.config.alignment_settings, 'callbacks') and \
+           hasattr(self.config.alignment_settings.callbacks, 'alignment_metrics') and \
+           self.config.alignment_settings.callbacks.alignment_metrics:
             
-            alignment_metrics_to_track = self.config.training_settings.callbacks.alignment_metrics
+            alignment_metrics_to_track = self.config.alignment_settings.callbacks.alignment_metrics
             logger.info(f"Configuring AlignmentMetricTracker callbacks for: {alignment_metrics_to_track}")
 
             # Ensure dataset has a test_loader for metrics, or use train_loader as fallback
