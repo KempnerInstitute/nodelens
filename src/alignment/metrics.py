@@ -472,17 +472,18 @@ def alignment(inputs: torch.Tensor, weights: torch.Tensor,
     return AlignmentMetrics.measure(inputs, weights, method=method, **kwargs) 
 
 
-# Function to be moved from dropout.py
+# Function to be moved from dropout.py - NOW THE CANONICAL VERSION
 def compute_all_node_scores(
     model: nn.Module,
-    metric_instance: 'AlignmentMetric',
+    # MODIFIED: Takes a list of metric configurations
+    metric_configs: List[Dict[str, Any]], 
     device: torch.device,
     data_loader: DataLoader,
     num_batches: int = 5,
     debug_mode: bool = False,
-) -> Dict[int, torch.Tensor]:
+) -> Dict[int, Dict[str, torch.Tensor]]: # MODIFIED: Return type reflects multiple metrics per layer
     """
-    Computes per-node scores for all specified alignment layers in a model.
+    Computes per-node scores for specified alignment layers for multiple metrics.
     This function orchestrates activation hooking and per-layer metric computation.
     It no longer has logic to exclude classification layers from score computation itself;
     that responsibility lies with the calling application (e.g., pruning).
@@ -490,19 +491,25 @@ def compute_all_node_scores(
     Args:
         model: The model (expected to have .alignment_layers and .alignment_names attributes, 
                typically an AlignmentNetwork instance).
-        metric_instance: An instantiated AlignmentMetric object (e.g., AlignmentMetric(name="RQ")).
+        metric_configs: List of metric configurations (dicts). Each dict should have at least a "name"
+                        key, and can optionally have "scale_by_norm" (defaults to False).
         device: The torch.device to run computations on.
         data_loader: DataLoader for providing input data to the model for activation hooking.
         num_batches: Number of batches from data_loader to use for collecting activations.
         debug_mode: If True, enables verbose logging.
 
     Returns:
-        A dictionary mapping layer_idx to a 1D tensor of per-node scores for that layer.
+        A dictionary mapping layer_idx to another dictionary, which maps metric_name 
+        to a 1D tensor of per-node scores for that layer and metric.
     """
     if not hasattr(model, "alignment_layers") or not hasattr(model, "alignment_names"):
         raise ValueError("Model must define .alignment_layers and .alignment_names attributes (typically an AlignmentNetwork).")
-    if not isinstance(metric_instance, AlignmentMetric):
-        raise ValueError("metric_instance must be an instance of AlignmentMetric.")
+    # MODIFIED: Validation for metric_configs
+    if not isinstance(metric_configs, list) or not all(isinstance(mc, dict) and "name" in mc for mc in metric_configs):
+        raise ValueError("metric_configs must be a list of dictionaries, each with a 'name' key.")
+    if not metric_configs: # No metrics to compute
+        logger.warning("compute_all_node_scores called with empty metric_configs. Returning empty dict.")
+        return {}
 
     normalized_device = _normalize_device(device)
     model.eval()
@@ -575,46 +582,54 @@ def compute_all_node_scores(
             h.remove()
         hooks.clear() # Clear the list of hooks
 
-    scores_per_layer = {}
+    # MODIFIED: Outer dictionary stores results per layer
+    all_scores_per_layer_all_metrics: Dict[int, Dict[str, torch.Tensor]] = {}
     layer_iter = enumerate(model.alignment_layers)
     if debug_mode:
-        layer_iter = tqdm(list(layer_iter), desc="Computing layer scores from activations")
+        layer_iter = tqdm(list(layer_iter), desc="Computing layer scores from activations for multiple metrics")
 
     for layer_idx, layer_mod_scores in layer_iter:
         layer_name_scores = model.alignment_names[layer_idx]
+        metrics_for_this_layer: Dict[str, torch.Tensor] = {}
 
         if layer_name_scores not in model.hidden or not model.hidden[layer_name_scores]:
-            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
-            scores_per_layer[layer_idx] = torch.zeros(node_count, device=normalized_device)
             if debug_mode:
-                logger.warning(f"No/empty hooking data for layer '{layer_name_scores}'. Scores set to zero.")
+                logger.warning(f"No/empty hooking data for layer '{layer_name_scores}'. Scores set to zero for all metrics.")
+            # Populate with zero tensors for all requested metrics for this layer
+            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
+            for m_config in metric_configs:
+                metrics_for_this_layer[m_config["name"]] = torch.zeros(node_count, device=normalized_device)
+            all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
             if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None
             continue
         
-        # MODIFIED: Use process_cnn_weights
-        # Assuming pruning_strategy="structure-aware" is a reasonable default for general metric calculation context.
-        # This might need to become a parameter if different strategies are needed for metric calculation itself.
         w_flat, layer_metadata = process_cnn_weights(model, layer_idx, pruning_strategy="structure-aware")
         X_acts = torch.cat(model.hidden[layer_name_scores], dim=0)
         
         if debug_mode:
             logger.info(f"Layer {layer_name_scores}: Activations X shape {X_acts.shape}, Weights w_flat shape {w_flat.shape}")
             if layer_metadata:
-                logger.info(f"  Layer metadata from process_cnn_weights: {layer_metadata}") # Log metadata
-            
-        try:
-            node_scores = metric_instance.compute_per_node_scores(X_acts, w_flat, device=normalized_device)
-            if debug_mode and node_scores is not None and node_scores.numel() > 0:
-                logger.info(f"Layer {layer_name_scores} score stats: min={torch.min(node_scores).item():.4f}, max={torch.max(node_scores).item():.4f}, mean={torch.mean(node_scores).item():.4f}, std={torch.std(node_scores).item():.4f}")
-            scores_per_layer[layer_idx] = node_scores.detach() if node_scores is not None else torch.zeros(w_flat.shape[0] if w_flat is not None else 0, device=normalized_device)
-        except Exception as e_comp:
-            logger.error(f"Error computing scores for layer {layer_name_scores}: {e_comp}", exc_info=debug_mode)
-            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
-            # Check if w_flat was successfully created before trying to access its shape for zeros fallback
-            fallback_zeros_shape = w_flat.shape[0] if w_flat is not None and hasattr(w_flat, 'shape') else node_count
-            scores_per_layer[layer_idx] = torch.zeros(fallback_zeros_shape, device=normalized_device)
+                logger.info(f"  Layer metadata from process_cnn_weights: {layer_metadata}")
         
-        model.hidden[layer_name_scores] = None # Cleanup specific layer hidden data
+        # MODIFIED: Inner loop for each metric config
+        for m_config in metric_configs:
+            metric_name = m_config["name"]
+            scale_by_norm_for_metric = m_config.get("scale_by_norm", False)
+            current_metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm_for_metric)
+            
+            try:
+                node_scores = current_metric_instance.compute_per_node_scores(X_acts, w_flat, device=normalized_device)
+                if debug_mode and node_scores is not None and node_scores.numel() > 0:
+                    logger.info(f"  Metric '{metric_name}': Layer {layer_name_scores} score stats: min={torch.min(node_scores).item():.4f}, max={torch.max(node_scores).item():.4f}, mean={torch.mean(node_scores).item():.4f}, std={torch.std(node_scores).item():.4f}")
+                metrics_for_this_layer[metric_name] = node_scores.detach() if node_scores is not None else torch.zeros(w_flat.shape[0] if w_flat is not None else 0, device=normalized_device)
+            except Exception as e_comp:
+                logger.error(f"Error computing scores for metric '{metric_name}' on layer {layer_name_scores}: {e_comp}", exc_info=debug_mode)
+                node_count_fallback = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
+                fallback_zeros_shape = w_flat.shape[0] if w_flat is not None and hasattr(w_flat, 'shape') else node_count_fallback
+                metrics_for_this_layer[metric_name] = torch.zeros(fallback_zeros_shape, device=normalized_device)
+        
+        all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
+        model.hidden[layer_name_scores] = None 
     
-    model.hidden.clear() # Final cleanup of the hidden dict itself
-    return scores_per_layer 
+    model.hidden.clear() 
+    return all_scores_per_layer_all_metrics 

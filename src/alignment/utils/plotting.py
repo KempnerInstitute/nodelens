@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Union, Any
 import logging
+import torch
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -1070,3 +1071,118 @@ def plot_layer_isolated_dropout_results(
         plt.close(fig)
         plot_files.append(plot_filename)
     return plot_files 
+
+def plot_metric_evolution(
+    metric_evolution_data: List[Dict[str, Any]], 
+    metric_name: str, 
+    save_dir: str, 
+    title_prefix: str = "", 
+    show_plots: bool = False
+) -> Optional[str]:
+    """
+    Plots the evolution of a given alignment metric over epochs, per layer.
+
+    Args:
+        metric_evolution_data: List of dicts, where each dict contains at least
+                               'epoch' and 'scores_per_layer'. 'scores_per_layer'
+                               is a dict mapping layer_idx to a tensor of node scores.
+        metric_name: The name of the metric being plotted (e.g., "RQ", "MI").
+        save_dir: Directory to save the plot.
+        title_prefix: Optional prefix for the plot title.
+        show_plots: Whether to display the plot interactively.
+
+    Returns:
+        Optional path to the saved plot file, or None if plotting failed.
+    """
+    if not metric_evolution_data:
+        logger.warning(f"No metric evolution data provided for {metric_name}. Skipping plot.")
+        return None
+
+    epochs = sorted(list(set(item['epoch'] for item in metric_evolution_data if 'epoch' in item)))
+    if not epochs:
+        logger.warning(f"No epoch data found in metric_evolution_data for {metric_name}. Skipping plot.")
+        return None
+
+    # Collect data: {layer_idx: [mean_score_epoch1, mean_score_epoch2, ...]}
+    layer_scores_over_epochs: Dict[int, List[Optional[float]]] = {}
+    # Also collect epochs for which each layer has data, in case of sparsity
+    layer_epochs_present: Dict[int, List[int]] = {}
+
+    # Determine all unique layer indices present across all epochs
+    all_layer_indices = set()
+    for epoch_data in metric_evolution_data:
+        if "scores_per_layer" in epoch_data and isinstance(epoch_data["scores_per_layer"], dict):
+            all_layer_indices.update(epoch_data["scores_per_layer"].keys())
+    
+    if not all_layer_indices:
+        logger.warning(f"No layer scores found in metric_evolution_data for {metric_name}. Skipping plot.")
+        return None
+
+    # Initialize lists for all layers for all epochs to handle missing data gracefully
+    for layer_idx in all_layer_indices:
+        layer_scores_over_epochs[layer_idx] = [np.nan] * len(epochs)
+        layer_epochs_present[layer_idx] = [] # This will store actual epochs with data
+
+    epoch_to_idx_map = {epoch_val: i for i, epoch_val in enumerate(epochs)}
+
+    for epoch_data in metric_evolution_data:
+        current_epoch = epoch_data.get('epoch')
+        scores_per_layer = epoch_data.get("scores_per_layer")
+        if current_epoch is None or not isinstance(scores_per_layer, dict):
+            continue
+        
+        epoch_idx = epoch_to_idx_map.get(current_epoch)
+        if epoch_idx is None: # Should not happen if epochs list is built correctly
+            continue
+
+        for layer_idx, node_scores_tensor in scores_per_layer.items():
+            if layer_idx not in layer_scores_over_epochs: # Should be pre-initialized
+                logger.warning(f"Layer index {layer_idx} found in epoch {current_epoch} but not in all_layer_indices. Skipping.")
+                continue
+            
+            if isinstance(node_scores_tensor, torch.Tensor) and node_scores_tensor.numel() > 0:
+                mean_score = node_scores_tensor.mean().item()
+                layer_scores_over_epochs[layer_idx][epoch_idx] = mean_score
+                if current_epoch not in layer_epochs_present[layer_idx]: # Build up actual epochs with data
+                     layer_epochs_present[layer_idx].append(current_epoch)
+            elif node_scores_tensor is None or (isinstance(node_scores_tensor, torch.Tensor) and node_scores_tensor.numel() == 0):
+                # Handle cases where scores might be None or empty tensor, already NaN
+                pass # layer_scores_over_epochs[layer_idx][epoch_idx] is already np.nan
+    
+    plt.figure(figsize=(12, 7))
+    
+    sorted_layer_indices = sorted(list(all_layer_indices))
+
+    for layer_idx in sorted_layer_indices:
+        scores = layer_scores_over_epochs[layer_idx]
+        # Only plot if there's some non-NaN data for the layer
+        if not all(np.isnan(s) for s in scores):
+            # Use the global epochs list for the x-axis to align all lines
+            plt.plot(epochs, scores, marker='o', linestyle='-', label=f'Layer {layer_idx}')
+
+    plt.xlabel("Epoch")
+    plt.ylabel(f"Mean {metric_name} Score")
+    plot_title = f"{title_prefix} Evolution of Mean {metric_name} per Layer"
+    plt.title(plot_title)
+    plt.legend(loc='best', fontsize='small')
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    plt.tight_layout()
+
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+    
+    plot_filename = f"{title_prefix.lower().replace(' ', '_')}_{metric_name.lower()}_evolution.png"
+    plot_filepath = os.path.join(save_dir, plot_filename)
+    
+    try:
+        plt.savefig(plot_filepath)
+        logger.info(f"Saved metric evolution plot to {plot_filepath}")
+        if show_plots:
+            plt.show()
+    except Exception as e:
+        logger.error(f"Error saving/showing metric evolution plot: {e}")
+        plot_filepath = None
+    finally:
+        plt.close()
+        
+    return plot_filepath 

@@ -17,6 +17,7 @@ from alignment.utils.model_utils import (
 )
 from alignment.utils.metrics_utils import AlignmentMetricsFactory as AlignmentMetrics
 from alignment.utils.metrics_utils import alignment
+from alignment.metrics import get_metric, AlignmentMetric
 
 class AlignmentNetwork(nn.Module):
     """
@@ -247,7 +248,7 @@ class AlignmentNetwork(nn.Module):
         return delta_weights
 
     @torch.no_grad()
-    def measure_alignment_methods(self, x, methods, precomputed=False):
+    def measure_alignment_methods(self, x, methods, precomputed=False, scale_by_norm_for_rq: bool = False):
         # force precomputed=False so hooking always runs
         layer_inputs = self.get_layer_inputs(x, precomputed=False)
         preprocessed = self._preprocess_inputs(layer_inputs, compress_convolutional=True)
@@ -255,14 +256,17 @@ class AlignmentNetwork(nn.Module):
         all_layer_results = []
         for idx, (inp, w) in enumerate(zip(preprocessed, weights)):
             metrics_dict = {}
-            for m in methods:
+            for m_name in methods:
                 if self.cnn_mode == "patchwise" and inp.ndim == 3:
-                    val = AlignmentMetrics.patchwise_alignment(inp, w, method=m, weigh_by_var=True)
-                elif m == "delta_alignment":
+                    val = AlignmentMetrics.patchwise_alignment(inp, w, method=m_name, weigh_by_var=True)
+                elif m_name.lower() == "delta_alignment":
                     val = AlignmentMetrics.delta_alignment(self, idx, inp)
                 else:
-                    val = AlignmentMetrics.measure(inp, w, method=m)
-                metrics_dict[m] = val
+                    current_scale_by_norm = scale_by_norm_for_rq if m_name.upper() == "RQ" else False
+                    
+                    metric_obj = get_metric(name=m_name, scale_by_norm=current_scale_by_norm)
+                    val = metric_obj.compute_per_node_scores(inp, w, device=inp.device)
+                metrics_dict[m_name] = val
             all_layer_results.append(metrics_dict)
         return all_layer_results
 

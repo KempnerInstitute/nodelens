@@ -20,7 +20,7 @@ save_networks: true                     # If true, final trained/pruned network 
 no_save: false                          # Master switch: if true, nothing is saved to disk.
 just_plot: false                        # If true, loads existing results and only generates plots.
 show_all: false                         # If true, matplotlib plots will be displayed interactively.
-seed: 42                              # MODIFIED: Set a seed for reproducibility during testing
+seed: 422                              # MODIFIED: Set a seed for reproducibility during testing
 
 # -----------------------------------------------------------------------------
 # II. Dataset Configuration
@@ -112,7 +112,7 @@ alignment_settings:
 pruning_settings:
   dropout_min: 0.0
   dropout_max: 0.9
-  dropout_steps: 10 # MODIFIED: Reduced steps for faster testing
+  dropout_steps: 30 # MODIFIED: Reduced steps for faster testing
   
   dropout_mode: "scaled"                # How weights are treated after pruning nodes/connections:
                                         #   "scaled": Remaining weights are scaled by 1/(1-p) (Inverted Dropout principle).
