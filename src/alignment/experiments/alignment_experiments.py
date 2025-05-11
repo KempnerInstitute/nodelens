@@ -298,6 +298,8 @@ class AlignmentExperiment(Experiment):
             }
         
         num_batches_for_metric_calc = self.config.pruning_settings.num_batches_for_scores
+        # Get the global CPU offload flag
+        force_cpu_flag = self.config.alignment_settings.force_cpu_for_large_metric_ops
 
         results_from_manager = {}
         try:
@@ -306,7 +308,8 @@ class AlignmentExperiment(Experiment):
                 pruning_mode=pruning_mode, dropout_mode=dropout_mode_val, 
                 show_progress=True, debug_mode=self.debug_mode,
                 exclude_classification_layer_config=effective_exclude_classification_layer,
-                num_batches_for_pre_scoring=num_batches_for_metric_calc
+                num_batches_for_pre_scoring=num_batches_for_metric_calc,
+                force_cpu_for_large_metric_ops=force_cpu_flag
             )
         except Exception as e:
             logger.error(f"Error during run_progressive_dropout_experiment call: {str(e)}")
@@ -398,6 +401,7 @@ class AlignmentExperiment(Experiment):
         exclude_cls_layer = self.config.pruning_settings.exclude_classification_layer
         dropout_mode_val = self.config.pruning_settings.dropout_mode
         num_batches_for_metric_calc_isolated = self.config.pruning_settings.num_batches_for_scores
+        force_cpu_flag_isolated = self.config.alignment_settings.force_cpu_for_large_metric_ops # Get the flag
         metric_instance_for_isolated = self.metric
 
         results_from_manager = run_layer_isolated_dropout_experiment(
@@ -410,7 +414,8 @@ class AlignmentExperiment(Experiment):
             show_progress=True, 
             debug_mode=self.debug_mode,
             exclude_classification_layer_config=exclude_cls_layer,
-            num_batches_for_pre_scoring=num_batches_for_metric_calc_isolated
+            num_batches_for_pre_scoring=num_batches_for_metric_calc_isolated,
+            force_cpu_for_large_metric_ops=force_cpu_flag_isolated
         )
 
         # Call the specific plotting function for layer-isolated results

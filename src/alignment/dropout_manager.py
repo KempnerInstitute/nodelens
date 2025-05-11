@@ -34,7 +34,8 @@ def run_progressive_dropout_experiment(
     show_progress: bool = True,
     debug_mode: bool = False,
     exclude_classification_layer_config: bool = True,
-    num_batches_for_pre_scoring: int = 5
+    num_batches_for_pre_scoring: int = 5,
+    force_cpu_for_large_metric_ops: bool = True
 ) -> Dict:
     """
     Run progressive dropout experiment on multiple networks with multiple strategies.
@@ -51,6 +52,7 @@ def run_progressive_dropout_experiment(
         debug_mode: Whether to print additional debug information
         exclude_classification_layer_config: Whether to exclude the classification layer from the experiment
         num_batches_for_pre_scoring: Number of batches to use for pre-scoring
+        force_cpu_for_large_metric_ops: Whether to force CPU for large metric operations
         
     Returns:
         Dictionary with dropout experiment results
@@ -94,7 +96,8 @@ def run_progressive_dropout_experiment(
             device=device, 
             data_loader=dataset.test_loader,
             num_batches=num_batches_for_pre_scoring,
-            debug_mode=debug_mode
+            debug_mode=debug_mode,
+            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops
         )
         
         current_net_scores = {} 
@@ -344,7 +347,8 @@ def run_layer_isolated_dropout_experiment(
     show_progress: bool = True,
     debug_mode: bool = False,
     exclude_classification_layer_config: bool = True,
-    num_batches_for_pre_scoring: int = 5
+    num_batches_for_pre_scoring: int = 5,
+    force_cpu_for_large_metric_ops: bool = True
 ) -> Dict:
     logger.info("Starting Layer Isolated Dropout Experiment")
     device = _normalize_device(device)
@@ -380,7 +384,8 @@ def run_layer_isolated_dropout_experiment(
             device=device, 
             data_loader=dataset.test_loader,
             debug_mode=debug_mode, 
-            num_batches=num_batches_for_pre_scoring
+            num_batches=num_batches_for_pre_scoring,
+            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops
         )
         
         scores_this_rep_single_metric = {} 

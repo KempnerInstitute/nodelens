@@ -87,7 +87,7 @@ class MIMetric(AlignmentMetricBase):
     """Mutual Information (MI) alignment metric."""
 
     @staticmethod
-    def measure(inputs: torch.Tensor, weights: torch.Tensor, bins: int = 30, eps: float = 1e-9, **kwargs) -> torch.Tensor:
+    def measure(inputs: torch.Tensor, weights: torch.Tensor, bins: int = 30, eps: float = 1e-9, force_cpu_for_large_metric_ops: bool = True, **kwargs) -> torch.Tensor:
         """
         Measure the mutual information between input dimensions and weight vectors.
         
@@ -96,6 +96,7 @@ class MIMetric(AlignmentMetricBase):
             weights: Weight tensor (output, features)
             bins: Number of bins for histogram
             eps: Small value to prevent division by zero
+            force_cpu_for_large_metric_ops: Whether to force CPU for large metric operations
             
         Returns:
             Tensor containing MI values per weight vector
@@ -109,7 +110,7 @@ class MIMetric(AlignmentMetricBase):
 
         # Determine if processing should be forced to CPU based on input size
         perform_on_cpu = False
-        if inputs.is_cuda and ((inputs.shape[0] > 200_000 and inputs.shape[1] > 50) or (inputs.numel() > 10_000_000)):
+        if force_cpu_for_large_metric_ops and inputs.is_cuda and ((inputs.shape[0] > 200_000 and inputs.shape[1] > 50) or (inputs.numel() > 10_000_000)):
             # logger.info(f"MI: Large input tensor X ({inputs.shape}) detected on CUDA. Offloading to CPU.") # Ensure logger is available
             perform_on_cpu = True
 
@@ -269,11 +270,11 @@ class AlignmentMetricsFactory:
     @classmethod
     def register(cls, name: str, metric_class: AlignmentMetricBase) -> None:
         """Register a new alignment metric."""
-        cls._registry[name] = metric_class
+        cls._registry[name.lower()] = metric_class
     
     @classmethod
     def measure(cls, inputs: torch.Tensor, weights: torch.Tensor, 
-               method: str = "RQ", **kwargs) -> torch.Tensor:
+               method: str = "RQ", force_cpu_for_large_metric_ops: bool = True, **kwargs) -> torch.Tensor:
         """
         Measure alignment using specified method.
         
@@ -281,28 +282,27 @@ class AlignmentMetricsFactory:
             inputs: Input activations tensor
             weights: Weight tensor
             method: Name of alignment metric to use
+            force_cpu_for_large_metric_ops: Whether to force CPU for large metric operations
             **kwargs: Additional parameters for the metric
             
         Returns:
             Tensor containing alignment values
         """
-        method = method.lower()
+        normalized_method_name = method.lower()
+        # Map legacy/alternative names to current registered names if necessary
+        # This simple mapping assumes registered names are consistent (e.g., "rq", "mi")
         
-        # Map method names for backward compatibility
-        method_map = {
-            "rq": "RQ",
-            "mi": "MI",
-            "weight_similarity": "weight_similarity",
-            "redundancy": "redundancy",
-        }
+        metric_class_to_call = cls._registry.get(normalized_method_name)
+        if metric_class_to_call is None:
+            # Try uppercase for RQ/MI as they were before
+            metric_class_to_call = cls._registry.get(method.upper())
         
-        normalized_method = method_map.get(method, method)
-        normalized_method = normalized_method.upper() if normalized_method in ["rq", "mi"] else normalized_method
+        if metric_class_to_call is None:
+            raise ValueError(f"Unknown alignment metric: {method}. Registered: {list(cls._registry.keys())}")
         
-        if normalized_method not in cls._registry:
-            raise ValueError(f"Unknown alignment metric: {method}")
-            
-        return cls._registry[normalized_method].measure(inputs, weights, **kwargs)
+        # Pass the flag through kwargs if the specific metric's measure method expects it
+        kwargs['force_cpu_for_large_metric_ops'] = force_cpu_for_large_metric_ops
+        return metric_class_to_call.measure(inputs, weights, **kwargs)
 
 
 # Standalone function for backward compatibility

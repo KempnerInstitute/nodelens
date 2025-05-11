@@ -186,16 +186,18 @@ class AlignmentMetric:
     factory and individual metric implementations.
     """
     
-    def __init__(self, name: str = "RQ", scale_by_norm: bool = False):
+    def __init__(self, name: str = "RQ", scale_by_norm: bool = False, force_cpu_for_large_metric_ops: bool = True):
         """
         Initialize alignment metric.
         
         Args:
             name: Name of the alignment metric to use
             scale_by_norm: Whether to scale the covariance or final measure by norm
+            force_cpu_for_large_metric_ops: If True, offload known large tensor ops in metrics to CPU.
         """
         self.name = name
         self.scale_by_norm = scale_by_norm
+        self.force_cpu_for_large_metric_ops = force_cpu_for_large_metric_ops
         
         # Validate that the metric exists
         self._validate_metric_name()
@@ -257,7 +259,7 @@ class AlignmentMetric:
                     # Compute using the lower-level API
                     result = AlignmentMetrics.measure(
                         layer_activations, dummy_weights, 
-                        method=self.name
+                        method=self.name, force_cpu_for_large_metric_ops=self.force_cpu_for_large_metric_ops
                     ).mean().item()
                 
                 results.append(result)
@@ -404,10 +406,9 @@ class AlignmentMetric:
             filter_scores = torch.zeros(num_filters, device=device)
             eps = 1e-12
 
-            # Potentially offload to CPU if X is huge, even for patch-wise ops
+            # Use self.force_cpu_for_large_metric_ops for its internal heuristic if needed
             perform_on_cpu_patchwise = False
-            if X.is_cuda and X.numel() > 10_000_000: # Simpler heuristic for patchwise
-                # logger.info(f"RQ PatchSummary: Large X ({X.shape}) on CUDA, using CPU for patch ops.")
+            if self.force_cpu_for_large_metric_ops and X.is_cuda and X.numel() > 10_000_000: 
                 perform_on_cpu_patchwise = True
             
             X_op = X.cpu() if perform_on_cpu_patchwise else X
@@ -461,8 +462,8 @@ class AlignmentMetric:
 
         # Existing logic for Linear layers or cnn_mode='unfold' (global covariance on unfolded patches)
         perform_on_cpu_cov = False
-        if X.is_cuda and ( (X.shape[0] > 500_000 and X.shape[1] > 100) or (X.numel() > 20_000_000) ):
-            # logger.info(f"RQ: Large input tensor X ({X.shape}) for covariance on CUDA. Offloading to CPU.")
+        if self.force_cpu_for_large_metric_ops and X.is_cuda and ( (X.shape[0] > 500_000 and X.shape[1] > 100) or (X.numel() > 20_000_000) ):
+            logger.info(f"RQ: Large input tensor X ({X.shape}) on CUDA with force_cpu=True. Offloading centering and cov to CPU.")
             perform_on_cpu_cov = True
 
         if perform_on_cpu_cov:
@@ -511,23 +512,31 @@ class AlignmentMetric:
         Returns:
             Per-node MI scores (num_nodes,)
         """
-        # For now, we delegate to the AlignmentMetrics class
-        return AlignmentMetrics.measure(X, W, method="MI")
+        # Delegate to factory, but factory.measure would need the flag too if MI has large ops.
+        # For now, MIMetric.measure itself needs to be refactored to use this flag.
+        # This means `AlignmentMetrics.measure` needs to pass it, or MIMetric gets it from its own init.
+        # Let's assume for now that MIMetric will be refactored similarly if direct CPU offload needed.
+        # The call to AlignmentMetrics.measure needs to be able to pass this flag down.
+        # This is getting complex. A simpler way for now: _compute_mi will call the MIMetric static method
+        # and pass the flag it receives from compute_per_node_scores.
+        # compute_per_node_scores will get it from self.force_cpu_for_large_metric_ops
+        return AlignmentMetrics.measure(X, W, method="MI", force_cpu_for_large_metric_ops=self.force_cpu_for_large_metric_ops)
 
 
 # Function to get an alignment metric instance
-def get_metric(name: str, scale_by_norm: bool = False) -> AlignmentMetric:
+def get_metric(name: str, scale_by_norm: bool = False, force_cpu_for_large_metric_ops: bool = True) -> AlignmentMetric:
     """
     Get alignment metric by name.
     
     Args:
         name: Name of the metric ('RQ', 'MI', 'rank', 'null_space', etc.)
         scale_by_norm: Whether to scale the covariance or final measure by norm
+        force_cpu_for_large_metric_ops: Global flag for CPU offload in metrics.
         
     Returns:
         AlignmentMetric instance
     """
-    return AlignmentMetric(name=name, scale_by_norm=scale_by_norm)
+    return AlignmentMetric(name=name, scale_by_norm=scale_by_norm, force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops)
 
 
 # Register a new metric with the registry
@@ -570,7 +579,8 @@ def compute_all_node_scores(
     num_batches: Optional[int] = 5,
     debug_mode: bool = False,
     configured_cnn_mode: Optional[str] = "unfold", 
-    configured_cnn_rq_op: Optional[str] = "mean"
+    configured_cnn_rq_op: Optional[str] = "mean",
+    force_cpu_for_large_metric_ops: bool = True
 ) -> Dict[int, Dict[str, torch.Tensor]]:
     """
     Computes per-node scores for specified alignment layers for multiple metrics.
@@ -701,7 +711,11 @@ def compute_all_node_scores(
         for m_config in metric_configs:
             metric_name = m_config["name"]
             scale_by_norm_for_metric = m_config.get("scale_by_norm", False)
-            current_metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm_for_metric)
+            current_metric_instance = get_metric(
+                name=metric_name, 
+                scale_by_norm=scale_by_norm_for_metric,
+                force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops
+            )
             
             per_batch_node_scores_for_metric = []
 
