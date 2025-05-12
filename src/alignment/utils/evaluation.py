@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple, Union, Optional, Any
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
+import torch.distributed as dist
 
 # Updated import to reflect moved utility functions
 from alignment.utils.model_utils import _normalize_device
@@ -83,9 +84,28 @@ def evaluate_on_loader(
                 acc = 100.0 * correct / total if total > 0 else 0.0 # Ensure total > 0 for acc calculation
                 loader_iter.set_postfix({'loss': f"{total_loss/total if total > 0 else 0.0:.4f}", 'acc': f"{acc:.2f}%"})
     
-    # Calculate final metrics
-    avg_loss = total_loss / total
-    accuracy = 100.0 * correct / total
+    # --- DDP Metric Aggregation ---
+    if ddp_world_size > 1:
+        # Create tensors for aggregation
+        # Order: total_loss, correct, total
+        metrics_tensor = torch.tensor([total_loss, correct, total], dtype=torch.float64, device=device)
+        # Sum across all ranks
+        dist.all_reduce(metrics_tensor, op=dist.ReduceOp.SUM)
+        # Extract aggregated values
+        total_loss_global = metrics_tensor[0].item()
+        correct_global = metrics_tensor[1].item()
+        total_global = metrics_tensor[2].item()
+    else:
+        # If not DDP, local values are global values
+        total_loss_global = total_loss
+        correct_global = correct
+        total_global = total
+    # --- End DDP Metric Aggregation ---
+
+    # Calculate final metrics using aggregated values
+    # Avoid division by zero if total_global is somehow zero
+    avg_loss = total_loss_global / total_global if total_global > 0 else 0.0
+    accuracy = 100.0 * correct_global / total_global if total_global > 0 else 0.0
     
     return {
         'loss': avg_loss,
@@ -297,6 +317,7 @@ def evaluate_model(
     """
     from alignment.datasets import load_dataset # Moved import here for clarity
     from alignment.metrics import get_metric # Moved import here
+    from alignment.models.base import AlignmentNetwork # Import AlignmentNetwork for isinstance check
 
     if device is None:
         try:
@@ -327,90 +348,109 @@ def evaluate_model(
     else:
         final_loader = loader
 
-    total_loss = 0.0
-    correct = 0
-    total_samples = 0
+    # --- Core Loss/Accuracy Calculation using DDP-aware evaluate_on_loader ---
+    # evaluate_on_loader is now DDP-aware and returns aggregated metrics.
+    # The show_progress for evaluate_on_loader is set to False here, 
+    # as evaluate_model has its own tqdm progress bar for the alignment part if enabled.
+    # If evaluate_model's own tqdm is disabled (show_progress=False), then we might want 
+    # to pass show_progress to evaluate_on_loader.
+    # For simplicity, let's keep evaluate_on_loader quiet when called internally.
+    core_metrics = evaluate_on_loader(
+        model=model,
+        data_loader=final_loader,
+        device=device,
+        show_progress=False, # Keep this internal call quiet
+        ddp_rank=ddp_rank,
+        ddp_world_size=ddp_world_size
+    )
+    metrics_results = {k: v for k, v in core_metrics.items()} # Initialize with loss and accuracy
+    # --- End Core Loss/Accuracy Calculation ---
+
     alignment_metric_instance = None
     collected_alignment_values = [] # For storing batch_alignment if with_alignment is True
-
-    is_main_process = (ddp_rank == 0)
-    progress_bar_disabled_eval_model = not is_main_process if (ddp_world_size > 1 and show_progress) else not show_progress
-
     if with_alignment:
         alignment_metric_instance = get_metric(metric_name_for_eval)
-        if not isinstance(model, AlignmentNetwork):
+        if not isinstance(model, AlignmentNetwork): # Use the imported AlignmentNetwork
             logger.warning("Alignment measurement requested, but model is not an AlignmentNetwork. Skipping alignment.")
             with_alignment = False # Disable if not an AlignmentNetwork
 
-    with torch.no_grad():
-        for inputs, targets in tqdm(final_loader, desc=f"Evaluating on {loader_name}", leave=False, disable=progress_bar_disabled_eval_model):
-            inputs, targets = inputs.to(device), targets.to(device)
-            
-            current_batch_size = inputs.size(0)
-            outputs = model(inputs)
-            
-            if isinstance(outputs, tuple):
-                outputs = outputs[0]
-            
-            loss = F.cross_entropy(outputs, targets, reduction='sum') # Sum loss for batch
-            total_loss += loss.item()
-            
-            _, predicted = outputs.max(1)
-            correct += predicted.eq(targets).sum().item()
-            total_samples += current_batch_size
-            
-            if with_alignment and alignment_metric_instance and hasattr(model, 'measure_alignment'):
-                # Ensure model.forward was called in a way that populates hidden activations if metric needs them
-                # For some metrics, just the inputs and weights are needed. measure_alignment might handle this.
-                # This part might need model.forward(inputs, store_hidden=True) called before if metric needs it.
-                # For simplicity, assuming measure_alignment can trigger necessary hooks if called on AlignmentNetwork.
-                # The AlignmentNetwork.measure_alignment itself calls get_layer_inputs which can store_hidden.
+    # The loop below is now ONLY for alignment metric collection if `with_alignment` is true.
+    # Loss and accuracy are already computed by `evaluate_on_loader`.
+    if with_alignment: # Only loop if alignment is needed
+        # We need to iterate through the loader again for alignment if it requires batch-wise inputs.
+        # The model.measure_alignment (now measure_alignment_methods) takes a dataloader.
+        is_main_process = (ddp_rank == 0)
+        if is_main_process: # Alignment calculation only on main process
+            if alignment_metric_instance and hasattr(model, 'measure_alignment_methods'):
                 try:
-                    # Alignment measurement should ideally run on rank 0 only or results gathered.
-                    # For now, assume it's okay for all ranks to compute if model is DDP (weights are same).
-                    # But if it involves data collection (hooks), it should be on one rank or handled carefully.
-                    # If measure_alignment_methods from AlignmentNetwork is DDP-aware or called on non-DDP model on rank 0:
-                    if is_main_process: # Only measure alignment on main process to avoid redundant computation/hook issues
-                        batch_alignment = model.measure_alignment(inputs, method=metric_name_for_eval, precomputed=False) 
-                        collected_alignment_values.append(batch_alignment) 
+                    # The refactored measure_alignment_methods takes a DataLoader
+                    # model should be the DDP-wrapped model.measure_alignment_methods handles base_model access.
+                    # Ensure AlignmentNetwork instance has _is_ddp_wrapped set if model is DDP
+                    if ddp_world_size > 1 and isinstance(model, nn.parallel.DistributedDataParallel) and hasattr(model.module, '_is_ddp_wrapped'):
+                        model.module._is_ddp_wrapped = True
+                    elif hasattr(model, '_is_ddp_wrapped'): # Non-DDP or model is already the AlignmentNetwork instance
+                        model._is_ddp_wrapped = (ddp_world_size > 1) 
+                        
+                    # Using final_loader ensures num_batches_for_eval is respected.
+                    # The method itself now handles iterating over batches internally.
+                    layer_metric_results_list = model.measure_alignment_methods(
+                        dataloader=final_loader, # Pass the (potentially subsetted) dataloader
+                        methods=[metric_name_for_eval],
+                        num_batches=len(final_loader), # Process all batches in the final_loader
+                        device=device,
+                        scale_by_norm_for_rq=(metric_name_for_eval.upper() == "RQ"), # Example for RQ
+                        # metric_kwargs can be passed here if evaluate_model needs to provide them
+                    )
+                    # `layer_metric_results_list` is a list of dicts: [{metric_name: scores_tensor_layer_0}, ...]
+                    # We need to extract the scores for `metric_name_for_eval` and average them.
+                    alignment_scores_for_metric = []
+                    for layer_data in layer_metric_results_list:
+                        if metric_name_for_eval in layer_data:
+                            score_tensor = layer_data[metric_name_for_eval]
+                            alignment_scores_for_metric.append(score_tensor.mean().item() if isinstance(score_tensor, torch.Tensor) else score_tensor)
+                        else:
+                            alignment_scores_for_metric.append(np.nan)
+                    metrics_results['alignment'] = alignment_scores_for_metric
+
                 except Exception as e:
-                    logger.error(f"Error measuring alignment during evaluation for batch: {e}", exc_info=True) # Changed from debug_mode
+                    logger.error(f"Error measuring alignment during evaluation: {e}", exc_info=True)
+            elif alignment_metric_instance and hasattr(model, 'measure_alignment'): # Fallback for older interface if strictly needed
+                # This block can be removed if measure_alignment_methods is the sole path
+                logger.warning("Using legacy model.measure_alignment. Consider full switch to measure_alignment_methods.")
+                with torch.no_grad(): # Original loop for measure_alignment (batch by batch)
+                    for inputs, targets in tqdm(final_loader, desc=f"Evaluating Alignment on {loader_name}", leave=False, disable=progress_bar_disabled_eval_model):
+                        inputs = inputs.to(device)
+                        # model.forward(inputs, store_hidden=True) # If measure_alignment relies on this
+                        batch_alignment = model.measure_alignment(inputs, method=metric_name_for_eval, precomputed=False)
+                        collected_alignment_values.append(batch_alignment)
     
-    metrics_results = {}
-    if total_samples > 0:
-        metrics_results['loss'] = total_loss / total_samples
-        metrics_results['accuracy'] = 100. * correct / total_samples
-    else:
-        metrics_results['loss'] = float('inf')
-        metrics_results['accuracy'] = 0.0
-    
-    # Averaging and reporting alignment only on main process
-    if is_main_process and with_alignment and collected_alignment_values:
-        # Average alignment values across batches for each layer
-        # collected_alignment_values is a list of lists: [[L0_b1, L1_b1,...], [L0_b2, L1_b2,...]]
+    # Averaging and reporting alignment (if collected via old measure_alignment path)
+    is_main_process = (ddp_rank == 0) # Re-check for safety, though alignment is main_process guarded
+    if is_main_process and with_alignment and collected_alignment_values: # This applies if legacy path was taken
         num_layers_alignment = len(collected_alignment_values[0]) if collected_alignment_values else 0
         avg_alignment_per_layer = []
         for i in range(num_layers_alignment):
             layer_specific_alignments = [batch_align_list[i] for batch_align_list in collected_alignment_values if i < len(batch_align_list)]
-            # Each element in layer_specific_alignments can be a tensor (e.g. node scores) or a scalar (layer score)
-            # If it's a tensor of node scores, we might want to average them first
             processed_layer_alignments = []
             for item in layer_specific_alignments:
                 if isinstance(item, torch.Tensor):
-                    processed_layer_alignments.append(item.mean().item()) # Example: mean of node scores
+                    processed_layer_alignments.append(item.mean().item())
                 elif isinstance(item, (float, int)):
                     processed_layer_alignments.append(item)
-            
             if processed_layer_alignments:
                 avg_alignment_per_layer.append(np.mean(processed_layer_alignments))
             else:
                 avg_alignment_per_layer.append(np.nan)
-        metrics_results['alignment'] = avg_alignment_per_layer
+        # Only set alignment if not already set by measure_alignment_methods path
+        if 'alignment' not in metrics_results:
+             metrics_results['alignment'] = avg_alignment_per_layer
     
     if is_main_process: # Log final results only on main process
-        logger.info(f"Evaluation on {loader_name}: Loss={metrics_results['loss']:.4f}, Acc={metrics_results['accuracy']:.2f}%")
-        if 'alignment' in metrics_results:
-            alignment_str = ', '.join([f"{val:.4f}" for val in metrics_results['alignment']])
+        log_loss = metrics_results.get('loss', float('nan'))
+        log_acc = metrics_results.get('accuracy', float('nan'))
+        logger.info(f"Evaluation on {loader_name}: Loss={log_loss:.4f}, Acc={log_acc:.2f}%")
+        if 'alignment' in metrics_results and metrics_results['alignment'] is not None:
+            alignment_str = ', '.join([f"{val:.4f}" for val in metrics_results['alignment'] if not np.isnan(val)])
             logger.info(f"Avg Alignment ({metric_name_for_eval}): [{alignment_str}]")
     
     return metrics_results
@@ -483,17 +523,24 @@ def evaluate(
         # If DDP, sampler should be for the subset, or iterate `num_batches_for_eval` times.
         # For now, let DDP sampler work on full dataset and we just iterate less if num_batches_for_eval is set.
         # This means each rank processes a subset of its DDP-assigned shard.
-        actual_sampler = dataloader.sampler # Keep original DDP sampler if any
-        dataloader = torch.utils.data.DataLoader(sub_dataset, batch_size=dataloader.batch_size, shuffle=False, sampler=None if actual_sampler else None)
+        # actual_sampler = dataloader.sampler # Keep original DDP sampler if any
+        # dataloader = torch.utils.data.DataLoader(sub_dataset, batch_size=dataloader.batch_size, shuffle=False, sampler=None if actual_sampler else None)
         # If actual_sampler was DDP, the new loader doesn't have it, which is problematic.
         # Better: limit loop iterations instead of creating subset loader for DDP.
 
     results = {}
-    all_losses = [[] for _ in range(num_nets)]
-    all_accuracies = [[] for _ in range(num_nets)]
-    # For alignment: results["alignment_metrics"][net_idx][method_name][layer_idx] = value
-    # Or simpler: results["alignment_metrics"][net_idx][layer_idx] = {method1: val, method2: val}
-    # Let's use: results["alignment_metrics"] = [{method: [layer_scores_net_1]}, {method: [layer_scores_net_2]}]
+    # --- MODIFIED: Accumulators for DDP aggregation ---
+    # Store sum of losses, sum of correct predictions, and total samples for each network
+    # These will be aggregated across ranks if DDP is active.
+    # Initialize on the correct device to allow direct accumulation from GPU tensors.
+    sum_losses_all_nets = torch.zeros(num_nets, dtype=torch.float64, device=device)
+    sum_correct_all_nets = torch.zeros(num_nets, dtype=torch.float64, device=device)
+    total_samples_all_nets = torch.zeros(num_nets, dtype=torch.int64, device=device) # total samples processed per net (should be same for all)
+    # --- End MODIFIED ---
+
+    # all_losses = [[] for _ in range(num_nets)] # OLD: stored per-batch losses
+    # all_accuracies = [[] for _ in range(num_nets)] # OLD: stored per-batch accuracies
+    
     if measure_alignment:
         results["alignment_metrics"] = [{} for _ in range(num_nets)]
 
@@ -508,24 +555,37 @@ def evaluate(
         try:
             inputs, targets = next(actual_dataloader_iterator)
         except StopIteration:
+            logger.warning("Dataloader exhausted earlier than expected in evaluate function.") # Added warning
             break # Should not happen if num_batches_to_process <= len(dataloader)
-        inputs, targets = dataset.unwrap_batch((inputs, targets), device=device)
+        inputs_device, targets_device = inputs.to(device), targets.to(device) # Ensure on correct device
         
+        current_batch_size = inputs_device.size(0)
+
         for idx, net in enumerate(nets):
-            outputs = net(inputs)
+            outputs = net(inputs_device)
             if isinstance(outputs, tuple):
                 outputs = outputs[0]
             
-            loss = dataset.measure_loss(outputs, targets, reduction="mean") # Use dataset's loss, mean over batch
-            all_losses[idx].append(loss.item())
-            
-            # Use dataset.measure_accuracy for consistency if it exists, else simple acc
-            if hasattr(dataset, 'measure_accuracy'):
-                acc = dataset.measure_accuracy(outputs, targets, percentage=True)
+            # Use dataset.measure_loss if available, otherwise default to CrossEntropyLoss
+            # The reduction='sum' is important for correct DDP aggregation.
+            if hasattr(dataset, 'measure_loss'):
+                loss = dataset.measure_loss(outputs, targets_device, reduction="sum")
             else:
-                _, predicted = outputs.max(1)
-                acc = (predicted == targets).float().mean().item() * 100.0
-            all_accuracies[idx].append(acc.item() if isinstance(acc, torch.Tensor) else acc)
+                loss = F.cross_entropy(outputs, targets_device, reduction="sum")
+            sum_losses_all_nets[idx] += loss.item() # Accumulate sum of losses
+            
+            # Accuracy calculation
+            _, predicted = outputs.max(1)
+            sum_correct_all_nets[idx] += predicted.eq(targets_device).sum().item() # Accumulate sum of correct predictions
+            total_samples_all_nets[idx] += current_batch_size # Accumulate total samples for this network
+            
+            # OLD per-batch accumulation:
+            # all_losses[idx].append(loss.item())
+            # if hasattr(dataset, 'measure_accuracy'):
+            #     acc = dataset.measure_accuracy(outputs, targets_device, percentage=True)
+            # else:
+            #     acc = (predicted == targets_device).float().mean().item() * 100.0
+            # all_accuracies[idx].append(acc.item() if isinstance(acc, torch.Tensor) else acc)
 
             if measure_alignment and isinstance(net, AlignmentNetwork):
                 # Resolve alignment_methods before using in the main DDP-aware block
@@ -538,7 +598,7 @@ def evaluate(
                     model_to_measure = net.module if isinstance(net, nn.parallel.DistributedDataParallel) else net
                     if isinstance(model_to_measure, AlignmentNetwork): 
                         current_net_alignment_batch = model_to_measure.measure_alignment_methods(
-                            inputs, methods=resolved_alignment_methods, precomputed=False
+                            inputs_device, methods=resolved_alignment_methods, precomputed=False
                         )
                         # Store once (e.g., from first batch) or average across batches.
                         # Current storage is once.
@@ -547,9 +607,32 @@ def evaluate(
                     else:
                         logger.warning(f"Net {idx} is DDP-wrapped but module is not AlignmentNetwork. Cannot measure alignment.")
 
-    # Finalize metrics
-    results["loss"] = [np.mean(losses) if losses else np.nan for losses in all_losses]
-    results["accuracy"] = [np.mean(accs) if accs else np.nan for accs in all_accuracies]
+    # --- DDP Metric Aggregation for loss and accuracy ---
+    if ddp_world_size > 1:
+        dist.all_reduce(sum_losses_all_nets, op=dist.ReduceOp.SUM)
+        dist.all_reduce(sum_correct_all_nets, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_samples_all_nets, op=dist.ReduceOp.SUM)
+    # --- End DDP Aggregation ---
+
+    # Finalize metrics - calculate averages using globally aggregated sums
+    # These will be lists of final metrics, one per network.
+    final_losses = []
+    final_accuracies = []
+    for i in range(num_nets):
+        if total_samples_all_nets[i].item() > 0:
+            avg_loss = sum_losses_all_nets[i].item() / total_samples_all_nets[i].item()
+            avg_acc = 100.0 * sum_correct_all_nets[i].item() / total_samples_all_nets[i].item()
+        else:
+            avg_loss = float('nan')
+            avg_acc = float('nan')
+        final_losses.append(avg_loss)
+        final_accuracies.append(avg_acc)
+
+    results["loss"] = final_losses
+    results["accuracy"] = final_accuracies
+    # results["loss"] = [np.mean(losses) if losses else np.nan for losses in all_losses] # OLD
+    # results["accuracy"] = [np.mean(accs) if accs else np.nan for accs in all_accuracies] # OLD
+
     if num_nets == 1:
         results["loss"] = results["loss"][0]
         results["accuracy"] = results["accuracy"][0]

@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import logging
 from typing import Dict, Any, Callable, Optional, Tuple, Union, List, Protocol
+from torch.utils.data import DataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,12 @@ except ImportError:
         "PID-based metrics will use dummy implementations."
     )
     # Define dummy implementation if import fails
-    class DummyBROJA:
-        @staticmethod
-        def pid(p_rc_s: Dict) -> Dict[str, float]:
-            logger.warning("Using dummy BROJA_2PID.pid implementation.")
-            return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
-    BROJA_2PID_MODULE = DummyBROJA()
+        class DummyBROJA:
+            @staticmethod
+            def pid(p_rc_s: Dict) -> Dict[str, float]:
+                logger.warning("Using dummy BROJA_2PID.pid implementation.")
+                return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
+        BROJA_2PID_MODULE = DummyBROJA()
     PID_AVAILABLE = False
 except Exception as e:
      logger.error(f"An unexpected error occurred while trying to load BROJA_2PID: {e}")
@@ -61,33 +62,42 @@ def get_broja_pid_module():
     if BROJA_2PID_MODULE is None:
          # This state should ideally not be reached due to the try/except block above.
          logger.error("BROJA_2PID_MODULE is unexpectedly None. Returning a fallback dummy.")
-         class FallbackDummyBROJA:
-             @staticmethod
-             def pid(p_rc_s: Dict) -> Dict[str, float]: return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
+        class FallbackDummyBROJA:
+            @staticmethod
+            def pid(p_rc_s: Dict) -> Dict[str, float]: return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
          BROJA_2PID_MODULE = FallbackDummyBROJA()
     return BROJA_2PID_MODULE
 
 # --- UTILITY FUNCTIONS ---
-def covariance(X: torch.Tensor) -> torch.Tensor:
+def covariance(X: torch.Tensor, force_cpu: bool = False) -> torch.Tensor:
+    original_device = X.device
+    if force_cpu and X.is_cuda:
+        X = X.cpu()
+        # logger.debug("Moved tensor to CPU for covariance calculation.")
+
     if X.ndim == 1: X = X.unsqueeze(0)
     if X.shape[0] < 2:
-        # logger.warning(f"Covariance: needs >= 2 samples, got {X.shape[0]}. Returning zeros.")
-        return torch.zeros((X.shape[1], X.shape[1]), device=X.device, dtype=X.dtype)
+        # Return on the original device
+        return torch.zeros((X.shape[1], X.shape[1]), device=original_device, dtype=X.dtype)
     X_centered = X - X.mean(dim=0, keepdim=True)
-    return torch.matmul(X_centered.T, X_centered) / (X.size(0) - 1)
+    cov_matrix = torch.matmul(X_centered.T, X_centered) / (X.size(0) - 1)
+    return cov_matrix.to(original_device) # Ensure result is on original device
 
-def correlation(X: torch.Tensor) -> torch.Tensor:
-    cov = covariance(X)
+def correlation(X: torch.Tensor, force_cpu: bool = False) -> torch.Tensor:
+    original_device = X.device
+    cov = covariance(X, force_cpu=force_cpu) # Pass flag down
     std_dev = torch.sqrt(torch.diag(cov) + 1e-10)
     outer_std_dev = torch.outer(std_dev, std_dev)
-    return torch.where(outer_std_dev > 1e-10, cov / outer_std_dev, torch.zeros_like(cov))
+    corr_matrix = torch.where(outer_std_dev > 1e-10, cov / outer_std_dev, torch.zeros_like(cov))
+    return corr_matrix.to(original_device)
 
 # --- RAYLEIGH QUOTIENT ---
 @torch.no_grad()
 def compute_rayleigh_quotient(
     layer_inputs: torch.Tensor,
     layer_weights: torch.Tensor,
-    relative: bool = True, verbose: bool = False, min_samples_for_cov: int = 2
+    relative: bool = True, verbose: bool = False, min_samples_for_cov: int = 2,
+    force_cpu_for_large_metric_ops: bool = False # NEW kwarg
 ) -> torch.Tensor:
     num_out_features = layer_weights.shape[0]
     zeros_output = lambda: torch.zeros(num_out_features, device=layer_weights.device, dtype=layer_weights.dtype)
@@ -117,7 +127,8 @@ def compute_rayleigh_quotient(
         # logger.warning("RQ: empty inputs/weights. Ret zeros."); 
         return zeros_output()
     try:
-        C = covariance(layer_inputs.to(layer_weights.device))
+        # Pass force_cpu_for_large_metric_ops to covariance
+        C = covariance(layer_inputs.to(layer_weights.device), force_cpu=force_cpu_for_large_metric_ops)
         if torch.isnan(C).any() or torch.isinf(C).any(): 
             # logger.warning("RQ: NaN/Inf in cov. Ret zeros."); 
             return zeros_output()
@@ -131,12 +142,15 @@ def compute_rayleigh_quotient(
         numerator = torch.sum(WC * layer_weights, dim=1)
         denominator = torch.sum(layer_weights * layer_weights, dim=1)
         
-        rq_scores = torch.zeros_like(numerator)
+        rq_scores = torch.zeros_like(numerator, device=layer_weights.device) # Ensure scores are on original device
+        # Move numerator to weights device for division and assignment
+        numerator = numerator.to(rq_scores.device)
+
         mask = denominator > 1e-12
         rq_scores[mask] = numerator[mask] / denominator[mask]
         if relative:
             trace_C = torch.trace(C)
-            if trace_C > 1e-12: rq_scores[mask] /= trace_C
+            if trace_C > 1e-12: rq_scores[mask] /= trace_C.to(rq_scores.device) # Ensure trace is on correct device
             else: rq_scores[mask] = 0.0
         return torch.nan_to_num(rq_scores, nan=0.0, posinf=0.0, neginf=0.0)
     except Exception as e:
@@ -146,7 +160,8 @@ def compute_rayleigh_quotient(
 @torch.no_grad()
 def mi_gaussian_approx(
     layer_outputs: torch.Tensor, target_outputs: Optional[torch.Tensor] = None, 
-    order: int = 0, verbose: bool = False # order currently unused for simplification
+    order: int = 0, verbose: bool = False,
+    force_cpu_for_large_metric_ops: bool = False # NEW kwarg
 ) -> torch.Tensor:
     zeros_output = lambda num_n: torch.zeros(num_n, device=layer_outputs.device, dtype=layer_outputs.dtype)
     if layer_outputs.ndim != 2 or layer_outputs.shape[0] < 2: 
@@ -161,8 +176,8 @@ def mi_gaussian_approx(
         if num_neurons <= 1: return zeros_output(num_neurons)
         # Use PC1 of layer_outputs as reference if no target_outputs
         try:
-            cov_layer = covariance(layer_outputs)
-            _, eigenvectors = torch.linalg.eigh(cov_layer)
+            cov_layer = covariance(layer_outputs, force_cpu=force_cpu_for_large_metric_ops)
+            _, eigenvectors = torch.linalg.eigh(cov_layer.to(layer_outputs.device))
             ref_data = torch.matmul(layer_outputs, eigenvectors[:, -1].unsqueeze(1))
         except Exception as e:
             # logger.warning(f"MI_gauss: PC1 calc failed: {e}. Ret zeros."); 
@@ -181,7 +196,7 @@ def mi_gaussian_approx(
             ref_k = ref_data[:, k].unsqueeze(1)
             combined = torch.cat((neuron_out_i, ref_k), dim=1)
             if combined.shape[0] < 2: continue
-            cov_matrix = covariance(combined)
+            cov_matrix = covariance(combined, force_cpu=force_cpu_for_large_metric_ops)
             var_neuron, var_ref = cov_matrix[0,0], cov_matrix[1,1]
             if var_neuron > 1e-12 and var_ref > 1e-12:
                 rho_sq = (cov_matrix[0,1]**2) / (var_neuron * var_ref)
@@ -260,7 +275,8 @@ def mi_direct_binning(
 # --- REDUNDANCY AND PID METRICS ---
 @torch.no_grad()
 def average_redundancy_gaussian(
-    layer_inputs: torch.Tensor, layer_weights: torch.Tensor, verbose: bool = False
+    layer_inputs: torch.Tensor, layer_weights: torch.Tensor, verbose: bool = False,
+    force_cpu_for_large_metric_ops: bool = False # NEW kwarg
 ) -> torch.Tensor:
     zeros_output = lambda num_n: torch.zeros(num_n, device=layer_weights.device, dtype=layer_weights.dtype)
     if layer_inputs.ndim!=2 or layer_inputs.shape[0]<2: 
@@ -275,7 +291,7 @@ def average_redundancy_gaussian(
     projected_outputs = torch.matmul(layer_inputs, layer_weights.T)
     if projected_outputs.shape[0] < 2: return avg_red_scores
 
-    try: corr_matrix_projections = correlation(projected_outputs)
+    try: corr_matrix_projections = correlation(projected_outputs, force_cpu=force_cpu_for_large_metric_ops)
     except Exception as e: 
         # logger.warning(f"Red_gauss: corr matrix failed: {e}. Ret zeros."); 
         return avg_red_scores
@@ -294,6 +310,7 @@ def average_redundancy_gaussian(
 def average_pid_component(
     layer_inputs: torch.Tensor, layer_outputs: torch.Tensor, 
     pid_component_name: str, bins: int = 10, verbose: bool = False,
+    force_cpu_for_large_metric_ops: bool = False # NEW kwarg
 ) -> torch.Tensor:
     zeros_output = lambda num_n: torch.zeros(num_n, device=layer_outputs.device, dtype=layer_outputs.dtype)
     
@@ -417,29 +434,37 @@ class _AlignmentMetricImpl:
             else: raise ValueError("Cannot determine device for metric calculation.")
         eff_device = torch.device(device) if isinstance(device, str) else device
         
-        fn_kwargs = {"verbose": verbose, **metric_specific_kwargs}
+        # Extract relevant kwargs for specific metric functions, pass others via **fn_kwargs
+        # This helps avoid passing unsupported args to underlying functions.
+        fn_kwargs = {"verbose": verbose}
+        force_cpu_flag = metric_specific_kwargs.get("force_cpu_for_large_metric_ops", False)
+        # configured_cnn_mode = metric_specific_kwargs.get("configured_cnn_mode", "unfold") # Example if needed
+        # configured_cnn_rq_op = metric_specific_kwargs.get("configured_cnn_rq_op", "mean") # Example if needed
 
         if "rayleigh_quotient" in metric_name_lower or "rq" in metric_name_lower:
             if layer_inputs is None or layer_weights is None: raise ValueError(f"{self.name} needs layer_inputs and layer_weights.")
             fn_kwargs["relative"] = self.scale_by_norm
             fn_kwargs["min_samples_for_cov"] = min_samples_for_cov
+            fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
             return self._metric_fn(layer_inputs.to(eff_device), layer_weights.to(eff_device), **fn_kwargs)
         
         elif "mi_gaussian" in metric_name_lower or "mi_g" in metric_name_lower:
             if layer_outputs is None: raise ValueError(f"{self.name} needs layer_outputs.")
             if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
-            # order param was in original mi_gaussian_approx, pass if available in kwargs
             if "order" in metric_specific_kwargs: fn_kwargs["order"] = metric_specific_kwargs["order"]
+            fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
             return self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
 
         elif "mi_direct" in metric_name_lower or "mi_bin" in metric_name_lower:
             if layer_outputs is None: raise ValueError(f"{self.name} needs layer_outputs.")
             if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
             fn_kwargs["bins"] = bins
+            # mi_direct_binning doesn't use covariance, so force_cpu_flag isn't directly passed to it.
             return self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
 
         elif "redundancy_gaussian" in metric_name_lower or "red_g" in metric_name_lower:
             if layer_inputs is None or layer_weights is None: raise ValueError(f"{self.name} needs layer_inputs and layer_weights.")
+            fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
             return self._metric_fn(layer_inputs.to(eff_device), layer_weights.to(eff_device), **fn_kwargs)
         
         elif "pid_" in metric_name_lower:
@@ -449,7 +474,6 @@ class _AlignmentMetricImpl:
                 return torch.zeros(num_n, device=eff_device)
             if layer_inputs is None or layer_outputs is None: raise ValueError(f"{self.name} needs layer_inputs and layer_outputs.")
             fn_kwargs["bins"] = bins
-            # The _metric_fn for PID is already specific (e.g., pid_si_metric_raw)
             return self._metric_fn(layer_inputs.to(eff_device), layer_outputs.to(eff_device), **fn_kwargs)
         else:
             raise NotImplementedError(f"Dispatch for {self.name} in _AlignmentMetricImpl.compute_per_node_scores not implemented.")
@@ -499,7 +523,7 @@ def get_metric(name: str, scale_by_norm: bool = False) -> AlignmentMetric: # Ret
 @torch.no_grad()
 def compute_metrics_for_layers(
     model: nn.Module,
-    collected_data: Dict[str, Dict[str, torch.Tensor]], 
+    collected_data: Dict[str, Dict[str, torch.Tensor]],
     metric_configs: List[Dict[str, Any]], 
     device: Union[str, torch.device],
 ) -> Dict[str, Dict[str, Union[torch.Tensor, float]]]:
@@ -598,7 +622,7 @@ def compute_pairwise_metric(
             
             combined = torch.cat((data1_mean, data2_mean), dim=1)
             if combined.shape[0] < 2: return 0.0
-            cov_matrix = covariance(combined)
+            cov_matrix = covariance(combined, force_cpu=force_cpu_for_large_metric_ops)
             var1, var2 = cov_matrix[0, 0], cov_matrix[1, 1]
             if var1 > 1e-12 and var2 > 1e-12:
                 rho_sq = (cov_matrix[0, 1]**2) / (var1 * var2)
@@ -650,7 +674,7 @@ def compute_pairwise_metric(
             
             combined = torch.cat((data1_mean, data2_mean), dim=1)
             if combined.shape[0] < 2: return 0.0
-            corr_matrix = correlation(combined)
+            corr_matrix = correlation(combined, force_cpu=force_cpu_for_large_metric_ops)
             return corr_matrix[0, 1].item()
 
         elif metric_name_lower == "cosine_similarity":
@@ -721,3 +745,163 @@ def compute_pairwise_metric(
     except Exception as e:
         logger.error(f"Error computing pairwise metric '{metric_name_lower}': {e}", exc_info=verbose)
         return 0.0 # Return default value on error 
+
+# --- NEW: compute_all_node_scores --- 
+def compute_all_node_scores(
+    model: nn.Module,
+    metric_configs: List[Dict[str, Any]], # e.g. [{"name": "RQ", "scale_by_norm": False, "min_samples_for_cov": 2}]
+    device: Union[str, torch.device],
+    data_loader: DataLoader, # DataLoader from which to get batches
+    num_batches: Optional[int] = 1, # Number of batches to process to collect activations
+    # The following are passed down to compute_metrics_for_layers or individual metrics via metric_configs if needed
+    # force_cpu_for_large_metric_ops: bool = True, # This should be a kwarg within a metric_config if metric-specific
+    # configured_cnn_mode: Optional[str] = "unfold", # This is now part of ModelConfig for AlignmentNetwork wrapper
+    # configured_cnn_rq_op: Optional[str] = "mean", # This is also part of AlignmentConfig
+    debug_mode: bool = False # For verbose logging if any metric supports it
+) -> Dict[str, Dict[str, torch.Tensor]]: # Returns {layer_name: {metric_name: scores_tensor}}
+    """
+    Computes node scores for specified metrics for all relevant layers in a model.
+    This involves running data through the model to collect activations.
+    """
+    eff_device = torch.device(device) if isinstance(device, str) else device
+    model.to(eff_device)
+    model.eval()
+
+    # Identify layers to hook (e.g., all layers with weights, or specific ones if model is AlignmentNetwork)
+    # For a generic nn.Module, we might hook all modules that have parameters or are common layer types.
+    # If model is AlignmentNetwork, it has self.alignment_names and self.alignment_layers.
+    layers_to_hook = []
+    if hasattr(model, 'alignment_layers') and hasattr(model, 'alignment_names'): # Check if it's an AlignmentNetwork
+        # Use the pre-defined alignment layers from AlignmentNetwork
+        for name, layer in zip(model.alignment_names, model.alignment_layers):
+            layers_to_hook.append((name, layer))
+    else:
+        # For generic nn.Module, hook identifiable layers (e.g., Conv, Linear)
+        # This basic heuristic might need refinement for complex custom models.
+        for name, module_item in model.named_modules():
+            if isinstance(module_item, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                layers_to_hook.append((name, module_item))
+    
+    if not layers_to_hook:
+        logger.warning("compute_all_node_scores: No suitable layers found to hook in the model.")
+        return {}
+
+    # Setup hooks to capture inputs and outputs
+    captured_activations: Dict[str, Dict[str, List[torch.Tensor]]] = {name: {"input": [], "output": []} for name, _ in layers_to_hook}
+    hooks = []
+
+    def make_hook_fn(layer_name_key: str, input_or_output: str):
+        def hook_fn(module, m_input, m_output):
+            # For inputs, m_input is a tuple. We usually care about the first element.
+            data_to_store = m_input[0] if input_or_output == "input" else m_output
+            if isinstance(data_to_store, torch.Tensor):
+                # Detach and move to CPU to avoid accumulating on GPU memory during forward passes
+                # This is important if num_batches is large.
+                # However, for metric computation, they might need to be on `eff_device` later.
+                # Let's keep on original device for now, assuming num_batches is small for this typical use case.
+                # If OOM occurs, consider .cpu() here and .to(eff_device) in compute_metrics_for_layers.
+                captured_activations[layer_name_key][input_or_output].append(data_to_store.detach())
+            elif isinstance(data_to_store, tuple): # Some layers might return tuples
+                 if data_to_store and isinstance(data_to_store[0], torch.Tensor):
+                    captured_activations[layer_name_key][input_or_output].append(data_to_store[0].detach())
+        return hook_fn
+
+    for layer_name, layer_module in layers_to_hook:
+        hooks.append(layer_module.register_forward_hook(make_hook_fn(layer_name, "input")))
+        hooks.append(layer_module.register_forward_hook(make_hook_fn(layer_name, "output")))
+
+    # Pass data through the model to trigger hooks
+    batches_processed = 0
+    with torch.no_grad():
+        for batch_idx, batch_data in enumerate(data_loader):
+            if num_batches is not None and batch_idx >= num_batches:
+                break
+            # Assuming batch_data is (inputs, targets) or just inputs
+            if isinstance(batch_data, (list, tuple)):
+                inputs, _ = batch_data[0].to(eff_device), batch_data[1] # Only move inputs to device
+            else:
+                inputs = batch_data.to(eff_device)
+            
+            try:
+                _ = model(inputs)
+                batches_processed += 1
+            except Exception as e:
+                logger.error(f"Error during model forward pass in compute_all_node_scores for batch {batch_idx}: {e}", exc_info=debug_mode)
+                # Potentially break or continue based on severity
+                break 
+
+    # Remove hooks
+    for h in hooks: h.remove()
+
+    if batches_processed == 0:
+        logger.warning("compute_all_node_scores: No batches were processed. Cannot compute metrics.")
+        return {}
+
+    # Consolidate captured data: Dict[str, Dict[str, torch.Tensor]]
+    # Each list of batch tensors should be concatenated.
+    collected_data_for_metric_computation: Dict[str, Dict[str, torch.Tensor]] = {}
+    for layer_name, io_data in captured_activations.items():
+        collected_data_for_metric_computation[layer_name] = {}
+        if io_data["input"]: 
+            try: collected_data_for_metric_computation[layer_name]["input"] = torch.cat(io_data["input"]) 
+            except RuntimeError as e: logger.error(f"Error concatenating inputs for {layer_name}: {e}")
+        if io_data["output"]: 
+            try: collected_data_for_metric_computation[layer_name]["output"] = torch.cat(io_data["output"])
+            except RuntimeError as e: logger.error(f"Error concatenating outputs for {layer_name}: {e}")
+    
+    # Call compute_metrics_for_layers with the collected data
+    # Pass specific metric_configs which may include kwargs for individual metrics
+    layer_metric_scores = compute_metrics_for_layers(
+        model=model, 
+        collected_data=collected_data_for_metric_computation, 
+        metric_configs=metric_configs, # This now includes specific kwargs per metric
+        device=eff_device
+        # force_cpu_for_large_metric_ops, configured_cnn_mode, configured_cnn_rq_op 
+        # are now expected to be part of metric_configs if a specific metric needs them,
+        # or handled by the metric implementation itself (e.g. cnn_mode by AlignmentNetwork wrapper).
+    )
+    return layer_metric_scores 
+
+@torch.no_grad()
+def compute_metrics_for_layers(
+    model: nn.Module,
+    collected_data: Dict[str, Dict[str, torch.Tensor]], 
+    metric_configs: List[Dict[str, Any]], 
+    device: Union[str, torch.device],
+) -> Dict[str, Dict[str, Union[torch.Tensor, float]]]:
+    results: Dict[str, Dict[str, Union[torch.Tensor, float]]] = {}
+    model.to(device); model.eval()
+    modules_dict = {name: mod for name, mod in model.named_modules()}
+
+    for layer_name, layer_data in collected_data.items():
+        results[layer_name] = {}
+        module = modules_dict.get(layer_name)
+        if not module: continue
+        
+        l_inputs = layer_data.get("input"); l_outputs = layer_data.get("output")
+
+        for m_config in metric_configs:
+            metric_name = m_config["name"]
+            scale_by_norm = m_config.get("scale_by_norm", False)
+            specific_kwargs_for_metric = {k:v for k,v in m_config.items() if k not in ["name", "scale_by_norm"]}
+
+            try:
+                # Get the AlignmentMetric wrapper instance
+                metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm)
+                
+                # Call its compute_per_node_scores method
+                metric_val = metric_instance.compute_per_node_scores(
+                    layer_inputs=l_inputs, 
+                    layer_weights=module.weight.detach() if hasattr(module, 'weight') and module.weight is not None else None, 
+                    layer_outputs=l_outputs,
+                    device=device, 
+                    **specific_kwargs_for_metric
+                )
+                if metric_val is not None:
+                    results[layer_name][metric_name] = metric_val.item() if metric_val.numel()==1 else metric_val.cpu()
+                else: results[layer_name][metric_name] = torch.tensor(float('nan'))
+            except Exception as e:
+                verbose_logging = specific_kwargs_for_metric.get("verbose", False)
+                logger.error(f"Error computing metric '{metric_name}' for layer '{layer_name}': {e}", exc_info=verbose_logging)
+                results[layer_name][metric_name] = torch.tensor(float('nan'))
+    return results 

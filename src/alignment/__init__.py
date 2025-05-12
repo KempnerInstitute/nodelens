@@ -45,11 +45,8 @@ from alignment.datasets import (
 
 # Metrics
 from alignment.metrics import (
-    RQMetric,
-    MIMetric,
     AlignmentMetric,
     get_metric,
-    register_metric,
 )
 
 # Dropout
@@ -105,11 +102,8 @@ __all__ = [
     "load_dataset",
     
     # Metrics
-    "RQMetric",
-    "MIMetric",
     "AlignmentMetric",
     "get_metric",
-    "register_metric",
     
     # Dropout
     "progressive_dropout",

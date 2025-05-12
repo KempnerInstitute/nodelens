@@ -85,9 +85,14 @@ def run_progressive_dropout_experiment(
 
     logger.info(f"Pre-computing scores & indices for {len(networks)} network replicates.")
     # Construct metric_configs for the single metric used by this experiment
+    # Pass down additional relevant configs for metric computation.
     metric_config_for_pruning = [{
         "name": metric_instance.name, 
-        "scale_by_norm": metric_instance.scale_by_norm
+        "scale_by_norm": metric_instance.scale_by_norm,
+        "force_cpu_for_large_metric_ops": force_cpu_for_large_metric_ops,
+        "configured_cnn_mode": configured_cnn_mode,
+        "configured_cnn_rq_op": configured_cnn_rq_op
+        # Add other relevant kwargs from the function signature if needed by specific metrics
     }]
 
     for net_idx, net_rep in enumerate(tqdm(networks, desc="Preparing Network Metrics", disable=not show_progress)):
@@ -380,7 +385,10 @@ def run_layer_isolated_dropout_experiment(
     # Construct metric_configs for the single metric used by this experiment
     metric_config_for_isolated_pruning = [{
         "name": metric.name, 
-        "scale_by_norm": metric.scale_by_norm
+        "scale_by_norm": metric.scale_by_norm,
+        "force_cpu_for_large_metric_ops": force_cpu_for_large_metric_ops,
+        "configured_cnn_mode": configured_cnn_mode,
+        "configured_cnn_rq_op": configured_cnn_rq_op
     }]
 
     for net_idx, net_rep in enumerate(original_networks):
@@ -430,12 +438,12 @@ def run_layer_isolated_dropout_experiment(
         rand_indices_this_rep = {}
         for l_idx_scores, score_tensor in scores_this_rep_single_metric.items():
             if score_tensor is not None and isinstance(score_tensor, torch.Tensor) and score_tensor.numel() > 0:
-            count = score_tensor.shape[0]
-            asc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=False)
-            desc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=True)
-            allidx_layer = list(range(count))
-            random.shuffle(allidx_layer)
-            rand_indices_this_rep[l_idx_scores] = torch.tensor(allidx_layer, device=device, dtype=torch.long)
+                count = score_tensor.shape[0]
+                asc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=False)
+                desc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=True)
+                allidx_layer = list(range(count))
+                random.shuffle(allidx_layer)
+                rand_indices_this_rep[l_idx_scores] = torch.tensor(allidx_layer, device=device, dtype=torch.long)
             else:
                 asc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)
                 desc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)

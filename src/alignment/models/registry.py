@@ -76,7 +76,7 @@ def get_model_constructor(model_name: str) -> Callable[..., AlignmentNetwork]:
     
     # If it's a registered model, return its constructor
     if model_name_lower in registry_lower:
-        return registry_lower[model_name_lower]
+    return registry_lower[model_name_lower]
     else:
         # It's an external model type (torchvision_, hf_, external)
         # create_model will handle the actual loading for these.

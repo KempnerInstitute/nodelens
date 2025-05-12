@@ -18,6 +18,7 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
+import torch.distributed as dist
 
 from alignment.metrics import AlignmentMetric, get_metric
 from alignment.datasets import load_dataset
@@ -260,7 +261,8 @@ def train_model(
     callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
     dataset_config_for_eval: Optional[Any] = None,
     ddp_rank: int = 0,
-    ddp_world_size: int = 1
+    ddp_world_size: int = 1,
+    loss_criterion: Optional[nn.Module] = None
 ) -> Dict[str, Any]:
     """
     Train a neural network model.
@@ -280,6 +282,7 @@ def train_model(
         dataset_config_for_eval: Optional dataset configuration for the validation loader.
         ddp_rank: Rank of the current DDP process
         ddp_world_size: Total number of DDP processes
+        loss_criterion: Optional pre-initialized loss function
         
     Returns:
         Dictionary containing training metrics and results
@@ -290,6 +293,11 @@ def train_model(
     # Create optimizer if not provided
     if optimizer is None:
         optimizer = optim.Adam(model.parameters(), lr=0.001)
+    
+    # Setup Loss Criterion
+    if loss_criterion is None:
+        logger.warning("Loss criterion not provided to train_model, defaulting to CrossEntropyLoss.")
+        loss_criterion = nn.CrossEntropyLoss()
     
     # Initialize metric tracking
     history = {
@@ -330,7 +338,7 @@ def train_model(
                 outputs = outputs[0]  # If model returns (outputs, hidden), take outputs
             
             # Compute loss
-            loss = torch.nn.functional.cross_entropy(outputs, targets)
+            loss = loss_criterion(outputs, targets)
             
             # Backward pass and optimize
             loss.backward()
@@ -349,14 +357,37 @@ def train_model(
                     'acc': f"{100. * correct / total:.1f}%"
                 })
         
-        # Calculate epoch metrics (all processes do this, loss/acc are from their own data portion)
-        epoch_loss = total_loss / total
-        epoch_accuracy = 100. * correct / total
+        # Calculate epoch metrics (initially based on local data)
+        # These are sums/counts before aggregation
+        epoch_loss_sum_local = total_loss
+        epoch_correct_local = correct
+        epoch_total_local = total
+
+        # Aggregate metrics across all DDP processes if applicable
+        if ddp_world_size > 1:
+            # Create tensors for aggregation
+            metrics_tensor = torch.tensor([epoch_loss_sum_local, epoch_correct_local, epoch_total_local], dtype=torch.float64, device=device)
+            # Sum across all ranks
+            dist.all_reduce(metrics_tensor, op=dist.ReduceOp.SUM)
+            # Extract aggregated values
+            epoch_loss_sum_global = metrics_tensor[0].item()
+            epoch_correct_global = metrics_tensor[1].item()
+            epoch_total_global = metrics_tensor[2].item()
+        else:
+            # If not DDP, local values are global values
+            epoch_loss_sum_global = epoch_loss_sum_local
+            epoch_correct_global = epoch_correct_local
+            epoch_total_global = epoch_total_local
+
+        # Calculate final average loss and accuracy using aggregated values
+        # Avoid division by zero if epoch_total_global is somehow zero
+        final_epoch_loss = epoch_loss_sum_global / epoch_total_global if epoch_total_global > 0 else 0.0
+        final_epoch_accuracy = 100. * epoch_correct_global / epoch_total_global if epoch_total_global > 0 else 0.0
         current_lr = optimizer.param_groups[0]['lr']
         
-        # Store metrics
-        history['train_loss'].append(epoch_loss)
-        history['train_accuracy'].append(epoch_accuracy)
+        # Store aggregated metrics
+        history['train_loss'].append(final_epoch_loss)
+        history['train_accuracy'].append(final_epoch_accuracy)
         history['learning_rate'].append(current_lr)
         
         # Evaluate on validation set if provided
@@ -374,16 +405,16 @@ def train_model(
             history['val_loss'].append(val_results['loss'])
             history['val_accuracy'].append(val_results['accuracy'])
             
-            # Logging only on main process
+            # Logging only on main process - uses aggregated metrics now
             if is_main_process and (epoch == num_epochs - 1 or (epoch + 1) % 5 == 0):
                 logger.info(f"Epoch {epoch+1}/{num_epochs}: "
-                          f"Loss={epoch_loss:.4f}, Acc={epoch_accuracy:.2f}%, "
+                          f"Loss={final_epoch_loss:.4f}, Acc={final_epoch_accuracy:.2f}%, "
                           f"Val Loss={val_results['loss']:.4f}, Val Acc={val_results['accuracy']:.2f}%")
         else:
-            # Logging only on main process
+            # Logging only on main process - uses aggregated metrics now
             if is_main_process and (epoch == num_epochs - 1 or (epoch + 1) % 5 == 0):
                 logger.info(f"Epoch {epoch+1}/{num_epochs}: "
-                          f"Loss={epoch_loss:.4f}, Acc={epoch_accuracy:.2f}%")
+                          f"Loss={final_epoch_loss:.4f}, Acc={final_epoch_accuracy:.2f}%")
         
         # Save checkpoint only on main process
         if is_main_process and checkpoint_dir is not None and (epoch + 1) % checkpoint_freq == 0:
@@ -397,8 +428,8 @@ def train_model(
                 'epoch': epoch + 1,
                 'model_state_dict': model_state_to_save,
                 'optimizer_state_dict': optimizer.state_dict(),
-                'train_loss': epoch_loss,
-                'train_accuracy': epoch_accuracy,
+                'train_loss': final_epoch_loss,
+                'train_accuracy': final_epoch_accuracy,
                 'val_loss': history['val_loss'][-1] if val_loader is not None else None,
                 'val_accuracy': history['val_accuracy'][-1] if val_loader is not None else None
             }, checkpoint_file)
@@ -408,8 +439,8 @@ def train_model(
             epoch_context = {
                 "epoch": epoch + 1,
                 "model": model,
-                "train_loss": epoch_loss,
-                "train_accuracy": epoch_accuracy,
+                "train_loss": final_epoch_loss,
+                "train_accuracy": final_epoch_accuracy,
                 "val_loss": history['val_loss'][-1] if val_loader is not None and history['val_loss'] else None,
                 "val_accuracy": history['val_accuracy'][-1] if val_loader is not None and history['val_accuracy'] else None,
                 "learning_rate": current_lr,
@@ -670,6 +701,7 @@ def train_networks_fully_tensorized(
     weight_decay: float = 0.0,
     ddp_rank: int = 0,
     ddp_world_size: int = 1,
+    loss_criterion: Optional[nn.Module] = None,
     **optimizer_kwargs
 ) -> Dict:
     """
@@ -689,6 +721,7 @@ def train_networks_fully_tensorized(
         weight_decay: Weight decay for the optimizer.
         ddp_rank: Rank of the current DDP process
         ddp_world_size: Total number of DDP processes
+        loss_criterion: Optional pre-initialized loss function
         **optimizer_kwargs: Additional arguments for the optimizer.
 
     Returns:
@@ -729,6 +762,15 @@ def train_networks_fully_tensorized(
     
     ensemble = NetworkEnsemble(networks).to(device)
     
+    # --- NEW: Use provided loss_criterion or default ---
+    if loss_criterion is None:
+        logger.warning("train_networks_fully_tensorized: loss_criterion not provided, defaulting to CrossEntropyLoss.")
+        effective_loss_criterion = nn.CrossEntropyLoss() # Default
+    else:
+        effective_loss_criterion = loss_criterion
+    effective_loss_criterion = effective_loss_criterion.to(device) # Ensure loss is on the correct device
+    # --- End NEW ---
+
     # Create optimizer for the ensemble
     optimizer = optimizer_class(
         ensemble.parameters(), 
@@ -761,7 +803,7 @@ def train_networks_fully_tensorized(
             current_batch_loss = 0
             for net_idx in range(num_networks):
                 net_output = outputs_ensemble[net_idx]
-                net_loss = F.cross_entropy(net_output, targets, reduction='mean')
+                net_loss = effective_loss_criterion(net_output, targets)
                 current_batch_loss += net_loss
                 
                 _, predicted = net_output.max(1)
@@ -830,6 +872,7 @@ def train_networks_sequential(
     callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
     ddp_rank: int = 0,
     ddp_world_size: int = 1,
+    loss_criterion: Optional[nn.Module] = None,
     **optimizer_kwargs
 ) -> Dict[str, List[float]]:
     """
@@ -883,7 +926,8 @@ def train_networks_sequential(
             callbacks=callbacks, # Pass down the callbacks
             dataset_config_for_eval=dataset.config_object, # MODIFIED: Use dataset.config_object
             ddp_rank=ddp_rank,
-            ddp_world_size=ddp_world_size
+            ddp_world_size=ddp_world_size,
+            loss_criterion=loss_criterion # NEW: Pass loss_criterion
         )
         all_individual_histories.append(individual_history)
 
@@ -922,6 +966,7 @@ def train_networks(
     callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
     ddp_rank: int = 0,
     ddp_world_size: int = 1,
+    loss_criterion: Optional[nn.Module] = None,
     **optimizer_kwargs
 ) -> Dict[str, List[float]]:
     """
@@ -940,6 +985,7 @@ def train_networks(
         callbacks: Optional list of callback functions to call at the end of each epoch for each model (primarily for sequential).
         ddp_rank: Rank of the current DDP process
         ddp_world_size: Total number of DDP processes
+        loss_criterion: Optional pre-initialized loss function
         **optimizer_kwargs: Additional arguments to pass to optimizer
         
     Returns:
@@ -985,6 +1031,7 @@ def train_networks(
         "weight_decay": weight_decay,
         "ddp_rank": ddp_rank,
         "ddp_world_size": ddp_world_size,
+        "loss_criterion": loss_criterion,
         **optimizer_kwargs
     }
 
@@ -1000,6 +1047,11 @@ def train_networks(
             # If general ensemble-level callbacks were needed, its signature would change.
             if callbacks:
                 logger.warning("Model-specific callbacks are not currently supported with 'fully_tensorized' training method. Callbacks will be ignored.")
+            # Fully tensorized training needs its own loss handling inside, or this needs to be passed and used.
+            # For now, train_networks_fully_tensorized does not use the passed loss_criterion directly.
+            # It uses F.cross_entropy. This needs to be addressed if fully_tensorized is used with other losses.
+            if loss_criterion is not None and str(loss_criterion).lower().find('crossentropyloss') == -1:
+                 logger.warning("Custom loss_criterion provided to 'fully_tensorized' method, but it currently uses F.cross_entropy internally. This custom loss will be ignored by fully_tensorized.") 
             return train_networks_fully_tensorized(**common_args)
         except Exception as e:
             logger.error(f"Fully_tensorized training failed: {str(e)}. Falling back to sequential.", exc_info=True)
