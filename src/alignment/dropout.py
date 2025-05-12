@@ -179,7 +179,7 @@ def eigenvector_dropout(
                 if layer_mod.bias is not None:
                     bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, [i for i in nodes if i < layer_mod.bias.data.shape[0]], device)
                     layer_mod.bias.data = layer_mod.bias.data * bias_mask * scale
-            else:
+                    else:
                 # Just zero out the weights without scaling
                 for node_idx in nodes:
                     if node_idx < out_dim:
@@ -196,7 +196,7 @@ def eigenvector_dropout(
 
             if nodes_to_drop <= 0:
                 alignment_values.append(0.0)
-                continue
+            continue
 
             # Get scores for this layer
             scores = node_scores_by_layer[l_i]
@@ -418,13 +418,13 @@ def progressive_dropout(
 
         return network_accuracies_all, network_losses_all, pruning_details_all
 
-    else:
+                    else:
         logger.info(f"Starting progressive_dropout (single-strategy path): strategy={strategy}, " f"mode={pruning_mode}, dropout_mode={dropout_mode}")
-        network_accuracies: Dict[int, List[float]] = {}
-        network_losses: Dict[int, List[float]] = {}
+    network_accuracies: Dict[int, List[float]] = {}
+    network_losses: Dict[int, List[float]] = {}
         pruning_details_single_strat: Dict[int, Dict[int, Dict[int, Dict[str, Any]]]] = {n_idx: {} for n_idx in range(len(networks))}
 
-        if not networks:
+    if not networks:
             return network_accuracies, network_losses, pruning_details_single_strat
 
         for net_idx, net in enumerate(networks):

@@ -32,7 +32,7 @@ class BaseConfig:
             # Merge the schema with the loaded YAML. YAML values override schema defaults.
             # OmegaConf handles type validation and conversion based on schema type hints.
             merged_conf = OmegaConf.merge(schema, yaml_conf)
-            
+                    
             # Resolve any variable interpolations (e.g., ${oc.env:SOME_VAR})
             OmegaConf.resolve(merged_conf)
             
@@ -90,7 +90,7 @@ class BaseConfig:
 
             if hasattr(obj, "validate") and callable(getattr(obj, "validate")):
                 obj.validate()
-            
+                
             return obj
         except OmegaConfBaseException as e:
             raise ValueError(f"Error creating config from dictionary with OmegaConf: {str(e)}") from e
@@ -111,90 +111,177 @@ class BaseConfig:
             return OmegaConf.to_container(OmegaConf.create(self), resolve=True)
         except Exception as e:
             config_logger.warning(f"Error converting config to dict using OmegaConf: {e}. Falling back to vars().")
-            result = {}
-            for k, v in vars(self).items():
-                if isinstance(v, BaseConfig):
+        result = {}
+        for k, v in vars(self).items():
+            if isinstance(v, BaseConfig):
                     result[k] = v.to_dict() # Recursive call
-                else:
-                    result[k] = v
-            return result
+            else:
+                result[k] = v
+        return result
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
 
 
+# --- NEW: Nested Model Parameter Dataclasses ---
+@dataclass
+class MLPParamsConfig(BaseConfig):
+    input_dim: Optional[int] = 784      # e.g., 784 for MNIST
+    hidden_dims: List[int] = field(default_factory=lambda: [128, 64])
+    activation: str = "relu"          # Options: "relu", "tanh", "sigmoid", "identity"
+
+    def validate(self) -> bool:
+        if self.input_dim is None or self.input_dim <= 0:
+            # Allow None if data is auto-flattened and dim inferred, but explicit is better
+            config_logger.warning("MLPParamsConfig input_dim not set or invalid, model might fail.")
+        if not self.hidden_dims:
+            config_logger.warning("MLPParamsConfig hidden_dims not set, will be a linear model if empty.")
+        valid_activations = ["relu", "tanh", "sigmoid", "identity"]
+        if self.activation.lower() not in valid_activations:
+            raise ValueError(f"Invalid MLP activation: {self.activation}. Valid: {valid_activations}")
+        return True
+
+@dataclass
+class CNN2P2ParamsConfig(BaseConfig):
+    in_channels: int = 1                 # e.g., 1 for MNIST, 3 for CIFAR
+    conv_channels: List[int] = field(default_factory=lambda: [32, 64])
+    kernel_sizes: List[int] = field(default_factory=lambda: [5, 5])
+    strides: List[int] = field(default_factory=lambda: [1, 1])
+    paddings: List[int] = field(default_factory=lambda: [0, 0]) 
+    pool_kernel_size: int = 2
+    pool_stride: int = 2
+    hidden_fc_dim: int = 128
+    example_input_hw: List[int] = field(default_factory=lambda: [28,28])
+
+    def validate(self) -> bool:
+        for param_name, param_list in [
+            ("conv_channels", self.conv_channels),
+            ("kernel_sizes", self.kernel_sizes),
+            ("strides", self.strides),
+            ("paddings", self.paddings)
+        ]:
+            if not (isinstance(param_list, list) and len(param_list) == 2):
+                raise ValueError(f"CNN2P2ParamsConfig {param_name} must be a list of 2 elements, got {param_list}")
+        if not (isinstance(self.example_input_hw, (list, tuple)) and len(self.example_input_hw) == 2):
+                raise ValueError(f"CNN2P2ParamsConfig example_input_hw must be a list/tuple of 2 elements, got {self.example_input_hw}")
+        return True
+
+@dataclass
+class ExternalModelParamsConfig(BaseConfig):
+    source: Optional[str] = None  # e.g., "torchvision", "huggingface_transformers"
+    name_or_path: Optional[str] = None # e.g., "resnet18", "bert-base-uncased"
+    pretrained: bool = True
+    freeze_feature_extractor: bool = False
+
+    def validate(self) -> bool:
+        if not self.source:
+            raise ValueError("ExternalModelParamsConfig: 'source' is required (e.g., 'torchvision').")
+        if not self.name_or_path:
+            raise ValueError("ExternalModelParamsConfig: 'name_or_path' is required.")
+        valid_sources = ["torchvision", "huggingface_transformers"]
+        if self.source not in valid_sources:
+            raise ValueError(f"Invalid external_model_source: '{self.source}'. Valid are: {valid_sources}")
+        return True
+# --- End NEW: Nested Model Parameter Dataclasses ---
+
 @dataclass
 class ModelConfig(BaseConfig):
     """Neural network model configuration."""
     
-    model_name: str = "MLP"
-    # Common params
-    dropout_rate: float = 0.0 # Used by MLP, CNN2P2, AlexNet (for overriding default)
-    output_dim: int = 10      # Used by MLP, CNN2P2, AlexNet (as num_classes)
-    alignment_layers: Optional[Dict[str, Any]] = None # Using Any for value type, can be int or other spec
+    model_name: str = "MLP" # Main model type identifier
+    
+    # --- Common Parameters (apply to most models or the AlignmentNetwork wrapper) ---
+    output_dim: int = 10      # Number of output classes, typically for the final layer.
+    dropout_rate: float = 0.0 # A general dropout rate. Internal models might use this for their nn.Dropout layers.
+                              # For external models, this is usually not directly applied unless model supports it.
+    cnn_mode: Optional[str] = "unfold" # For AlignmentNetwork wrapper: "unfold", "patchwise", "batch_patch_combined".
+                                     # If None, AlignmentNetwork defaults to "unfold".
+    alignment_layers: Optional[Dict[str, Any]] = None # Specifies layers for AlignmentNetwork analysis.
+    
+    # --- Model-Specific Parameter Blocks ---
+    # Only the block corresponding to model_name (or inferred for external) should be populated in YAML.
+    mlp_params: Optional[MLPParamsConfig] = None
+    cnn2p2_params: Optional[CNN2P2ParamsConfig] = None
+    external_params: Optional[ExternalModelParamsConfig] = None
+    
+    # --- Deprecated/Legacy fields (will be removed or ignored if new structure is used) ---
+    # These are now part of the nested configs above or external_params.
+    input_dim: Optional[int] = field(default=None, metadata={"deprecated": True})
+    hidden_dims: Optional[List[int]] = field(default=None, metadata={"deprecated": True})
+    activation: Optional[str] = field(default=None, metadata={"deprecated": True})
+    in_channels: Optional[int] = field(default=None, metadata={"deprecated": True})
+    conv_channels: Optional[List[int]] = field(default=None, metadata={"deprecated": True})
+    kernel_sizes: Optional[List[int]] = field(default=None, metadata={"deprecated": True})
+    strides: Optional[List[int]] = field(default=None, metadata={"deprecated": True})
+    paddings: Optional[List[int]] = field(default=None, metadata={"deprecated": True})
+    pool_kernel_size: Optional[int] = field(default=None, metadata={"deprecated": True})
+    pool_stride: Optional[int] = field(default=None, metadata={"deprecated": True})
+    hidden_fc_dim: Optional[int] = field(default=None, metadata={"deprecated": True})
+    example_input_hw: Optional[List[int]] = field(default=None, metadata={"deprecated": True})
+    external_model_source: Optional[str] = field(default=None, metadata={"deprecated": True})
+    external_model_name_or_path: Optional[str] = field(default=None, metadata={"deprecated": True})
+    pretrained: Optional[bool] = field(default=None, metadata={"deprecated": True}) # Note: external_params.pretrained is bool=True
+    freeze_feature_extractor: Optional[bool] = field(default=None, metadata={"deprecated": True})
+    # --- End Deprecated --- 
 
-    # MLP specific
-    input_dim: Optional[int] = None # e.g., 784 for MNIST with MLP
-    hidden_dims: Optional[List[int]] = field(default_factory=lambda: [100, 100, 50])
-    activation: Optional[str] = "relu" # For MLP: relu, tanh, sigmoid, identity
-
-    # CNN2P2 specific
-    in_channels: Optional[int] = None # e.g., 1 for MNIST, 3 for CIFAR
-    conv_channels: Optional[List[int]] = field(default_factory=lambda: [32, 64])
-    kernel_sizes: Optional[List[int]] = field(default_factory=lambda: [5, 5])
-    strides: Optional[List[int]] = field(default_factory=lambda: [1, 1])
-    paddings: Optional[List[int]] = field(default_factory=lambda: [0, 0]) # Default to 0, adjust based on kernel/stride
-    pool_kernel_size: Optional[int] = 2
-    pool_stride: Optional[int] = 2
-    hidden_fc_dim: Optional[int] = 128
-    example_input_hw: Optional[List[int]] = field(default_factory=lambda: [28,28]) # For dynamic FC input calculation
-
-    # AlexNet specific (uses output_dim as num_classes, dropout_rate to override internal dropout)
-    # No extra specific params here needed beyond common ones, unless more customization is desired.
-
-    # Field for other model-specific kwargs not explicitly defined
-    extra_model_params: Dict[str, Any] = field(default_factory=dict)
+    extra_model_params: Dict[str, Any] = field(default_factory=dict) # For ad-hoc params to internal constructors.
 
     def __post_init__(self):
-        # Backward compatibility for "dropout" if present in config
-        if "dropout" in self.extra_model_params and self.dropout_rate == 0.0:
-            self.dropout_rate = self.extra_model_params.pop("dropout")
-        # Ensure example_input_hw is a tuple for CNN2P2
-        if self.example_input_hw is not None and not isinstance(self.example_input_hw, tuple):
-            self.example_input_hw = tuple(self.example_input_hw)
+        # Logic to populate specific param blocks if top-level ones are still used (for backward compatibility)
+        # Or, ideally, enforce that only one specific param block is used.
+        # For now, we primarily expect the YAML to use the nested structure.
+        
+        # Infer external_params if model_name suggests it and external_params is not explicitly set
+        if self.model_name and not self.external_params:
+            if self.model_name.lower().startswith("torchvision_") or self.model_name.lower().startswith("hf_"):
+                source = "torchvision" if self.model_name.lower().startswith("torchvision_") else "huggingface_transformers"
+                name_or_path = self.model_name.split("_", 1)[1] if "_" in self.model_name else ""
+                if name_or_path:
+                    self.external_params = ExternalModelParamsConfig(source=source, name_or_path=name_or_path)
+                    config_logger.info(f"Inferred external_params for {self.model_name}: source={source}, name_or_path={name_or_path}")
+                else:
+                    config_logger.warning(f"Model name '{self.model_name}' suggests an external model, but could not infer name_or_path. Please set external_params explicitly.")
+            elif self.model_name.lower() == "external" and (self.external_model_source and self.external_model_name_or_path):
+                 # Handle legacy top-level external fields if model_name="external"
+                 self.external_params = ExternalModelParamsConfig(
+                     source=self.external_model_source,
+                     name_or_path=self.external_model_name_or_path,
+                     pretrained=self.pretrained if self.pretrained is not None else True,
+                     freeze_feature_extractor=self.freeze_feature_extractor if self.freeze_feature_extractor is not None else False
+                 )
+                 config_logger.info(f"Populated external_params from legacy top-level fields for model_name='external'.")
 
     def validate(self) -> bool:
         """Validate model configuration."""
         if not (0.0 <= self.dropout_rate <= 1.0):
             raise ValueError(f"Dropout rate must be between 0 and 1, got {self.dropout_rate}")
             
-        # Basic model name check (can be expanded)
-        known_models = ["MLP", "CNN2P2", "AlexNet"]
-        if self.model_name not in known_models:
-            logger.warning(f"Unusual model name: {self.model_name}. Ensure a corresponding create_{self.model_name.lower()} function exists.")
-        
-        if self.model_name == "MLP":
-            if self.input_dim is None:
-                logger.warning("MLP input_dim not set, model might fail if data isn't auto-flattened to a known size.")
-            if not self.hidden_dims:
-                logger.warning("MLP hidden_dims not set, will be a linear model if empty.")
-            valid_activations = ["relu", "tanh", "sigmoid", "identity"]
-            if self.activation.lower() not in valid_activations:
-                raise ValueError(f"Invalid MLP activation: {self.activation}. Valid: {valid_activations}")
+        model_name_lower = self.model_name.lower()
+        known_internal_models = ["mlp", "cnn2p2", "alexnet"] # AlexNet is now external via torchvision
+        is_external = model_name_lower.startswith("torchvision_") or model_name_lower.startswith("hf_") or model_name_lower == "external" or (self.external_params is not None)
 
-        if self.model_name == "CNN2P2":
-            if self.in_channels is None:
-                raise ValueError("CNN2P2 in_channels must be set.")
-            for param_name, param_list in [
-                ("conv_channels", self.conv_channels),
-                ("kernel_sizes", self.kernel_sizes),
-                ("strides", self.strides),
-                ("paddings", self.paddings)
-            ]:
-                if not (isinstance(param_list, list) and len(param_list) == 2):
-                    raise ValueError(f"CNN2P2 {param_name} must be a list of 2 elements, got {param_list}")
-            if not (isinstance(self.example_input_hw, (list, tuple)) and len(self.example_input_hw) == 2):
-                 raise ValueError(f"CNN2P2 example_input_hw must be a list/tuple of 2 elements, got {self.example_input_hw}")
+        if not is_external and model_name_lower not in known_internal_models:
+            # This warning is if it's not a known internal name AND not clearly an external model config
+            config_logger.warning(f"Unusual model_name: {self.model_name}. Ensure it's a registered internal model or configure external_params correctly.")
+
+        # Validate specific param blocks based on model_name
+        if model_name_lower == "mlp":
+            if not self.mlp_params: raise ValueError("model_name is MLP, but mlp_params block is missing.")
+            self.mlp_params.validate()
+        elif model_name_lower == "cnn2p2":
+            if not self.cnn2p2_params: raise ValueError("model_name is CNN2P2, but cnn2p2_params block is missing.")
+            self.cnn2p2_params.validate()
+        elif is_external:
+            if not self.external_params: raise ValueError(f"model_name '{self.model_name}' indicates an external model, but external_params block is missing or could not be inferred.")
+            self.external_params.validate()
+        
+        # Validate cnn_mode if set (this is for AlignmentNetwork wrapper)
+        if self.cnn_mode is not None:
+            valid_cnn_modes_wrapper = ["unfold", "patchwise", "batch_patch_combined"]
+            # Note: "filter_patch_summary", "filter_specific_covariance_rq" are more for metric computation interpretation
+            # rather than AlignmentNetwork preprocessing mode directly.
+            if self.cnn_mode not in valid_cnn_modes_wrapper:
+                config_logger.warning(f"ModelConfig.cnn_mode (for AlignmentNetwork wrapper) '{self.cnn_mode}' provided. Ensure it is valid. Known wrapper modes: {valid_cnn_modes_wrapper}")
 
         return True
 
@@ -368,17 +455,16 @@ class AlignmentConfig(BaseConfig):
         if self.metric not in valid_metrics:
             warnings.warn(f"Unusual alignment metric: {self.metric}. Supported: {valid_metrics}")
         
-        valid_cnn_modes = ["unfold", "patchwise", "batch_patch_combined", "filter_patch_summary"]
+        valid_cnn_modes = ["unfold", "patchwise", "batch_patch_combined", "filter_patch_summary", "filter_specific_covariance_rq"]
         if self.cnn_mode not in valid_cnn_modes:
-            raise ValueError(f"Invalid CNN mode: {self.cnn_mode}. Supported: {valid_cnn_modes}")
+            raise ValueError(f"Invalid CNN mode: '{self.cnn_mode}'. Supported: {valid_cnn_modes}")
 
         valid_rq_ops = ["mean", "max", "var", "sum"]
         if self.cnn_rq_aggregation_op not in valid_rq_ops:
-            raise ValueError(f"Invalid cnn_rq_aggregation_op: {self.cnn_rq_aggregation_op}. Supported: {valid_rq_ops}")
+            raise ValueError(f"Invalid cnn_rq_aggregation_op: '{self.cnn_rq_aggregation_op}'. Supported: {valid_rq_ops}")
         
         if self.callbacks is not None:
             if not isinstance(self.callbacks, CallbackSettings):
-                 # This should ideally be caught by __post_init__ or OmegaConf.to_object instantiation
                 raise ValueError(f"AlignmentConfig.callbacks is not a CallbackSettings instance after __post_init__. Type: {type(self.callbacks)}")
             self.callbacks.validate()
         return True
@@ -457,6 +543,15 @@ class ExperimentConfig(BaseConfig):
     debug_mode: bool = False  # Enable debug output
     seed: Optional[int] = None # Added seed for reproducibility
     
+    # --- NEW: DDP Configuration ---
+    use_ddp: bool = False # Whether to use Distributed Data Parallel
+    ddp_backend: Optional[str] = "nccl" # DDP backend, e.g., "nccl", "gloo"
+    # ddp_rank, ddp_world_size, ddp_local_rank will be set at runtime if use_ddp is true
+    ddp_rank: int = 0 
+    ddp_world_size: int = 1
+    ddp_local_rank: int = 0 # Typically set from ENV or launcher
+    # --- End NEW ---
+
     # Nested configurations
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -534,6 +629,10 @@ class ExperimentConfig(BaseConfig):
         except Exception as e:
             raise ValueError(f"Nested config validation error: {str(e)}")
         
+        # Validate DDP config
+        if self.use_ddp and self.ddp_backend not in ["nccl", "gloo", "mpi"]:
+            raise ValueError(f"Invalid ddp_backend: {self.ddp_backend}. Supported: nccl, gloo, mpi")
+
         return True
 
 # For backward compatibility

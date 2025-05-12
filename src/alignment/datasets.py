@@ -425,7 +425,10 @@ def load_dataset(
     dataset_config: Union[DatasetConfig, Dict[str, Any]],
     batch_size: Optional[int] = None,
     device: Optional[Union[str, torch.device]] = None,
-    transform_params: Optional[Dict[str, Any]] = None
+    transform_params: Optional[Dict[str, Any]] = None,
+    use_ddp: bool = False,
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
 ) -> DataSet:
     """
     Load a dataset based on configuration.
@@ -435,6 +438,9 @@ def load_dataset(
         batch_size: Optional batch size (overrides config)
         device: Optional device to place tensors on
         transform_params: Optional transform parameters (overrides config)
+        use_ddp: Whether DDP is active, to configure DistributedSampler.
+        ddp_rank: DDP rank.
+        ddp_world_size: DDP world size.
         
     Returns:
         Dataset object with loaders
@@ -479,13 +485,19 @@ def load_dataset(
     elif hasattr(dataset_config, 'batch_size'):
         loader_params['batch_size'] = dataset_config.batch_size
     
+    # Add num_workers from config if available, otherwise default_loader_parameters will handle it.
+    if hasattr(dataset_config, 'num_workers'):
+        loader_params['num_workers'] = dataset_config.num_workers
+    # pin_memory could also be configured here from dataset_config if needed
+
     # Load the dataset
     dataset = get_dataset(
         dataset_name=dataset_name,
         build=True,
         dataset_parameters={'root': dataset_path, 'download': True},
         transform_parameters=transform_params,
-        loader_parameters=loader_params,
+        loader_parameters=loader_params, # Contains batch_size, num_workers etc.
+        distributed=use_ddp, 
         device=device,
         config_object=dataset_config
     )

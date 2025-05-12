@@ -8,780 +8,716 @@ functions for alignment-based analysis.
 """
 
 import torch
+import math
 import numpy as np
+import sys
+import os
+import importlib.util
+from pathlib import Path
 import torch.nn.functional as F
-from typing import Dict, List, Tuple, Union, Optional, Any, Callable
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 import logging
-import traceback
-
-# Import core implementations from utils.metrics_utils
-from alignment.utils.metrics_utils import (
-    AlignmentMetricBase,
-    RQMetric,
-    MIMetric,
-    WeightSimilarityMetric,
-    NodeRedundancyMetric,
-    AlignmentMetricsFactory as AlignmentMetrics,
-    alignment
-)
-
-# If these utils are used by the moved function, ensure they are accessible
-from alignment.utils.model_utils import _normalize_device, _ensure_model_on_device, _flatten_layer_weights_for_node, process_cnn_weights
+from typing import Dict, Any, Callable, Optional, Tuple, Union, List, Protocol
 
 logger = logging.getLogger(__name__)
 
-class RankAlignmentMetric(AlignmentMetricBase):
-    """
-    Rank-based alignment metric.
-    
-    This metric assesses alignment based on the correlation of
-    principal components of activations and weight matrices.
-    """
-    
-    @staticmethod
-    def measure(inputs: torch.Tensor, weights: torch.Tensor, **kwargs) -> torch.Tensor:
-        """
-        Measure rank alignment between inputs and weights.
-        
-        Args:
-            inputs: Input activations tensor
-            weights: Weight tensor
-            
-        Returns:
-            Tensor containing rank alignment values
-        """
-        # Ensure inputs have at least 2 dimensions
-        if inputs.dim() < 2:
-            inputs = inputs.unsqueeze(0)
-            
-        # Move weights to same device as inputs
-        weights = weights.to(inputs.device)
-        
-        # Center the inputs
-        X = inputs - inputs.mean(dim=0, keepdim=True)
-        
-        # Compute SVD of inputs
-        try:
-            U, S, V = torch.linalg.svd(X, full_matrices=False)
-            
-            # Compute alignment between singular vectors and weight vectors
-            alignment_scores = []
-            for i in range(min(10, V.size(0))):  # Use top 10 singular vectors
-                singular_vector = V[i, :]
-                
-                # Compute alignment with each weight vector
-                for j in range(weights.size(0)):
-                    weight_vector = weights[j, :]
-                    
-                    # Compute cosine similarity
-                    cos_sim = torch.dot(singular_vector, weight_vector) / (
-                        torch.norm(singular_vector) * torch.norm(weight_vector) + 1e-8
-                    )
-                    alignment_scores.append(cos_sim.abs().item())
-            
-            # Return mean alignment
-            return torch.tensor(alignment_scores).mean()
-            
-        except Exception:
-            # Fallback if SVD fails
-            return torch.tensor(0.5, device=inputs.device)
-    
-    @classmethod
-    def get_name(cls) -> str:
-        """Return the name of the metric."""
-        return "RankAlignment"
+# --- BROJA_2PID Import (Revised) ---
+BROJA_2PID_MODULE = None
+PID_AVAILABLE = False
+try:
+    # Attempt to import directly assuming it's vendored or installed
+    from alignment.external import BROJA_2PID 
+    BROJA_2PID_MODULE = BROJA_2PID
+    PID_AVAILABLE = True
+    logger.info("Successfully loaded BROJA_2PID module from alignment.external.")
+except ImportError:
+    logger.warning(
+        "BROJA_2PID module not found in alignment.external. "
+        "Please ensure BROJA_2PID.py (or package) is placed in src/alignment/external/. "
+        "PID-based metrics will use dummy implementations."
+    )
+    # Define dummy implementation if import fails
+    class DummyBROJA:
+        @staticmethod
+        def pid(p_rc_s: Dict) -> Dict[str, float]:
+            logger.warning("Using dummy BROJA_2PID.pid implementation.")
+            return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
+    BROJA_2PID_MODULE = DummyBROJA()
+    PID_AVAILABLE = False
+except Exception as e:
+     logger.error(f"An unexpected error occurred while trying to load BROJA_2PID: {e}")
+     # Define dummy implementation on other errors too
+     class DummyBROJA:
+         @staticmethod
+         def pid(p_rc_s: Dict) -> Dict[str, float]:
+             logger.warning("Using dummy BROJA_2PID.pid implementation due to loading error.")
+             return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
+     BROJA_2PID_MODULE = DummyBROJA()
+     PID_AVAILABLE = False
 
+def get_broja_pid_module():
+    global BROJA_2PID_MODULE
+    # The module (real or dummy) is already assigned during initial import attempt.
+    if BROJA_2PID_MODULE is None:
+         # This state should ideally not be reached due to the try/except block above.
+         logger.error("BROJA_2PID_MODULE is unexpectedly None. Returning a fallback dummy.")
+         class FallbackDummyBROJA:
+             @staticmethod
+             def pid(p_rc_s: Dict) -> Dict[str, float]: return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
+         BROJA_2PID_MODULE = FallbackDummyBROJA()
+    return BROJA_2PID_MODULE
 
-class NullSpaceAlignmentMetric(AlignmentMetricBase):
-    """
-    Null space alignment metric.
-    
-    This metric assesses alignment based on the projection of
-    weights onto the null space of the input covariance matrix.
-    """
-    
-    @staticmethod
-    def measure(inputs: torch.Tensor, weights: torch.Tensor, **kwargs) -> torch.Tensor:
-        """
-        Measure null space alignment between inputs and weights.
-        
-        Args:
-            inputs: Input activations tensor
-            weights: Weight tensor
-            
-        Returns:
-            Tensor containing null space alignment values
-        """
-        # Ensure inputs have at least 2 dimensions
-        if inputs.dim() < 2:
-            inputs = inputs.unsqueeze(0)
-            
-        # Move weights to same device as inputs
-        weights = weights.to(inputs.device)
-        
-        # Center the inputs
-        X = inputs - inputs.mean(dim=0, keepdim=True)
-        
-        # Compute eigendecomposition of input covariance
-        try:
-            cov = torch.matmul(X.t(), X) / (X.size(0) - 1)
-            eigenvalues, eigenvectors = torch.linalg.eigh(cov)
-            
-            # Calculate threshold for null space
-            threshold = torch.max(eigenvalues) * 1e-3
-            
-            # Identify null space eigenvectors
-            null_indices = (eigenvalues < threshold).nonzero().flatten()
-            
-            if null_indices.size(0) == 0:
-                # No clear null space
-                return torch.tensor(0.0, device=inputs.device)
-                
-            null_eigenvectors = eigenvectors[:, null_indices]
-            
-            # Compute projection of weights onto null space
-            projection_scores = []
-            for i in range(weights.size(0)):
-                weight_vector = weights[i, :]
-                
-                # Project weight vector onto null space
-                projection = torch.matmul(
-                    torch.matmul(null_eigenvectors.t(), weight_vector),
-                    null_eigenvectors
-                )
-                
-                # Compute fraction of weight vector in null space
-                projection_norm = torch.norm(projection)
-                weight_norm = torch.norm(weight_vector)
-                
-                projection_scores.append((projection_norm / weight_norm).item())
-                
-            return torch.tensor(projection_scores).mean()
-                
-        except Exception:
-            # Fallback if eigendecomposition fails
-            return torch.tensor(0.0, device=inputs.device)
-    
-    @classmethod
-    def get_name(cls) -> str:
-        """Return the name of the metric."""
-        return "NullSpaceAlignment"
+# --- UTILITY FUNCTIONS ---
+def covariance(X: torch.Tensor) -> torch.Tensor:
+    if X.ndim == 1: X = X.unsqueeze(0)
+    if X.shape[0] < 2:
+        # logger.warning(f"Covariance: needs >= 2 samples, got {X.shape[0]}. Returning zeros.")
+        return torch.zeros((X.shape[1], X.shape[1]), device=X.device, dtype=X.dtype)
+    X_centered = X - X.mean(dim=0, keepdim=True)
+    return torch.matmul(X_centered.T, X_centered) / (X.size(0) - 1)
 
+def correlation(X: torch.Tensor) -> torch.Tensor:
+    cov = covariance(X)
+    std_dev = torch.sqrt(torch.diag(cov) + 1e-10)
+    outer_std_dev = torch.outer(std_dev, std_dev)
+    return torch.where(outer_std_dev > 1e-10, cov / outer_std_dev, torch.zeros_like(cov))
 
-# Register additional metrics with the registry
-AlignmentMetrics.register("rank", RankAlignmentMetric)
-AlignmentMetrics.register("null_space", NullSpaceAlignmentMetric)
+# --- RAYLEIGH QUOTIENT ---
+@torch.no_grad()
+def compute_rayleigh_quotient(
+    layer_inputs: torch.Tensor,
+    layer_weights: torch.Tensor,
+    relative: bool = True, verbose: bool = False, min_samples_for_cov: int = 2
+) -> torch.Tensor:
+    num_out_features = layer_weights.shape[0]
+    zeros_output = lambda: torch.zeros(num_out_features, device=layer_weights.device, dtype=layer_weights.dtype)
 
-
-class AlignmentMetric:
-    """
-    Interface for computing alignment metrics on neural networks.
-    
-    This class provides a standardized interface for alignment metrics,
-    including support for node-wise scoring for pruning experiments.
-    It serves as a higher-level wrapper around the lower-level AlignmentMetrics
-    factory and individual metric implementations.
-    """
-    
-    def __init__(self, name: str = "RQ", scale_by_norm: bool = False, force_cpu_for_large_metric_ops: bool = True):
-        """
-        Initialize alignment metric.
-        
-        Args:
-            name: Name of the alignment metric to use
-            scale_by_norm: Whether to scale the covariance or final measure by norm
-            force_cpu_for_large_metric_ops: If True, offload known large tensor ops in metrics to CPU.
-        """
-        self.name = name
-        self.scale_by_norm = scale_by_norm
-        self.force_cpu_for_large_metric_ops = force_cpu_for_large_metric_ops
-        
-        # Validate that the metric exists
-        self._validate_metric_name()
-        
-    def _validate_metric_name(self):
-        """Validate that the metric name is valid."""
-        normalized_name = self.name.lower()
-        
-        valid_metrics = [
-            "rq", "mi", "rank", "null_space", 
-            "weight_similarity", "redundancy", "class_separation"
-        ]
-        
-        if normalized_name not in valid_metrics:
-            raise ValueError(f"Unknown alignment metric: {self.name}. "
-                           f"Valid options are: {', '.join(valid_metrics)}")
-        
-    def measure(self, 
-                activations: Union[List[torch.Tensor], torch.Tensor], 
-                targets: Optional[torch.Tensor] = None, 
-                num_classes: int = 10) -> Union[List[float], torch.Tensor]:
-        """
-        Measure alignment between activations and targets.
-        
-        This method handles both:
-        1. List of activations from different layers (returns a list of scores)
-        2. Single activation tensor (returns a single tensor of scores)
-        
-        Args:
-            activations: Layer activations (list for multiple layers or tensor for single layer)
-            targets: Target labels (optional, used for class-based metrics)
-            num_classes: Number of classes in the dataset
-            
-        Returns:
-            List of alignment values per layer or tensor of values for a single layer
-        """
-        if isinstance(activations, list):
-            # Multiple layers - compute for each and return list
-            results = []
-            
-            for layer_activations in activations:
-                # Handle class-specific metrics
-                if self.name.lower() == "class_separation" and targets is not None:
-                    result = self._compute_class_separation(
-                        layer_activations, targets, num_classes
-                    )
-                else:
-                    # For metrics that don't use targets, we pass a dummy weight matrix
-                    # TODO: Implement proper handling for all metrics
-                    if layer_activations.dim() > 2:
-                        layer_activations = layer_activations.reshape(layer_activations.size(0), -1)
-                    
-                    # Use a dummy identity matrix as weights
-                    dummy_weights = torch.eye(
-                        layer_activations.size(1), 
-                        device=layer_activations.device
-                    )
-                    
-                    # Compute using the lower-level API
-                    result = AlignmentMetrics.measure(
-                        layer_activations, dummy_weights, 
-                        method=self.name, force_cpu_for_large_metric_ops=self.force_cpu_for_large_metric_ops
-                    ).mean().item()
-                
-                results.append(result)
-                
-            return results
+    if layer_inputs.ndim != 2:
+        if layer_inputs.ndim > 2 and layer_inputs.shape[0] > 0:
+            layer_inputs = layer_inputs.flatten(start_dim=1)
         else:
-            # Single layer - return tensor of scores
-            return self.compute_per_node_scores(activations, None)
-    
-    def _compute_class_separation(self, 
-                                activations: torch.Tensor, 
-                                targets: torch.Tensor, 
-                                num_classes: int) -> float:
-        """
-        Compute separation between class activations.
-        
-        Args:
-            activations: Layer activations
-            targets: Target labels
-            num_classes: Number of classes in the dataset
-            
-        Returns:
-            Class separation score
-        """
-        if activations.dim() > 2:
-            activations = activations.reshape(activations.size(0), -1)
-        
-        # Compute class means
-        class_means = []
-        for c in range(num_classes):
-            class_mask = (targets == c)
-            if class_mask.sum() > 0:
-                class_mean = activations[class_mask].mean(dim=0)
-                class_means.append(class_mean)
-        
-        if len(class_means) > 1:
-            # Compute mean distance between class centers
-            class_means = torch.stack(class_means)
-            dists = torch.cdist(class_means, class_means)
-            # Mask the diagonal
-            mask = torch.ones_like(dists) - torch.eye(dists.size(0), device=dists.device)
-            return (dists * mask).sum().item() / (mask.sum().item() + 1e-8)
+            # logger.error(f"RQ: inputs not 2D ({layer_inputs.shape}). Ret zeros."); 
+            return zeros_output()
+    if layer_weights.ndim != 2:
+        if layer_weights.ndim > 2 and layer_weights.shape[0] > 0:
+            layer_weights = layer_weights.reshape(layer_weights.shape[0], -1)
         else:
-            return 0.0
+            # logger.error(f"RQ: weights not 2D ({layer_weights.shape}). Ret zeros."); 
+            return zeros_output()
+    if layer_inputs.shape[0] < min_samples_for_cov: 
+        # logger.warning(f"RQ: samples < {min_samples_for_cov}. Ret zeros."); 
+        return zeros_output()
+    if layer_weights.shape[1] != layer_inputs.shape[1]:
+        min_dim = min(layer_weights.shape[1], layer_inputs.shape[1])
+        layer_weights = layer_weights[:, :min_dim]; layer_inputs = layer_inputs[:, :min_dim]
+        if min_dim == 0: 
+            # logger.error("RQ: 0 common feature dim. Ret zeros."); 
+            return zeros_output()
+    if layer_inputs.numel() == 0 or layer_weights.numel() == 0: 
+        # logger.warning("RQ: empty inputs/weights. Ret zeros."); 
+        return zeros_output()
+    try:
+        C = covariance(layer_inputs.to(layer_weights.device))
+        if torch.isnan(C).any() or torch.isinf(C).any(): 
+            # logger.warning("RQ: NaN/Inf in cov. Ret zeros."); 
+            return zeros_output()
+        
+        # Efficient computation for w^T C w for each w in W
+        # W is [out_features, in_features], C is [in_features, in_features]
+        # WC = W @ C  -> [out_features, in_features]
+        # Element-wise multiply WC with W: WCW = WC * W -> [out_features, in_features]
+        # Sum over in_features: numerator = WCW.sum(dim=1) -> [out_features]
+        WC = torch.matmul(layer_weights, C)
+        numerator = torch.sum(WC * layer_weights, dim=1)
+        denominator = torch.sum(layer_weights * layer_weights, dim=1)
+        
+        rq_scores = torch.zeros_like(numerator)
+        mask = denominator > 1e-12
+        rq_scores[mask] = numerator[mask] / denominator[mask]
+        if relative:
+            trace_C = torch.trace(C)
+            if trace_C > 1e-12: rq_scores[mask] /= trace_C
+            else: rq_scores[mask] = 0.0
+        return torch.nan_to_num(rq_scores, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception as e:
+        logger.error(f"RQ calc error: {e}", exc_info=verbose); return zeros_output()
+
+# --- MUTUAL INFORMATION METRICS ---
+@torch.no_grad()
+def mi_gaussian_approx(
+    layer_outputs: torch.Tensor, target_outputs: Optional[torch.Tensor] = None, 
+    order: int = 0, verbose: bool = False # order currently unused for simplification
+) -> torch.Tensor:
+    zeros_output = lambda num_n: torch.zeros(num_n, device=layer_outputs.device, dtype=layer_outputs.dtype)
+    if layer_outputs.ndim != 2 or layer_outputs.shape[0] < 2: 
+        # logger.warning(f"MI_gauss: outputs not 2D or <2 samples. Ret zeros."); 
+        return zeros_output(layer_outputs.shape[1] if layer_outputs.ndim == 2 else 1)
     
+    batch_size, num_neurons = layer_outputs.shape
+    mi_scores = torch.zeros(num_neurons, device=layer_outputs.device)
+
+    ref_data = target_outputs
+    if ref_data is None:
+        if num_neurons <= 1: return zeros_output(num_neurons)
+        # Use PC1 of layer_outputs as reference if no target_outputs
+        try:
+            cov_layer = covariance(layer_outputs)
+            _, eigenvectors = torch.linalg.eigh(cov_layer)
+            ref_data = torch.matmul(layer_outputs, eigenvectors[:, -1].unsqueeze(1))
+        except Exception as e:
+            # logger.warning(f"MI_gauss: PC1 calc failed: {e}. Ret zeros."); 
+            return zeros_output(num_neurons)
+    
+    if ref_data.ndim == 1: ref_data = ref_data.unsqueeze(1)
+    if ref_data.shape[0] != batch_size: 
+        # logger.warning(f"MI_gauss: ref_data batch mismatch. Ret zeros."); 
+        return zeros_output(num_neurons)
+
+    for i in range(num_neurons):
+        neuron_out_i = layer_outputs[:, i].unsqueeze(1)
+        avg_rho_sq_sum = 0.0
+        valid_refs = 0
+        for k in range(ref_data.shape[1]):
+            ref_k = ref_data[:, k].unsqueeze(1)
+            combined = torch.cat((neuron_out_i, ref_k), dim=1)
+            if combined.shape[0] < 2: continue
+            cov_matrix = covariance(combined)
+            var_neuron, var_ref = cov_matrix[0,0], cov_matrix[1,1]
+            if var_neuron > 1e-12 and var_ref > 1e-12:
+                rho_sq = (cov_matrix[0,1]**2) / (var_neuron * var_ref)
+                avg_rho_sq_sum += torch.clamp(rho_sq, 0, 0.999999) # Clamp for log
+                valid_refs +=1 
+        if valid_refs > 0:
+            mi_scores[i] = -0.5 * torch.log(1.0 - (avg_rho_sq_sum / valid_refs))
+    return torch.nan_to_num(mi_scores)
+
+@torch.no_grad()
+def mi_direct_binning(
+    layer_outputs: torch.Tensor, target_outputs: Optional[torch.Tensor] = None, 
+    bins: int = 10, verbose: bool = False
+) -> torch.Tensor:
+    zeros_output = lambda num_n: torch.zeros(num_n, device=layer_outputs.device, dtype=layer_outputs.dtype)
+    if layer_outputs.ndim != 2 or layer_outputs.shape[0] < 2: 
+        # logger.warning(f"MI_direct: outputs not 2D or <2 samples. Ret zeros."); 
+        return zeros_output(layer_outputs.shape[1] if layer_outputs.ndim == 2 else 1)
+
+    batch_size, num_neurons = layer_outputs.shape
+    mi_scores = torch.zeros(num_neurons, device=layer_outputs.device)
+    source_np = layer_outputs.cpu().numpy()
+
+    ref_np: Optional[np.ndarray] = None
+    if target_outputs is not None:
+        if target_outputs.ndim == 1: target_outputs = target_outputs.unsqueeze(1)
+        if target_outputs.shape[0] != batch_size: 
+            # logger.warning(f"MI_direct: target batch mismatch. Ret zeros."); 
+            return zeros_output(num_neurons)
+        ref_np = target_outputs.cpu().numpy()
+    elif num_neurons > 1:
+        # If no target, use mean of other neurons as reference (changes per neuron i)
+        pass 
+    else: # num_neurons <=1 and no target_outputs
+        return zeros_output(num_neurons)
+
+    for i in range(num_neurons):
+        neuron_i_np = source_np[:, i]
+        current_ref_np = ref_np
+        if current_ref_np is None and num_neurons > 1: # Calculate ref based on others
+            other_indices = [j for j in range(num_neurons) if j != i]
+            if not other_indices: continue
+            current_ref_np = np.mean(source_np[:, other_indices], axis=1, keepdims=True)
+        if current_ref_np is None: continue
+
+        min_i, max_i = np.min(neuron_i_np), np.max(neuron_i_np)
+        bins_i_vals = np.linspace(min_i, max_i, bins + 1)
+        digitized_i = np.digitize(neuron_i_np, bins_i_vals[:-1] if max_i > min_i + 1e-9 else [min_i]) -1
+        digitized_i = np.clip(digitized_i, 0, bins - 1)
+        
+        avg_mi_for_neuron_i = 0.0
+        valid_refs = 0
+        for k in range(current_ref_np.shape[1]):
+            ref_k_np = current_ref_np[:, k]
+            min_k, max_k = np.min(ref_k_np), np.max(ref_k_np)
+            bins_k_vals = np.linspace(min_k, max_k, bins + 1)
+            digitized_k = np.digitize(ref_k_np, bins_k_vals[:-1] if max_k > min_k + 1e-9 else [min_k]) -1
+            digitized_k = np.clip(digitized_k, 0, bins-1)
+
+            joint_hist = np.zeros((bins, bins), dtype=float)
+            for s_idx in range(batch_size): joint_hist[digitized_i[s_idx], digitized_k[s_idx]] += 1
+            joint_p = joint_hist / batch_size
+            p_i = np.sum(joint_p, axis=1); p_k = np.sum(joint_p, axis=0)
+            
+            mi_val = 0.0
+            for b_i in range(bins): 
+                for b_k in range(bins):
+                    if joint_p[b_i,b_k]>1e-12 and p_i[b_i]>1e-12 and p_k[b_k]>1e-12:
+                        mi_val += joint_p[b_i,b_k] * np.log2(joint_p[b_i,b_k]/(p_i[b_i]*p_k[b_k]))
+            avg_mi_for_neuron_i += mi_val
+            valid_refs +=1
+        if valid_refs > 0: mi_scores[i] = avg_mi_for_neuron_i / valid_refs
+        
+    return torch.nan_to_num(mi_scores.to(layer_outputs.device))
+
+# --- REDUNDANCY AND PID METRICS ---
+@torch.no_grad()
+def average_redundancy_gaussian(
+    layer_inputs: torch.Tensor, layer_weights: torch.Tensor, verbose: bool = False
+) -> torch.Tensor:
+    zeros_output = lambda num_n: torch.zeros(num_n, device=layer_weights.device, dtype=layer_weights.dtype)
+    if layer_inputs.ndim!=2 or layer_inputs.shape[0]<2: 
+        # logger.warning("Red_gauss: inputs problem. Ret zeros."); 
+        return zeros_output(layer_weights.shape[0])
+    if layer_weights.ndim!=2 or layer_weights.shape[0]<=1: 
+        # logger.warning("Red_gauss: weights problem. Ret zeros."); 
+        return zeros_output(layer_weights.shape[0])
+    
+    num_neurons = layer_weights.shape[0]
+    avg_red_scores = torch.zeros(num_neurons, device=layer_weights.device)
+    projected_outputs = torch.matmul(layer_inputs, layer_weights.T)
+    if projected_outputs.shape[0] < 2: return avg_red_scores
+
+    try: corr_matrix_projections = correlation(projected_outputs)
+    except Exception as e: 
+        # logger.warning(f"Red_gauss: corr matrix failed: {e}. Ret zeros."); 
+        return avg_red_scores
+
+    for i in range(num_neurons):
+        sum_red_i, num_pairs = 0.0, 0
+        for j in range(num_neurons):
+            if i == j: continue
+            rho_sq = torch.clamp(corr_matrix_projections[i,j]**2, 0, 0.999999)
+            sum_red_i += -0.5 * torch.log(1.0 - rho_sq)
+            num_pairs += 1
+        if num_pairs > 0: avg_red_scores[i] = sum_red_i / num_pairs
+    return torch.nan_to_num(avg_red_scores)
+
+@torch.no_grad()
+def average_pid_component(
+    layer_inputs: torch.Tensor, layer_outputs: torch.Tensor, 
+    pid_component_name: str, bins: int = 10, verbose: bool = False,
+) -> torch.Tensor:
+    zeros_output = lambda num_n: torch.zeros(num_n, device=layer_outputs.device, dtype=layer_outputs.dtype)
+    
+    # Use the PID_AVAILABLE flag for a quick check
+    if not PID_AVAILABLE:
+        # logger.warning(f"PID_{pid_component_name}: BROJA not available. Ret zeros."); 
+        return zeros_output(layer_outputs.shape[1])
+    
+    broja = get_broja_pid_module() # Get the module (could still be dummy if loaded but unusable?)
+
+    if layer_inputs.ndim!=2 or layer_inputs.shape[0]<2: 
+        # logger.warning("PID: inputs problem. Ret zeros."); 
+        return zeros_output(layer_outputs.shape[1])
+    if layer_outputs.ndim!=2 or layer_outputs.shape[0]<2 or layer_outputs.shape[1]<=1: 
+        # logger.warning("PID: outputs problem. Ret zeros."); 
+        return zeros_output(layer_outputs.shape[1])
+
+    batch_size, features_in = layer_inputs.shape
+    _, num_neurons = layer_outputs.shape
+    avg_pid_scores = torch.zeros(num_neurons, device=layer_outputs.device)
+    layer_inputs_np, layer_outputs_np = layer_inputs.cpu().numpy(), layer_outputs.cpu().numpy()
+
+    s_target_np = layer_inputs_np[:,0] # Default to first feature if PCA fails or not used
+    if features_in > 1:
+        try:
+            n_pca_comp = min(batch_size-1, features_in, 5) # Keep PCA components low for stability
+            if n_pca_comp >= 1:
+                from sklearn.decomposition import PCA
+                pca = PCA(n_components=1, whiten=False, svd_solver='auto')
+                s_target_np = pca.fit_transform(layer_inputs_np).flatten()
+            # else: logger.warning("PID: Not enough samples/features for PCA on inputs. Using first feature.")
+        except Exception as e_pca:
+            # logger.warning(f"PID: PCA on inputs failed: {e_pca}. Using first feature.");
+            pass # s_target_np already defaults to first feature
+    
+    min_s, max_s = np.min(s_target_np), np.max(s_target_np)
+    s_bins_vals = np.linspace(min_s, max_s, bins + 1)
+    s_digitized = np.digitize(s_target_np, s_bins_vals[:-1] if max_s > min_s+1e-9 else [min_s]) -1
+    s_digitized = np.clip(s_digitized, 0, bins - 1)
+
+    for i in range(num_neurons):
+        y1_np = layer_outputs_np[:, i]
+        min_y1, max_y1 = np.min(y1_np), np.max(y1_np)
+        y1_bins_vals = np.linspace(min_y1, max_y1, bins + 1)
+        y1_digitized = np.digitize(y1_np, y1_bins_vals[:-1] if max_y1 > min_y1+1e-9 else [min_y1]) -1
+        y1_digitized = np.clip(y1_digitized, 0, bins - 1)
+
+        sum_pid_i, num_pairs = 0.0, 0
+        for j in range(num_neurons):
+            if i == j: continue
+            y2_np = layer_outputs_np[:, j]
+            min_y2, max_y2 = np.min(y2_np), np.max(y2_np)
+            y2_bins_vals = np.linspace(min_y2, max_y2, bins + 1)
+            y2_digitized = np.digitize(y2_np, y2_bins_vals[:-1] if max_y2 > min_y2+1e-9 else [min_y2]) -1
+            y2_digitized = np.clip(y2_digitized, 0, bins-1)
+            
+            p_sy1y2_dict: Dict[Tuple[int,int,int], float] = {}
+            for s_idx in range(batch_size):
+                key = (s_digitized[s_idx], y1_digitized[s_idx], y2_digitized[s_idx])
+                p_sy1y2_dict[key] = p_sy1y2_dict.get(key, 0.0) + 1.0
+            if not p_sy1y2_dict: continue
+            total_counts = sum(p_sy1y2_dict.values())
+            if total_counts == 0 : continue
+            broja_input = {k: v / total_counts for k,v in p_sy1y2_dict.items()}
+            if not broja_input: continue
+
+            try:
+                pid_res = broja.pid(broja_input)
+                comp_val_map = {"SI": "SI", "UI1": "UIY", "UI2": "UIZ", "CI": "CI"}
+                sum_pid_i += pid_res.get(comp_val_map.get(pid_component_name, ""), 0.0)
+                num_pairs +=1
+            except Exception as e_pid:
+                # if verbose: logger.warning(f"PID: BROJA fail ({i},{j}): {e_pid}. Skip.")
+                continue
+        if num_pairs > 0: avg_pid_scores[i] = sum_pid_i / num_pairs
+    return torch.nan_to_num(avg_pid_scores.to(layer_outputs.device))
+
+# --- METRIC PROTOCOL & WRAPPER --- 
+class AlignmentMetric(Protocol):
+    name: str
+    scale_by_norm: bool
+
     def compute_per_node_scores(
         self,
-        layer_input: torch.Tensor,
-        layer_weights: Optional[torch.Tensor] = None,
-        device: Optional[torch.device] = None,
-        is_conv_layer: bool = False,
-        cnn_mode_for_metric: Optional[str] = "unfold",
-        cnn_rq_aggregation_op: Optional[str] = "mean"
+        layer_inputs: Optional[torch.Tensor] = None, 
+        layer_weights: Optional[torch.Tensor] = None, 
+        layer_outputs: Optional[torch.Tensor] = None,
+        device: Optional[Union[str, torch.device]] = None,
+        min_samples_for_cov: int = 2, 
+        target_outputs: Optional[torch.Tensor] = None,
+        bins: int = 10, 
+        verbose: bool = False,
+        **metric_specific_kwargs
     ) -> torch.Tensor:
-        """
-        Compute a per-node alignment score for each node's weight vector w_i.
+        ...
+
+class _AlignmentMetricImpl:
+    def __init__(self, name: str, metric_fn: Callable, scale_by_norm: bool = False):
+        self.name = name
+        self._metric_fn = metric_fn
+        self.scale_by_norm = scale_by_norm
+
+    def compute_per_node_scores(
+        self,
+        layer_inputs: Optional[torch.Tensor] = None, 
+        layer_weights: Optional[torch.Tensor] = None, 
+        layer_outputs: Optional[torch.Tensor] = None,
+        device: Optional[Union[str, torch.device]] = None,
+        min_samples_for_cov: int = 2,
+        target_outputs: Optional[torch.Tensor] = None,
+        bins: int = 10,
+        verbose: bool = False,
+        **metric_specific_kwargs
+    ) -> torch.Tensor:
         
-        Args:
-            layer_input: 2D tensor of shape (N, input_dim) with the data
-            layer_weights: 2D tensor (#nodes, input_dim), or None to use identity
-            device: PyTorch device to ensure everything is on the correct device
-            is_conv_layer: True if the current layer_input/layer_weights are for a convolutional layer.
-            cnn_mode_for_metric: Specifies how CNN activations/weights should be interpreted by the metric (e.g., "filter_patch_summary" for RQ).
-            cnn_rq_aggregation_op: If using summary for CNN RQ, specifies op ('mean', 'max').
-            
-        Returns:
-            A 1D tensor (#nodes,) of alignment scores
-        """
+        metric_name_lower = self.name.lower()
         if device is None:
-            device = layer_input.device if isinstance(layer_input, torch.Tensor) else torch.device('cpu')
+            if layer_inputs is not None: device = layer_inputs.device
+            elif layer_weights is not None: device = layer_weights.device
+            elif layer_outputs is not None: device = layer_outputs.device
+            else: raise ValueError("Cannot determine device for metric calculation.")
+        eff_device = torch.device(device) if isinstance(device, str) else device
         
-        # Move input to device if needed
-        if isinstance(layer_input, torch.Tensor):
-            layer_input = layer_input.to(device)
+        fn_kwargs = {"verbose": verbose, **metric_specific_kwargs}
+
+        if "rayleigh_quotient" in metric_name_lower or "rq" in metric_name_lower:
+            if layer_inputs is None or layer_weights is None: raise ValueError(f"{self.name} needs layer_inputs and layer_weights.")
+            fn_kwargs["relative"] = self.scale_by_norm
+            fn_kwargs["min_samples_for_cov"] = min_samples_for_cov
+            return self._metric_fn(layer_inputs.to(eff_device), layer_weights.to(eff_device), **fn_kwargs)
         
-        # Basic checks
-        if layer_input.dim() != 2 and not (is_conv_layer and cnn_mode_for_metric == "filter_patch_summary"):
-            # For filter_patch_summary, layer_input might be (Patches, Features_per_patch)
-            # For other cases, it expects (N_samples, D_features)
-            if layer_input.dim() > 2:
-                layer_input = layer_input.reshape(layer_input.size(0), -1)
-            elif layer_input.dim() == 1 and layer_input.size(0) == layer_weights.size(1): # Single sample case
-                layer_input = layer_input.unsqueeze(0)
+        elif "mi_gaussian" in metric_name_lower or "mi_g" in metric_name_lower:
+            if layer_outputs is None: raise ValueError(f"{self.name} needs layer_outputs.")
+            if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
+            # order param was in original mi_gaussian_approx, pass if available in kwargs
+            if "order" in metric_specific_kwargs: fn_kwargs["order"] = metric_specific_kwargs["order"]
+            return self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
+
+        elif "mi_direct" in metric_name_lower or "mi_bin" in metric_name_lower:
+            if layer_outputs is None: raise ValueError(f"{self.name} needs layer_outputs.")
+            if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
+            fn_kwargs["bins"] = bins
+            return self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
+
+        elif "redundancy_gaussian" in metric_name_lower or "red_g" in metric_name_lower:
+            if layer_inputs is None or layer_weights is None: raise ValueError(f"{self.name} needs layer_inputs and layer_weights.")
+            return self._metric_fn(layer_inputs.to(eff_device), layer_weights.to(eff_device), **fn_kwargs)
         
-        # If weights are not provided, use identity matrix
-        if layer_weights is None:
-            # For RQ and similar metrics, weights must have compatible shape
-            layer_weights = torch.eye(layer_input.size(1), device=device)
+        elif "pid_" in metric_name_lower:
+            if not PID_AVAILABLE: 
+                logger.warning(f"PID metric {self.name} called; BROJA_2PID not available. Returning zeros.")
+                num_n = layer_outputs.shape[1] if layer_outputs is not None else (layer_inputs.shape[1] if layer_inputs is not None else 1)
+                return torch.zeros(num_n, device=eff_device)
+            if layer_inputs is None or layer_outputs is None: raise ValueError(f"{self.name} needs layer_inputs and layer_outputs.")
+            fn_kwargs["bins"] = bins
+            # The _metric_fn for PID is already specific (e.g., pid_si_metric_raw)
+            return self._metric_fn(layer_inputs.to(eff_device), layer_outputs.to(eff_device), **fn_kwargs)
         else:
-            # Move weights to device
-            layer_weights = layer_weights.to(device)
-        
-        # Dispatch to appropriate method based on metric name
-        if self.name.lower() == "rq":
-            return self._compute_rq(layer_input, layer_weights, device, 
-                                    is_conv_layer=is_conv_layer, 
-                                    cnn_mode=cnn_mode_for_metric, 
-                                    cnn_rq_aggregation_op=cnn_rq_aggregation_op)
-        elif self.name.lower().startswith("mi"):
-            return self._compute_mi(layer_input, layer_weights, device)
-        elif self.name.lower() == "rank":
-            metric_cls_instance = RankAlignmentMetric()
-            return metric_cls_instance.measure(layer_input, layer_weights)
-        elif self.name.lower() == "null_space":
-            metric_cls_instance = NullSpaceAlignmentMetric()
-            return metric_cls_instance.measure(layer_input, layer_weights)
-        else:
-            # Default to RQ as a fallback, passing default CNN flags
-            return self._compute_rq(layer_input, layer_weights, device, 
-                                    is_conv_layer=False, cnn_mode="unfold", cnn_rq_aggregation_op="mean")
-    
-    def _compute_rq(
-        self,
-        X: torch.Tensor,
-        W: torch.Tensor,
-        device: torch.device,
-        is_conv_layer: bool = False,
-        cnn_mode: Optional[str] = "unfold",
-        cnn_rq_aggregation_op: Optional[str] = "mean"
-    ) -> torch.Tensor:
-        """
-        Compute Rayleigh Quotient per node.
-        
-        Args:
-            X: Input data (N, input_dim)
-            W: Weight matrix (num_nodes, input_dim)
-            device: Compute device
-            is_conv_layer: True if the current layer_input/layer_weights are for a convolutional layer.
-            cnn_mode: Specifies how CNN activations/weights should be interpreted by the metric (e.g., "filter_patch_summary" for RQ).
-            cnn_rq_aggregation_op: If using summary for CNN RQ, specifies op ('mean', 'max').
-            
-        Returns:
-            Per-node RQ scores (num_nodes,)
-        """
-        N = X.size(0)
-        if N < 2:
-            return torch.zeros(W.size(0), device=device)
+            raise NotImplementedError(f"Dispatch for {self.name} in _AlignmentMetricImpl.compute_per_node_scores not implemented.")
 
-        if is_conv_layer and cnn_mode == "filter_patch_summary":
-            # X is (num_total_patches_for_batch, filter_input_dims)
-            # W is (out_channels, filter_input_dims)
-            # logger.info(f"RQ using filter_patch_summary for Conv. X: {X.shape}, W: {W.shape}, op: {cnn_rq_aggregation_op}")
-            num_filters = W.shape[0]
-            filter_scores = torch.zeros(num_filters, device=device)
-            eps = 1e-12
+# --- METRIC REGISTRY & DISPATCHER ---
+# Raw metric functions for PID, to be wrapped by _AlignmentMetricImpl
+def pid_si_metric_raw(layer_inputs: torch.Tensor, layer_outputs: torch.Tensor, **kwargs) -> torch.Tensor:
+    return average_pid_component(layer_inputs, layer_outputs, "SI", **kwargs)
+def pid_uiy_metric_raw(layer_inputs: torch.Tensor, layer_outputs: torch.Tensor, **kwargs) -> torch.Tensor:
+    return average_pid_component(layer_inputs, layer_outputs, "UIY", **kwargs)
+def pid_uiz_metric_raw(layer_inputs: torch.Tensor, layer_outputs: torch.Tensor, **kwargs) -> torch.Tensor:
+    return average_pid_component(layer_inputs, layer_outputs, "UIZ", **kwargs)
+def pid_ci_metric_raw(layer_inputs: torch.Tensor, layer_outputs: torch.Tensor, **kwargs) -> torch.Tensor:
+    return average_pid_component(layer_inputs, layer_outputs, "CI", **kwargs)
 
-            # Use self.force_cpu_for_large_metric_ops for its internal heuristic if needed
-            perform_on_cpu_patchwise = False
-            if self.force_cpu_for_large_metric_ops and X.is_cuda and X.numel() > 10_000_000: 
-                perform_on_cpu_patchwise = True
-            
-            X_op = X.cpu() if perform_on_cpu_patchwise else X
-            W_op = W.cpu() if perform_on_cpu_patchwise else W
+ALIGNMENT_METRICS_REGISTRY: Dict[str, Callable[..., torch.Tensor]] = {
+    "rayleigh_quotient": compute_rayleigh_quotient,
+    "rq": compute_rayleigh_quotient,
+    "mi_gaussian": mi_gaussian_approx,
+    "mi_g": mi_gaussian_approx,
+    "mi_direct": mi_direct_binning,
+    "mi_bin": mi_direct_binning,
+    "redundancy_gaussian": average_redundancy_gaussian,
+    "red_g": average_redundancy_gaussian,
+    "pid_shared_info": pid_si_metric_raw,
+    "pid_si": pid_si_metric_raw,
+    "pid_unique_info_neuron": pid_uiy_metric_raw, 
+    "pid_ui1": pid_uiy_metric_raw, 
+    "pid_uiy": pid_uiy_metric_raw,
+    "pid_unique_info_other": pid_uiz_metric_raw, 
+    "pid_ui2": pid_uiz_metric_raw,
+    "pid_uiz": pid_uiz_metric_raw,
+    "pid_synergy_info": pid_ci_metric_raw,
+    "pid_ci": pid_ci_metric_raw,
+}
 
-            for j in range(num_filters):
-                w_j = W_op[j, :] 
-                w_j_norm_sq = (w_j * w_j).sum()
-                if w_j_norm_sq < eps:
-                    filter_scores[j] = 0.0
-                    continue
-
-                # Projections of all patches onto this filter: p_k^T w_j  (or w_j^T p_k)
-                # X_op is (N_patches, D_filter_in), w_j is (D_filter_in)
-                # Result proj_val_for_filter_j is (N_patches)
-                proj_val_for_filter_j = X_op @ w_j.T 
-                
-                # Squared cosine similarity: (w_j^T p_k)^2 / (||w_j||^2 ||p_k||^2)
-                # Equivalent to (proj_val_for_filter_j)^2 / (w_j_norm_sq * ||p_k||^2)
-                patch_norms_sq = (X_op * X_op).sum(dim=1)
-                
-                # Avoid division by zero for patch_norms_sq
-                valid_patches_mask = patch_norms_sq > eps
-                if not valid_patches_mask.any():
-                    filter_scores[j] = 0.0
-                    continue
-
-                # Select only valid patches
-                valid_proj_val = proj_val_for_filter_j[valid_patches_mask]
-                valid_patch_norms_sq = patch_norms_sq[valid_patches_mask]
-
-                patch_level_rqs = (valid_proj_val**2) / (w_j_norm_sq * valid_patch_norms_sq + eps)
-                
-                if patch_level_rqs.numel() == 0:
-                    filter_scores[j] = 0.0
-                    continue
-
-                if cnn_rq_aggregation_op == "mean":
-                    agg_score = patch_level_rqs.mean()
-                elif cnn_rq_aggregation_op == "max":
-                    agg_score = patch_level_rqs.max()
-                elif cnn_rq_aggregation_op == "var":
-                    agg_score = patch_level_rqs.var()
-                elif cnn_rq_aggregation_op == "sum":
-                    agg_score = patch_level_rqs.sum()
-                else: # Default to mean
-                    agg_score = patch_level_rqs.mean()
-                filter_scores[j] = agg_score
-            
-            return filter_scores.to(device) # Ensure result is on original device
-
-        # Existing logic for Linear layers or cnn_mode='unfold' (global covariance on unfolded patches)
-        perform_on_cpu_cov = False
-        if self.force_cpu_for_large_metric_ops and X.is_cuda and ( (X.shape[0] > 500_000 and X.shape[1] > 100) or (X.numel() > 20_000_000) ):
-            logger.info(f"RQ: Large input tensor X ({X.shape}) on CUDA with force_cpu=True. Offloading centering and cov to CPU.")
-            perform_on_cpu_cov = True
-
-        if perform_on_cpu_cov:
-            # ... (CPU offload logic for covariance as before) ...
-            X_cpu = X.cpu(); W_cpu = W.cpu()
-            mean_X_cpu = X_cpu.mean(dim=0, keepdim=True); X_centered_cpu = X_cpu - mean_X_cpu
-            cov_x = (X_centered_cpu.t() @ X_centered_cpu) / (N - 1)
-            # cov_x = cov_x.to(device) # Keep cov_x on CPU if W_op is CPU
-            W_op_cov = W_cpu
-        else:
-            mean_X = X.mean(dim=0, keepdim=True); X_centered = X - mean_X 
-            cov_x = (X_centered.t() @ X_centered) / (N - 1)
-            W_op_cov = W
-
-        if self.scale_by_norm:
-            norm_val = cov_x.norm(p=2)
-            if norm_val > 1e-12: cov_x = cov_x / norm_val
-        
-        # Ensure cov_x is on the same device as W_op_cov for matmul
-        cov_x = cov_x.to(W_op_cov.device)
-
-        w_norm_sq_cov = (W_op_cov * W_op_cov).sum(dim=1)  
-        wCov_cov = W_op_cov @ cov_x               
-        numerator_cov = (wCov_cov * W_op_cov).sum(dim=1)  
-        eps_cov = 1e-12
-        rq_scores = numerator_cov / (w_norm_sq_cov + eps_cov)
-        
-        if perform_on_cpu_cov:
-            rq_scores = rq_scores.to(device)
-        return rq_scores
-
-    def _compute_mi(
-        self,
-        X: torch.Tensor,
-        W: torch.Tensor,
-        device: torch.device
-    ) -> torch.Tensor:
-        """
-        Compute mutual information-based scores.
-        
-        Args:
-            X: Input data (N, input_dim)
-            W: Weight matrix (num_nodes, input_dim)
-            device: Compute device
-            
-        Returns:
-            Per-node MI scores (num_nodes,)
-        """
-        # Delegate to factory, but factory.measure would need the flag too if MI has large ops.
-        # For now, MIMetric.measure itself needs to be refactored to use this flag.
-        # This means `AlignmentMetrics.measure` needs to pass it, or MIMetric gets it from its own init.
-        # Let's assume for now that MIMetric will be refactored similarly if direct CPU offload needed.
-        # The call to AlignmentMetrics.measure needs to be able to pass this flag down.
-        # This is getting complex. A simpler way for now: _compute_mi will call the MIMetric static method
-        # and pass the flag it receives from compute_per_node_scores.
-        # compute_per_node_scores will get it from self.force_cpu_for_large_metric_ops
-        return AlignmentMetrics.measure(X, W, method="MI", force_cpu_for_large_metric_ops=self.force_cpu_for_large_metric_ops)
+# RENAMED from get_metric_function
+def get_metric(name: str, scale_by_norm: bool = False) -> AlignmentMetric: # Returns the Protocol type
+    """Gets an AlignmentMetric instance (wrapper) from the registry."""
+    metric_fn_callable = ALIGNMENT_METRICS_REGISTRY.get(name.lower())
+    if metric_fn_callable is None:
+        available = ", ".join(ALIGNMENT_METRICS_REGISTRY.keys())
+        raise ValueError(f"Metric '{name}' not found in registry. Available: {available}")
+    return _AlignmentMetricImpl(name=name, metric_fn=metric_fn_callable, scale_by_norm=scale_by_norm)
 
 
-# Function to get an alignment metric instance
-def get_metric(name: str, scale_by_norm: bool = False, force_cpu_for_large_metric_ops: bool = True) -> AlignmentMetric:
-    """
-    Get alignment metric by name.
-    
-    Args:
-        name: Name of the metric ('RQ', 'MI', 'rank', 'null_space', etc.)
-        scale_by_norm: Whether to scale the covariance or final measure by norm
-        force_cpu_for_large_metric_ops: Global flag for CPU offload in metrics.
-        
-    Returns:
-        AlignmentMetric instance
-    """
-    return AlignmentMetric(name=name, scale_by_norm=scale_by_norm, force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops)
-
-
-# Register a new metric with the registry
-def register_metric(name: str, metric_class: AlignmentMetricBase) -> None:
-    """
-    Register a new alignment metric.
-    
-    Args:
-        name: Name to register the metric under
-        metric_class: Class implementing the AlignmentMetricBase interface
-    """
-    AlignmentMetrics.register(name, metric_class)
-
-
-# Legacy function for backward compatibility
-def alignment(inputs: torch.Tensor, weights: torch.Tensor, 
-             method: str = "RQ", relative: bool = True, **kwargs) -> torch.Tensor:
-    """
-    Compute alignment between inputs and weights.
-    
-    Args:
-        inputs: Input activations tensor
-        weights: Weight tensor
-        method: Alignment method
-        relative: Whether to use relative alignment (for RQ)
-        
-    Returns:
-        Tensor containing alignment values
-    """
-    kwargs["relative"] = relative
-    return AlignmentMetrics.measure(inputs, weights, method=method, **kwargs) 
-
-
-# Function to be moved from dropout.py - NOW THE CANONICAL VERSION
-def compute_all_node_scores(
+@torch.no_grad()
+def compute_metrics_for_layers(
     model: nn.Module,
+    collected_data: Dict[str, Dict[str, torch.Tensor]], 
     metric_configs: List[Dict[str, Any]], 
-    device: torch.device,
-    data_loader: DataLoader,
-    num_batches: Optional[int] = 5,
-    debug_mode: bool = False,
-    configured_cnn_mode: Optional[str] = "unfold", 
-    configured_cnn_rq_op: Optional[str] = "mean",
-    force_cpu_for_large_metric_ops: bool = True
-) -> Dict[int, Dict[str, torch.Tensor]]:
-    """
-    Computes per-node scores for specified alignment layers for multiple metrics.
-    Activations are processed per batch for each metric to manage memory, 
-    and then scores are averaged across batches.
-    """
-    if not hasattr(model, "alignment_layers") or not hasattr(model, "alignment_names"):
-        raise ValueError("Model must define .alignment_layers and .alignment_names attributes (typically an AlignmentNetwork).")
-    if not isinstance(metric_configs, list) or not all(isinstance(mc, dict) and "name" in mc for mc in metric_configs):
-        raise ValueError("metric_configs must be a list of dictionaries, each with a 'name' key.")
-    if not metric_configs: 
-        logger.warning("compute_all_node_scores called with empty metric_configs. Returning empty dict.")
-        return {}
+    device: Union[str, torch.device],
+) -> Dict[str, Dict[str, Union[torch.Tensor, float]]]:
+    results: Dict[str, Dict[str, Union[torch.Tensor, float]]] = {}
+    model.to(device); model.eval()
+    modules_dict = {name: mod for name, mod in model.named_modules()}
 
-    normalized_device = _normalize_device(device)
-    model.eval()
-    _ensure_model_on_device(model, normalized_device)
-
-    if debug_mode:
-        logger.info(f"Computing node scores for {len(metric_configs)} metrics, using {num_batches} batches, for model with {len(model.alignment_layers)} alignment layers on device {normalized_device}")
-        for i, (layer_mod, layer_name) in enumerate(zip(model.alignment_layers, model.alignment_names)):
-            if hasattr(layer_mod, 'weight') and layer_mod.weight is not None:
-                 logger.info(f"Layer {i}: {layer_name} - {type(layer_mod).__name__} - Shape: {layer_mod.weight.shape}")
-            else:
-                 logger.info(f"Layer {i}: {layer_name} - {type(layer_mod).__name__} - No weight attribute or weight is None")
-
-    if not hasattr(model, "hidden"):
-        model.hidden = {}
-    else: 
-        model.hidden.clear()
-
-    # Determine effective number of batches to process
-    effective_num_batches = num_batches
-    if effective_num_batches is None or effective_num_batches < 0: # Treat None or <0 as all batches
-        effective_num_batches = len(data_loader)
-        if debug_mode:
-            logger.info(f"num_batches is None or <0, using all {effective_num_batches} batches from data_loader.")
-    elif effective_num_batches == 0:
-        logger.warning("num_batches is 0, no batches will be processed for activation hooking.")
-        # Populate with zeros based on expected structure if no batches ran but layers exist
-        # (This logic is duplicated below, can be refactored if needed)
-        all_scores_per_layer_all_metrics_empty: Dict[int, Dict[str, torch.Tensor]] = {}
-        for layer_idx_empty, layer_mod_scores_empty in enumerate(model.alignment_layers):
-            metrics_for_this_layer_empty = {}
-            node_count_empty = layer_mod_scores_empty.weight.shape[0] if hasattr(layer_mod_scores_empty, 'weight') and layer_mod_scores_empty.weight is not None else 0
-            for m_config_empty in metric_configs:
-                metrics_for_this_layer_empty[m_config_empty["name"]] = torch.zeros(node_count_empty, device=normalized_device)
-            all_scores_per_layer_all_metrics_empty[layer_idx_empty] = metrics_for_this_layer_empty
-        return all_scores_per_layer_all_metrics_empty
-
-    processed_batch_count = 0
-    hooks = []
-    try:
-        alignment_layer_modules = model.alignment_layers # For type checking in hook
-        def get_activation_hook(layer_idx_for_hook):
-            def hook(module, layer_input, layer_output):
-                x = layer_input[0].detach()
-                layer_name_for_storage = model.alignment_names[layer_idx_for_hook]
-                if not model.hidden.get(layer_name_for_storage):
-                    model.hidden[layer_name_for_storage] = []
-                model.hidden[layer_name_for_storage].append(x) # Store raw input tensor for this batch
-                if debug_mode and len(model.hidden[layer_name_for_storage]) == 1 and processed_batch_count < 1: # Log shape only for first batch fully processed by hooks for this layer
-                    logger.info(f"Layer {layer_name_for_storage} (hook for batch {processed_batch_count+1}) input shape: {x.shape}")
-            return hook
-
-        for i, layer_mod_hook in enumerate(model.alignment_layers):
-            hooks.append(layer_mod_hook.register_forward_hook(get_activation_hook(i)))
-
-        # MODIFIED: Use effective_num_batches for tqdm total and loop break condition
-        batch_iter = tqdm(data_loader, desc="Processing batches for activation hooking", total=effective_num_batches, disable=not debug_mode, leave=False)
-        for inputs, _targets in batch_iter:
-            if processed_batch_count >= effective_num_batches:
-                break # Ensure we don't process more than intended
-            inputs = inputs.to(normalized_device)
-            for layer_name_clear in model.alignment_names:
-                 model.hidden[layer_name_clear] = [] 
-            model(inputs) 
-            processed_batch_count += 1
-            # No need for a second check of processed_batch_count >= effective_num_batches here if tqdm handles total correctly
-    finally:
-        for h in hooks:
-            h.remove()
-        hooks.clear()
-
-    all_scores_per_layer_all_metrics: Dict[int, Dict[str, torch.Tensor]] = {}
-    if processed_batch_count == 0:
-        logger.warning("No batches were actually processed for activation hooking (effective_num_batches might have been 0 or loader empty). Returning empty scores.")
-        # ... (populate with zeros as above) ...
-        for layer_idx_empty, layer_mod_scores_empty in enumerate(model.alignment_layers):
-            metrics_for_this_layer_empty = {}
-            node_count_empty = layer_mod_scores_empty.weight.shape[0] if hasattr(layer_mod_scores_empty, 'weight') and layer_mod_scores_empty.weight is not None else 0
-            for m_config_empty in metric_configs:
-                metrics_for_this_layer_empty[m_config_empty["name"]] = torch.zeros(node_count_empty, device=normalized_device)
-            all_scores_per_layer_all_metrics[layer_idx_empty] = metrics_for_this_layer_empty
-        return all_scores_per_layer_all_metrics
-
-    layer_iter = enumerate(model.alignment_layers)
-    if debug_mode:
-        layer_iter = tqdm(list(layer_iter), desc="Computing layer scores (batch-wise avg) for multiple metrics")
-
-    for layer_idx, layer_mod_scores in layer_iter:
-        layer_name_scores = model.alignment_names[layer_idx]
-        metrics_for_this_layer: Dict[str, torch.Tensor] = {}
-        current_layer_module_for_processing = model.alignment_layers[layer_idx]
-        is_conv_type_processing = isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d))
-
-        if layer_name_scores not in model.hidden or not model.hidden[layer_name_scores]:
-            # ... (handle missing data as before) ...
-            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
-            for m_config in metric_configs:
-                metrics_for_this_layer[m_config["name"]] = torch.zeros(node_count, device=normalized_device)
-            all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
-            if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None 
-            continue
+    for layer_name, layer_data in collected_data.items():
+        results[layer_name] = {}
+        module = modules_dict.get(layer_name)
+        if not module: continue
         
-        w_flat, layer_metadata = process_cnn_weights(model, layer_idx, pruning_strategy="structure-aware")
-        if w_flat is None:
-            logger.error(f"Failed to get weights for layer {layer_name_scores}. Skipping metric computation for this layer.")
-            node_count = layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0
-            for m_config in metric_configs:
-                metrics_for_this_layer[m_config["name"]] = torch.zeros(node_count, device=normalized_device)
-            all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
-            if layer_name_scores in model.hidden: model.hidden[layer_name_scores] = None
-            continue
-
-        activation_batches_for_layer = model.hidden[layer_name_scores] # List of tensors, each from a batch
+        l_inputs = layer_data.get("input"); l_outputs = layer_data.get("output")
 
         for m_config in metric_configs:
             metric_name = m_config["name"]
-            scale_by_norm_for_metric = m_config.get("scale_by_norm", False)
-            current_metric_instance = get_metric(
-                name=metric_name, 
-                scale_by_norm=scale_by_norm_for_metric,
-                force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops
-            )
-            
-            per_batch_node_scores_for_metric = []
+            scale_by_norm = m_config.get("scale_by_norm", False)
+            specific_kwargs_for_metric = {k:v for k,v in m_config.items() if k not in ["name", "scale_by_norm"]}
 
-            for batch_idx_act, act_tensor_one_batch in enumerate(activation_batches_for_layer):
-                X_processed_one_batch: Optional[torch.Tensor] = None
-                if is_conv_type_processing:
-                    # ... (unfolding logic as implemented in previous step, ensure kernel_s etc. are defined)
-                    kernel_s = current_layer_module_for_processing.kernel_size
-                    stride_s = current_layer_module_for_processing.stride
-                    padding_s = current_layer_module_for_processing.padding
-                    dilation_s = current_layer_module_for_processing.dilation
-                    # act_tensor_one_batch should be NCHW or NCL from the hook
-                    if isinstance(current_layer_module_for_processing, (nn.Conv2d, nn.ConvTranspose2d)) and act_tensor_one_batch.dim() == 4:
-                        try:
-                            unfolded_act = F.unfold(act_tensor_one_batch, kernel_size=kernel_s, dilation=dilation_s, padding=padding_s, stride=stride_s)
-                            unfolded_act = unfolded_act.transpose(1, 2).contiguous().view(-1, unfolded_act.size(1))
-                            X_processed_one_batch = unfolded_act
-                        except Exception as e_unfold:
-                            logger.error(f"Batch {batch_idx_act}: Error unfolding for Conv2D layer {layer_name_scores}: {e_unfold}. Input: {act_tensor_one_batch.shape}")
-                    elif isinstance(current_layer_module_for_processing, (nn.Conv1d, nn.ConvTranspose1d)) and act_tensor_one_batch.dim() == 3:
-                        try:
-                            # Ensure kernel_s, dilation_s etc. are 1-element tuples for 1D conv if they are ints
-                            k_s = (kernel_s[0],1) if isinstance(kernel_s, tuple) else (kernel_s,1)
-                            d_s = (dilation_s[0],1) if isinstance(dilation_s, tuple) else (dilation_s,1)
-                            p_s = (padding_s[0],0) if isinstance(padding_s, tuple) else (padding_s,0)
-                            st_s = (stride_s[0],1) if isinstance(stride_s, tuple) else (stride_s,1)
-                            unfolded_act = F.unfold(act_tensor_one_batch.unsqueeze(3), kernel_size=k_s, dilation=d_s, padding=p_s, stride=st_s)
-                            unfolded_act = unfolded_act.transpose(1, 2).contiguous().view(-1, unfolded_act.size(1))
-                            X_processed_one_batch = unfolded_act
-                        except Exception as e_unfold:
-                            logger.error(f"Batch {batch_idx_act}: Error unfolding for Conv1D layer {layer_name_scores}: {e_unfold}. Input: {act_tensor_one_batch.shape}")
-                    else:
-                        logger.warning(f"Batch {batch_idx_act}: Skipping unfold for {layer_name_scores} (type {type(current_layer_module_for_processing).__name__}, dim {act_tensor_one_batch.dim()}). Using flattened.")
-                        X_processed_one_batch = act_tensor_one_batch.reshape(act_tensor_one_batch.size(0), -1)
-                else: # Linear layer
-                    X_processed_one_batch = act_tensor_one_batch.reshape(act_tensor_one_batch.size(0), -1)
+            try:
+                # Get the AlignmentMetric wrapper instance
+                metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm)
+                
+                # Call its compute_per_node_scores method
+                metric_val = metric_instance.compute_per_node_scores(
+                    layer_inputs=l_inputs, 
+                    layer_weights=module.weight.detach() if hasattr(module, 'weight') and module.weight is not None else None, 
+                    layer_outputs=l_outputs,
+                    device=device, 
+                    **specific_kwargs_for_metric
+                )
+                if metric_val is not None:
+                    results[layer_name][metric_name] = metric_val.item() if metric_val.numel()==1 else metric_val.cpu()
+                else: results[layer_name][metric_name] = torch.tensor(float('nan'))
+            except Exception as e:
+                verbose_logging = specific_kwargs_for_metric.get("verbose", False)
+                logger.error(f"Error computing metric '{metric_name}' for layer '{layer_name}': {e}", exc_info=verbose_logging)
+                results[layer_name][metric_name] = torch.tensor(float('nan'))
+    return results 
 
-                if X_processed_one_batch is not None and X_processed_one_batch.numel() > 0:
-                    try:
-                        node_scores_this_batch = current_metric_instance.compute_per_node_scores(
-                            X_processed_one_batch, 
-                            w_flat, 
-                            device=normalized_device, 
-                            is_conv_layer=is_conv_type_processing, 
-                            cnn_mode_for_metric=configured_cnn_mode,
-                            cnn_rq_aggregation_op=configured_cnn_rq_op
-                        )
-                        if node_scores_this_batch is not None:
-                             per_batch_node_scores_for_metric.append(node_scores_this_batch)
-                    except Exception as e_comp_batch:
-                        logger.error(f"Batch {batch_idx_act}: Error computing scores for metric '{metric_name}' on layer {layer_name_scores}: {e_comp_batch}", exc_info=debug_mode)
-                # else: logger.warning if X_processed_one_batch is None or empty for a batch
-            
-            # Average scores across batches for this metric and layer
-            if per_batch_node_scores_for_metric:
-                final_scores_for_metric = torch.stack(per_batch_node_scores_for_metric).mean(dim=0)
-                if debug_mode:
-                    logger.info(f"  Metric '{metric_name}': Layer {layer_name_scores} avg score stats: min={torch.min(final_scores_for_metric).item():.4f}, max={torch.max(final_scores_for_metric).item():.4f}, mean={torch.mean(final_scores_for_metric).item():.4f}, std={torch.std(final_scores_for_metric).item():.4f}")
-                metrics_for_this_layer[metric_name] = final_scores_for_metric.detach()
-            else:
-                logger.warning(f"No batch scores computed for metric '{metric_name}' on layer {layer_name_scores}. Setting to zeros.")
-                node_count_fallback = w_flat.shape[0] if w_flat is not None else (layer_mod_scores.weight.shape[0] if hasattr(layer_mod_scores, 'weight') and layer_mod_scores.weight is not None else 0)
-                metrics_for_this_layer[metric_name] = torch.zeros(node_count_fallback, device=normalized_device)
-        
-        all_scores_per_layer_all_metrics[layer_idx] = metrics_for_this_layer
-        model.hidden[layer_name_scores] = None 
+# --- NEW: Pairwise Metric Calculation ---
+
+@torch.no_grad()
+def compute_pairwise_metric(
+    data1: torch.Tensor,
+    data2: torch.Tensor,
+    metric_name: str,
+    target_data: Optional[torch.Tensor] = None, # e.g., for PID's S variable
+    verbose: bool = False,
+    bins: int = 10 # For binning metrics
+) -> Union[torch.Tensor, float]:
+    """
+    Compute a metric between two sets of data (activations, weights, etc.).
+
+    Args:
+        data1: First tensor [batch, features1] or [features1]
+        data2: Second tensor [batch, features2] or [features2]
+        metric_name: Name of the metric (e.g., 'mi_gaussian', 'correlation', 'cosine_similarity', 'pid_si').
+        target_data: Optional third tensor [batch, features_target] for metrics like PID.
+        verbose: Enable verbose logging.
+        bins: Number of bins for discrete metrics.
+
+    Returns:
+        Metric value (float or Tensor depending on metric and input shapes).
+    """
+    metric_name_lower = metric_name.lower()
+    device = data1.device
+
+    # Ensure data is at least 2D [batch, features]
+    if data1.ndim == 1: data1 = data1.unsqueeze(0)
+    if data2.ndim == 1: data2 = data2.unsqueeze(0)
+    if target_data is not None and target_data.ndim == 1: target_data = target_data.unsqueeze(0)
     
-    model.hidden.clear() 
-    return all_scores_per_layer_all_metrics 
+    batch_size = data1.shape[0]
+    if data2.shape[0] != batch_size:
+        raise ValueError(f"Batch size mismatch between data1 ({batch_size}) and data2 ({data2.shape[0]})")
+    if target_data is not None and target_data.shape[0] != batch_size:
+        raise ValueError(f"Batch size mismatch between data and target_data ({target_data.shape[0]})")
+
+    # --- Metric Dispatch --- 
+
+    try:
+        if metric_name_lower in ["mi_gaussian", "mi_g", "redundancy_gaussian", "red_g"]:
+            # Calculate MI using Gaussian approx between data1 and data2
+            # Assuming data1 and data2 represent activities of two nodes/groups
+            # Concatenate features for covariance calculation
+            if data1.shape[1] > 1 or data2.shape[1] > 1:
+                logger.warning(f"Pairwise {metric_name} typically compares single features. Averaging over features.")
+                # Compute MI for each feature pair and average? Or compute for mean activity?
+                # Let's compute for the mean activity for simplicity now.
+                data1_mean = data1.mean(dim=1, keepdim=True)
+                data2_mean = data2.mean(dim=1, keepdim=True)
+            else:
+                 data1_mean = data1
+                 data2_mean = data2
+            
+            combined = torch.cat((data1_mean, data2_mean), dim=1)
+            if combined.shape[0] < 2: return 0.0
+            cov_matrix = covariance(combined)
+            var1, var2 = cov_matrix[0, 0], cov_matrix[1, 1]
+            if var1 > 1e-12 and var2 > 1e-12:
+                rho_sq = (cov_matrix[0, 1]**2) / (var1 * var2)
+                mi_val = -0.5 * torch.log(1.0 - torch.clamp(rho_sq, 0, 0.999999))
+                return torch.nan_to_num(mi_val).item()
+            else:
+                return 0.0
+
+        elif metric_name_lower in ["mi_direct", "mi_bin"]:
+            # Calculate MI using binning between data1 and data2 (mean activities)
+            if data1.shape[1] > 1 or data2.shape[1] > 1:
+                 logger.warning(f"Pairwise {metric_name} typically compares single features. Using mean activity.")
+                 data1_np = data1.mean(dim=1).cpu().numpy()
+                 data2_np = data2.mean(dim=1).cpu().numpy()
+            else:
+                 data1_np = data1.squeeze(1).cpu().numpy()
+                 data2_np = data2.squeeze(1).cpu().numpy()
+
+            min1, max1 = np.min(data1_np), np.max(data1_np)
+            bins1_vals = np.linspace(min1, max1, bins + 1)
+            digitized1 = np.digitize(data1_np, bins1_vals[:-1] if max1 > min1 + 1e-9 else [min1]) - 1
+            digitized1 = np.clip(digitized1, 0, bins - 1)
+
+            min2, max2 = np.min(data2_np), np.max(data2_np)
+            bins2_vals = np.linspace(min2, max2, bins + 1)
+            digitized2 = np.digitize(data2_np, bins2_vals[:-1] if max2 > min2 + 1e-9 else [min2]) - 1
+            digitized2 = np.clip(digitized2, 0, bins - 1)
+
+            joint_hist = np.zeros((bins, bins), dtype=float)
+            for s_idx in range(batch_size): joint_hist[digitized1[s_idx], digitized2[s_idx]] += 1
+            joint_p = joint_hist / batch_size
+            p1 = np.sum(joint_p, axis=1); p2 = np.sum(joint_p, axis=0)
+            
+            mi_val = 0.0
+            for b1 in range(bins): 
+                for b2 in range(bins):
+                    if joint_p[b1, b2] > 1e-12 and p1[b1] > 1e-12 and p2[b2] > 1e-12:
+                        mi_val += joint_p[b1, b2] * np.log2(joint_p[b1, b2] / (p1[b1] * p2[b2]))
+            return mi_val
+
+        elif metric_name_lower == "correlation":
+            if data1.shape[1] > 1 or data2.shape[1] > 1:
+                 logger.warning(f"Pairwise {metric_name} typically compares single features. Using mean activity.")
+                 data1_mean = data1.mean(dim=1, keepdim=True)
+                 data2_mean = data2.mean(dim=1, keepdim=True)
+            else:
+                 data1_mean = data1
+                 data2_mean = data2
+            
+            combined = torch.cat((data1_mean, data2_mean), dim=1)
+            if combined.shape[0] < 2: return 0.0
+            corr_matrix = correlation(combined)
+            return corr_matrix[0, 1].item()
+
+        elif metric_name_lower == "cosine_similarity":
+            # Interpret data1 and data2 as vectors (e.g., weight vectors or mean activation vectors)
+            vec1 = data1.mean(dim=0) # Average over batch if multiple samples given
+            vec2 = data2.mean(dim=0)
+            return F.cosine_similarity(vec1, vec2, dim=0).item()
+
+        elif "pid_" in metric_name_lower:
+            if not PID_AVAILABLE:
+                logger.warning(f"PID metric '{metric_name}' requested, but BROJA_2PID not available. Returning 0.")
+                return 0.0
+            if target_data is None:
+                raise ValueError("PID metrics require target_data (S variable) for pairwise calculation.")
+            
+            broja = get_broja_pid_module()
+            
+            # Use mean activities if multiple features
+            if data1.shape[1] > 1: data1 = data1.mean(dim=1, keepdim=True)
+            if data2.shape[1] > 1: data2 = data2.mean(dim=1, keepdim=True)
+            if target_data.shape[1] > 1: target_data = target_data.mean(dim=1, keepdim=True)
+
+            y1_np = data1.squeeze(1).cpu().numpy()
+            y2_np = data2.squeeze(1).cpu().numpy()
+            s_np = target_data.squeeze(1).cpu().numpy()
+
+            # Digitize y1, y2, s (similar to average_pid_component)
+            min_y1, max_y1 = np.min(y1_np), np.max(y1_np)
+            y1_bins_vals = np.linspace(min_y1, max_y1, bins + 1)
+            y1_digitized = np.digitize(y1_np, y1_bins_vals[:-1] if max_y1 > min_y1+1e-9 else [min_y1]) - 1
+            y1_digitized = np.clip(y1_digitized, 0, bins - 1)
+
+            min_y2, max_y2 = np.min(y2_np), np.max(y2_np)
+            y2_bins_vals = np.linspace(min_y2, max_y2, bins + 1)
+            y2_digitized = np.digitize(y2_np, y2_bins_vals[:-1] if max_y2 > min_y2+1e-9 else [min_y2]) - 1
+            y2_digitized = np.clip(y2_digitized, 0, bins - 1)
+
+            min_s, max_s = np.min(s_np), np.max(s_np)
+            s_bins_vals = np.linspace(min_s, max_s, bins + 1)
+            s_digitized = np.digitize(s_np, s_bins_vals[:-1] if max_s > min_s+1e-9 else [min_s]) - 1
+            s_digitized = np.clip(s_digitized, 0, bins - 1)
+            
+            # Compute joint distribution p(S, Y1, Y2)
+            p_sy1y2_dict: Dict[Tuple[int,int,int], float] = {}
+            for s_idx in range(batch_size):
+                key = (s_digitized[s_idx], y1_digitized[s_idx], y2_digitized[s_idx])
+                p_sy1y2_dict[key] = p_sy1y2_dict.get(key, 0.0) + 1.0
+            
+            if not p_sy1y2_dict: return 0.0
+            total_counts = sum(p_sy1y2_dict.values())
+            if total_counts == 0: return 0.0
+            broja_input = {k: v / total_counts for k, v in p_sy1y2_dict.items()}
+            if not broja_input: return 0.0
+
+            pid_res = broja.pid(broja_input)
+            # Map requested metric name to BROJA output key
+            comp_val_map = {
+                "pid_si": "SI", "pid_shared_info": "SI",
+                "pid_ui1": "UIY", "pid_unique_info_1": "UIY",
+                "pid_ui2": "UIZ", "pid_unique_info_2": "UIZ",
+                "pid_ci": "CI", "pid_synergy_info": "CI"
+            }
+            return pid_res.get(comp_val_map.get(metric_name_lower, ""), 0.0)
+
+        else:
+            raise ValueError(f"Unsupported pairwise metric: {metric_name_lower}")
+            
+    except Exception as e:
+        logger.error(f"Error computing pairwise metric '{metric_name_lower}': {e}", exc_info=verbose)
+        return 0.0 # Return default value on error 
