@@ -232,116 +232,144 @@ class CNN2P2(nn.Module):
 
 # Register model constructors
 @register_model("mlp")
-def create_mlp(config_model: Dict, 
-               alignment_layers: Optional[Dict[str, Any]] = None,
-               cnn_mode: str = "unfold") -> AlignmentNetwork:
+def create_mlp(
+    # Common params from ModelConfig
+    output_dim: int,
+    dropout_rate: float,
+    # Specific params from MLPParamsConfig (via ModelConfig.mlp_params)
+    input_dim: int,
+    hidden_dims: List[int],
+    activation: str,
+    # Params for AlignmentNetwork wrapper
+    alignment_layers: Optional[Dict[str, Any]] = None,
+    cnn_mode_for_wrapper: str = "unfold", # cnn_mode from ModelConfig to be used by AlignmentNetwork
+    extra_params: Optional[Dict[str, Any]] = None # from ModelConfig.extra_model_params
+) -> AlignmentNetwork:
     
-    # Parameters from your YAML mapped to the new MLP class
-    mlp_params = {
-        "input_dim": config_model.get("input_dim", 784),
-        "hidden_dims": config_model.get("hidden_dims", [100, 100, 50]),
-        "output_dim": config_model.get("output_dim", 10),
-        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.0)), 
-        "activation_type": config_model.get("activation", "relu")
+    mlp_constructor_params = {
+        "input_dim": input_dim,
+        "hidden_dims": hidden_dims,
+        "output_dim": output_dim, # Pass common output_dim to MLP class
+        "dropout_rate": dropout_rate, # Pass common dropout_rate to MLP class
+        "activation_type": activation
     }
-    base_model = MLP(**mlp_params)
+    # Include any extra_params if provided and MLP class accepts them (or handle selectively)
+    # For now, assuming MLP class takes these specific args.
+    # If extra_params are for MLP class, they need to be merged into mlp_constructor_params.
+    # If they are for something else, they are ignored here for MLP construction.
+    if extra_params:
+        # Example: if MLP had a `use_bias` param not in MLPParamsConfig but in extra_model_params
+        # mlp_constructor_params.update({k:v for k,v in extra_params.items() if k in MLP.__init__.__code__.co_varnames})
+        pass # No generic merging for now, rely on explicit params
+
+    base_model = MLP(**mlp_constructor_params)
     
-    # Default alignment layer naming for the new MLP structure
-    # Linear layers are now direct children of base_model.network (a Sequential module)
-    # Their names will be like "network.0", "network.2" (if dropout is present), etc.
-    # Or, if we name them: layerInput, layerHidden.0.linear, layerOutput.linear
-    # For AlignmentNetwork, we need the names of modules that HAVE a .weight attribute.
     default_alignment_layer_names = {}
     idx_for_alignment = 0
     for i, layer in enumerate(base_model.network):
         if isinstance(layer, nn.Linear):
-            # Using a generic name format for layers within the sequential block
             default_alignment_layer_names[f"network.{i}"] = idx_for_alignment 
             idx_for_alignment += 1
 
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    # Use the passed cnn_mode for AlignmentNetwork
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode_for_wrapper)
 
 
 @register_model("cnn2p2")
-def create_cnn2p2(config_model: Dict, 
-                  alignment_layers: Optional[Dict[str, Any]] = None,
-                  cnn_mode: str = "unfold") -> AlignmentNetwork:
-    # Parameters from your YAML mapped to the new CNN2P2 class
-    # Need to add these to ModelConfig and YAML if not present
-    cnn_params = {
-        "in_channels": config_model.get("in_channels", 1),
-        "output_dim": config_model.get("output_dim", 10),
-        "conv_channels": config_model.get("conv_channels", [32, 64]),
-        "kernel_sizes": config_model.get("kernel_sizes", [5, 5]),
-        "strides": config_model.get("strides", [1, 1]),
-        "paddings": config_model.get("paddings", [0, 0]), # Default to 0 if not specified, adjust based on common use
-        "pool_kernel_size": config_model.get("pool_kernel_size", 2),
-        "pool_stride": config_model.get("pool_stride", 2),
-        "hidden_fc_dim": config_model.get("hidden_fc_dim", 128), # Your v2 num_hidden[1]
-        "dropout_rate": config_model.get("dropout_rate", config_model.get("dropout", 0.0)),
-        "example_input_hw": tuple(config_model.get("example_input_hw", [28,28])) # e.g. (28,28) for MNIST
-    }
-    # Determine input_dim for fc layer based on conv output and example_input_hw
-    # This calculation is now inside CNN2P2 __init__
-
-    base_model = CNN2P2(**cnn_params)
+def create_cnn2p2(
+    # Common params from ModelConfig
+    output_dim: int,
+    dropout_rate: float, # General dropout, CNN2P2 specific dropout is internal or via this
+    # Specific params from CNN2P2ParamsConfig (via ModelConfig.cnn2p2_params)
+    in_channels: int,
+    conv_channels: List[int],
+    kernel_sizes: List[int],
+    strides: List[int],
+    paddings: List[int],
+    pool_kernel_size: int,
+    pool_stride: int,
+    hidden_fc_dim: int,
+    example_input_hw: List[int],
+    # Params for AlignmentNetwork wrapper
+    alignment_layers: Optional[Dict[str, Any]] = None,
+    cnn_mode_for_wrapper: str = "unfold", # cnn_mode from ModelConfig to be used by AlignmentNetwork
+    extra_params: Optional[Dict[str, Any]] = None # from ModelConfig.extra_model_params
+) -> AlignmentNetwork:
     
-    # Default alignment layers for the new CNN2P2 structure
-    # Names will be self.conv1.0 (Conv2d), self.conv2.0 (Conv2d)
-    # And for FC layers within self.fc_layers (Sequential): self.fc_layers.1 (Linear), self.fc_layers.4 (Linear)
-    default_alignment_layer_names = {
-        "conv1.0": 0,       # First Conv2d inside self.conv1 Sequential
-        "conv2.0": 1,       # First Conv2d inside self.conv2 Sequential
-        "fc_layers.1": 2,   # First Linear layer in self.fc_layers
-        "fc_layers.4": 3    # Second Linear layer in self.fc_layers (after Dropout, ReLU, Dropout)
+    cnn_constructor_params = {
+        "in_channels": in_channels,
+        "output_dim": output_dim, # Pass common output_dim
+        "conv_channels": conv_channels,
+        "kernel_sizes": kernel_sizes,
+        "strides": strides,
+        "paddings": paddings,
+        "pool_kernel_size": pool_kernel_size,
+        "pool_stride": pool_stride,
+        "hidden_fc_dim": hidden_fc_dim,
+        "dropout_rate": dropout_rate, # Pass common dropout_rate, CNN2P2 class uses it for its FC dropout
+        "example_input_hw": tuple(example_input_hw) # Ensure it's a tuple for CNN2P2 class
     }
+    # Handle extra_params if CNN2P2 class supports them
+    if extra_params: 
+        pass # No generic merging for now, rely on explicit params
+
+    base_model = CNN2P2(**cnn_constructor_params)
+    
+    default_alignment_layer_names = {
+        "conv1.0": 0,       
+        "conv2.0": 1,       
+        "fc_layers.2": 2,   # Updated based on typical CNN2P2 sequential: Flatten, Dropout, Linear, ReLU, Dropout, Linear
+                            # Index 2 for Linear after Dropout(1)
+        "fc_layers.5": 3    # Index 5 for Linear after Dropout(4), ReLU(3)
+    }
+    # To be more robust, inspect base_model.fc_layers for Linear instances:
+    # linear_fc_indices = [i for i, m in enumerate(base_model.fc_layers) if isinstance(m, nn.Linear)]
+    # if len(linear_fc_indices) >= 1: default_alignment_layer_names[f"fc_layers.{linear_fc_indices[0]}"] = 2
+    # if len(linear_fc_indices) >= 2: default_alignment_layer_names[f"fc_layers.{linear_fc_indices[1]}"] = 3
+    
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
 
-    # Use the passed cnn_mode for AlignmentNetwork
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode_for_wrapper)
 
 
-@register_model("alexnet")
-def create_alexnet(config_model: Dict,
-                   alignment_layers: Optional[Dict[str, Any]] = None,
-                   cnn_mode: str = "unfold") -> AlignmentNetwork:
-    dropout_rate = config_model.get("dropout_rate", config_model.get("dropout", 0.0))
-    num_classes = config_model.get("output_dim", 1000) # AlexNet torchvision default is 1000
-
-    base_model = alexnet(weights=None, progress=False, num_classes=num_classes) # Use num_classes
+@register_model("alexnet") # This is for a custom/non-pretrained AlexNet if needed
+def create_alexnet(
+    # Common params from ModelConfig
+    output_dim: int,
+    dropout_rate: float, # General dropout for potential override
+    # Params for AlignmentNetwork wrapper
+    alignment_layers: Optional[Dict[str, Any]] = None,
+    cnn_mode_for_wrapper: str = "unfold", 
+    extra_params: Optional[Dict[str, Any]] = None
+) -> AlignmentNetwork:
+    # This constructor is for a basic AlexNet, likely non-pretrained torchvision one or custom.
+    # If user wants pretrained, they should use model_name: "torchvision_alexnet" which is handled by registry.py directly.
+    # Here, we assume extra_params might contain specific AlexNet constructor args if this isn't just torchvision.alexnet()
     
-    # Modify dropout rates in AlexNet if specified
-    # AlexNet has dropout layers named classifier.2 and classifier.5
-    # The original AlexNet paper used 0.5 dropout.
-    # torchvision.models.alexnet() already adds nn.Dropout(p=0.5) at these positions.
-    # We can adjust them if dropout_rate is different from 0.5 and > 0.
-    if dropout_rate > 0 and dropout_rate != 0.5:
+    # Determine if torchvision.models.alexnet specific params are in extra_params
+    use_torchvision_default = True
+    tv_alexnet_kwargs = {}
+    if extra_params:
+        # Example: if extra_params was {"torchvision_progress": False}
+        if "progress" in extra_params: tv_alexnet_kwargs["progress"] = extra_params["progress"]
+        # if any other specific args are passed for a custom AlexNet, this logic would change
+
+    base_model = alexnet(weights=None, num_classes=output_dim, **tv_alexnet_kwargs) 
+    
+    if dropout_rate > 0 and dropout_rate != 0.5: # Default torchvision AlexNet has p=0.5
         for name, module in base_model.named_modules():
             if isinstance(module, nn.Dropout):
                 module.p = dropout_rate
-                logger.info(f"Set dropout for {name} in AlexNet to {dropout_rate}")
+                logger.info(f"Set dropout for {name} in custom AlexNet to {dropout_rate}")
     
-    # Default alignment layers for AlexNet (key linear and conv layers)
-    # Names from base_model.named_modules():
-    # features.0, features.3, features.6, features.8, features.10 (Conv2d)
-    # classifier.1, classifier.4, classifier.6 (Linear)
     default_alignment_layer_names = {
-        "features.0": 0, # Conv1
-        "features.3": 1, # Conv2
-        "features.6": 2, # Conv3
-        "features.8": 3, # Conv4
-        "features.10": 4, # Conv5
-        "classifier.1": 5, # FC1
-        "classifier.4": 6, # FC2
-        "classifier.6": 7  # Output FC
+        "features.0": 0, "features.3": 1, "features.6": 2, "features.8": 3, "features.10": 4,
+        "classifier.1": 5, "classifier.4": 6, "classifier.6": 7
     }
     final_alignment_layer_names = alignment_layers if alignment_layers is not None else default_alignment_layer_names
     
-    # Use the passed cnn_mode for AlignmentNetwork
-    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode)
+    return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode_for_wrapper)
 
 
 # Dictionary for dataset-specific model parameters

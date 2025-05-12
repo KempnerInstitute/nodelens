@@ -35,7 +35,9 @@ def run_progressive_dropout_experiment(
     debug_mode: bool = False,
     exclude_classification_layer_config: bool = True,
     num_batches_for_pre_scoring: int = 5,
-    force_cpu_for_large_metric_ops: bool = True
+    force_cpu_for_large_metric_ops: bool = True,
+    configured_cnn_mode: Optional[str] = "unfold",
+    configured_cnn_rq_op: Optional[str] = "mean"
 ) -> Dict:
     """
     Run progressive dropout experiment on multiple networks with multiple strategies.
@@ -53,6 +55,8 @@ def run_progressive_dropout_experiment(
         exclude_classification_layer_config: Whether to exclude the classification layer from the experiment
         num_batches_for_pre_scoring: Number of batches to use for pre-scoring
         force_cpu_for_large_metric_ops: Whether to force CPU for large metric operations
+        configured_cnn_mode: Optional CNN metric computation mode
+        configured_cnn_rq_op: Optional CNN RQ operation
         
     Returns:
         Dictionary with dropout experiment results
@@ -97,7 +101,9 @@ def run_progressive_dropout_experiment(
             data_loader=dataset.test_loader,
             num_batches=num_batches_for_pre_scoring,
             debug_mode=debug_mode,
-            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops
+            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops,
+            configured_cnn_mode=configured_cnn_mode,
+            configured_cnn_rq_op=configured_cnn_rq_op
         )
         
         current_net_scores = {} 
@@ -348,7 +354,9 @@ def run_layer_isolated_dropout_experiment(
     debug_mode: bool = False,
     exclude_classification_layer_config: bool = True,
     num_batches_for_pre_scoring: int = 5,
-    force_cpu_for_large_metric_ops: bool = True
+    force_cpu_for_large_metric_ops: bool = True,
+    configured_cnn_mode: Optional[str] = "unfold",
+    configured_cnn_rq_op: Optional[str] = "mean"
 ) -> Dict:
     logger.info("Starting Layer Isolated Dropout Experiment")
     device = _normalize_device(device)
@@ -385,7 +393,9 @@ def run_layer_isolated_dropout_experiment(
             data_loader=dataset.test_loader,
             debug_mode=debug_mode, 
             num_batches=num_batches_for_pre_scoring,
-            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops
+            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops,
+            configured_cnn_mode=configured_cnn_mode,
+            configured_cnn_rq_op=configured_cnn_rq_op
         )
         
         scores_this_rep_single_metric = {} 
@@ -414,18 +424,18 @@ def run_layer_isolated_dropout_experiment(
                     logger.error(f"Layer Isolated: Failed to obtain any scores for network {net_idx} for any metric.")
         else:
             logger.error(f"Layer Isolated: compute_all_node_scores returned empty dict for network {net_idx}.")
-
+        
         asc_indices_this_rep = {}
         desc_indices_this_rep = {}
         rand_indices_this_rep = {}
         for l_idx_scores, score_tensor in scores_this_rep_single_metric.items():
             if score_tensor is not None and isinstance(score_tensor, torch.Tensor) and score_tensor.numel() > 0:
-                count = score_tensor.shape[0]
-                asc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=False)
-                desc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=True)
-                allidx_layer = list(range(count))
-                random.shuffle(allidx_layer)
-                rand_indices_this_rep[l_idx_scores] = torch.tensor(allidx_layer, device=device, dtype=torch.long)
+            count = score_tensor.shape[0]
+            asc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=False)
+            desc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=True)
+            allidx_layer = list(range(count))
+            random.shuffle(allidx_layer)
+            rand_indices_this_rep[l_idx_scores] = torch.tensor(allidx_layer, device=device, dtype=torch.long)
             else:
                 asc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)
                 desc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)

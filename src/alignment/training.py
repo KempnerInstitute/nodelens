@@ -65,7 +65,7 @@ def train_network(
         device = _normalize_device(device)
     
     _ensure_model_on_device(network, device)
-
+    
     # Get data loader from DataSet, respecting batch_size override
     # DataSet.train_loader is created with dataset.batch_size by default.
     # If batch_size is specified here, it implies a different loader config for this specific call.
@@ -86,7 +86,7 @@ def train_network(
         lr=learning_rate,
         weight_decay=weight_decay
     )
-
+    
     # Adapt the old progress_callback to the new callback system if provided
     # The old callback expects (epoch, epoch_loss, epoch_acc)
     # The new callback system in train_model provides a richer epoch_context dict.
@@ -130,7 +130,7 @@ def train_network(
     # The original train_network logged per epoch. train_model also logs per epoch.
     # So, explicit logging here might be redundant if train_model's logging is sufficient.
     # For compatibility, the old progress_callback (if any) handles any specific per-epoch actions.
-
+    
     return history
 
 
@@ -258,7 +258,9 @@ def train_model(
     checkpoint_freq: int = 1,
     return_history: bool = False,
     callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
-    dataset_config_for_eval: Optional[Any] = None
+    dataset_config_for_eval: Optional[Any] = None,
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
 ) -> Dict[str, Any]:
     """
     Train a neural network model.
@@ -276,6 +278,8 @@ def train_model(
         callbacks: Optional list of callback functions to call at the end of each epoch. 
                    Each callback will receive a dictionary with epoch context.
         dataset_config_for_eval: Optional dataset configuration for the validation loader.
+        ddp_rank: Rank of the current DDP process
+        ddp_world_size: Total number of DDP processes
         
     Returns:
         Dictionary containing training metrics and results
@@ -303,8 +307,16 @@ def train_model(
         correct = 0
         total = 0
         
-        # Progress bar
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        is_main_process = (ddp_rank == 0)
+        
+        pbar_desc = f"Epoch {epoch+1}/{num_epochs}"
+        # Adjust progress bar description for non-main DDP processes if they were to run it
+        # if ddp_world_size > 1 and not is_main_process:
+        #     pbar_desc = f"Epoch {epoch+1}/{num_epochs} (Rank {ddp_rank})"
+        
+        # Progress bar: only on main process (rank 0) if DDP is active and world_size > 1
+        pbar_disabled = not is_main_process if ddp_world_size > 1 else False
+        pbar = tqdm(train_loader, desc=pbar_desc, disable=pbar_disabled)
         
         for batch_idx, (inputs, targets) in enumerate(pbar):
             inputs, targets = inputs.to(device), targets.to(device)
@@ -330,13 +342,14 @@ def train_model(
             correct += predicted.eq(targets).sum().item()
             total += targets.size(0)
             
-            # Update progress bar - simplified
-            pbar.set_postfix({
-                'loss': f"{total_loss / total:.4f}",
-                'acc': f"{100. * correct / total:.1f}%"
-            })
+            # Update progress bar only for main process
+            if is_main_process:
+                pbar.set_postfix({
+                    'loss': f"{total_loss / total:.4f}",
+                    'acc': f"{100. * correct / total:.1f}%"
+                })
         
-        # Calculate epoch metrics
+        # Calculate epoch metrics (all processes do this, loss/acc are from their own data portion)
         epoch_loss = total_loss / total
         epoch_accuracy = 100. * correct / total
         current_lr = optimizer.param_groups[0]['lr']
@@ -348,34 +361,41 @@ def train_model(
         
         # Evaluate on validation set if provided
         if val_loader is not None:
+            # evaluate_model is called, it needs to be DDP aware or call DDP aware functions
+            # Assume evaluate_model internally calls something like evaluate_on_loader which should be made DDP aware
             val_results = evaluate_model(
-                model=model,
-                dataset_config=dataset_config_for_eval,
-                device=device
+                model=model, # DDP model is passed if ddp active
+                dataset_config=dataset_config_for_eval, # This should ideally be a DataSet object
+                device=device,
+                ddp_rank=ddp_rank, # Pass DDP info
+                ddp_world_size=ddp_world_size
             )
             
             history['val_loss'].append(val_results['loss'])
             history['val_accuracy'].append(val_results['accuracy'])
             
-            # Simplified logging - only log final epoch or every 5 epochs
-            if epoch == num_epochs - 1 or (epoch + 1) % 5 == 0:
+            # Logging only on main process
+            if is_main_process and (epoch == num_epochs - 1 or (epoch + 1) % 5 == 0):
                 logger.info(f"Epoch {epoch+1}/{num_epochs}: "
                           f"Loss={epoch_loss:.4f}, Acc={epoch_accuracy:.2f}%, "
                           f"Val Loss={val_results['loss']:.4f}, Val Acc={val_results['accuracy']:.2f}%")
         else:
-            # Simplified logging - only log final epoch or every 5 epochs
-            if epoch == num_epochs - 1 or (epoch + 1) % 5 == 0:
+            # Logging only on main process
+            if is_main_process and (epoch == num_epochs - 1 or (epoch + 1) % 5 == 0):
                 logger.info(f"Epoch {epoch+1}/{num_epochs}: "
                           f"Loss={epoch_loss:.4f}, Acc={epoch_accuracy:.2f}%")
         
-        # Save checkpoint if directory is provided
-        if checkpoint_dir is not None and (epoch + 1) % checkpoint_freq == 0:
+        # Save checkpoint only on main process
+        if is_main_process and checkpoint_dir is not None and (epoch + 1) % checkpoint_freq == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
             checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pt")
             
+            # If model is DDP wrapped, save model.module.state_dict()
+            model_state_to_save = model.module.state_dict() if isinstance(model, nn.parallel.DistributedDataParallel) else model.state_dict()
+
             torch.save({
                 'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': model_state_to_save,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_loss': epoch_loss,
                 'train_accuracy': epoch_accuracy,
@@ -422,7 +442,9 @@ def load_checkpoint(
     checkpoint_path: str,
     optimizer: Optional[optim.Optimizer] = None,
     scheduler: Optional[Any] = None,
-    device: Optional[torch.device] = None
+    device: Optional[torch.device] = None,
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
 ) -> Dict[str, Any]:
     """
     Load a model checkpoint.
@@ -433,6 +455,8 @@ def load_checkpoint(
         optimizer: Optimizer to load state into
         scheduler: Scheduler to load state into
         device: Device to load the checkpoint to
+        ddp_rank: Rank of the current DDP process
+        ddp_world_size: Total number of DDP processes
         
     Returns:
         Dictionary containing checkpoint metadata
@@ -444,7 +468,12 @@ def load_checkpoint(
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
     
     # Load model weights
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # If the model passed is DDP wrapped, load state to model.module.
+    # Otherwise, load directly to the model.
+    if isinstance(model, nn.parallel.DistributedDataParallel):
+        model.module.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
     
     # Move model to device if specified
     if device is not None:
@@ -481,7 +510,9 @@ def evaluate(
     alignment_methods: Optional[List[str]] = None,
     num_batches_for_eval: Optional[int] = None, # To limit data for faster eval
     # ADDED: Parameter to pass down for RQ scaling
-    scale_rq_by_norm: bool = False 
+    scale_rq_by_norm: bool = False,
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
 ) -> Dict[str, Any]:
     """
     Evaluate network(s) on a dataset, with options for alignment measurement.
@@ -494,6 +525,8 @@ def evaluate(
         alignment_methods: List of alignment methods to measure (default: ["RQ"])
         num_batches_for_eval: Number of batches to use for evaluation (default: None)
         scale_rq_by_norm: If True and RQ is an alignment method, scale its covariance by norm.
+        ddp_rank: Rank of the current DDP process
+        ddp_world_size: Total number of DDP processes
     Returns:
         Dictionary of evaluation results
     """
@@ -577,32 +610,32 @@ def evaluate(
                     scale_by_norm_for_rq=scale_rq_by_norm # Passed from evaluate function's params
                 )
                 align_data.append(current_net_alignment_batch)
-                
-                # Compute distributions of alignment values
-                layer_dists = []
-                for layer_dict in current_net_alignment_batch:
-                    m_d = {}
-                    for m, val_tensor in layer_dict.items():
-                        val_cpu = val_tensor.detach().cpu()
-                        c, e = torch.histogram(val_cpu, bins=bins, density=True)
-                        m_d[m] = (c, e)
-                    layer_dists.append(m_d)
-                dist_data.append(layer_dists)
-                
-                # Compute expected distributions if requested
-                if measure_expected:
-                    net_inps = net.get_layer_inputs(images, precomputed=False)
-                    layer_exp_list = []
-                    for inp in net_inps:
-                        if inp.ndim == 4:
-                            inp = inp.flatten(start_dim=1)
-                        wvals, _ = AlignmentMetrics.compute_eigenvalues(inp)
-                        method_exp = {}
-                        for m in alignment_methods:
-                            ccounts, cedges = AlignmentMetrics.measure_expected_distribution(m, wvals, bins=bins)
-                            method_exp[m] = (ccounts, cedges)
-                        layer_exp_list.append(method_exp)
-                    exp_data.append(layer_exp_list)
+            
+            # Compute distributions of alignment values
+            layer_dists = []
+            for layer_dict in current_net_alignment_batch:
+                m_d = {}
+                for m, val_tensor in layer_dict.items():
+                    val_cpu = val_tensor.detach().cpu()
+                    c, e = torch.histogram(val_cpu, bins=bins, density=True)
+                    m_d[m] = (c, e)
+                layer_dists.append(m_d)
+            dist_data.append(layer_dists)
+            
+            # Compute expected distributions if requested
+            if measure_expected:
+                net_inps = net.get_layer_inputs(images, precomputed=False)
+                layer_exp_list = []
+                for inp in net_inps:
+                    if inp.ndim == 4:
+                        inp = inp.flatten(start_dim=1)
+                    wvals, _ = AlignmentMetrics.compute_eigenvalues(inp)
+                    method_exp = {}
+                    for m in alignment_methods:
+                        ccounts, cedges = AlignmentMetrics.measure_expected_distribution(m, wvals, bins=bins)
+                        method_exp[m] = (ccounts, cedges)
+                    layer_exp_list.append(method_exp)
+                exp_data.append(layer_exp_list)
                 
         # Store alignment results
         results["alignment"] = [{"epoch": "test", "batch": "all", "data": align_data}]
@@ -611,7 +644,19 @@ def evaluate(
         if measure_expected:
             results["expected_distribution"] = [{"epoch": "test", "batch": "all", "data": exp_data}]
     
-    return results
+    is_main_process = (ddp_rank == 0)
+
+    # Construct a similar return dict to the original `evaluate` if possible
+    # Original returned e.g. {'accuracies': [...], 'losses': [...], 'alignment_scores': ...}
+    final_results = {
+        "loss": eval_results.get("mean_loss", eval_results.get("all_losses", [0.0])[0]),
+        "accuracy": eval_results.get("mean_accuracy", eval_results.get("all_accuracies", [0.0])[0])
+    }
+    
+    if is_main_process: # Log only on main process
+        logger.info(f"Evaluation on {'train' if train_set else 'test'} set: Accuracy={final_results['accuracy']:.2f}%, Loss={final_results['loss']:.4f}")
+
+    return final_results
 
 
 def train_networks_fully_tensorized(
@@ -623,6 +668,8 @@ def train_networks_fully_tensorized(
     show_progress: bool = True,
     optimizer_class=torch.optim.Adam,
     weight_decay: float = 0.0,
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1,
     **optimizer_kwargs
 ) -> Dict:
     """
@@ -640,6 +687,8 @@ def train_networks_fully_tensorized(
         show_progress: Whether to show progress bars
         optimizer_class: The optimizer class to use.
         weight_decay: Weight decay for the optimizer.
+        ddp_rank: Rank of the current DDP process
+        ddp_world_size: Total number of DDP processes
         **optimizer_kwargs: Additional arguments for the optimizer.
 
     Returns:
@@ -779,6 +828,8 @@ def train_networks_sequential(
     optimizer_class=torch.optim.Adam,
     weight_decay: float = 0.0,
     callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1,
     **optimizer_kwargs
 ) -> Dict[str, List[float]]:
     """
@@ -795,7 +846,7 @@ def train_networks_sequential(
         'train_loss': [], 'train_acc': [],
         'test_loss': [], 'test_acc': []
     }
-
+    
     all_individual_histories = [] # To store history from each train_model call
 
     net_iter_desc = "Training Networks Sequentially"
@@ -805,7 +856,7 @@ def train_networks_sequential(
         if show_progress and len(networks) > 1:
             net_iter.set_description(f"{net_iter_desc} (Network {net_idx+1}/{len(networks)})")
 
-        _ensure_model_on_device(net, device)
+            _ensure_model_on_device(net, device)
         
         # Setup optimizer for the current network
         optimizer = optimizer_class(
@@ -830,7 +881,9 @@ def train_networks_sequential(
             checkpoint_dir=None, # Checkpointing handled at a higher level or disabled here
             return_history=True,
             callbacks=callbacks, # Pass down the callbacks
-            dataset_config_for_eval=dataset.config_object # MODIFIED: Use dataset.config_object
+            dataset_config_for_eval=dataset.config_object, # MODIFIED: Use dataset.config_object
+            ddp_rank=ddp_rank,
+            ddp_world_size=ddp_world_size
         )
         all_individual_histories.append(individual_history)
 
@@ -852,7 +905,7 @@ def train_networks_sequential(
             logger.info(f"Sequential Training Avg (Epoch {num_epochs_trained}/{num_epochs}) - "
                         f"train_loss: {aggregated_history['train_loss'][-1]:.4f}, train_acc: {aggregated_history['train_acc'][-1]:.2f}%, "
                         f"test_loss: {aggregated_history['test_loss'][-1]:.4f}, test_acc: {aggregated_history['test_acc'][-1]:.2f}%")
-    
+            
     return aggregated_history
 
 
@@ -867,6 +920,8 @@ def train_networks(
     weight_decay: float = 0.0,
     training_method: str = "auto",
     callbacks: Optional[List[Callable[[Dict[str, Any]], None]]] = None,
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1,
     **optimizer_kwargs
 ) -> Dict[str, List[float]]:
     """
@@ -883,6 +938,8 @@ def train_networks(
         weight_decay: Weight decay for optimizer
         training_method: Method for training ('auto', 'sequential', 'fully_tensorized')
         callbacks: Optional list of callback functions to call at the end of each epoch for each model (primarily for sequential).
+        ddp_rank: Rank of the current DDP process
+        ddp_world_size: Total number of DDP processes
         **optimizer_kwargs: Additional arguments to pass to optimizer
         
     Returns:
@@ -926,7 +983,8 @@ def train_networks(
         "show_progress": show_progress,
         "optimizer_class": optimizer_class,
         "weight_decay": weight_decay,
-        # Callbacks will be passed selectively
+        "ddp_rank": ddp_rank,
+        "ddp_world_size": ddp_world_size,
         **optimizer_kwargs
     }
 

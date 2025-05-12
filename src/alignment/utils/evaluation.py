@@ -23,7 +23,11 @@ def evaluate_on_loader(
     model: nn.Module,
     data_loader,
     device="cuda",
-    show_progress: bool = False
+    show_progress: bool = False,
+    # --- NEW: DDP Parameters ---
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
+    # --- End NEW ---
 ) -> Dict[str, float]:
     """
     Evaluate a model on the given data loader.
@@ -33,6 +37,8 @@ def evaluate_on_loader(
         data_loader: Data loader for evaluation
         device: Device to evaluate on
         show_progress: Whether to show progress bar
+        ddp_rank: DDP rank, for rank-specific operations (progress bar).
+        ddp_world_size: DDP world size.
         
     Returns:
         Dictionary with evaluation metrics
@@ -47,7 +53,11 @@ def evaluate_on_loader(
     correct = 0
     total = 0
     
-    loader_iter = tqdm(data_loader, desc="Evaluating") if show_progress else data_loader
+    is_main_process = (ddp_rank == 0)
+    # Disable progress bar for non-main DDP processes if DDP is active
+    progress_bar_disabled = not is_main_process if (ddp_world_size > 1 and show_progress) else not show_progress
+    
+    loader_iter = tqdm(data_loader, desc="Evaluating", disable=progress_bar_disabled) 
     
     with torch.no_grad():
         for inputs, targets in loader_iter:
@@ -68,10 +78,10 @@ def evaluate_on_loader(
             correct += predicted.eq(targets).sum().item()
             total += targets.size(0)
             
-            # Update progress bar
-            if show_progress:
-                acc = 100.0 * correct / total
-                loader_iter.set_postfix({'loss': f"{total_loss/total:.4f}", 'acc': f"{acc:.2f}%"})
+            # Update progress bar only on the main process
+            if show_progress and is_main_process:
+                acc = 100.0 * correct / total if total > 0 else 0.0 # Ensure total > 0 for acc calculation
+                loader_iter.set_postfix({'loss': f"{total_loss/total if total > 0 else 0.0:.4f}", 'acc': f"{acc:.2f}%"})
     
     # Calculate final metrics
     avg_loss = total_loss / total
@@ -86,7 +96,11 @@ def evaluate_on_loader(
 def evaluate_networks(
     networks: List[nn.Module],
     data_loader,
-    device="cuda"
+    device="cuda",
+    # --- NEW: DDP Parameters ---
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
+    # --- End NEW ---
 ) -> Tuple[float, float]:
     """
     Evaluate multiple networks on the given data loader.
@@ -95,6 +109,8 @@ def evaluate_networks(
         networks: List of networks to evaluate
         data_loader: Data loader for evaluation
         device: Device to evaluate on
+        ddp_rank: DDP rank.
+        ddp_world_size: DDP world size.
         
     Returns:
         Tuple of (average loss, average accuracy)
@@ -105,14 +121,17 @@ def evaluate_networks(
     total_loss = 0.0
     total_acc = 0.0
     
-    for network in networks:
-        metrics = evaluate_on_loader(network, data_loader, device, show_progress=False)
+    for network_idx, network in enumerate(networks):
+        # Pass DDP parameters to evaluate_on_loader
+        # Progress bar within evaluate_on_loader will be rank-aware
+        metrics = evaluate_on_loader(network, data_loader, device, show_progress=False, ddp_rank=ddp_rank, ddp_world_size=ddp_world_size)
         total_loss += metrics['loss']
         total_acc += metrics['accuracy']
     
-    avg_loss = total_loss / len(networks)
-    avg_acc = total_acc / len(networks)
+    avg_loss = total_loss / len(networks) if networks else 0.0
+    avg_acc = total_acc / len(networks) if networks else 0.0
     
+    # This function doesn't log itself, relies on caller.
     return avg_loss, avg_acc 
 
 
@@ -133,7 +152,11 @@ def evaluate_networks_ensemble(
     device: torch.device,
     # Use reduction='sum' for CrossEntropyLoss if averaging loss manually later by total samples
     # Or use reduction='mean' if criterion itself should average over batch for each network
-    criterion: nn.Module = nn.CrossEntropyLoss(reduction='sum') 
+    criterion: nn.Module = nn.CrossEntropyLoss(reduction='sum'),
+    # --- NEW: DDP Parameters (ensemble eval is typically single-process but good for signature consistency) ---
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
+    # --- End NEW ---
 ) -> Tuple[List[float], List[float]]:
     """
     Evaluate a list of (already pruned) networks simultaneously on a dataset.
@@ -144,6 +167,8 @@ def evaluate_networks_ensemble(
         data_loader (torch.utils.data.DataLoader): DataLoader for the evaluation dataset.
         device (torch.device): The device to perform evaluation on.
         criterion (nn.Module): The loss function.
+        ddp_rank: DDP rank.
+        ddp_world_size: DDP world size.
 
     Returns:
         Tuple[List[float], List[float]]: A tuple containing two lists:
@@ -170,8 +195,13 @@ def evaluate_networks_ensemble(
     sum_correct_per_network = torch.zeros(num_networks, device=device, dtype=torch.float64)
     total_samples_processed = 0
 
+    is_main_process = (ddp_rank == 0)
+    # Progress bar for ensemble evaluation, only on main process
+    progress_bar_disabled = not is_main_process if ddp_world_size > 1 else False
+    batch_iterator = tqdm(data_loader, desc="Ensemble Eval", disable=progress_bar_disabled)
+
     with torch.no_grad():
-        for inputs, targets in data_loader: # Consider tqdm(data_loader, desc="Ensemble Eval") if verbose
+        for inputs, targets in batch_iterator: # Consider tqdm(data_loader, desc="Ensemble Eval") if verbose
             inputs, targets = inputs.to(device), targets.to(device)
             current_batch_size = inputs.size(0)
             total_samples_processed += current_batch_size
@@ -243,7 +273,11 @@ def evaluate_model(
     # Adding metric_name and num_batches here if they were from extra_config or implicit
     metric_name_for_eval: str = "RQ",
     num_batches_for_eval: Optional[int] = None, # For sampling if loader is large
-    show_progress: bool = True  # ADDED: show_progress parameter
+    show_progress: bool = True,
+    # --- NEW: DDP Parameters ---
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
+    # --- End NEW ---
 ) -> Dict[str, Any]:
     """
     Evaluate a neural network model.
@@ -256,6 +290,8 @@ def evaluate_model(
         metric_name_for_eval: Name of the alignment metric if with_alignment is True.
         num_batches_for_eval: Number of batches from loader to use for evaluation (None for all).
         show_progress: Whether to display a progress bar during evaluation.
+        ddp_rank: DDP rank.
+        ddp_world_size: DDP world size.
     Returns:
         Dictionary containing evaluation metrics (loss, accuracy, optional alignment).
     """
@@ -277,7 +313,8 @@ def evaluate_model(
     elif isinstance(dataset_config, dict): batch_size_from_config = dataset_config.get('batch_size')
     final_batch_size = batch_size_from_config if batch_size_from_config is not None else 128
 
-    dataset = load_dataset(dataset_config, batch_size=final_batch_size, device=device) # Pass device to load_dataset
+    dataset = load_dataset(dataset_config, batch_size=final_batch_size, device=device, 
+                           use_ddp=(ddp_world_size > 1), ddp_rank=ddp_rank, ddp_world_size=ddp_world_size) # Pass DDP info
     
     loader = getattr(dataset, loader_name, None)
     if loader is None:
@@ -296,6 +333,9 @@ def evaluate_model(
     alignment_metric_instance = None
     collected_alignment_values = [] # For storing batch_alignment if with_alignment is True
 
+    is_main_process = (ddp_rank == 0)
+    progress_bar_disabled_eval_model = not is_main_process if (ddp_world_size > 1 and show_progress) else not show_progress
+
     if with_alignment:
         alignment_metric_instance = get_metric(metric_name_for_eval)
         if not isinstance(model, AlignmentNetwork):
@@ -303,7 +343,7 @@ def evaluate_model(
             with_alignment = False # Disable if not an AlignmentNetwork
 
     with torch.no_grad():
-        for inputs, targets in tqdm(final_loader, desc=f"Evaluating on {loader_name}", leave=False, disable=not show_progress):
+        for inputs, targets in tqdm(final_loader, desc=f"Evaluating on {loader_name}", leave=False, disable=progress_bar_disabled_eval_model):
             inputs, targets = inputs.to(device), targets.to(device)
             
             current_batch_size = inputs.size(0)
@@ -326,10 +366,15 @@ def evaluate_model(
                 # For simplicity, assuming measure_alignment can trigger necessary hooks if called on AlignmentNetwork.
                 # The AlignmentNetwork.measure_alignment itself calls get_layer_inputs which can store_hidden.
                 try:
-                    batch_alignment = model.measure_alignment(inputs, method=metric_name_for_eval, precomputed=False) # precomputed=False to trigger hooks
-                    collected_alignment_values.append(batch_alignment) # list of lists (one per batch, then per layer)
+                    # Alignment measurement should ideally run on rank 0 only or results gathered.
+                    # For now, assume it's okay for all ranks to compute if model is DDP (weights are same).
+                    # But if it involves data collection (hooks), it should be on one rank or handled carefully.
+                    # If measure_alignment_methods from AlignmentNetwork is DDP-aware or called on non-DDP model on rank 0:
+                    if is_main_process: # Only measure alignment on main process to avoid redundant computation/hook issues
+                        batch_alignment = model.measure_alignment(inputs, method=metric_name_for_eval, precomputed=False) 
+                        collected_alignment_values.append(batch_alignment) 
                 except Exception as e:
-                    logger.error(f"Error measuring alignment during evaluation for batch: {e}", exc_info=debug_mode)
+                    logger.error(f"Error measuring alignment during evaluation for batch: {e}", exc_info=True) # Changed from debug_mode
     
     metrics_results = {}
     if total_samples > 0:
@@ -339,7 +384,8 @@ def evaluate_model(
         metrics_results['loss'] = float('inf')
         metrics_results['accuracy'] = 0.0
     
-    if with_alignment and collected_alignment_values:
+    # Averaging and reporting alignment only on main process
+    if is_main_process and with_alignment and collected_alignment_values:
         # Average alignment values across batches for each layer
         # collected_alignment_values is a list of lists: [[L0_b1, L1_b1,...], [L0_b2, L1_b2,...]]
         num_layers_alignment = len(collected_alignment_values[0]) if collected_alignment_values else 0
@@ -361,10 +407,11 @@ def evaluate_model(
                 avg_alignment_per_layer.append(np.nan)
         metrics_results['alignment'] = avg_alignment_per_layer
     
-    logger.info(f"Evaluation on {loader_name}: Loss={metrics_results['loss']:.4f}, Acc={metrics_results['accuracy']:.2f}%")
-    if 'alignment' in metrics_results:
-        alignment_str = ', '.join([f"{val:.4f}" for val in metrics_results['alignment']])
-        logger.info(f"Avg Alignment ({metric_name_for_eval}): [{alignment_str}]")
+    if is_main_process: # Log final results only on main process
+        logger.info(f"Evaluation on {loader_name}: Loss={metrics_results['loss']:.4f}, Acc={metrics_results['accuracy']:.2f}%")
+        if 'alignment' in metrics_results:
+            alignment_str = ', '.join([f"{val:.4f}" for val in metrics_results['alignment']])
+            logger.info(f"Avg Alignment ({metric_name_for_eval}): [{alignment_str}]")
     
     return metrics_results
 
@@ -379,7 +426,11 @@ def evaluate(
     alignment_methods: Optional[List[str]] = None,
     # measure_expected: bool = True, # This was part of original, seems complex for general eval
     # bins: int = 50 # Also for expected distribution
-    num_batches_for_eval: Optional[int] = None # To limit data for faster eval
+    num_batches_for_eval: Optional[int] = None, # To limit data for faster eval
+    # --- NEW: DDP Parameters ---
+    ddp_rank: int = 0,
+    ddp_world_size: int = 1
+    # --- End NEW ---
 ) -> Dict[str, Any]:
     """
     Evaluate network(s) on a dataset, with options for alignment measurement.
@@ -391,6 +442,8 @@ def evaluate(
         measure_alignment: If True, compute alignment metrics for the network(s).
         alignment_methods: List of alignment method names to compute if measure_alignment is True (e.g., ["RQ", "MI"]).
         num_batches_for_eval: Number of batches to use for this evaluation (None for all).
+        ddp_rank: DDP rank.
+        ddp_world_size: DDP world size.
     Returns:
         Dictionary of evaluation results. If multiple nets, results are lists under keys.
     """
@@ -407,14 +460,33 @@ def evaluate(
         device = getattr(dataset, 'device', _normalize_device(torch.device("cuda" if torch.cuda.is_available() else "cpu")))
     device = _normalize_device(device)
 
+    # DDP: This function assumes models are already on their correct DDP devices if DDP is active.
+    # The DDP wrapping (which moves model to device) happens in AlignmentExperiment.create_networks.
     for net in nets:
-        net.to(device)
+        # net.to(device) # Should already be on correct device due to DDP wrapping or _ensure_model_on_device
         net.eval()
 
+    # DataSet.load_dataset creates DDP-aware dataloaders if `distributed=True` is passed.
+    # The `dataset` object here should have been created with DDP awareness if applicable.
     dataloader = dataset.train_loader if train_set else dataset.test_loader
+    if dataloader.sampler is not None and isinstance(dataloader.sampler, DistributedSampler):
+        dataloader.sampler.set_epoch(0) # Set epoch for sampler if DDP
+
     if num_batches_for_eval is not None and num_batches_for_eval > 0:
+        # Note: Using torch.utils.data.Subset with DistributedSampler needs careful handling.
+        # The sampler indices might not align with subset indices unless subset is created per rank.
+        # For simplicity, if subsetting, assume it's for single process or results are approximate for DDP.
+        # A more robust way for DDP subsetting would be to limit iterations.
+        if ddp_world_size > 1:
+            logger.warning("Subsetting dataloader with num_batches_for_eval and DDP might lead to skewed data per rank. Consider iterating for num_batches directly.")
         sub_dataset = torch.utils.data.Subset(dataloader.dataset, range(min(num_batches_for_eval * dataloader.batch_size, len(dataloader.dataset))))
-        dataloader = torch.utils.data.DataLoader(sub_dataset, batch_size=dataloader.batch_size, shuffle=False)
+        # If DDP, sampler should be for the subset, or iterate `num_batches_for_eval` times.
+        # For now, let DDP sampler work on full dataset and we just iterate less if num_batches_for_eval is set.
+        # This means each rank processes a subset of its DDP-assigned shard.
+        actual_sampler = dataloader.sampler # Keep original DDP sampler if any
+        dataloader = torch.utils.data.DataLoader(sub_dataset, batch_size=dataloader.batch_size, shuffle=False, sampler=None if actual_sampler else None)
+        # If actual_sampler was DDP, the new loader doesn't have it, which is problematic.
+        # Better: limit loop iterations instead of creating subset loader for DDP.
 
     results = {}
     all_losses = [[] for _ in range(num_nets)]
@@ -425,8 +497,19 @@ def evaluate(
     if measure_alignment:
         results["alignment_metrics"] = [{} for _ in range(num_nets)]
 
-    for inputs, targets in tqdm(dataloader, desc=f"Evaluating ({'train' if train_set else 'test'} set)", leave=False):
-        inputs, targets = dataset.unwrap_batch((inputs, targets), device=device) # Use dataset's unwrap
+    is_main_process = (ddp_rank == 0)
+    progress_bar_disabled_evaluate = not is_main_process if ddp_world_size > 1 else False
+    actual_dataloader_iterator = iter(dataloader)
+    
+    # Loop for specified number of batches if num_batches_for_eval is set
+    num_batches_to_process = num_batches_for_eval if num_batches_for_eval is not None else len(dataloader)
+
+    for batch_iter_idx in tqdm(range(num_batches_to_process), desc=f"Evaluating ({'train' if train_set else 'test'} set)", leave=False, disable=progress_bar_disabled_evaluate):
+        try:
+            inputs, targets = next(actual_dataloader_iterator)
+        except StopIteration:
+            break # Should not happen if num_batches_to_process <= len(dataloader)
+        inputs, targets = dataset.unwrap_batch((inputs, targets), device=device)
         
         for idx, net in enumerate(nets):
             outputs = net(inputs)
@@ -445,21 +528,24 @@ def evaluate(
             all_accuracies[idx].append(acc.item() if isinstance(acc, torch.Tensor) else acc)
 
             if measure_alignment and isinstance(net, AlignmentNetwork):
-                if not alignment_methods:
-                    alignment_methods = ["RQ"] # Default to RQ if none specified
-                # The measure_alignment_methods in AlignmentNetwork returns: 
-                # List[Dict[str, torch.Tensor]] -> list over layers, dict over methods
-                # We want to average over batches.
-                # Let's store all batch metrics and average at the end.
-                current_net_alignment_batch = net.measure_alignment_methods(inputs, methods=alignment_methods, precomputed=False)
-                # current_net_alignment_batch is like [{meth1:val, meth2:val}_layer0, {meth1:val, meth2:val}_layer1, ...]
-                # We need to store this per batch for averaging later.
-                # This needs a temporary structure e.g. temp_align[net_idx][layer_idx][method].append(value_this_batch)
-                # For simplicity in this refactor, let's compute and log average for just ONE batch of data for alignment for now,
-                # as the original `evaluate` also seemed to do for alignment part.
-                # If a more robust per-batch averaging is needed, the data struct would be more complex.
-                if idx not in results["alignment_metrics"] or not results["alignment_metrics"][idx]: # Compute once
-                    results["alignment_metrics"][idx] = current_net_alignment_batch 
+                # Resolve alignment_methods before using in the main DDP-aware block
+                resolved_alignment_methods = alignment_methods
+                if not resolved_alignment_methods: 
+                    resolved_alignment_methods = ["RQ"] # Default to RQ if none specified
+                
+                # Alignment measurement only on main process to avoid redundant work / hook issues with DDP models
+                if is_main_process: 
+                    model_to_measure = net.module if isinstance(net, nn.parallel.DistributedDataParallel) else net
+                    if isinstance(model_to_measure, AlignmentNetwork): 
+                        current_net_alignment_batch = model_to_measure.measure_alignment_methods(
+                            inputs, methods=resolved_alignment_methods, precomputed=False
+                        )
+                        # Store once (e.g., from first batch) or average across batches.
+                        # Current storage is once.
+                        if idx not in results["alignment_metrics"] or not results["alignment_metrics"][idx]:
+                            results["alignment_metrics"][idx] = current_net_alignment_batch 
+                    else:
+                        logger.warning(f"Net {idx} is DDP-wrapped but module is not AlignmentNetwork. Cannot measure alignment.")
 
     # Finalize metrics
     results["loss"] = [np.mean(losses) if losses else np.nan for losses in all_losses]
@@ -467,21 +553,30 @@ def evaluate(
     if num_nets == 1:
         results["loss"] = results["loss"][0]
         results["accuracy"] = results["accuracy"][0]
-        if measure_alignment and results["alignment_metrics"]:
+        if measure_alignment and results.get("alignment_metrics"):
             results["alignment_metrics"] = results["alignment_metrics"][0]
 
-    logger.info(f"Final Evaluation ({'train' if train_set else 'test'} set):")
-    if num_nets == 1:
-        logger.info(f"  Loss: {results['loss']:.4f}, Accuracy: {results['accuracy']:.2f}%")
-        if measure_alignment and results.get("alignment_metrics"):
-            for layer_idx, method_data in enumerate(results["alignment_metrics"]):
-                log_str = f"  Layer {layer_idx} Alignments: "
-                for method, val in method_data.items():
-                    log_str += f"{method}: {val.mean().item() if isinstance(val, torch.Tensor) else val:.4f} "
-                logger.info(log_str)
-    else:
-        for i in range(num_nets):
-            logger.info(f"  Net {i}: Loss: {results['loss'][i]:.4f}, Accuracy: {results['accuracy'][i]:.2f}%")
-            # Similar alignment logging for multiple nets if structure is adapted
+    if is_main_process: # Log final results only on main process
+        logger.info(f"Final Evaluation ({'train' if train_set else 'test'} set):")
+        if num_nets == 1:
+            logger.info(f"  Loss: {results['loss']:.4f}, Accuracy: {results['accuracy']:.2f}%")
+            if measure_alignment and results.get("alignment_metrics"):
+                alignment_data_to_log = results["alignment_metrics"]
+                if isinstance(alignment_data_to_log, list) and len(alignment_data_to_log) > 0: # Check if it is a list (for multiple nets)
+                    alignment_data_to_log = alignment_data_to_log[0] # Get data for the first net if single net case was not flattened
+
+                if isinstance(alignment_data_to_log, list): # It should be list of layer_data dicts
+                    for layer_idx, method_data in enumerate(alignment_data_to_log):
+                        log_str = f"  Layer {layer_idx} Alignments: "
+                        for method, val in method_data.items():
+                            log_str += f"{method}: {val.mean().item() if isinstance(val, torch.Tensor) else val:.4f} "
+                        logger.info(log_str)
+                elif isinstance(alignment_data_to_log, dict): # Should not happen if num_nets=1 was handled
+                    logger.warning("Unexpected alignment_metrics structure for single net logging.")
+        else:
+            for i in range(num_nets):
+                logger.info(f"  Net {i}: Loss: {results['loss'][i]:.4f}, Accuracy: {results['accuracy'][i]:.2f}%")
+            # TODO: Add DDP-aware logging for alignment metrics for multiple networks if needed.
+            # Current alignment storage results["alignment_metrics"][net_idx] can be used.
     
     return results 

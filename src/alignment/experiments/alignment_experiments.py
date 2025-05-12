@@ -23,7 +23,7 @@ import torch.nn as nn
 from tqdm import tqdm
 import wandb
 
-from alignment.config import ExperimentConfig, DatasetConfig, CheckpointingConfig, AlignmentConfig
+from alignment.config import ExperimentConfig, DatasetConfig, CheckpointingConfig, AlignmentConfig, MetricTrackerConfig
 from alignment.experiments.experiment import Experiment
 from alignment.metrics import AlignmentMetric, get_metric, compute_all_node_scores
 from alignment.models.registry import create_model
@@ -42,7 +42,7 @@ from alignment.utils.plotting import (
     plot_metric_evolution
 )
 from alignment.datasets import get_dataset, load_dataset
-from alignment.dropout_manager import run_layer_isolated_dropout_experiment, run_progressive_dropout_experiment
+from alignment.dropout_manager import run_layer_isolated_dropout_experiment, run_progressive_dropout_experiment, run_eigenvector_dropout_experiment
 
 # Import for callbacks
 from torch.utils.data import DataLoader # Ensure DataLoader is imported
@@ -53,13 +53,12 @@ logger = logging.getLogger(__name__)
 
 class AlignmentExperiment(Experiment):
     """
-    Experiment class for studying neural network alignment properties.
-    
-    This class implements experiments that assess alignment between layers
-    in neural networks, with support for different dropout strategies,
-    multiple metrics, and visualization.
+    Base experiment class for studying neural network alignment properties.
+
+    Handles common setup like network creation, dataset loading, metric initialization,
+    and plotting/saving results. Subclasses implement specific experiment logic in the `run` method.
     """
-    
+
     def __init__(self, config: ExperimentConfig) -> None:
         """Initialize the experiment with the given config.
 
@@ -78,29 +77,12 @@ class AlignmentExperiment(Experiment):
             self.device = _normalize_device(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         
         # Explicitly set self.debug_mode for the AlignmentExperiment instance
-        # self.config is an ExperimentConfig instance and is guaranteed to have debug_mode
         self.debug_mode = self.config.debug_mode 
 
         # Dataset name determination logic
-        current_dataset_name = "unknown"
-        if hasattr(self.config, 'dataset'):
-            if hasattr(self.config.dataset, 'dataset_name') and self.config.dataset.dataset_name:
-                current_dataset_name = self.config.dataset.dataset_name
-        elif isinstance(self.config.dataset, str):
-                current_dataset_name = self.config.dataset
+        self._resolve_dataset_name()
         
-        if current_dataset_name == "unknown":
-            logger.warning("Dataset name not found. Attempting to use default from DatasetConfig.")
-            try:
-                default_dataset_conf = DatasetConfig()
-                current_dataset_name = default_dataset_conf.dataset_name
-                logger.info(f"Using default dataset name: {current_dataset_name}")
-            except Exception as e:
-                logger.error(f"Could not determine dataset name from defaults: {e}")
-                current_dataset_name = "MNIST" 
-                logger.warning(f"Falling back to hardcoded default dataset: {current_dataset_name}")
-
-        logger.info(f"AlignmentExperiment: Using dataset: {current_dataset_name} on device: {self.device}")
+        logger.info(f"AlignmentExperiment: Using dataset: {self.current_dataset_name} on device: {self.device}")
 
         # self.figure_path and self.weights_path are set by base Experiment.setup_paths via self.working_dir
         # (setup_paths is called by super().__init__())
@@ -109,49 +91,67 @@ class AlignmentExperiment(Experiment):
         logger.debug(f"AlignmentExperiment initialized. Debug mode: {self.debug_mode}. W&B run ID: {self.wandb_run.id if self.wandb_run else 'None'}")
         
         # Metric initialization
+        self._initialize_metric()
+        
+        # Initialization for attributes used later
+        self.networks: List[nn.Module] = []
+        self.dataset = None
+        self.training_history: Dict = {}
+        self.metric_tracker_instance: Optional[AlignmentMetricTracker] = None
+        self.results: Dict = {} # Initialize results dict
+
+    def _resolve_dataset_name(self):
+        """Helper to determine the dataset name from config."""
+        self.current_dataset_name = "unknown"
+        if hasattr(self.config, 'dataset'):
+            if hasattr(self.config.dataset, 'dataset_name') and self.config.dataset.dataset_name:
+                self.current_dataset_name = self.config.dataset.dataset_name
+            elif isinstance(self.config.dataset, str):
+                self.current_dataset_name = self.config.dataset
+        
+        if self.current_dataset_name == "unknown":
+            logger.warning("Dataset name not found in config. Attempting to use default from DatasetConfig.")
+            try:
+                default_dataset_conf = DatasetConfig()
+                self.current_dataset_name = default_dataset_conf.dataset_name
+                logger.info(f"Using default dataset name: {self.current_dataset_name}")
+            except Exception as e:
+                logger.error(f"Could not determine dataset name from defaults: {e}")
+                self.current_dataset_name = "MNIST" 
+                logger.warning(f"Falling back to hardcoded default dataset: {self.current_dataset_name}")
+
+    def _initialize_metric(self):
+        """Helper to initialize the primary alignment metric."""
         if hasattr(self.config, 'alignment_settings') and self.config.alignment_settings is not None:
-            self.metric = get_metric(self.config.alignment_settings.metric)
+            metric_name = self.config.alignment_settings.metric
+            scale_by_norm = self.config.alignment_settings.scale_by_norm
+            self.metric = get_metric(metric_name=metric_name, scale_by_norm=scale_by_norm)
+            if self.metric is None:
+                 logger.error(f"Metric '{metric_name}' could not be initialized from registry.")
+                 # Fallback to default metric if get_metric failed
+                 default_align_conf = AlignmentConfig()
+                 self.metric = get_metric(default_align_conf.metric, default_align_conf.scale_by_norm)
+                 logger.warning(f"Falling back to default alignment metric: {default_align_conf.metric}")
+            else:
+                 logger.info(f"Initialized primary metric: {self.metric.name} (scale_by_norm={self.metric.scale_by_norm})")
+
         else:
             logger.error("alignment_settings not found in config or metric not specified!")
             default_align_conf = AlignmentConfig()
-            self.metric = get_metric(default_align_conf.metric)
+            self.metric = get_metric(default_align_conf.metric, default_align_conf.scale_by_norm)
             logger.warning(f"Falling back to default alignment metric: {default_align_conf.metric}")
-        
+
     def get_basename(self) -> str:
         """
-        Get the base name for the experiment.
-        
-        Returns:
-            Base name string
+        Get the base name for the experiment. Overrides base Experiment method if needed.
+        Uses experiment_name from config if available, otherwise falls back to model/dataset.
         """
-        # Ensure dataset_name is correctly accessed
-        dataset_name_for_path = "unknown_dataset"
-        if hasattr(self.config, 'dataset') and hasattr(self.config.dataset, 'dataset_name'):
-            dataset_name_for_path = self.config.dataset.dataset_name
-        elif hasattr(self.config, 'dataset') and isinstance(self.config.dataset, str):
-            dataset_name_for_path = self.config.dataset
-        
-        return f"alignment_{self.config.model.model_name}_{dataset_name_for_path}"
-    
-    def prepare_path(self) -> List[str]:
-        """
-        Prepare the experiment path components.
-        
-        Returns:
-            List of path components
-        """
-        dataset_name_for_path = "unknown_dataset"
-        if hasattr(self.config, 'dataset') and hasattr(self.config.dataset, 'dataset_name'):
-            dataset_name_for_path = self.config.dataset.dataset_name
-        elif hasattr(self.config, 'dataset') and isinstance(self.config.dataset, str):
-            dataset_name_for_path = self.config.dataset
-
-        return [
-            "alignment",
-            self.config.model.model_name,
-            dataset_name_for_path,
-            f"metric_{self.config.alignment_settings.metric}"
-        ]
+        if hasattr(self.config, "experiment_name") and self.config.experiment_name:
+            return self.config.experiment_name
+        else:
+            # Fallback name construction
+            model_name = self.config.model.model_name if hasattr(self.config, 'model') else "unknown_model"
+            return f"alignment_{model_name}_{self.current_dataset_name}"
     
     def create_networks(self) -> List[nn.Module]:
         """
@@ -164,57 +164,55 @@ class AlignmentExperiment(Experiment):
             List containing multiple independently initialized networks
         """
         num_replicates = self.config.training.replicates
-        networks = []
+        networks_list = [] # Renamed to avoid confusion with self.networks
         for i in range(num_replicates):
             if self.config.seed is not None:
                 torch.manual_seed(self.config.seed + i)
-                torch.cuda.manual_seed_all(self.config.seed + i)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(self.config.seed + i)
                 np.random.seed(self.config.seed + i)
             
-            model = create_model(self.config.model)
-            _ensure_model_on_device(model, self.device)
-            networks.append(model)
+            current_model_config = copy.deepcopy(self.config.model)
             
-        logger.info(f"Created {len(networks)} models on device {self.device}: {self.config.model.model_name}")
-        return networks
+            # Set cnn_mode in ModelConfig from AlignmentSettings
+            if hasattr(self.config, 'alignment_settings') and self.config.alignment_settings.cnn_mode:
+                current_model_config.cnn_mode = self.config.alignment_settings.cnn_mode
+            # Remove from extra_model_params if it was there as part of the old workaround
+            if current_model_config.extra_model_params and "cnn_mode" in current_model_config.extra_model_params:
+                del current_model_config.extra_model_params["cnn_mode"]
+
+            alignment_model_instance = create_model(current_model_config)
+            _ensure_model_on_device(alignment_model_instance, self.device)
+
+            final_model_for_list = alignment_model_instance
+            
+            # Check DDP conditions
+            can_ddp = False
+            if self.config.use_ddp and hasattr(torch, 'distributed') and torch.distributed.is_initialized():
+                if self.config.ddp_world_size > 1:
+                    can_ddp = True
+
+            if can_ddp:
+                if self.device.type == 'cuda':
+                    final_model_for_list = nn.parallel.DistributedDataParallel(
+                        alignment_model_instance, 
+                        device_ids=[self.config.ddp_local_rank],
+                        output_device=self.config.ddp_local_rank,
+                        find_unused_parameters=False 
+                    )
+                    logger.info(f"Wrapped model replicate {i} with DDP (CUDA). Local rank: {self.config.ddp_local_rank}")
+                elif self.device.type == 'cpu': 
+                    final_model_for_list = nn.parallel.DistributedDataParallel(
+                        alignment_model_instance,
+                        find_unused_parameters=False
+                    )
+                    logger.info(f"Wrapped model replicate {i} with DDP (CPU).")
+
+            networks_list.append(final_model_for_list)
+            
+        logger.info(f"Created {len(networks_list)} model replicates. DDP active for wrapping: {can_ddp}")
+        return networks_list
     
-    def evaluate_on_loader(self, model, data_loader, device=None, show_progress=True):
-        eval_device = _normalize_device(device if device is not None else self.device)
-        _ensure_model_on_device(model, eval_device)
-        
-        model.eval()
-        total_loss = 0.0
-        correct = 0
-        total = 0
-        
-        # Control progress bar display with show_progress argument
-        loader_iter = tqdm(data_loader, desc="Evaluating", leave=False) if show_progress else data_loader
-        
-        with torch.no_grad():
-            for inputs, targets in loader_iter:
-                inputs, targets = inputs.to(eval_device), targets.to(eval_device)
-                outputs = model(inputs)
-                if isinstance(outputs, tuple):
-                    outputs = outputs[0]
-                loss = torch.nn.functional.cross_entropy(outputs, targets, reduction='sum')
-                total_loss += loss.item()
-                _, predicted = outputs.max(1)
-                correct += predicted.eq(targets).sum().item()
-                total += targets.size(0)
-                if show_progress and isinstance(loader_iter, tqdm):
-                    loader_iter.set_postfix({
-                        'loss': f"{total_loss / total if total > 0 else 0:.4f}",
-                        'acc': f"{100.0 * correct / total if total > 0 else 0:.2f}%"
-                    })
-        
-        metrics = {
-            'loss': total_loss / total if total > 0 else 0.0,
-            'accuracy': 100.0 * correct / total if total > 0 else 0.0
-        }
-        if show_progress: # Only log final if progress was shown for batches
-            logger.info(f"Evaluation complete: Accuracy = {metrics['accuracy']:.2f}%, Loss = {metrics['loss']:.4f}")
-        return metrics
-        
     def train_networks(self, networks: List[nn.Module], dataset, callbacks: Optional[List[Callable]] = None) -> Dict:
         """
         Train multiple networks on the given dataset.
@@ -241,26 +239,224 @@ class AlignmentExperiment(Experiment):
                 num_epochs=num_epochs,
                 learning_rate=learning_rate,
                 device=self.device,
-                show_progress=True,
-                optimizer_class=getattr(torch.optim, optimizer_name, torch.optim.Adam),
-                weight_decay=weight_decay,
+            show_progress=True,
+            optimizer_class=getattr(torch.optim, optimizer_name, torch.optim.Adam),
+            weight_decay=weight_decay,
                 training_method=training_method,
                 callbacks=callbacks
             )
     
-    def run_progressive_dropout(self, networks: List[nn.Module], dataset) -> Dict:
-        logger.info("Running Progressive Dropout Experiment (via DropoutManager)")
-        
-        pruning_config_source = self.config.pruning_settings
-        alignment_config_source = self.config.alignment_settings
+    def _setup_callbacks(self) -> List[Callable]:
+        """Prepare callback functions based on config."""
+        callbacks_list = []
+        self.metric_tracker_instance = None # Reset instance
 
-        dropout_min = pruning_config_source.dropout_min
-        dropout_max = pruning_config_source.dropout_max
-        num_dropout_steps = pruning_config_source.dropout_steps
-        
-        logger.info(f"Fetched pruning params: min={dropout_min}, max={dropout_max}, steps={num_dropout_steps}")
+        if self.config.alignment_settings and \
+           hasattr(self.config.alignment_settings, 'callbacks') and \
+           self.config.alignment_settings.callbacks and \
+           self.config.alignment_settings.callbacks.alignment_metrics:
+            
+            metric_configs_to_track: List[MetricTrackerConfig] = self.config.alignment_settings.callbacks.alignment_metrics
+            logger.info(f"Configuring AlignmentMetricTracker for metrics: {[mc.name for mc in metric_configs_to_track]}")
 
-        if num_dropout_steps <=0 : 
+            metric_dataloader = self.dataset.test_loader 
+            if metric_dataloader is None and self.dataset.train_loader is not None:
+                logger.warning("No test_loader in dataset for metric callback, using train_loader.")
+                metric_dataloader = self.dataset.train_loader
+            elif metric_dataloader is None:
+                logger.error("No suitable dataloader for metric callback. Skipping tracker setup.")
+                metric_configs_to_track = [] 
+
+            if metric_configs_to_track and metric_dataloader: 
+                # Create dicts for compute_all_node_scores compatibility
+                dict_metric_configs = []
+                for mc_obj in metric_configs_to_track:
+                    conf_dict = {"name": mc_obj.name}
+                    # TODO: Add scale_by_norm from the primary metric if name matches?
+                    # Or require scale_by_norm in MetricTrackerConfig?
+                    # For now, compute_all_node_scores uses default scale_by_norm=False if not provided.
+                    dict_metric_configs.append(conf_dict)
+
+                tracker = AlignmentMetricTracker(
+                    metric_configs=dict_metric_configs, 
+                    data_loader=metric_dataloader, 
+                    device=self.device,
+                    # Use num_batches from the first configured metric, or default
+                    num_batches=metric_configs_to_track[0].num_batches if metric_configs_to_track[0].num_batches is not None else 5,
+                    # Pass ExperimentConfig for access to pruning/alignment settings if needed by tracker
+                    experiment_config=self.config, 
+                    # Pass global CNN settings needed by compute_all_node_scores inside tracker
+                    global_cnn_mode=self.config.alignment_settings.cnn_mode,
+                    global_cnn_rq_aggregation_op=self.config.alignment_settings.cnn_rq_aggregation_op,
+                    force_cpu_for_large_metric_ops=self.config.alignment_settings.force_cpu_for_large_metric_ops
+                )
+                callbacks_list.append(tracker.track_metrics) # Pass the method as the callback
+                self.metric_tracker_instance = tracker 
+                logger.info(f"Added AlignmentMetricTracker for metrics: {[mc['name'] for mc in dict_metric_configs]}.")
+        
+        return callbacks_list
+
+    def _run_initial_training(self, callbacks_list: List[Callable]):
+        """Runs the initial training phase if configured."""
+        if self.config.training.epochs > 0:
+            if self.config.training.train_before_dropout:
+                logger.info(f"Starting initial training for {self.config.training.epochs} epochs...")
+                self.training_history = self.train_networks(self.networks, self.dataset, callbacks=callbacks_list) 
+                if self.debug_mode and self.training_history and self.training_history.get('test_acc') and self.training_history['test_acc']:
+                    logger.info(f"Initial training final test accuracy: {self.training_history['test_acc'][-1]:.2f}%")
+            else:
+                logger.info("Skipping initial training because train_before_dropout is false.")
+                self.training_history = {'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []}
+        else:
+            logger.info("Skipping initial training based on config (epochs=0).")
+            self.training_history = {'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []}
+
+    def _run_plotting_and_saving(self):
+        """Handles plotting and saving results after the main experiment logic."""
+        logger.info(f"Completed main computation for {self.config.experiment_type} experiment")
+        plot_files_generated = []
+        
+        if self.results and "error" not in self.results:
+            # Generic plotting based on expected keys from different experiment types
+            prog_results_data = self.results.get("progressive_dropout", self.results if self.config.experiment_type == "progressive_dropout" else None)
+            iso_results_data = self.results.get("layer_isolated_pruning", self.results if self.config.experiment_type == "layer_isolated_pruning" else None)
+            eig_results_data = self.results.get("eigenvector_dropout", self.results if self.config.experiment_type == "eigenvector_dropout" else None)
+
+            title_prefix = self.config.experiment_name
+            show_all_plots = self.config.show_all
+            pruning_mode_plot = self.config.pruning_settings.dropout_pruning_mode
+            dropout_mode_plot = self.config.pruning_settings.dropout_mode
+
+            if prog_results_data and "accuracies" in prog_results_data:
+                acc_plots = plot_dropout_results(prog_results_data, self.figure_path, title_prefix, pruning_mode_plot, dropout_mode_plot)
+                if acc_plots: plot_files_generated.extend(acc_plots if isinstance(acc_plots, list) else [acc_plots])
+                if "pruning_details" in prog_results_data and "pre_pruning_layer_stats" in prog_results_data:
+                    plot_paths = [
+                        plot_mean_rq_of_pruned_nodes(prog_results_data, self.figure_path, title_prefix, show_all_plots),
+                        plot_per_layer_pruning_percentage(prog_results_data, self.figure_path, title_prefix, show_all_plots),
+                        plot_per_layer_contribution_to_pruning(prog_results_data, self.figure_path, title_prefix, show_all_plots)
+                    ]
+                    plot_files_generated.extend([p for p in plot_paths if p])
+                if prog_results_data.get("pre_pruning_layer_stats"):
+                    rq_stats_plot = plot_rq_stats_per_layer(prog_results_data, self.figure_path, title_prefix, show_all_plots)
+                    if rq_stats_plot: plot_files_generated.append(rq_stats_plot)
+
+            if iso_results_data and "accuracies_isolated" in iso_results_data:
+                iso_plots = plot_layer_isolated_dropout_results(iso_results_data, self.figure_path, title_prefix, show_all_plots)
+                if iso_plots: plot_files_generated.extend(iso_plots)
+            
+            if eig_results_data and "accuracies" in eig_results_data:
+                eig_acc_plots = plot_dropout_results(eig_results_data, self.figure_path, title_prefix, pruning_mode_plot, dropout_mode_plot)
+                if eig_acc_plots: plot_files_generated.extend(eig_acc_plots if isinstance(eig_acc_plots, list) else [eig_acc_plots])
+
+            # Summary plot only makes sense if alignment_analysis ran and produced both sub-results
+            if self.config.experiment_type == "alignment_analysis" and prog_results_data and eig_results_data:
+                 summary_path = plot_experiment_summary({"progressive_dropout": prog_results_data, "eigenvector_dropout": eig_results_data}, self.figure_path, title_prefix)
+                 if summary_path: plot_files_generated.append(summary_path)
+
+            # Plot metric evolution from tracker
+            if self.metric_tracker_instance and self.metric_tracker_instance.metrics_evolution:
+                logger.info(f"Generating evolution plots from AlignmentMetricTracker...")
+                tracked_metric_names = self.metric_tracker_instance.get_tracked_metric_names()
+                evolution_data_by_metric = self.metric_tracker_instance.get_evolution_data_by_metric()
+                
+                for metric_name_to_plot in tracked_metric_names:
+                    single_metric_evolution_data = evolution_data_by_metric.get(metric_name_to_plot)
+                    if single_metric_evolution_data:
+                        evolution_plot_path = plot_metric_evolution(
+                            metric_evolution_data=single_metric_evolution_data,
+                            metric_name=metric_name_to_plot,
+                            save_dir=self.figure_path,
+                            title_prefix=title_prefix,
+                            show_plots=show_all_plots
+                        )
+                        if evolution_plot_path:
+                            plot_files_generated.append(evolution_plot_path)
+
+            if plot_files_generated:
+                self.results["plot_files"] = plot_files_generated 
+                if self.wandb_run:
+                    log_plots_to_wandb(plot_files_generated, tags={"experiment_type": self.config.experiment_type})
+            
+            # Save the consolidated metric evolution data from the tracker
+            if self.metric_tracker_instance and self.metric_tracker_instance.metrics_evolution:
+                self.results["all_metrics_evolution_data"] = self.metric_tracker_instance.metrics_evolution
+                logger.info(f"Stored consolidated metric evolution data in results.")
+
+            # Save results using base class method
+            # Use a filename reflecting the specific experiment type
+            results_filename = f"{self.config.experiment_type}_results.pkl"
+            self.save_results(self.results, filename=results_filename)
+
+        # The base Experiment class handles wandb.finish() in its cleanup/del method.
+        logger.info(f"Completed {self.config.experiment_name} (type: {self.config.experiment_type}) experiment run.")
+
+    # The main execution flow, common setup + call subclass 'run' + common teardown
+    def execute_experiment(self) -> Tuple[Dict, List[nn.Module]]:
+        """
+        Main execution flow: setup, run specific logic, teardown.
+        This replaces the old 'run' method which called 'main'.
+        The base class 'Experiment.run' will call this.
+        """
+        # 1. Setup (already done by base class __init__ and AlignmentExperiment __init__)
+        # self.setup_paths() # Base class Experiment.__init__ handles this
+        # logger.info(f"Set up paths. Results will be saved to {self.results_path}") # Base class logs this
+
+        # 2. Create Networks & Load Dataset (Common Setup)
+        self.networks = self.create_networks()
+        batch_size = self.config.dataset.batch_size
+        self.dataset = load_dataset(self.config.dataset, batch_size=batch_size, device=self.device, use_ddp=self.config.use_ddp, ddp_rank=self.config.ddp_rank, ddp_world_size=self.config.ddp_world_size) 
+
+        # 3. Setup Callbacks (Common Setup)
+        callbacks_list = self._setup_callbacks()
+
+        # 4. Initial Training (Common Setup)
+        self._run_initial_training(callbacks_list)
+
+        # 5. Run the specific experiment logic (implemented by subclass)
+        # The 'run' method implemented by subclasses will perform the core computations
+        # and should store its primary output in self.results.
+        self.results = self.run() # Call the abstract run method implemented by subclass
+
+        # 6. Plotting and Saving (Common Teardown/Reporting)
+        self._run_plotting_and_saving()
+        
+        # 7. Return results and networks
+        # Base class Experiment.run() calls this method and returns its result.
+        return self.results, self.networks
+
+    # Abstract run method to be implemented by subclasses
+    def run(self) -> Dict:
+        """
+        Abstract method for experiment-specific logic.
+        Subclasses must implement this method to perform their computations.
+        The results dictionary should be returned.
+        """
+        raise NotImplementedError("Subclasses must implement the 'run' method.")
+
+# --- Subclasses for Specific Experiment Types ---
+
+class ProgressiveDropoutExperiment(AlignmentExperiment):
+    """Experiment for progressive dropout based on alignment metrics."""
+    
+    def run(self) -> Dict:
+        """Runs the progressive dropout experiment."""
+        logger.info("Running Progressive Dropout Experiment")
+        
+        # Common setup: Create networks, load data, initial training (done in __init__ or called before run)
+        if not self.networks or self.dataset is None:
+             raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
+        self._run_initial_training(self._setup_callbacks()) # Run initial training if needed
+
+        # Get necessary configs
+        pruning_config = self.config.pruning_settings
+        alignment_config = self.config.alignment_settings
+
+        # Prepare dropout fractions
+        dropout_min = pruning_config.dropout_min
+        dropout_max = pruning_config.dropout_max
+        num_dropout_steps = pruning_config.dropout_steps
+        if num_dropout_steps <= 0: 
             _fractions = [0.0, dropout_max] 
         elif num_dropout_steps == 1:
              _fractions = [dropout_min, dropout_max]
@@ -270,46 +466,37 @@ class AlignmentExperiment(Experiment):
             _fractions = [0.0] + _fractions 
         dropout_fractions = sorted(list(set(_fractions)))
 
-        pruning_mode = pruning_config_source.dropout_pruning_mode
-        dropout_mode_val = pruning_config_source.dropout_mode
-        effective_exclude_classification_layer = pruning_config_source.exclude_classification_layer
-        
-        metric_to_use = self.metric
+        pruning_mode = pruning_config.dropout_pruning_mode
+        dropout_mode_val = pruning_config.dropout_mode
+        effective_exclude_classification_layer = pruning_config.exclude_classification_layer
+        num_batches_for_metric_calc = pruning_config.num_batches_for_scores
+        force_cpu_flag = alignment_config.force_cpu_for_large_metric_ops
+        cnn_mode_for_pruning_scores = alignment_config.cnn_mode
+        cnn_rq_op_for_pruning_scores = alignment_config.cnn_rq_aggregation_op
+        metric_to_use = self.metric # Initialized in base class __init__
+
         if metric_to_use is None:
-            logger.warning("self.metric not initialized, attempting to get from config.alignment_settings now.")
-            metric_to_use = get_metric(alignment_config_source.metric)
+            logger.error("Metric not initialized properly!")
+            # Attempt to re-initialize metric here or raise error
+            self._initialize_metric()
+            metric_to_use = self.metric
+            if metric_to_use is None:
+                 raise ValueError("Failed to initialize metric for progressive dropout.")
 
-        logger.info(f"Using metric: {alignment_config_source.metric}, PruningMode: {pruning_mode}, DropoutMode: {dropout_mode_val}, ExcludeCls: {effective_exclude_classification_layer}")
+        logger.info(f"Using metric: {metric_to_use.name}, PruningMode: {pruning_mode}, DropoutMode: {dropout_mode_val}, ExcludeCls: {effective_exclude_classification_layer}")
 
-        training_history = None
-        if self.config.training.epochs > 0 and self.config.training.train_before_dropout:
-            logger.info(f"Starting training for {self.config.training.epochs} epochs...")
-            training_history = self.train_networks(networks, dataset, callbacks=None)
-            if self.debug_mode and training_history:
-                logger.info(f"Training completed. History keys: {training_history.keys()}")
-                if 'test_acc' in training_history and training_history['test_acc']:
-                    logger.info(f"Final test accuracy after training: {training_history['test_acc'][-1]:.2f}%")
-            elif not training_history:
-                logger.warning("self.train_networks was called but returned no history.")
-        else:
-            logger.info("Skipping training before dropout based on config (epochs=0 or train_before_dropout=false).")
-            training_history = {
-                'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []
-            }
-        
-        num_batches_for_metric_calc = self.config.pruning_settings.num_batches_for_scores
-        # Get the global CPU offload flag
-        force_cpu_flag = self.config.alignment_settings.force_cpu_for_large_metric_ops
-
+        # Call the manager function
         results_from_manager = {}
         try:
             results_from_manager = run_progressive_dropout_experiment(
-                networks, dataset, dropout_fractions, metric_to_use, self.device,
+                self.networks, self.dataset, dropout_fractions, metric_to_use, self.device,
                 pruning_mode=pruning_mode, dropout_mode=dropout_mode_val, 
                 show_progress=True, debug_mode=self.debug_mode,
                 exclude_classification_layer_config=effective_exclude_classification_layer,
                 num_batches_for_pre_scoring=num_batches_for_metric_calc,
-                force_cpu_for_large_metric_ops=force_cpu_flag
+                force_cpu_for_large_metric_ops=force_cpu_flag,
+                configured_cnn_mode=cnn_mode_for_pruning_scores,
+                configured_cnn_rq_op=cnn_rq_op_for_pruning_scores
             )
         except Exception as e:
             logger.error(f"Error during run_progressive_dropout_experiment call: {str(e)}")
@@ -318,442 +505,270 @@ class AlignmentExperiment(Experiment):
                 import traceback
                 logger.error(traceback.format_exc())
         
-        final_results = results_from_manager
-        final_results["training_history"] = training_history
-        return final_results
-    
-    def run_eigenvector_dropout(self, network: nn.Module, dataset) -> Dict:
-        """
-        Run eigenvector dropout experiment on a network.
-        
-        Args:
-            network: Network to evaluate
-            dataset: Dataset object
-
-        Returns:
-            Dictionary with eigenvector dropout results
-        """
-        dropout_min = self.config.pruning_settings.dropout_min
-        dropout_max = self.config.pruning_settings.dropout_max
-        num_dropout_steps = self.config.pruning_settings.dropout_steps
-        dropout_fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
-        
-        dropout_mode_val = self.config.pruning_settings.dropout_mode
-        pruning_mode_for_eigen = self.config.pruning_settings.dropout_pruning_mode
-        
-        # Initialize results
-        results_from_manager = {
-            "dropout_fractions": dropout_fractions,
-            "accuracies": {"eigenvector": []},
-            "losses": {"eigenvector": []},
-            "alignment_values": {"eigenvector": []}
-        }
-        
-        # Ensure network is on the correct, normalized device before passing to eigenvector_dropout
-        _ensure_model_on_device(network, self.device)
-        
-        # Process each dropout fraction
-        fraction_pbar = tqdm(dropout_fractions, desc="Eigenvector Dropout", position=0)
-        for dropout_fraction in fraction_pbar:
-            try:
-                # Call the eigenvector_dropout function
-                accuracy, alignment_values = eigenvector_dropout(
-                    network,
-                    self.config.dataset,
-                    dropout_fraction=dropout_fraction,
-                    metric=self.metric,
-                    device=self.device,
-                    dropout_mode=dropout_mode_val,
-                    dropout_pruning_mode=pruning_mode_for_eigen,
-                    debug_mode=self.debug_mode
-                )
-                
-                # Store results
-                results_from_manager["accuracies"]["eigenvector"].append(accuracy)
-                results_from_manager["losses"]["eigenvector"].append(100.0 - accuracy)
-                results_from_manager["alignment_values"]["eigenvector"].append(alignment_values)
-                
-                # Update progress bar
-                fraction_pbar.set_postfix({"acc": f"{accuracy:.2f}%"})
-                
-            except Exception as e:
-                logger.error(f"Error in eigenvector dropout at fraction {dropout_fraction}: {str(e)}")
-                # Add placeholder values to maintain result structure
-                results_from_manager["accuracies"]["eigenvector"].append(0.0)
-                results_from_manager["losses"]["eigenvector"].append(100.0)
-                results_from_manager["alignment_values"]["eigenvector"].append(None)
-        
+        # Add training history to the results
+        results_from_manager["training_history"] = self.training_history
         return results_from_manager
-    
-    def run_layer_isolated_experiment(self, networks: List[nn.Module], dataset) -> Dict:
-        logger.info("Running Layer Isolated Dropout Experiment")
-        dropout_min = self.config.pruning_settings.dropout_min
-        dropout_max = self.config.pruning_settings.dropout_max
-        num_dropout_steps = self.config.pruning_settings.dropout_steps
-        if num_dropout_steps <=1:
-            _fractions = [0.0, dropout_max]
+
+
+class EigenvectorDropoutExperiment(AlignmentExperiment):
+    """Experiment for eigenvector-based dropout."""
+
+    def run(self) -> Dict:
+        """Runs the eigenvector dropout experiment."""
+        logger.info("Running Eigenvector Dropout Experiment")
+
+        # Common setup
+        if not self.networks or self.dataset is None:
+             raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
+        self._run_initial_training(self._setup_callbacks()) # Run initial training if needed
+
+        if not self.networks:
+            logger.error("No networks available for Eigenvector Dropout Experiment.")
+            return {"error": "No networks found."}
+        
+        network_to_use = self.networks[0] # Eigenvector typically runs on one network
+        logger.info(f"Using the first network replicate (of {len(self.networks)}) for eigenvector dropout.")
+
+        # Get necessary configs
+        pruning_config = self.config.pruning_settings
+        alignment_config = self.config.alignment_settings
+
+        # Prepare dropout fractions
+        dropout_min = pruning_config.dropout_min
+        dropout_max = pruning_config.dropout_max
+        num_dropout_steps = pruning_config.dropout_steps
+        if num_dropout_steps <= 0: 
+             _fractions = [0.0, dropout_max] 
+        elif num_dropout_steps == 1:
+             _fractions = [dropout_min, dropout_max]
+        else:
+            _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
+        if 0.0 not in _fractions: 
+             _fractions = [0.0] + _fractions 
+        dropout_fractions = sorted(list(set(_fractions)))
+        
+        dropout_mode_val = pruning_config.dropout_mode
+        pruning_mode_for_eigen = pruning_config.dropout_pruning_mode
+        metric_to_use = self.metric
+
+        if metric_to_use is None:
+            logger.error("Metric not initialized properly!")
+            self._initialize_metric()
+            metric_to_use = self.metric
+            if metric_to_use is None:
+                 raise ValueError("Failed to initialize metric for eigenvector dropout.")
+        
+        logger.info(f"Using metric: {metric_to_use.name}, PruningMode: {pruning_mode_for_eigen}, DropoutMode: {dropout_mode_val}")
+
+        # Call the manager function (or directly the dropout function if manager is simple)
+        # The dropout_manager module has run_eigenvector_dropout_experiment
+        results_from_manager = {}
+        try:
+             results_from_manager = run_eigenvector_dropout_experiment(
+                 network=network_to_use, dataset=self.dataset, dropout_fractions=dropout_fractions,
+                 metric=metric_to_use, device=self.device,
+                 dropout_mode=dropout_mode_val,
+                 pruning_mode=pruning_mode_for_eigen,
+                 show_progress=True, debug_mode=self.debug_mode
+             )
+        except Exception as e:
+            logger.error(f"Error during run_eigenvector_dropout_experiment call: {str(e)}")
+            results_from_manager = {"error": str(e)}
+            if self.debug_mode:
+                import traceback
+                logger.error(traceback.format_exc())
+
+        # Add training history
+        results_from_manager["training_history"] = self.training_history
+        return results_from_manager
+
+
+class LayerIsolatedPruningExperiment(AlignmentExperiment):
+    """Experiment for pruning layers in isolation."""
+
+    def run(self) -> Dict:
+        """Runs the layer isolated pruning experiment."""
+        logger.info("Running Layer Isolated Pruning Experiment")
+        
+        # Common setup
+        if not self.networks or self.dataset is None:
+             raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
+        self._run_initial_training(self._setup_callbacks()) # Run initial training if needed
+
+        # Get necessary configs
+        pruning_config = self.config.pruning_settings
+        alignment_config = self.config.alignment_settings
+
+        # Prepare dropout fractions
+        dropout_min = pruning_config.dropout_min
+        dropout_max = pruning_config.dropout_max
+        num_dropout_steps = pruning_config.dropout_steps
+        if num_dropout_steps <= 0: 
+            _fractions = [0.0, dropout_max] 
+        elif num_dropout_steps == 1:
+            _fractions = [dropout_min, dropout_max]
         else:
             _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
         if 0.0 not in _fractions: # Ensure 0.0 is present for baseline
             _fractions = [0.0] + _fractions
         dropout_fractions = sorted(list(set(_fractions)))
 
-        exclude_cls_layer = self.config.pruning_settings.exclude_classification_layer
-        dropout_mode_val = self.config.pruning_settings.dropout_mode
-        num_batches_for_metric_calc_isolated = self.config.pruning_settings.num_batches_for_scores
-        force_cpu_flag_isolated = self.config.alignment_settings.force_cpu_for_large_metric_ops # Get the flag
+        exclude_cls_layer = pruning_config.exclude_classification_layer
+        dropout_mode_val = pruning_config.dropout_mode
+        num_batches_for_metric_calc_isolated = pruning_config.num_batches_for_scores
+        force_cpu_flag_isolated = alignment_config.force_cpu_for_large_metric_ops
+        cnn_mode_for_isolated_scores = alignment_config.cnn_mode
+        cnn_rq_op_for_isolated_scores = alignment_config.cnn_rq_aggregation_op
         metric_instance_for_isolated = self.metric
 
-        results_from_manager = run_layer_isolated_dropout_experiment(
-            original_networks=networks,
-            dataset=dataset,
-            dropout_fractions=dropout_fractions,
-            metric=metric_instance_for_isolated,
-            device=self.device,
-            dropout_mode=dropout_mode_val,
-            show_progress=True, 
-            debug_mode=self.debug_mode,
-            exclude_classification_layer_config=exclude_cls_layer,
-            num_batches_for_pre_scoring=num_batches_for_metric_calc_isolated,
-            force_cpu_for_large_metric_ops=force_cpu_flag_isolated
-        )
+        if metric_instance_for_isolated is None:
+            logger.error("Metric not initialized properly!")
+            self._initialize_metric()
+            metric_instance_for_isolated = self.metric
+            if metric_instance_for_isolated is None:
+                 raise ValueError("Failed to initialize metric for layer isolated pruning.")
 
-        # Call the specific plotting function for layer-isolated results
-        if results_from_manager: # Check if results were successfully generated
-            isolated_plot_files = plot_layer_isolated_dropout_results(
-                results_from_manager, 
-                save_dir=self.figure_path,
-                title_prefix=f"{self.config.experiment_name}",
-                show_plots=self.config.show_all
-            )
-            if isolated_plot_files:
-                results_from_manager.setdefault("plot_files", []).extend(isolated_plot_files)
+        logger.info(f"Using metric: {metric_instance_for_isolated.name}, DropoutMode: {dropout_mode_val}, ExcludeCls: {exclude_cls_layer}")
         
-        # Potentially add training_history if relevant
-        final_results = results_from_manager
-        # If train_networks was called before this for the 'networks' list, get its history
-        training_history_isolated = getattr(self, 'training_history', {})
-        final_results["training_history"] = training_history_isolated
-        return final_results
-    
-    def main(self) -> Tuple[Dict, List[nn.Module]]:
-        self.setup_paths()
-        logger.info(f"Set up paths. Results will be saved to {self.results_path}")
-        networks = self.create_networks()
-        batch_size = self.config.dataset.batch_size
-        dataset = load_dataset(self.config.dataset, batch_size=batch_size, device=self.device) # Pass device
-        
-        experiment_type = self.config.experiment_type
-        results = {} # Initialize results here
-
-        callbacks_list = []
-        # MODIFIED: self.metric_tracker_instance will hold the single tracker instance
-        self.metric_tracker_instance: Optional[AlignmentMetricTracker] = None 
-
-        if self.config.alignment_settings and \
-           self.config.alignment_settings.callbacks and \
-           self.config.alignment_settings.callbacks.alignment_metrics:
-            
-            # This is already a list of MetricTrackerConfig objects due to config parsing
-            metric_configs_to_track = self.config.alignment_settings.callbacks.alignment_metrics
-            logger.info(f"Configuring a single AlignmentMetricTracker for metrics: {[mc.name for mc in metric_configs_to_track]}")
-
-            metric_dataloader = dataset.test_loader 
-            if metric_dataloader is None and dataset.train_loader is not None:
-                logger.warning("No test_loader in dataset for metric callback, using train_loader.")
-                metric_dataloader = dataset.train_loader
-            elif metric_dataloader is None:
-                logger.error("No suitable dataloader for metric callback. Skipping tracker setup.")
-                metric_configs_to_track = [] 
-
-            if metric_configs_to_track and metric_dataloader: 
-                # Convert MetricTrackerConfig objects to simple dicts for the tracker, as it currently expects List[Dict]
-                # Or, AlignmentMetricTracker could be updated to take List[MetricTrackerConfig]
-                # For now, convert to dicts as per its current __init__ type hint for metric_configs.
-                # However, compute_all_node_scores also expects List[Dict[str, Any]] for metric_configs.
-                # So, if MetricTrackerConfig has .name and .num_batches, it should be compatible if we ensure
-                # .scale_by_norm is also handled (get_metric in compute_all_node_scores expects it).
-                # Let's assume MetricTrackerConfig objects can be effectively used as dicts if they have the right fields.
-                # The AlignmentMetricTracker takes List[Dict[str, Any]] for metric_configs.
-                # The YAML parsing now creates List[MetricTrackerConfig].
-                # We need to ensure the tracker gets what compute_all_node_scores expects.
-                # The compute_all_node_scores expects dicts with "name" and optional "scale_by_norm".
-                
-                # Create the list of dicts for compute_all_node_scores from MetricTrackerConfig instances
-                dict_metric_configs = []
-                for mc_obj in metric_configs_to_track:
-                    conf_dict = {"name": mc_obj.name}
-                    # scale_by_norm is not in MetricTrackerConfig, it's in AlignmentConfig for the main metric.
-                    # For callback metrics, we assume default scale_by_norm=False unless specified differently.
-                    # Let's assume MetricTrackerConfig could gain a scale_by_norm field if needed.
-                    # For now, get_metric called within compute_all_node_scores will use its default for scale_by_norm.
-                    # This matches the behavior if only "name" is passed in the dict.
-                    dict_metric_configs.append(conf_dict)
-
-                tracker = AlignmentMetricTracker(
-                    metric_configs=dict_metric_configs, 
-                    data_loader=metric_dataloader, 
-                    device=self.device,
-                    num_batches=metric_configs_to_track[0].num_batches if metric_configs_to_track else 5,
-                    experiment_config=self.config, 
-                    global_cnn_mode=self.config.alignment_settings.cnn_mode,
-                    global_cnn_rq_aggregation_op=self.config.alignment_settings.cnn_rq_aggregation_op
-                )
-                callbacks_list.append(tracker)
-                self.metric_tracker_instance = tracker 
-                logger.info(f"Added single AlignmentMetricTracker for metrics: {[mc['name'] for mc in dict_metric_configs]}.")
-
-        if self.config.training.epochs > 0:
-            if self.config.training.train_before_dropout:
-                logger.info(f"Starting initial training for {self.config.training.epochs} epochs before experiment type: {experiment_type}")
-                self.training_history = self.train_networks(networks, dataset, callbacks=callbacks_list) 
-                if self.debug_mode and self.training_history and self.training_history.get('test_acc'):
-                    logger.info(f"Initial training final test accuracy: {self.training_history['test_acc'][-1]:.2f}%")
-            else:
-                logger.info("Skipping initial training because train_before_dropout is false.")
-                self.training_history = {'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []}
-        else:
-            logger.info("Skipping initial training based on config (epochs=0).")
-            self.training_history = {'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []}
-
-        if experiment_type == "alignment_analysis":
-            results["alignment_analysis"] = True # Mark that this meta-experiment ran
-            if self.config.alignment_settings.run_progressive:
-                logger.info(f"Running progressive dropout as part of alignment analysis")
-                results["progressive_dropout"] = self.run_progressive_dropout(networks, dataset)
-            if self.config.alignment_settings.run_eigenvector:
-                logger.info("Running eigenvector dropout as part of alignment analysis")
-                # Eigenvector typically runs on one network
-                results["eigenvector_dropout"] = self.run_eigenvector_dropout(networks[0], dataset) 
-        elif experiment_type == "progressive_dropout":
-            results = self.run_progressive_dropout(networks, dataset)
-        elif experiment_type == "eigenvector_dropout":
-            results = self.run_eigenvector_dropout(networks[0], dataset)
-        elif experiment_type == "layer_isolated_pruning":
-            results = self.run_layer_isolated_experiment(networks, dataset)
-        else:
-            raise ValueError(f"Unsupported experiment type: {experiment_type}")
-            
-        logger.info(f"Completed main computation for {experiment_type} experiment")
-
-        plot_files_generated = []
-        if results and "error" not in results:
-            # Determine which plots to generate based on available data in results
-            # For progressive_dropout or if it's a sub-result of alignment_analysis
-            prog_results_data = results if experiment_type == "progressive_dropout" else results.get("progressive_dropout")
-            if prog_results_data and "accuracies" in prog_results_data: # Basic check for progressive results
-                pruning_mode_plot = self.config.pruning_settings.dropout_pruning_mode
-                dropout_mode_plot = self.config.pruning_settings.dropout_mode
-                title_prefix_prog = self.config.experiment_name
-                show_all_plots = self.config.show_all
-
-                acc_plots = plot_dropout_results(prog_results_data, self.figure_path, title_prefix_prog, pruning_mode_plot, dropout_mode_plot)
-                if acc_plots: plot_files_generated.extend(acc_plots if isinstance(acc_plots, list) else [acc_plots])
-                
-                if "pruning_details" in prog_results_data and "pre_pruning_layer_stats" in prog_results_data:
-                    plot_paths = [
-                        plot_mean_rq_of_pruned_nodes(prog_results_data, self.figure_path, title_prefix_prog, show_all_plots),
-                        plot_per_layer_pruning_percentage(prog_results_data, self.figure_path, title_prefix_prog, show_all_plots),
-                        plot_per_layer_contribution_to_pruning(prog_results_data, self.figure_path, title_prefix_prog, show_all_plots)
-                    ]
-                    plot_files_generated.extend([p for p in plot_paths if p])
-                
-                if prog_results_data.get("pre_pruning_layer_stats"):
-                    rq_stats_plot = plot_rq_stats_per_layer(prog_results_data, self.figure_path, title_prefix_prog, show_all_plots)
-                    if rq_stats_plot: plot_files_generated.append(rq_stats_plot)
-
-            # For layer_isolated_pruning
-            iso_results_data = results if experiment_type == "layer_isolated_pruning" else results.get("layer_isolated_pruning") # Assuming results key matches exp_type
-            if iso_results_data and "accuracies_isolated" in iso_results_data:
-                title_prefix_iso = self.config.experiment_name
-                show_all_plots = self.config.show_all
-                iso_plots = plot_layer_isolated_dropout_results(iso_results_data, self.figure_path, title_prefix_iso, show_all_plots)
-                if iso_plots: plot_files_generated.extend(iso_plots)
-
-            # For eigenvector_dropout (assuming its results structure is similar to progressive for plot_dropout_results)
-            eig_results_data = results if experiment_type == "eigenvector_dropout" else results.get("eigenvector_dropout")
-            if eig_results_data and "accuracies" in eig_results_data:
-                pruning_mode_plot_eig = self.config.pruning_settings.dropout_pruning_mode 
-                dropout_mode_plot_eig = self.config.pruning_settings.dropout_mode 
-                title_prefix_eig = self.config.experiment_name
-                eig_acc_plots = plot_dropout_results(eig_results_data, self.figure_path, title_prefix_eig, pruning_mode_plot_eig, dropout_mode_plot_eig)
-                if eig_acc_plots: plot_files_generated.extend(eig_acc_plots if isinstance(eig_acc_plots, list) else [eig_acc_plots])
-            
-            # Summary plot if multiple types of results are present (e.g., from alignment_analysis)
-            if experiment_type == "alignment_analysis" and "progressive_dropout" in results and "eigenvector_dropout" in results:
-                summary_path = plot_experiment_summary(results, self.figure_path, self.config.experiment_name)
-                if summary_path: plot_files_generated.append(summary_path)
-
-            # MODIFIED: Plot metric evolution using the single tracker instance
-            if self.metric_tracker_instance and self.metric_tracker_instance.metrics_evolution:
-                logger.info(f"Generating evolution plots from AlignmentMetricTracker...")
-                # The data is in: self.metric_tracker_instance.metrics_evolution
-                # Each item: {"epoch": ep, "all_scores_per_layer": {layer_idx: {metric_name: scores_tensor}}}
-                
-                # We need to extract data for each metric name separately to pass to plot_metric_evolution
-                # Get all unique metric names that were tracked
-                tracked_metric_names = set()
-                if self.metric_tracker_instance.metrics_evolution:
-                    first_epoch_data = self.metric_tracker_instance.metrics_evolution[0]["all_scores_per_layer"]
-                    if first_epoch_data:
-                        first_layer_idx = list(first_epoch_data.keys())[0]
-                        if first_layer_idx is not None and first_epoch_data[first_layer_idx]:
-                            tracked_metric_names.update(first_epoch_data[first_layer_idx].keys())
-                
-                for metric_name_to_plot in tracked_metric_names:
-                    # Prepare data specifically for this metric_name_to_plot
-                    single_metric_evolution_data = []
-                    for epoch_entry in self.metric_tracker_instance.metrics_evolution:
-                        reformatted_scores_per_layer = {}
-                        for layer_idx, metrics_in_layer in epoch_entry["all_scores_per_layer"].items():
-                            if metric_name_to_plot in metrics_in_layer:
-                                reformatted_scores_per_layer[layer_idx] = metrics_in_layer[metric_name_to_plot]
-                        
-                        if reformatted_scores_per_layer: # Only add if this metric was present for this epoch
-                            single_metric_evolution_data.append({
-                                "epoch": epoch_entry["epoch"],
-                                "scores_per_layer": reformatted_scores_per_layer
-                            })
-                    
-                    if single_metric_evolution_data:
-                        evolution_plot_path = plot_metric_evolution(
-                            metric_evolution_data=single_metric_evolution_data,
-                            metric_name=metric_name_to_plot,
-                            save_dir=self.figure_path,
-                            title_prefix=f"{self.config.experiment_name}",
-                            show_plots=self.config.show_all
-                        )
-                        if evolution_plot_path:
-                            plot_files_generated.append(evolution_plot_path)
-            
-            if plot_files_generated:
-                results["plot_files"] = plot_files_generated 
-                if self.wandb_run:
-                    log_plots_to_wandb(plot_files_generated, tags={"experiment_type": experiment_type})
-            
-            # MODIFIED: Save the consolidated metric evolution data
-            if self.metric_tracker_instance and self.metric_tracker_instance.metrics_evolution:
-                results["all_metrics_evolution_data"] = self.metric_tracker_instance.metrics_evolution
-                logger.info(f"Stored consolidated metric evolution data in results.")
-
-            self.save_results(f"{experiment_type}_main_results.pkl", results)
-
-        logger.info(f"Completed {self.config.experiment_name} (type: {experiment_type}) experiment run.")
-        # Removed the separate saving of tracker history here as it's now part of the main results dict
-
-        return results, networks
-    
-    def setup_paths(self):
-        """
-        Set up paths for experiment outputs.
-        
-        Creates necessary directories for figures, weights, and results.
-        """
-        # Create timestamp subdirectory if needed
-        if self.config.use_timestamp:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_dir = os.path.join(self.config.results_path, f"{self.get_basename()}_{timestamp}")
-        else:
-            base_dir = os.path.join(self.config.results_path, self.get_basename())
-        
-        # Create main result directory
-        os.makedirs(base_dir, exist_ok=True)
-        self.results_path = base_dir
-        
-        # Create figure directory
-        self.figure_path = os.path.join(base_dir, "figures")
-        os.makedirs(self.figure_path, exist_ok=True)
-        
-        # Create weights directory for saved models
-        self.weights_path = os.path.join(base_dir, "weights")
-        os.makedirs(self.weights_path, exist_ok=True)
-        
-        # The self.device is already normalized in __init__
-        logger.info(f"Set up paths: results={self.results_path}, figures={self.figure_path}, device={self.device}")
-    
-    def save_results(self, filename: str, results: Dict):
-        """
-        Save results to file.
-        
-        Args:
-            filename: Name of the file to save to
-            results: Results dictionary to save
-        """
-        # Create a results directory if it doesn't exist
-        os.makedirs(self.results_path, exist_ok=True)
-        
-        # Save as pickle
-        results_file = os.path.join(self.results_path, filename)
-        with open(results_file, "wb") as f:
-            pickle.dump(results, f)
-        logger.info(f"Saved experiment results to {results_file}")
-        
-        # Try to save as JSON for readability
+        results_from_manager = {}
         try:
-            # Helper to convert non-serializable objects
-            def clean_for_json(obj):
-                if isinstance(obj, (torch.Tensor, np.ndarray)):
-                    return obj.tolist() if hasattr(obj, 'tolist') else str(obj)
-                elif isinstance(obj, dict):
-                    return {k: clean_for_json(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [clean_for_json(item) for item in obj]
-                elif isinstance(obj, tuple):
-                    return tuple(clean_for_json(item) for item in obj)
-                else:
-                    # Return string representation for other types
-                    return str(obj) if not isinstance(obj, (str, int, float, bool, type(None))) else obj
-            
-            # Convert to JSON-serializable format
-            json_results = clean_for_json(results)
-            
-            # Save as JSON
-            json_file = os.path.join(self.results_path, filename.replace(".pkl", ".json"))
-            with open(json_file, "w") as f:
-                json.dump(json_results, f, indent=2)
-            logger.info(f"Saved readable results to {json_file}")
+            results_from_manager = run_layer_isolated_dropout_experiment(
+                original_networks=self.networks,
+                dataset=self.dataset,
+                dropout_fractions=dropout_fractions,
+                metric=metric_instance_for_isolated,
+                device=self.device,
+                dropout_mode=dropout_mode_val,
+                show_progress=True, 
+                debug_mode=self.debug_mode,
+                exclude_classification_layer_config=exclude_cls_layer,
+                num_batches_for_pre_scoring=num_batches_for_metric_calc_isolated,
+                force_cpu_for_large_metric_ops=force_cpu_flag_isolated,
+                configured_cnn_mode=cnn_mode_for_isolated_scores,
+                configured_cnn_rq_op=cnn_rq_op_for_isolated_scores
+            )
         except Exception as e:
-            logger.warning(f"Could not save results as JSON: {str(e)}")
-    
-    def run(self) -> Tuple[Dict, List[nn.Module]]:
-        """
-        Run the experiment.
-        
-        Returns:
-            Tuple of (results, networks)
-        """
-        # Set up logging
-        setup_logging(log_level="INFO")
-        
-        # Set random seed if configured
-        if self.config.seed is not None:
-            torch.manual_seed(self.config.seed)
-            torch.cuda.manual_seed_all(self.config.seed)
-            np.random.seed(self.config.seed)
-            logger.info(f"Set random seed to {self.config.seed}")
-        
-        # Run the main experiment
-        results, networks = self.main()
-        
-        # Store results and networks for later use
-        self.results = results
-        self.networks = networks
-        
-        # Save configuration
-        config_file = os.path.join(self.results_path, "config.yaml")
-        if hasattr(self.config, 'to_dict'):
-            config_dict = self.config.to_dict()
-            with open(config_file, "w") as f:
-                yaml.dump(config_dict, f, default_flow_style=False)
-            logger.info(f"Saved configuration to {config_file}")
-        
-        # Finish W&B run if it was initialized
-        if self.wandb_run:
-            wandb.finish()
-            logger.info("Weights & Biases run finished.")
-        
-        return results, networks
+            logger.error(f"Error during run_layer_isolated_dropout_experiment call: {str(e)}")
+            results_from_manager = {"error": str(e)}
+            if self.debug_mode:
+                import traceback
+                logger.error(traceback.format_exc())
 
+        # Add training history
+        # The original code added plots here, but plotting is now handled in the base class _run_plotting_and_saving
+        results_from_manager["training_history"] = self.training_history
+        return results_from_manager
+
+
+class AlignmentAnalysisExperiment(AlignmentExperiment):
+    """Meta-experiment that runs multiple alignment analyses (e.g., progressive and eigenvector)."""
+
+    def run(self) -> Dict:
+        """Runs the alignment analysis experiment."""
+        logger.info("Running Alignment Analysis Experiment")
+        
+        # Common setup
+        if not self.networks or self.dataset is None:
+             raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
+        self._run_initial_training(self._setup_callbacks()) # Run initial training if needed
+
+        analysis_results = {"alignment_analysis": True} # Mark that this meta-experiment ran
+        
+        # Run Progressive Dropout if configured
+        if self.config.alignment_settings.run_progressive:
+            logger.info("Running progressive dropout as part of alignment analysis")
+            # Need to instantiate and run the ProgressiveDropoutExperiment logic
+            # We can call its 'run' method directly, but it needs the same setup (networks, dataset, etc.)
+            # Since this class inherits from AlignmentExperiment, self.networks etc. are available.
+            # We can create a temporary instance or reuse the logic structure.
+            # Let's call the manager function directly here for simplicity, similar to how the original code did.
+            
+            # Get necessary configs
+            pruning_config = self.config.pruning_settings
+            alignment_config = self.config.alignment_settings
+            # Prepare dropout fractions
+            dropout_min = pruning_config.dropout_min; dropout_max = pruning_config.dropout_max
+            num_dropout_steps = pruning_config.dropout_steps
+            if num_dropout_steps <= 0: _fractions = [0.0, dropout_max]
+            elif num_dropout_steps == 1: _fractions = [dropout_min, dropout_max]
+            else: _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
+            if 0.0 not in _fractions: _fractions = [0.0] + _fractions
+            dropout_fractions = sorted(list(set(_fractions)))
+            metric_to_use = self.metric
+            if metric_to_use is None: raise ValueError("Metric not initialized for progressive dropout in analysis.")
+
+            try:
+                prog_results = run_progressive_dropout_experiment(
+                    self.networks, self.dataset, dropout_fractions, metric_to_use, self.device,
+                    pruning_mode=pruning_config.dropout_pruning_mode, 
+                    dropout_mode=pruning_config.dropout_mode, 
+                    show_progress=True, debug_mode=self.debug_mode,
+                    exclude_classification_layer_config=pruning_config.exclude_classification_layer,
+                    num_batches_for_pre_scoring=pruning_config.num_batches_for_scores,
+                    force_cpu_for_large_metric_ops=alignment_config.force_cpu_for_large_metric_ops,
+                    configured_cnn_mode=alignment_config.cnn_mode,
+                    configured_cnn_rq_op=alignment_config.cnn_rq_aggregation_op
+                )
+                analysis_results["progressive_dropout"] = prog_results
+            except Exception as e:
+                 logger.error(f"Error running progressive dropout within analysis: {e}")
+                 analysis_results["progressive_dropout"] = {"error": str(e)}
+
+        # Run Eigenvector Dropout if configured
+        if self.config.alignment_settings.run_eigenvector:
+            logger.info("Running eigenvector dropout as part of alignment analysis")
+            if not self.networks:
+                 logger.error("No networks available for Eigenvector Dropout in analysis.")
+                 analysis_results["eigenvector_dropout"] = {"error": "No networks found."}
+            else:
+                network_to_use = self.networks[0]
+                # Get configs
+                pruning_config = self.config.pruning_settings
+                alignment_config = self.config.alignment_settings
+                # Prepare fractions
+                dropout_min = pruning_config.dropout_min; dropout_max = pruning_config.dropout_max
+                num_dropout_steps = pruning_config.dropout_steps
+                if num_dropout_steps <= 0: _fractions = [0.0, dropout_max]
+                elif num_dropout_steps == 1: _fractions = [dropout_min, dropout_max]
+                else: _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
+                if 0.0 not in _fractions: _fractions = [0.0] + _fractions
+                dropout_fractions = sorted(list(set(_fractions)))
+                metric_to_use = self.metric
+                if metric_to_use is None: raise ValueError("Metric not initialized for eigenvector dropout in analysis.")
+
+                try:
+                    eig_results = run_eigenvector_dropout_experiment(
+                         network=network_to_use, dataset=self.dataset, dropout_fractions=dropout_fractions,
+                         metric=metric_to_use, device=self.device,
+                         dropout_mode=pruning_config.dropout_mode,
+                         pruning_mode=pruning_config.dropout_pruning_mode,
+                         show_progress=True, debug_mode=self.debug_mode
+                     )
+                    analysis_results["eigenvector_dropout"] = eig_results
+                except Exception as e:
+                    logger.error(f"Error running eigenvector dropout within analysis: {e}")
+                    analysis_results["eigenvector_dropout"] = {"error": str(e)}
+
+        analysis_results["training_history"] = self.training_history
+        return analysis_results
+
+
+# --- Factory Function ---
+
+def get_experiment_class(experiment_type: str) -> Type[AlignmentExperiment]:
+    """Gets the appropriate experiment class based on the type string."""
+    if experiment_type == "progressive_dropout":
+        return ProgressiveDropoutExperiment
+    elif experiment_type == "eigenvector_dropout":
+        return EigenvectorDropoutExperiment
+    elif experiment_type == "layer_isolated_pruning":
+        return LayerIsolatedPruningExperiment
+    elif experiment_type == "alignment_analysis":
+        return AlignmentAnalysisExperiment
+    else:
+        raise ValueError(f"Unsupported experiment type: {experiment_type}")
+
+# --- CLI Entry Point ---
 
 def cli_main():
     """Command-line interface for running alignment experiments."""
@@ -762,21 +777,146 @@ def cli_main():
     parser = argparse.ArgumentParser(description="Neural network alignment experiment")
     parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
     parser.add_argument("--quiet", action="store_true", help="Reduce logging output")
+    parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for DDP (usually set by launcher)") # For DDP
+
     args = parser.parse_args()
 
     # Set logging level
     log_level = "WARNING" if args.quiet else "INFO"
-    setup_logging(log_level=log_level)
+    # Base Experiment __init__ handles logging setup if config.log_level is set, or defaults.
+    # setup_logging(log_level=log_level) # This might be redundant. Default to config or Experiment base.
 
     # Load configuration
     config = ExperimentConfig.load(args.config)
     
-    # Initialize and run experiment
-    experiment = AlignmentExperiment(config)
-    results, networks = experiment.run()
-    
-    return results, networks
+    # --- DDP Setup ---
+    is_ddp_initialized = False
+    if config.use_ddp:
+        import torch.distributed as dist
+        # import os # Already imported at top of file
 
+        if args.local_rank != -1: # Launched with torch.distributed.launch or similar
+            config.ddp_local_rank = args.local_rank
+        elif "LOCAL_RANK" in os.environ:
+            config.ddp_local_rank = int(os.environ["LOCAL_RANK"])
+        else:
+            logger.warning("DDP is enabled but local_rank is not provided via --local_rank or LOCAL_RANK env var. Assuming single-node, single-GPU or manual setup.")
+            # If not set, it might be a single GPU run or user handles DDP init outside.
+            # For this auto-setup, we proceed assuming it will be set if multi-GPU DDP is intended.
+
+        # Ensure device is set using local_rank for DDP
+        if torch.cuda.is_available() and config.ddp_local_rank >= 0:
+            torch.cuda.set_device(config.ddp_local_rank)
+            config.device = f"cuda:{config.ddp_local_rank}"
+            logger.info(f"DDP: Set device to cuda:{config.ddp_local_rank}")
+        else:
+            config.device = "cpu"
+            logger.info("DDP: CUDA not available or local_rank not set, DDP will use CPU or fail if backend needs CUDA.")
+
+        # Initialize process group if not already initialized
+        # Check WORLD_SIZE to determine if we are in a distributed environment
+        if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+            if not dist.is_initialized():
+                try:
+                    # RANK and WORLD_SIZE should be set by the launcher (e.g., torchrun)
+                    config.ddp_rank = int(os.environ["RANK"])
+                    config.ddp_world_size = int(os.environ["WORLD_SIZE"])
+                    
+                    dist.init_process_group(
+                        backend=config.ddp_backend,
+                        init_method="env://", # Assumes MASTER_ADDR and MASTER_PORT are set
+                        world_size=config.ddp_world_size,
+                        rank=config.ddp_rank
+                    )
+                    is_ddp_initialized = True
+                    logger.info(f"DDP: Initialized process group with backend '{config.ddp_backend}'. Rank: {config.ddp_rank}, World Size: {config.ddp_world_size}.")
+                except Exception as e:
+                    logger.error(f"DDP: Failed to initialize process group: {e}. Running in non-DDP mode despite use_ddp=True.")
+                    config.use_ddp = False # Fallback to non-DDP
+            else:
+                # Already initialized, likely by launcher or another part of the script
+                config.ddp_rank = dist.get_rank()
+                config.ddp_world_size = dist.get_world_size()
+                is_ddp_initialized = True # Mark as initialized from our perspective
+                logger.info(f"DDP: Process group already initialized. Rank: {config.ddp_rank}, World Size: {config.ddp_world_size}.")
+        else:
+            # Not a distributed environment (e.g. WORLD_SIZE=1 or not set)
+            logger.info("DDP: WORLD_SIZE not set or is 1. Assuming single process. DDP will not be fully activated.")
+            config.use_ddp = False # Effectively disable DDP logic if not truly distributed
+            config.ddp_rank = 0
+            config.ddp_world_size = 1
+            config.ddp_local_rank = 0 # Ensure this is 0 for single process
+            if config.device is None and torch.cuda.is_available(): # If device wasn't set by local_rank logic
+                config.device = "cuda:0"
+            elif config.device is None:
+                config.device = "cpu"
+    else:
+        # Not using DDP, ensure ranks are default for non-DDP logic that might check them
+        config.ddp_rank = 0
+        config.ddp_world_size = 1
+        config.ddp_local_rank = 0
+        if config.device is None: # Set default device if not specified and not DDP
+             config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    # --- End DDP Setup ---
+
+    # Get the correct experiment class based on config
+    try:
+        ExperimentClass = get_experiment_class(config.experiment_type)
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        sys.exit(1) # Exit if experiment type is invalid
+
+    # Initialize and run experiment
+    # The ExperimentClass __init__ will call the base Experiment __init__
+    # which now receives a config potentially updated with DDP rank/device info.
+    try:
+        experiment = ExperimentClass(config) 
+        
+        # Common setup requiring config but not specific subclass logic
+        experiment.networks = experiment.create_networks()
+        experiment.dataset = load_dataset(
+            experiment.config.dataset, 
+            batch_size=experiment.config.dataset.batch_size, 
+            device=experiment.device, # DDP-aware device from config
+            # --- NEW: Pass DDP flags to load_dataset ---
+            use_ddp=experiment.config.use_ddp,
+            ddp_rank=experiment.config.ddp_rank,
+            ddp_world_size=experiment.config.ddp_world_size
+            # --- End NEW ---
+        )
+        
+        # The run method performs the core computation
+        results = experiment.run() 
+        experiment.results = results # Store results on instance for plotting/saving
+
+        # Common Teardown/Reporting
+        experiment._run_plotting_and_saving() # Call plotting/saving after run completes
+
+        logger.info("Experiment finished successfully.")
+        # Potentially print summary results here if not quiet
+    except Exception as e:
+        logger.error(f"Experiment execution failed: {e}", exc_info=True)
+        # Ensure DDP cleanup on error before exit
+        if is_ddp_initialized:
+            dist.destroy_process_group()
+            logger.info("DDP: Destroyed process group due to error.")
+        sys.exit(1)
+    
+    # --- DDP Cleanup ---
+    if is_ddp_initialized:
+        dist.destroy_process_group()
+        logger.info("DDP: Destroyed process group successfully.")
+    # --- End DDP Cleanup ---
+    
+    # cleanup is handled by Experiment.__del__ (e.g. wandb.finish())
 
 if __name__ == "__main__":
     cli_main()
+
+# Removed old AlignmentExperiment methods that are now part of subclasses:
+# - run_progressive_dropout
+# - run_eigenvector_dropout
+# - run_layer_isolated_experiment
+# Modified main() -> execute_experiment() and added abstract run()
+# Updated cli_main() to use the factory function get_experiment_class()
