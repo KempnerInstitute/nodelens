@@ -94,6 +94,22 @@ class AlignmentMetricTracker:
             logger.warning("AlignmentMetricTracker: Model or epoch not found in epoch_context. Skipping.")
             return
 
+        # --- DDP Handling ---
+        ddp_rank = 0
+        ddp_world_size = 1
+        if self.experiment_config and hasattr(self.experiment_config, 'use_ddp') and self.experiment_config.use_ddp:
+            if hasattr(self.experiment_config, 'ddp_rank'):
+                ddp_rank = self.experiment_config.ddp_rank
+            if hasattr(self.experiment_config, 'ddp_world_size'):
+                ddp_world_size = self.experiment_config.ddp_world_size
+        
+        is_main_process = (ddp_rank == 0)
+
+        # If DDP is active, only proceed with metric computation on the main process (rank 0)
+        if ddp_world_size > 1 and not is_main_process:
+            return # Other ranks do nothing for this callback
+        # --- End DDP Handling ---
+
         effective_target_layers = self._get_effective_target_layers(model)
         if not effective_target_layers:
              logger.warning(f"Epoch {current_epoch}: No target layers identified for metric computation. Skipping.")
@@ -118,9 +134,13 @@ class AlignmentMetricTracker:
 
             # 1. Collect Data
             logger.debug(f"Epoch {current_epoch}: Collecting layer data (inputs={collect_inputs_flag}, outputs={collect_outputs_flag})...")
+            
+            # If DDP, use model.module for collection
+            model_to_collect_from = model.module if (ddp_world_size > 1 and isinstance(model, torch.nn.parallel.DistributedDataParallel)) else model
+            
             collected_data = collect_layer_data(
-                model=model,
-                dataloader=self.data_loader,
+                model=model_to_collect_from, # Pass the potentially unwrapped model
+                dataloader=self.data_loader, # Dataloader should be DDP-aware if world_size > 1
                 target_layers=effective_target_layers,
                 num_batches=self.num_batches,
                 device=self.device,
@@ -136,13 +156,37 @@ class AlignmentMetricTracker:
 
             # 2. Compute Metrics
             logger.debug(f"Epoch {current_epoch}: Computing metrics from collected data...")
-            # Pass device used for model weights access, collected data is on CPU
+            
+            # Prepare metric_configs for compute_metrics_for_layers
+            # This list of dicts tells compute_metrics_for_layers which metrics to run and with what specific args.
+            metric_configs_for_computation: List[Dict[str, Any]] = []
+            for name in self.metric_names:
+                conf = {"name": name}
+                # Add metric-specific kwargs passed during tracker initialization
+                if name in self.metric_kwargs:
+                    conf.update(self.metric_kwargs[name])
+                
+                # Add global/default settings from experiment_config if not already overridden by metric_kwargs
+                # Example: scale_by_norm for RQ, cnn_mode, cnn_rq_aggregation_op, force_cpu_for_large_metric_ops
+                if self.experiment_config and hasattr(self.experiment_config, 'alignment_settings'):
+                    if name.lower() == "rq" or "rayleigh_quotient" in name.lower():
+                        conf.setdefault("scale_by_norm", self.experiment_config.alignment_settings.scale_by_norm)
+                    
+                    # These are more general and could be passed as top-level args to compute_metrics_for_layers
+                    # or individual metric functions if they expect them.
+                    # For now, assuming _AlignmentMetricImpl handles what it needs based on its direct args.
+                    # We can add these to conf if compute_per_node_scores via _AlignmentMetricImpl expects them in **kwargs.
+                    # conf.setdefault("configured_cnn_mode", self.experiment_config.alignment_settings.cnn_mode) 
+                    # conf.setdefault("configured_cnn_rq_op", self.experiment_config.alignment_settings.cnn_rq_aggregation_op)
+                    # conf.setdefault("force_cpu_for_large_metric_ops", self.experiment_config.alignment_settings.force_cpu_for_large_metric_ops)
+                metric_configs_for_computation.append(conf)
+
             computed_metrics = compute_metrics_for_layers(
-                model=model, # Needed for weights
+                model=model_to_collect_from, # Pass the same model instance used for collection 
                 collected_data=collected_data,
-                metric_names=self.metric_names,
-                device=self.device, # Device for model/weights
-                metric_kwargs=self.metric_kwargs
+                metric_configs=metric_configs_for_computation, # Pass the constructed list of dicts
+                device=self.device # Device for model/weights and where metrics are computed
+                # metric_kwargs is now handled by preparing metric_configs_for_computation
             )
             logger.debug(f"Epoch {current_epoch}: Metric computation complete.")
 
