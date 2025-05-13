@@ -18,7 +18,7 @@ from tqdm import tqdm
 import random
 
 from alignment.metrics import AlignmentMetric, compute_all_node_scores
-from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _create_mask_from_indices, _evaluate_model_accuracy, _ensure_model_on_device
+from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _create_mask_from_indices, _evaluate_model_accuracy, _ensure_model_on_device, _apply_pruning_to_layer_module
 from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader
 
 logger = logging.getLogger(__name__)
@@ -380,18 +380,13 @@ def run_layer_isolated_dropout_experiment(
         logger.warning("No networks provided for layer isolated experiment.")
         return {}
 
-    # Results structure: {strategy: {layer_idx: [avg_accuracies_for_fractions_over_replicates]}}
-    # The main keys in the top-level dict will be strategies.
-    # We also need to store std deviations.
     results = {
         "dropout_fractions": dropout_fractions,
         "accuracies_isolated": {},
         "stds_isolated": {}
     }
 
-    # Pre-compute scores and sorted indices for EACH original network replicate ONCE
-    all_network_metrics_precomputed = []
-    # Construct metric_configs for the single metric used by this experiment
+    all_network_metrics_precomputed = [] 
     metric_config_for_isolated_pruning = [{
         "name": metric.name, 
         "scale_by_norm": metric.scale_by_norm,
@@ -417,10 +412,14 @@ def run_layer_isolated_dropout_experiment(
             metric_found_isolated = False
             for layer_idx_key in scores_dict_this_rep:
                 if metric.name in scores_dict_this_rep[layer_idx_key]:
-                    metric_found_isolated = True
-                    scores_this_rep_single_metric[layer_idx_key] = scores_dict_this_rep[layer_idx_key][metric.name]
+                    score_value = scores_dict_this_rep[layer_idx_key][metric.name]
+                    if score_value is not None and isinstance(score_value, torch.Tensor) and score_value.numel() > 0:
+                         scores_this_rep_single_metric[layer_idx_key] = score_value
+                         metric_found_isolated = True
+                    else:
+                         scores_this_rep_single_metric[layer_idx_key] = None # Store None if invalid
                 else:
-                    scores_this_rep_single_metric[layer_idx_key] = None
+                    scores_this_rep_single_metric[layer_idx_key] = None # Store None if metric not found
 
             if not metric_found_isolated:
                 logger.warning(f"Layer Isolated: Primary metric '{metric.name}' not found for network {net_idx}. Attempting fallback.")
@@ -442,15 +441,16 @@ def run_layer_isolated_dropout_experiment(
         asc_indices_this_rep = {}
         desc_indices_this_rep = {}
         rand_indices_this_rep = {}
-        for l_idx_scores, score_tensor in scores_this_rep_single_metric.items():
-            if score_tensor is not None and isinstance(score_tensor, torch.Tensor) and score_tensor.numel() > 0:
-                count = score_tensor.shape[0]
-                asc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=False)
-                desc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor, descending=True)
+        for l_idx_scores, score_tensor_val in scores_this_rep_single_metric.items(): # Renamed to avoid conflict
+            if score_tensor_val is not None and isinstance(score_tensor_val, torch.Tensor) and score_tensor_val.numel() > 0:
+                count = score_tensor_val.shape[0]
+                asc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor_val, descending=False)
+                desc_indices_this_rep[l_idx_scores] = torch.argsort(score_tensor_val, descending=True)
                 allidx_layer = list(range(count))
                 random.shuffle(allidx_layer)
                 rand_indices_this_rep[l_idx_scores] = torch.tensor(allidx_layer, device=device, dtype=torch.long)
             else:
+                # Ensure keys exist even if scores are None or invalid, to prevent KeyErrors later when accessing .get(layer_name_str)
                 asc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)
                 desc_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)
                 rand_indices_this_rep[l_idx_scores] = torch.empty(0, dtype=torch.long, device=device)
@@ -459,27 +459,38 @@ def run_layer_isolated_dropout_experiment(
             "scores": scores_this_rep_single_metric, 
             "asc_indices": asc_indices_this_rep, 
             "desc_indices": desc_indices_this_rep, 
-            "rand_indices": rand_indices_this_rep
+            "rand_indices": rand_indices_this_rep,
+            "alignment_names": net_rep.alignment_names if hasattr(net_rep, 'alignment_names') else [name for name, _ in net_rep.named_modules() if hasattr(_, 'weight')] # Store alignment names
         })
 
     if not all_network_metrics_precomputed or not all_network_metrics_precomputed[0]["scores"]:
         logger.error("Failed to pre-compute metrics for any network.")
         return {}
-    num_layers = len(all_network_metrics_precomputed[0]["scores"].keys())
-    classification_layer_actual_idx = num_layers - 1
+    
+    # Use alignment_names from the first precomputed network to determine num_layers consistently
+    # This assumes all networks have the same alignment_names structure if more than one original_network
+    first_net_alignment_names = all_network_metrics_precomputed[0]["alignment_names"]
+    num_layers = len(first_net_alignment_names)
+    classification_layer_name = first_net_alignment_names[-1] if first_net_alignment_names else None
 
     strategies_to_run = ["high_rq", "low_rq", "random"]
     for strategy in strategies_to_run:
-        results["accuracies_isolated"][strategy] = {l_idx: [] for l_idx in range(num_layers)}
-        results["stds_isolated"][strategy] = {l_idx: [] for l_idx in range(num_layers)}
+        results["accuracies_isolated"][strategy] = {layer_name: [] for layer_name in first_net_alignment_names}
+        results["stds_isolated"][strategy] = {layer_name: [] for layer_name in first_net_alignment_names}
 
-        for layer_to_isolate_idx in tqdm(range(num_layers), desc=f"Isolating Layers (Strat: {strategy})"):
-            if exclude_classification_layer_config and layer_to_isolate_idx == classification_layer_actual_idx:
+        # Iterate by layer_name_str using the order from the first network's alignment_names
+        for layer_to_isolate_name_str in tqdm(first_net_alignment_names, desc=f"Isolating Layers (Strat: {strategy})"):
+            # Find the integer index corresponding to this name for consistent iteration logic if needed
+            # For this refactor, we primarily use layer_name_str directly.
+            layer_to_isolate_idx = first_net_alignment_names.index(layer_to_isolate_name_str)
+
+            if exclude_classification_layer_config and layer_to_isolate_name_str == classification_layer_name:
+                # ... (baseline calculation for skipped classification layer) ...
                 baseline_accuracies_replicates = [_evaluate_model_accuracy(net, dataset.test_loader, device) for net in original_networks]
                 avg_baseline_acc = np.mean(baseline_accuracies_replicates) if baseline_accuracies_replicates else np.nan
                 std_baseline_acc = np.std(baseline_accuracies_replicates) if baseline_accuracies_replicates else np.nan
-                results["accuracies_isolated"][strategy][layer_to_isolate_idx] = [avg_baseline_acc] * len(dropout_fractions)
-                results["stds_isolated"][strategy][layer_to_isolate_idx] = [std_baseline_acc] * len(dropout_fractions)
+                results["accuracies_isolated"][strategy][layer_to_isolate_name_str] = [avg_baseline_acc] * len(dropout_fractions)
+                results["stds_isolated"][strategy][layer_to_isolate_name_str] = [std_baseline_acc] * len(dropout_fractions)
                 continue
 
             accuracies_this_layer_all_fracs_avg_reps = []
@@ -497,45 +508,41 @@ def run_layer_isolated_dropout_experiment(
                     net_copy.eval()
                     
                     metrics_for_this_rep = all_network_metrics_precomputed[net_rep_idx]
-                    target_layer_module = net_copy.alignment_layers[layer_to_isolate_idx]
-                    layer_name_str = net_copy.alignment_names[layer_to_isolate_idx]
+                    # Find the module corresponding to layer_to_isolate_name_str in net_copy
+                    target_layer_module = None
+                    module_map = {name: mod for name, mod in net_copy.named_modules()}
+                    target_layer_module = module_map.get(layer_to_isolate_name_str)
 
+                    if not target_layer_module or not hasattr(target_layer_module, 'weight') or target_layer_module.weight is None:
+                        logger.warning(f"Layer '{layer_to_isolate_name_str}' not found or has no weights in network copy {net_rep_idx}. Skipping pruning for this rep.")
+                        current_frac_accuracies_over_replicates.append(_evaluate_model_accuracy(net_copy, dataset.test_loader, device))
+                        continue
+                        
                     out_dim = target_layer_module.weight.data.shape[0]
                     n_drop = int(round(frac_val * out_dim))
 
-                    if n_drop > 0 and layer_name_str in metrics_for_this_rep["scores"] and metrics_for_this_rep["scores"][layer_name_str] is not None:
+                    # Use layer_to_isolate_name_str to access score/index dictionaries
+                    if n_drop > 0 and layer_to_isolate_name_str in metrics_for_this_rep["scores"] and metrics_for_this_rep["scores"][layer_to_isolate_name_str] is not None:
                         indices_map = {
                             "high_rq": metrics_for_this_rep["desc_indices"],
                             "low_rq": metrics_for_this_rep["asc_indices"],
                             "random": metrics_for_this_rep["rand_indices"]
                         }
-                        sorted_indices_for_layer = indices_map[strategy].get(layer_name_str)
+                        sorted_indices_for_layer = indices_map[strategy].get(layer_to_isolate_name_str)
                         
                         if sorted_indices_for_layer is not None and sorted_indices_for_layer.numel() > 0:
                             indices_to_drop = sorted_indices_for_layer[:n_drop]
-                            wdat = target_layer_module.weight.data
-                            mask = _create_mask_from_indices(wdat.shape, indices_to_drop, device)
-                            if dropout_mode == "scaled":
-                                frac_d_layer = n_drop / float(out_dim) if out_dim > 0 else 0.0
-                                scale = 1.0 / (1.0 - frac_d_layer) if frac_d_layer < 0.9999 else 10.0
-                                target_layer_module.weight.data.mul_(mask).mul_(scale)
-                                if target_layer_module.bias is not None:
-                                    bias_mask = _create_mask_from_indices(target_layer_module.bias.data.shape, indices_to_drop, device)
-                                    target_layer_module.bias.data.mul_(bias_mask).mul_(scale)
-                            else:
-                                target_layer_module.weight.data.mul_(mask)
-                                if target_layer_module.bias is not None:
-                                    bias_mask = _create_mask_from_indices(target_layer_module.bias.data.shape, indices_to_drop, device)
-                                    target_layer_module.bias.data.mul_(bias_mask)
+                            # Call the new shared pruning utility
+                            _apply_pruning_to_layer_module(target_layer_module, indices_to_drop, dropout_mode, device, out_dim_for_scaling=out_dim)
                         else:
-                            if debug_mode: logger.warning(f"Layer {layer_to_isolate_idx} not found in sorted indices for strategy {strategy}, rep {net_rep_idx}")
+                            if debug_mode: logger.warning(f"Layer '{layer_to_isolate_name_str}' (idx {layer_to_isolate_idx}) has no valid sorted indices for strategy {strategy}, rep {net_rep_idx}. No pruning applied.")
                     
                     current_frac_accuracies_over_replicates.append(_evaluate_model_accuracy(net_copy, dataset.test_loader, device))
                 
                 accuracies_this_layer_all_fracs_avg_reps.append(np.mean(current_frac_accuracies_over_replicates) if current_frac_accuracies_over_replicates else np.nan)
                 stds_this_layer_all_fracs_avg_reps.append(np.std(current_frac_accuracies_over_replicates) if current_frac_accuracies_over_replicates else np.nan)
             
-            results["accuracies_isolated"][strategy][layer_to_isolate_idx] = accuracies_this_layer_all_fracs_avg_reps
-            results["stds_isolated"][strategy][layer_to_isolate_idx] = stds_this_layer_all_fracs_avg_reps
+            results["accuracies_isolated"][strategy][layer_to_isolate_name_str] = accuracies_this_layer_all_fracs_avg_reps
+            results["stds_isolated"][strategy][layer_to_isolate_name_str] = stds_this_layer_all_fracs_avg_reps
 
     return results
