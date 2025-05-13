@@ -428,14 +428,63 @@ class AlignmentExperiment(Experiment):
             # Plot metric evolution from tracker
             if self.metric_tracker_instance and self.metric_tracker_instance.metrics_evolution:
                 logger.info(f"Generating evolution plots from AlignmentMetricTracker...")
-                tracked_metric_names = self.metric_tracker_instance.get_tracked_metric_names()
-                evolution_data_by_metric = self.metric_tracker_instance.get_evolution_data_by_metric()
+                
+                # Directly access the tracked metric names
+                tracked_metric_names = self.metric_tracker_instance.metric_names
+                
+                # Prepare evolution_data_by_metric for plotting
+                # Expected structure for plot_metric_evolution: 
+                # {layer_name: {'epochs': [...], 'mean_scores': [...], 'std_scores': [...]}}
+                # We will build this for each tracked metric.
 
                 for metric_name_to_plot in tracked_metric_names:
-                    single_metric_evolution_data = evolution_data_by_metric.get(metric_name_to_plot)
-                    if single_metric_evolution_data:
+                    # Data structure for this specific metric, to be passed to plot_metric_evolution
+                    current_metric_evolution_for_plot: Dict[str, Dict[str, List[Any]]] = {}
+
+                    for epoch_data in self.metric_tracker_instance.metrics_evolution:
+                        epoch_num = epoch_data["epoch"]
+                        all_scores_this_epoch = epoch_data["all_scores_per_layer"]
+                        
+                        for layer_name, metrics_in_layer in all_scores_this_epoch.items():
+                            if metric_name_to_plot in metrics_in_layer:
+                                scores_tensor = metrics_in_layer[metric_name_to_plot]
+                                
+                                if not isinstance(scores_tensor, torch.Tensor):
+                                    # logger.warning(f"Scores for {metric_name_to_plot} in layer {layer_name} epoch {epoch_num} is not a tensor: {type(scores_tensor)}. Skipping.")
+                                    # If it's a scalar (e.g. already averaged), treat as mean with 0 std
+                                    if isinstance(scores_tensor, (float, int)):
+                                        mean_score = float(scores_tensor)
+                                        std_score = 0.0
+                                    else: # Otherwise skip
+                                        continue 
+                                elif scores_tensor.numel() == 0:
+                                    # logger.warning(f"Scores tensor for {metric_name_to_plot} in layer {layer_name} epoch {epoch_num} is empty. Skipping.")
+                                    continue # Skip empty tensors
+                                else:
+                                    mean_score = torch.mean(scores_tensor.float()).item()
+                                    std_score = torch.std(scores_tensor.float()).item() if scores_tensor.numel() > 1 else 0.0
+
+                                if layer_name not in current_metric_evolution_for_plot:
+                                    current_metric_evolution_for_plot[layer_name] = {
+                                        "epochs": [], 
+                                        "mean_scores": [], 
+                                        "std_scores": []
+                                    }
+                                current_metric_evolution_for_plot[layer_name]["epochs"].append(epoch_num)
+                                current_metric_evolution_for_plot[layer_name]["mean_scores"].append(mean_score)
+                                current_metric_evolution_for_plot[layer_name]["std_scores"].append(std_score)
+                    
+                    if current_metric_evolution_for_plot:
+                        # Sort by epoch for consistent plotting, just in case epochs are not in order
+                        for layer_data_for_plot in current_metric_evolution_for_plot.values():
+                            if layer_data_for_plot["epochs"]:
+                                sorted_indices = np.argsort(layer_data_for_plot["epochs"])
+                                layer_data_for_plot["epochs"] = [layer_data_for_plot["epochs"][i] for i in sorted_indices]
+                                layer_data_for_plot["mean_scores"] = [layer_data_for_plot["mean_scores"][i] for i in sorted_indices]
+                                layer_data_for_plot["std_scores"] = [layer_data_for_plot["std_scores"][i] for i in sorted_indices]
+
                         evolution_plot_path = plot_metric_evolution(
-                            metric_evolution_data=single_metric_evolution_data,
+                            metric_evolution_data=current_metric_evolution_for_plot,
                             metric_name=metric_name_to_plot,
                             save_dir=self.figure_path,
                             title_prefix=title_prefix,
@@ -443,6 +492,8 @@ class AlignmentExperiment(Experiment):
                         )
                         if evolution_plot_path:
                             plot_files_generated.append(evolution_plot_path)
+                    else:
+                        logger.info(f"No evolution data found to plot for metric: {metric_name_to_plot}")
 
             if plot_files_generated:
                 self.results["plot_files"] = plot_files_generated

@@ -92,7 +92,6 @@ def run_progressive_dropout_experiment(
         "force_cpu_for_large_metric_ops": force_cpu_for_large_metric_ops,
         "configured_cnn_mode": configured_cnn_mode,
         "configured_cnn_rq_op": configured_cnn_rq_op
-        # Add other relevant kwargs from the function signature if needed by specific metrics
     }]
 
     for net_idx, net_rep in enumerate(tqdm(networks, desc="Preparing Network Metrics", disable=not show_progress)):
@@ -105,42 +104,53 @@ def run_progressive_dropout_experiment(
             device=device, 
             data_loader=dataset.test_loader,
             num_batches=num_batches_for_pre_scoring,
-            debug_mode=debug_mode,
-            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops,
-            configured_cnn_mode=configured_cnn_mode,
-            configured_cnn_rq_op=configured_cnn_rq_op
+            debug_mode=debug_mode
         )
+        
+        # +++ START NEW DETAILED DEBUG LOGGING +++
+        if debug_mode:
+            logger.debug(f"Dropout Manager (Net {net_idx}): Received scores_dict_of_dict from compute_all_node_scores:")
+            if not scores_dict_of_dict:
+                logger.debug("  scores_dict_of_dict is EMPTY.")
+            else:
+                for l_name_debug, m_dict_debug in scores_dict_of_dict.items():
+                    logger.debug(f"  Layer '{l_name_debug}': Contains metrics: {list(m_dict_debug.keys())}")
+                    for m_name_debug, val_debug in m_dict_debug.items():
+                        val_type = type(val_debug)
+                        val_shape = "N/A"
+                        is_valid_tensor = False
+                        if isinstance(val_debug, torch.Tensor):
+                            val_shape = str(val_debug.shape)
+                            is_valid_tensor = val_debug.numel() > 0 and not torch.isnan(val_debug).all()
+                        logger.debug(f"    Metric '{m_name_debug}': type={val_type}, shape={val_shape}, is_valid_tensor_for_pruning={is_valid_tensor}")
+        # +++ END NEW DETAILED DEBUG LOGGING +++
         
         current_net_scores = {} 
         if scores_dict_of_dict:
-            # Try to get scores for the specifically requested metric_instance.name
-            # scores_dict_of_dict is {layer_idx: {metric_name: tensor}}
-            # First, check if the primary metric is available in any layer
             metric_found = False
-            for layer_idx_key in scores_dict_of_dict:
-                if metric_instance.name in scores_dict_of_dict[layer_idx_key]:
-                    metric_found = True
-                    current_net_scores[layer_idx_key] = scores_dict_of_dict[layer_idx_key][metric_instance.name]
-                else:
-                    # If metric not in this layer, fill with None or zeros (current logic in compute_all_node_scores might do zeros)
-                    current_net_scores[layer_idx_key] = None # Or torch.zeros_like(some_other_tensor_from_this_layer)
-            
-            if not metric_found:
-                logger.warning(f"Progressive Dropout: Primary metric '{metric_instance.name}' not found in any layer for network {net_idx}. Attempting fallback.")
-                first_metric_name_found = None
-                first_layer_idx_for_fallback = next(iter(scores_dict_of_dict), None)
-                if first_layer_idx_for_fallback is not None and scores_dict_of_dict[first_layer_idx_for_fallback]:
-                    first_metric_name_found = next(iter(scores_dict_of_dict[first_layer_idx_for_fallback].keys()), None)
+            for layer_idx_key in scores_dict_of_dict: 
+                metric_data_for_layer = scores_dict_of_dict[layer_idx_key]
                 
-                if first_metric_name_found:
-                    logger.warning(f"Progressive Dropout: Using fallback metric '{first_metric_name_found}' for pruning scores for network {net_idx}.")
-                    current_net_scores = {} # Reset and rebuild
-                    for layer_idx_key, metrics_in_layer_val in scores_dict_of_dict.items():
-                        current_net_scores[layer_idx_key] = metrics_in_layer_val.get(first_metric_name_found)
+                if metric_instance.name in metric_data_for_layer: 
+                    score_value = metric_data_for_layer[metric_instance.name]
+                    if score_value is not None and isinstance(score_value, torch.Tensor) and score_value.numel() > 0 and not torch.isnan(score_value).all():
+                        current_net_scores[layer_idx_key] = score_value
+                        metric_found = True
+                        if debug_mode:
+                            logger.debug(f"Dropout Manager: Found valid score for metric '{metric_instance.name}' in layer '{layer_idx_key}'.")
+                    else:
+                        current_net_scores[layer_idx_key] = None 
+                        if debug_mode:
+                            logger.debug(f"Dropout Manager: Score for metric '{metric_instance.name}' in layer '{layer_idx_key}' is None, not a tensor, empty, or all NaNs.")
                 else:
-                    logger.error(f"Progressive Dropout: Failed to obtain any scores for network {net_idx} for any metric.")
-        else:
-            logger.error(f"Progressive Dropout: compute_all_node_scores returned empty dict for network {net_idx}.")
+                    current_net_scores[layer_idx_key] = None
+                    if debug_mode:
+                        logger.debug(f"Dropout Manager: Metric '{metric_instance.name}' (expected) not found in scores for layer '{layer_idx_key}'. Available metrics: {list(metric_data_for_layer.keys())}")
+            
+            if not metric_found: 
+                logger.warning(f"Progressive Dropout: Primary metric '{metric_instance.name}' not found with valid scores in any layer for network {net_idx}. Attempting fallback (fallback logic not shown here but was empty).")
+        else: 
+            logger.error(f"Progressive Dropout: compute_all_node_scores returned an empty dictionary for network {net_idx}.")
 
         all_networks_scores_by_layer_list.append(current_net_scores)
 
@@ -400,10 +410,7 @@ def run_layer_isolated_dropout_experiment(
             device=device, 
             data_loader=dataset.test_loader,
             debug_mode=debug_mode, 
-            num_batches=num_batches_for_pre_scoring,
-            force_cpu_for_large_metric_ops=force_cpu_for_large_metric_ops,
-            configured_cnn_mode=configured_cnn_mode,
-            configured_cnn_rq_op=configured_cnn_rq_op
+            num_batches=num_batches_for_pre_scoring
         )
         
         scores_this_rep_single_metric = {} 

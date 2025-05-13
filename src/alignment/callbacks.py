@@ -115,38 +115,37 @@ class AlignmentMetricTracker:
              logger.warning(f"Epoch {current_epoch}: No target layers identified for metric computation. Skipping.")
              return
 
-        # Determine if we need inputs/outputs based on requested metrics
         # This is a simplification; a more robust way would check metric function signatures
-        needs_inputs = any("rayleigh_quotient" in m or "redundancy" in m or "pid_" in m for m in self.metric_names)
-        needs_outputs = any("mi_" in m or "pid_" in m for m in self.metric_names)
+        metric_names_lower = [m.lower() for m in self.metric_names]
         
-        # Always collect outputs if any metric is requested; collect inputs only if needed.
-        # RQ, Redundancy_Gaussian, PID need inputs. MI, PID need outputs.
-        collect_inputs_flag = needs_inputs
-        collect_outputs_flag = needs_outputs or not needs_inputs # Collect outputs if MI or PID, or if only non-input metrics requested
+        final_collect_inputs = any("rayleigh_quotient" in m or "rq" in m or "redundancy" in m or "pid_" in m for m in metric_names_lower)
+        final_collect_outputs = any("mi_" in m or "pid_" in m for m in metric_names_lower)
 
-        metric_names_str = ", ".join(self.metric_names)
-        logger.info(f"Epoch {current_epoch}: Computing alignment metrics ({metric_names_str}) for layers: {effective_target_layers}")
-
+        if not final_collect_inputs and not final_collect_outputs and self.metric_names:
+             logger.warning(f"Epoch {current_epoch}: Metric names {self.metric_names} configured for tracker, but no input/output collection explicitly triggered by known patterns. This might be okay if metrics don't need activations.")
+        
+        # Use the final flags for the debug log AND the function call
+        logger.debug(f"Epoch {current_epoch}: Calling collect_layer_data with effective flags: (inputs={final_collect_inputs}, outputs={final_collect_outputs})...")
+        
+        # Store original training state and set model to eval - this was missing from the snippet
         original_training_state = model.training
         try:
-            model.eval() # Set to eval mode for consistent activation collection
+            model.eval() 
 
             # 1. Collect Data
-            logger.debug(f"Epoch {current_epoch}: Collecting layer data (inputs={collect_inputs_flag}, outputs={collect_outputs_flag})...")
+            # logger.debug(f"Epoch {current_epoch}: Collecting layer data (inputs={collect_inputs_flag}, outputs={collect_outputs_flag})...") # Old log, replaced by the one above
             
-            # If DDP, use model.module for collection
             model_to_collect_from = model.module if (ddp_world_size > 1 and isinstance(model, torch.nn.parallel.DistributedDataParallel)) else model
             
             collected_data = collect_layer_data(
-                model=model_to_collect_from, # Pass the potentially unwrapped model
-                dataloader=self.data_loader, # Dataloader should be DDP-aware if world_size > 1
+                model=model_to_collect_from, 
+                dataloader=self.data_loader, 
                 target_layers=effective_target_layers,
                 num_batches=self.num_batches,
                 device=self.device,
-                collect_inputs=collect_inputs_flag,
-                collect_outputs=collect_outputs_flag,
-                flatten_spatial=True # Assume metrics generally prefer flattened inputs/outputs
+                collect_inputs=final_collect_inputs, # Use new flag
+                collect_outputs=final_collect_outputs, # Use new flag
+                flatten_spatial=True 
             )
             logger.debug(f"Epoch {current_epoch}: Data collection complete.")
 
@@ -162,6 +161,7 @@ class AlignmentMetricTracker:
             metric_configs_for_computation: List[Dict[str, Any]] = []
             for name in self.metric_names:
                 conf = {"name": name}
+                
                 # Add metric-specific kwargs passed during tracker initialization
                 if name in self.metric_kwargs:
                     conf.update(self.metric_kwargs[name])
@@ -169,17 +169,26 @@ class AlignmentMetricTracker:
                 # Add global/default settings from experiment_config if not already overridden by metric_kwargs
                 # Example: scale_by_norm for RQ, cnn_mode, cnn_rq_aggregation_op, force_cpu_for_large_metric_ops
                 if self.experiment_config and hasattr(self.experiment_config, 'alignment_settings'):
-                    if name.lower() == "rq" or "rayleigh_quotient" in name.lower():
-                        conf.setdefault("scale_by_norm", self.experiment_config.alignment_settings.scale_by_norm)
+                    if hasattr(self.experiment_config.alignment_settings, 'scale_by_norm'):
+                        if name.lower() == "rq" or "rayleigh_quotient" in name.lower():
+                            logger.debug(f"Setting scale_by_norm={self.experiment_config.alignment_settings.scale_by_norm} for metric {name}")
+                            conf.setdefault("scale_by_norm", self.experiment_config.alignment_settings.scale_by_norm)
                     
-                    # These are more general and could be passed as top-level args to compute_metrics_for_layers
-                    # or individual metric functions if they expect them.
-                    # For now, assuming _AlignmentMetricImpl handles what it needs based on its direct args.
-                    # We can add these to conf if compute_per_node_scores via _AlignmentMetricImpl expects them in **kwargs.
-                    # conf.setdefault("configured_cnn_mode", self.experiment_config.alignment_settings.cnn_mode) 
-                    # conf.setdefault("configured_cnn_rq_op", self.experiment_config.alignment_settings.cnn_rq_aggregation_op)
-                    # conf.setdefault("force_cpu_for_large_metric_ops", self.experiment_config.alignment_settings.force_cpu_for_large_metric_ops)
+                    # Add additional parameters that might be needed for metrics computation
+                    if hasattr(self.experiment_config.alignment_settings, 'force_cpu_for_large_metric_ops'):
+                        conf.setdefault("force_cpu_for_large_metric_ops", 
+                                       self.experiment_config.alignment_settings.force_cpu_for_large_metric_ops)
+                    if hasattr(self.experiment_config.alignment_settings, 'cnn_mode'):
+                        conf.setdefault("configured_cnn_mode", self.experiment_config.alignment_settings.cnn_mode)
+                    if hasattr(self.experiment_config.alignment_settings, 'cnn_rq_aggregation_op'):
+                        conf.setdefault("configured_cnn_rq_op", self.experiment_config.alignment_settings.cnn_rq_aggregation_op)
+                
+                # Make sure verbose is set for debug
+                conf.setdefault("verbose", True if self.experiment_config and hasattr(self.experiment_config, 'debug_mode') and self.experiment_config.debug_mode else False)
+                
                 metric_configs_for_computation.append(conf)
+            
+            logger.debug(f"Epoch {current_epoch}: Prepared metric_configs_for_computation: {metric_configs_for_computation}")
 
             computed_metrics = compute_metrics_for_layers(
                 model=model_to_collect_from, # Pass the same model instance used for collection 
@@ -195,12 +204,12 @@ class AlignmentMetricTracker:
                 "epoch": current_epoch,
                 "all_scores_per_layer": computed_metrics # The structure matches the old format
             })
-            logger.info(f"Epoch {current_epoch}: Finished computing and storing metrics ({metric_names_str}).")
+            logger.info(f"Epoch {current_epoch}: Finished computing and storing metrics ({', '.join(self.metric_names)})")
 
         except Exception as e:
             debug_mode = getattr(self.experiment_config, 'debug_mode', False) if self.experiment_config else False
             logger.error(
-                f"Epoch {current_epoch}: Error computing alignment metrics ({metric_names_str}): {e}",
+                f"Epoch {current_epoch}: Error computing alignment metrics ({', '.join(self.metric_names)}): {e}",
                 exc_info=debug_mode
             )
         finally:

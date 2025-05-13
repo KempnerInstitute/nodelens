@@ -19,6 +19,7 @@ import torch.nn as nn
 import logging
 from typing import Dict, Any, Callable, Optional, Tuple, Union, List, Protocol
 from torch.utils.data import DataLoader
+from alignment.utils.activation_utils import collect_layer_data # Ensure this is imported
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,11 @@ except ImportError:
         "PID-based metrics will use dummy implementations."
     )
     # Define dummy implementation if import fails
-        class DummyBROJA:
-            @staticmethod
-            def pid(p_rc_s: Dict) -> Dict[str, float]:
-                logger.warning("Using dummy BROJA_2PID.pid implementation.")
-                return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
+    class DummyBROJA:
+        @staticmethod
+        def pid(p_rc_s: Dict) -> Dict[str, float]:
+            logger.warning("Using dummy BROJA_2PID.pid implementation.")
+            return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
         BROJA_2PID_MODULE = DummyBROJA()
     PID_AVAILABLE = False
 except Exception as e:
@@ -61,11 +62,11 @@ def get_broja_pid_module():
     # The module (real or dummy) is already assigned during initial import attempt.
     if BROJA_2PID_MODULE is None:
          # This state should ideally not be reached due to the try/except block above.
-         logger.error("BROJA_2PID_MODULE is unexpectedly None. Returning a fallback dummy.")
+        logger.error("BROJA_2PID_MODULE is unexpectedly None. Returning a fallback dummy.")
         class FallbackDummyBROJA:
             @staticmethod
             def pid(p_rc_s: Dict) -> Dict[str, float]: return {"SI": 0.0, "UIY": 0.0, "UIZ": 0.0, "CI": 0.0}
-         BROJA_2PID_MODULE = FallbackDummyBROJA()
+        BROJA_2PID_MODULE = FallbackDummyBROJA()
     return BROJA_2PID_MODULE
 
 # --- UTILITY FUNCTIONS ---
@@ -434,49 +435,145 @@ class _AlignmentMetricImpl:
             else: raise ValueError("Cannot determine device for metric calculation.")
         eff_device = torch.device(device) if isinstance(device, str) else device
         
+        # Log input tensors for debugging
+        logger.info(f"compute_per_node_scores({self.name}): Tensor availability - " + 
+                   f"inputs: {layer_inputs is not None}, weights: {layer_weights is not None}, " +
+                   f"outputs: {layer_outputs is not None}")
+        
+        if layer_inputs is not None:
+            logger.info(f"compute_per_node_scores({self.name}): layer_inputs.shape = {layer_inputs.shape}, " + 
+                       f"dtype = {layer_inputs.dtype}, device = {layer_inputs.device}")
+        if layer_weights is not None:
+            logger.info(f"compute_per_node_scores({self.name}): layer_weights.shape = {layer_weights.shape}, " + 
+                       f"dtype = {layer_weights.dtype}, device = {layer_weights.device}")
+        if layer_outputs is not None:
+            logger.info(f"compute_per_node_scores({self.name}): layer_outputs.shape = {layer_outputs.shape}, " + 
+                       f"dtype = {layer_outputs.dtype}, device = {layer_outputs.device}")
+        
         # Extract relevant kwargs for specific metric functions, pass others via **fn_kwargs
-        # This helps avoid passing unsupported args to underlying functions.
         fn_kwargs = {"verbose": verbose}
         force_cpu_flag = metric_specific_kwargs.get("force_cpu_for_large_metric_ops", False)
         # configured_cnn_mode = metric_specific_kwargs.get("configured_cnn_mode", "unfold") # Example if needed
         # configured_cnn_rq_op = metric_specific_kwargs.get("configured_cnn_rq_op", "mean") # Example if needed
 
-        if "rayleigh_quotient" in metric_name_lower or "rq" in metric_name_lower:
-            if layer_inputs is None or layer_weights is None: raise ValueError(f"{self.name} needs layer_inputs and layer_weights.")
-            fn_kwargs["relative"] = self.scale_by_norm
-            fn_kwargs["min_samples_for_cov"] = min_samples_for_cov
-            fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
-            return self._metric_fn(layer_inputs.to(eff_device), layer_weights.to(eff_device), **fn_kwargs)
-        
-        elif "mi_gaussian" in metric_name_lower or "mi_g" in metric_name_lower:
-            if layer_outputs is None: raise ValueError(f"{self.name} needs layer_outputs.")
-            if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
-            if "order" in metric_specific_kwargs: fn_kwargs["order"] = metric_specific_kwargs["order"]
-            fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
-            return self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
+        try:
+            if "rayleigh_quotient" in metric_name_lower or "rq" in metric_name_lower:
+                if layer_inputs is None or layer_weights is None: 
+                    logger.error(f"{self.name} needs layer_inputs and layer_weights, but got inputs: {layer_inputs is not None}, weights: {layer_weights is not None}")
+                    # Return an empty tensor with correct device/dtype instead of raising error
+                    if layer_weights is not None:
+                        return torch.zeros(layer_weights.shape[0], device=eff_device, dtype=layer_weights.dtype)
+                    else:
+                        return torch.zeros(1, device=eff_device, dtype=torch.float32)
+                
+                # Check tensor shapes and dimensions
+                if layer_inputs.ndim != 2:
+                    layer_inputs_reshaped = layer_inputs
+                    if layer_inputs.ndim > 2 and layer_inputs.shape[0] > 0:
+                        logger.info(f"compute_per_node_scores({self.name}): Reshaping layer_inputs from {layer_inputs.shape} to [batch_size, features]")
+                        layer_inputs_reshaped = layer_inputs.flatten(start_dim=1)
+                    else:
+                        logger.error(f"compute_per_node_scores({self.name}): Cannot reshape layer_inputs with ndim {layer_inputs.ndim}")
+                        return torch.zeros(layer_weights.shape[0], device=eff_device, dtype=layer_weights.dtype)
+                else:
+                    layer_inputs_reshaped = layer_inputs
+                    
+                if layer_weights.ndim != 2:
+                    layer_weights_reshaped = layer_weights
+                    if layer_weights.ndim > 2 and layer_weights.shape[0] > 0:
+                        logger.info(f"compute_per_node_scores({self.name}): Reshaping layer_weights from {layer_weights.shape} to [out_features, in_features]")
+                        layer_weights_reshaped = layer_weights.reshape(layer_weights.shape[0], -1)
+                    else:
+                        logger.error(f"compute_per_node_scores({self.name}): Cannot reshape layer_weights with ndim {layer_weights.ndim}")
+                        return torch.zeros(layer_weights.shape[0], device=eff_device, dtype=layer_weights.dtype)
+                else:
+                    layer_weights_reshaped = layer_weights
+                
+                # Check for dimension mismatch and fix
+                if layer_inputs_reshaped.shape[1] != layer_weights_reshaped.shape[1]:
+                    min_dim = min(layer_weights_reshaped.shape[1], layer_inputs_reshaped.shape[1])
+                    logger.warning(f"compute_per_node_scores({self.name}): Dimension mismatch - inputs: {layer_inputs_reshaped.shape[1]}, weights: {layer_weights_reshaped.shape[1]}. Using first {min_dim} dimensions.")
+                    if min_dim == 0:
+                        logger.error(f"compute_per_node_scores({self.name}): No common feature dimensions.")
+                        return torch.zeros(layer_weights_reshaped.shape[0], device=eff_device, dtype=layer_weights_reshaped.dtype)
+                    layer_weights_reshaped = layer_weights_reshaped[:, :min_dim]
+                    layer_inputs_reshaped = layer_inputs_reshaped[:, :min_dim]
+                
+                fn_kwargs["relative"] = self.scale_by_norm
+                fn_kwargs["min_samples_for_cov"] = min_samples_for_cov
+                fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
+                
+                logger.info(f"compute_per_node_scores({self.name}): Calling compute_rayleigh_quotient with shapes - inputs: {layer_inputs_reshaped.shape}, weights: {layer_weights_reshaped.shape}")
+                result = self._metric_fn(layer_inputs_reshaped.to(eff_device), layer_weights_reshaped.to(eff_device), **fn_kwargs)
+                logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
+                return result
+            
+            elif "mi_gaussian" in metric_name_lower or "mi_g" in metric_name_lower:
+                if layer_outputs is None: 
+                    logger.error(f"{self.name} needs layer_outputs, but got outputs: {layer_outputs is not None}")
+                    return torch.zeros(1, device=eff_device, dtype=torch.float32)
+                
+                if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
+                if "order" in metric_specific_kwargs: fn_kwargs["order"] = metric_specific_kwargs["order"]
+                fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
+                
+                logger.info(f"compute_per_node_scores({self.name}): Calling mi_gaussian_approx with outputs shape: {layer_outputs.shape}")
+                result = self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
+                logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
+                return result
 
-        elif "mi_direct" in metric_name_lower or "mi_bin" in metric_name_lower:
-            if layer_outputs is None: raise ValueError(f"{self.name} needs layer_outputs.")
-            if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
-            fn_kwargs["bins"] = bins
-            # mi_direct_binning doesn't use covariance, so force_cpu_flag isn't directly passed to it.
-            return self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
+            elif "mi_direct" in metric_name_lower or "mi_bin" in metric_name_lower:
+                if layer_outputs is None: 
+                    logger.error(f"{self.name} needs layer_outputs, but got outputs: {layer_outputs is not None}")
+                    return torch.zeros(1, device=eff_device, dtype=torch.float32)
+                
+                if target_outputs is not None: fn_kwargs["target_outputs"] = target_outputs.to(eff_device)
+                fn_kwargs["bins"] = bins
+                # mi_direct_binning doesn't use covariance, so force_cpu_flag isn't directly passed to it.
+                logger.info(f"compute_per_node_scores({self.name}): Calling mi_direct_binning with outputs shape: {layer_outputs.shape}")
+                result = self._metric_fn(layer_outputs.to(eff_device), **fn_kwargs)
+                logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
+                return result
 
-        elif "redundancy_gaussian" in metric_name_lower or "red_g" in metric_name_lower:
-            if layer_inputs is None or layer_weights is None: raise ValueError(f"{self.name} needs layer_inputs and layer_weights.")
-            fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
-            return self._metric_fn(layer_inputs.to(eff_device), layer_weights.to(eff_device), **fn_kwargs)
-        
-        elif "pid_" in metric_name_lower:
-            if not PID_AVAILABLE: 
-                logger.warning(f"PID metric {self.name} called; BROJA_2PID not available. Returning zeros.")
-                num_n = layer_outputs.shape[1] if layer_outputs is not None else (layer_inputs.shape[1] if layer_inputs is not None else 1)
-                return torch.zeros(num_n, device=eff_device)
-            if layer_inputs is None or layer_outputs is None: raise ValueError(f"{self.name} needs layer_inputs and layer_outputs.")
-            fn_kwargs["bins"] = bins
-            return self._metric_fn(layer_inputs.to(eff_device), layer_outputs.to(eff_device), **fn_kwargs)
-        else:
-            raise NotImplementedError(f"Dispatch for {self.name} in _AlignmentMetricImpl.compute_per_node_scores not implemented.")
+            elif "redundancy_gaussian" in metric_name_lower or "red_g" in metric_name_lower:
+                if layer_inputs is None or layer_weights is None: 
+                    logger.error(f"{self.name} needs layer_inputs and layer_weights, but got inputs: {layer_inputs is not None}, weights: {layer_weights is not None}")
+                    return torch.zeros(layer_weights.shape[0] if layer_weights is not None else 1, device=eff_device, 
+                                     dtype=layer_weights.dtype if layer_weights is not None else torch.float32)
+                
+                fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
+                logger.info(f"compute_per_node_scores({self.name}): Calling average_redundancy_gaussian with shapes - inputs: {layer_inputs.shape}, weights: {layer_weights.shape}")
+                result = self._metric_fn(layer_inputs.to(eff_device), layer_weights.to(eff_device), **fn_kwargs)
+                logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
+                return result
+            
+            elif "pid_" in metric_name_lower:
+                if not PID_AVAILABLE: 
+                    logger.warning(f"PID metric {self.name} called; BROJA_2PID not available. Returning zeros.")
+                    num_n = layer_outputs.shape[1] if layer_outputs is not None else (layer_inputs.shape[1] if layer_inputs is not None else 1)
+                    return torch.zeros(num_n, device=eff_device)
+                
+                if layer_inputs is None or layer_outputs is None: 
+                    logger.error(f"{self.name} needs layer_inputs and layer_outputs, but got inputs: {layer_inputs is not None}, outputs: {layer_outputs is not None}")
+                    return torch.zeros(layer_outputs.shape[1] if layer_outputs is not None else 1, device=eff_device, 
+                                     dtype=layer_outputs.dtype if layer_outputs is not None else torch.float32)
+                
+                fn_kwargs["bins"] = bins
+                logger.info(f"compute_per_node_scores({self.name}): Calling average_pid_component with shapes - inputs: {layer_inputs.shape}, outputs: {layer_outputs.shape}")
+                result = self._metric_fn(layer_inputs.to(eff_device), layer_outputs.to(eff_device), **fn_kwargs)
+                logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
+                return result
+            else:
+                logger.error(f"Dispatch for {self.name} in _AlignmentMetricImpl.compute_per_node_scores not implemented.")
+                return torch.zeros(1, device=eff_device, dtype=torch.float32)
+        except Exception as e:
+            logger.error(f"Error in compute_per_node_scores for metric {self.name}: {e}", exc_info=True)
+            if layer_weights is not None:
+                return torch.zeros(layer_weights.shape[0], device=eff_device, dtype=layer_weights.dtype)
+            elif layer_outputs is not None and layer_outputs.ndim > 1:
+                return torch.zeros(layer_outputs.shape[1], device=eff_device, dtype=layer_outputs.dtype)
+            else:
+                return torch.zeros(1, device=eff_device, dtype=torch.float32)
 
 # --- METRIC REGISTRY & DISPATCHER ---
 # Raw metric functions for PID, to be wrapped by _AlignmentMetricImpl
@@ -527,41 +624,113 @@ def compute_metrics_for_layers(
     metric_configs: List[Dict[str, Any]], 
     device: Union[str, torch.device],
 ) -> Dict[str, Dict[str, Union[torch.Tensor, float]]]:
+    logger.info(f"compute_metrics_for_layers: === ENTERED FUNCTION ===. collected_data keys: {list(collected_data.keys()) if collected_data else 'EMPTY_OR_NONE'}. Num metric_configs: {len(metric_configs) if metric_configs else 0}")
+    logger.info(f"compute_metrics_for_layers: metric_configs = {metric_configs}")
+    
     results: Dict[str, Dict[str, Union[torch.Tensor, float]]] = {}
     model.to(device); model.eval()
-    modules_dict = {name: mod for name, mod in model.named_modules()}
+    
+    # Adjust module lookup based on whether model has base_model
+    target_model_for_modules = model
+    if hasattr(model, 'base_model') and isinstance(model.base_model, nn.Module):
+        logger.info("compute_metrics_for_layers: Using model.base_model to resolve module names.")
+        target_model_for_modules = model.base_model
+    else:
+        logger.info("compute_metrics_for_layers: Using model directly to resolve module names.")
+        
+    modules_dict = {name: mod for name, mod in target_model_for_modules.named_modules()}
+    logger.info(f"compute_metrics_for_layers: Available modules for lookup: {list(modules_dict.keys())}")
 
     for layer_name, layer_data in collected_data.items():
         results[layer_name] = {}
         module = modules_dict.get(layer_name)
-        if not module: continue
         
-        l_inputs = layer_data.get("input"); l_outputs = layer_data.get("output")
+        logger.info(f"compute_metrics_for_layers: Processing layer '{layer_name}'. Module found: {module is not None}. Layer_data keys: {list(layer_data.keys()) if layer_data else 'None'}")
+        
+        if 'input' in layer_data:
+            logger.info(f"compute_metrics_for_layers: Layer '{layer_name}' input shape: {layer_data['input'].shape}")
+            # Check for NaN or Inf values in input
+            if torch.isnan(layer_data['input']).any() or torch.isinf(layer_data['input']).any():
+                logger.warning(f"compute_metrics_for_layers: Layer '{layer_name}' input contains NaN or Inf values!")
+        else:
+            logger.warning(f"compute_metrics_for_layers: Layer '{layer_name}' has no 'input' data!")
+        
+        if 'output' in layer_data:
+            logger.info(f"compute_metrics_for_layers: Layer '{layer_name}' output shape: {layer_data['output'].shape}")
+        
+        if not module: 
+            logger.warning(f"compute_metrics_for_layers: Module '{layer_name}' (from collected_data) not found in resolved model_modules for weight/type lookup.")
+            continue
+        
+        if hasattr(module, 'weight') and module.weight is not None:
+            logger.info(f"compute_metrics_for_layers: Layer '{layer_name}' weight shape: {module.weight.shape}")
+            # Check for NaN or Inf values in weights
+            if torch.isnan(module.weight).any() or torch.isinf(module.weight).any():
+                logger.warning(f"compute_metrics_for_layers: Layer '{layer_name}' weights contain NaN or Inf values!")
+        else:
+            logger.warning(f"compute_metrics_for_layers: Layer '{layer_name}' has no weight attribute or it's None.")
+            continue  # Skip this layer if no weights are available
+        
+        l_inputs = layer_data.get("input")
+        l_outputs = layer_data.get("output")
+        
+        # Verify dimensions match for RQ computation
+        weights_shape = module.weight.shape
+        if l_inputs is not None and weights_shape[1] != l_inputs.shape[1]:
+            logger.warning(f"compute_metrics_for_layers: Dimension mismatch for '{layer_name}': weights_shape[1]={weights_shape[1]}, l_inputs.shape[1]={l_inputs.shape[1]}")
+            if weights_shape[1] < l_inputs.shape[1]:
+                logger.info(f"compute_metrics_for_layers: Truncating input features for '{layer_name}' from {l_inputs.shape[1]} to {weights_shape[1]}")
+                l_inputs = l_inputs[:, :weights_shape[1]]
+            else:
+                logger.warning(f"compute_metrics_for_layers: Input features for '{layer_name}' are fewer than weight features. This may cause issues.")
 
-        for m_config in metric_configs:
-            metric_name = m_config["name"]
+        if not metric_configs: 
+            logger.warning(f"compute_metrics_for_layers: metric_configs is empty for layer '{layer_name}'. No metrics will be computed.")
+            continue
+
+        for m_config_idx, m_config in enumerate(metric_configs):
+            logger.info(f"compute_metrics_for_layers: INNER LOOP iteration {m_config_idx}, m_config: {m_config}")
+            metric_name = m_config.get("name") 
+            if not metric_name:
+                logger.warning(f"compute_metrics_for_layers: Metric config found without a 'name' for layer '{layer_name}'. Skipping config: {m_config}")
+                continue
+            
+            logger.info(f"compute_metrics_for_layers: Attempting to compute metric '{metric_name}' for layer '{layer_name}'.")
             scale_by_norm = m_config.get("scale_by_norm", False)
             specific_kwargs_for_metric = {k:v for k,v in m_config.items() if k not in ["name", "scale_by_norm"]}
+            
+            results[layer_name][metric_name] = torch.tensor(float('nan')) # Initialize with NaN
 
             try:
-                # Get the AlignmentMetric wrapper instance
+                logger.info(f"compute_metrics_for_layers: Getting metric instance for '{metric_name}' with scale_by_norm={scale_by_norm}")
                 metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm)
+                current_layer_weights = module.weight.detach() if hasattr(module, 'weight') and module.weight is not None else None
                 
-                # Call its compute_per_node_scores method
+                if metric_name.upper() == "RQ":
+                    logger.info(f"compute_metrics_for_layers (RQ Pre-Call): Layer '{layer_name}', l_inputs is None: {l_inputs is None}, current_layer_weights is None: {current_layer_weights is None}")
+                    if isinstance(l_inputs, torch.Tensor):
+                        logger.info(f"compute_metrics_for_layers (RQ Pre-Call): Layer '{layer_name}', l_inputs.shape: {l_inputs.shape}")
+                    if isinstance(current_layer_weights, torch.Tensor):
+                        logger.info(f"compute_metrics_for_layers (RQ Pre-Call): Layer '{layer_name}', current_layer_weights.shape: {current_layer_weights.shape}")
+
+                logger.info(f"compute_metrics_for_layers: Calling compute_per_node_scores with kwargs: {specific_kwargs_for_metric}")
                 metric_val = metric_instance.compute_per_node_scores(
                     layer_inputs=l_inputs, 
-                    layer_weights=module.weight.detach() if hasattr(module, 'weight') and module.weight is not None else None, 
+                    layer_weights=current_layer_weights, 
                     layer_outputs=l_outputs,
                     device=device, 
                     **specific_kwargs_for_metric
                 )
+                logger.info(f"compute_metrics_for_layers: Result from compute_per_node_scores: {metric_val}")
+                
                 if metric_val is not None:
+                    logger.info(f"compute_metrics_for_layers: Metric value for '{metric_name}' has shape: {metric_val.shape}, will store it in results")
                     results[layer_name][metric_name] = metric_val.item() if metric_val.numel()==1 else metric_val.cpu()
-                else: results[layer_name][metric_name] = torch.tensor(float('nan'))
+                else:
+                    logger.warning(f"compute_metrics_for_layers: Metric value for '{metric_name}' is None")
             except Exception as e:
-                verbose_logging = specific_kwargs_for_metric.get("verbose", False)
-                logger.error(f"Error computing metric '{metric_name}' for layer '{layer_name}': {e}", exc_info=verbose_logging)
-                results[layer_name][metric_name] = torch.tensor(float('nan'))
+                logger.error(f"Error computing metric '{metric_name}' for layer '{layer_name}': {e}", exc_info=True)
+    logger.info(f"compute_metrics_for_layers: === EXITING FUNCTION ===. Results: {results}")
     return results 
 
 # --- NEW: Pairwise Metric Calculation ---
@@ -749,159 +918,98 @@ def compute_pairwise_metric(
 # --- NEW: compute_all_node_scores --- 
 def compute_all_node_scores(
     model: nn.Module,
-    metric_configs: List[Dict[str, Any]], # e.g. [{"name": "RQ", "scale_by_norm": False, "min_samples_for_cov": 2}]
+    metric_configs: List[Dict[str, Any]], 
     device: Union[str, torch.device],
-    data_loader: DataLoader, # DataLoader from which to get batches
-    num_batches: Optional[int] = 1, # Number of batches to process to collect activations
-    # The following are passed down to compute_metrics_for_layers or individual metrics via metric_configs if needed
-    # force_cpu_for_large_metric_ops: bool = True, # This should be a kwarg within a metric_config if metric-specific
-    # configured_cnn_mode: Optional[str] = "unfold", # This is now part of ModelConfig for AlignmentNetwork wrapper
-    # configured_cnn_rq_op: Optional[str] = "mean", # This is also part of AlignmentConfig
-    debug_mode: bool = False # For verbose logging if any metric supports it
-) -> Dict[str, Dict[str, torch.Tensor]]: # Returns {layer_name: {metric_name: scores_tensor}}
+    data_loader: DataLoader, 
+    num_batches: Optional[int] = 1, 
+    debug_mode: bool = False 
+) -> Dict[str, Dict[str, torch.Tensor]]: 
     """
     Computes node scores for specified metrics for all relevant layers in a model.
-    This involves running data through the model to collect activations.
+    This version uses the centralized `activation_utils.collect_layer_data`.
     """
     eff_device = torch.device(device) if isinstance(device, str) else device
     model.to(eff_device)
     model.eval()
 
-    # Identify layers to hook (e.g., all layers with weights, or specific ones if model is AlignmentNetwork)
-    # For a generic nn.Module, we might hook all modules that have parameters or are common layer types.
-    # If model is AlignmentNetwork, it has self.alignment_names and self.alignment_layers.
-    layers_to_hook = []
-    if hasattr(model, 'alignment_layers') and hasattr(model, 'alignment_names'): # Check if it's an AlignmentNetwork
-        # Use the pre-defined alignment layers from AlignmentNetwork
-        for name, layer in zip(model.alignment_names, model.alignment_layers):
-            layers_to_hook.append((name, layer))
+    # Determine target layers for activation collection
+    target_layers_for_hooks = []
+    # If model is AlignmentNetwork, use its defined alignment_names
+    # This requires AlignmentNetwork to be duck-typed or imported carefully to avoid circularity
+    # Assuming model is AlignmentNetwork or DDP-wrapped AlignmentNetwork, as called from dropout_manager
+    actual_model_for_names = model
+    if hasattr(model, 'module'): # DDP wrapped
+        actual_model_for_names = model.module
+    
+    if hasattr(actual_model_for_names, 'alignment_names') and actual_model_for_names.alignment_names:
+        target_layers_for_hooks = actual_model_for_names.alignment_names
+        logger.debug(f"compute_all_node_scores: Using alignment_names for hooks: {target_layers_for_hooks}")
     else:
-        # For generic nn.Module, hook identifiable layers (e.g., Conv, Linear)
-        # This basic heuristic might need refinement for complex custom models.
+        # Fallback for generic nn.Module: hook layers with weights (e.g., Linear, Conv)
+        # This might need adjustment based on which layers are truly relevant for scoring.
         for name, module_item in model.named_modules():
             if isinstance(module_item, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-                layers_to_hook.append((name, module_item))
-    
-    if not layers_to_hook:
-        logger.warning("compute_all_node_scores: No suitable layers found to hook in the model.")
+                target_layers_for_hooks.append(name)
+        if not target_layers_for_hooks:
+            logger.warning("compute_all_node_scores: No target layers identified for generic model. Returning empty scores.")
+            return {}
+        logger.debug(f"compute_all_node_scores: Using weight-having layers for hooks: {target_layers_for_hooks}")
+
+    if not target_layers_for_hooks:
+        logger.warning("compute_all_node_scores: No layers to hook. Cannot compute scores.")
         return {}
 
-    # Setup hooks to capture inputs and outputs
-    captured_activations: Dict[str, Dict[str, List[torch.Tensor]]] = {name: {"input": [], "output": []} for name, _ in layers_to_hook}
-    hooks = []
+    # Determine if inputs/outputs are needed based on metric_configs
+    # Simplified: assume RQ/Redundancy/PID need inputs, MI/PID need outputs. Collect both for safety.
+    # A more granular check could be done by inspecting metric_fn signatures or specific metric needs.
+    collect_inputs_flag = False
+    collect_outputs_flag = False
+    for m_conf in metric_configs:
+        m_name_lower = m_conf.get("name", "").lower()
+        if "rayleigh_quotient" in m_name_lower or "rq" in m_name_lower or "redundancy" in m_name_lower or "pid_" in m_name_lower:
+            collect_inputs_flag = True
+        if "mi_" in m_name_lower or "pid_" in m_name_lower:
+            collect_outputs_flag = True
+    
+    if not collect_inputs_flag and not collect_outputs_flag:
+        # If no metrics seem to require inputs or outputs, default to collecting outputs as MI_G might be a default.
+        # Or, if only weight-based metrics were hypothetically supported, this might be fine.
+        # For now, let's ensure at least outputs are collected if nothing specific is triggered.
+        collect_outputs_flag = True 
+        logger.debug("compute_all_node_scores: No specific input/output needs detected from metrics, defaulting to collect_outputs=True.")
 
-    def make_hook_fn(layer_name_key: str, input_or_output: str):
-        def hook_fn(module, m_input, m_output):
-            # For inputs, m_input is a tuple. We usually care about the first element.
-            data_to_store = m_input[0] if input_or_output == "input" else m_output
-            if isinstance(data_to_store, torch.Tensor):
-                # Detach and move to CPU to avoid accumulating on GPU memory during forward passes
-                # This is important if num_batches is large.
-                # However, for metric computation, they might need to be on `eff_device` later.
-                # Let's keep on original device for now, assuming num_batches is small for this typical use case.
-                # If OOM occurs, consider .cpu() here and .to(eff_device) in compute_metrics_for_layers.
-                captured_activations[layer_name_key][input_or_output].append(data_to_store.detach())
-            elif isinstance(data_to_store, tuple): # Some layers might return tuples
-                 if data_to_store and isinstance(data_to_store[0], torch.Tensor):
-                    captured_activations[layer_name_key][input_or_output].append(data_to_store[0].detach())
-        return hook_fn
 
-    for layer_name, layer_module in layers_to_hook:
-        hooks.append(layer_module.register_forward_hook(make_hook_fn(layer_name, "input")))
-        hooks.append(layer_module.register_forward_hook(make_hook_fn(layer_name, "output")))
+    # Use the centralized collect_layer_data function
+    # `model` here is the AlignmentNetwork (or DDP wrapped one), collect_layer_data handles base_model logic.
+    collected_activations = collect_layer_data(
+        model=model, # Pass the potentially DDP-wrapped AlignmentNetwork
+        dataloader=data_loader,
+        target_layers=target_layers_for_hooks,
+        num_batches=num_batches if num_batches is not None else 1,
+        device=eff_device,
+        collect_inputs=collect_inputs_flag,
+        collect_outputs=collect_outputs_flag,
+        flatten_spatial=True # Default flattening, individual metrics might need to unflatten if necessary
+    )
 
-    # Pass data through the model to trigger hooks
-    batches_processed = 0
-    with torch.no_grad():
-        for batch_idx, batch_data in enumerate(data_loader):
-            if num_batches is not None and batch_idx >= num_batches:
-                break
-            # Assuming batch_data is (inputs, targets) or just inputs
-            if isinstance(batch_data, (list, tuple)):
-                inputs, _ = batch_data[0].to(eff_device), batch_data[1] # Only move inputs to device
-            else:
-                inputs = batch_data.to(eff_device)
-            
-            try:
-                _ = model(inputs)
-                batches_processed += 1
-            except Exception as e:
-                logger.error(f"Error during model forward pass in compute_all_node_scores for batch {batch_idx}: {e}", exc_info=debug_mode)
-                # Potentially break or continue based on severity
-                break 
-
-    # Remove hooks
-    for h in hooks: h.remove()
-
-    if batches_processed == 0:
-        logger.warning("compute_all_node_scores: No batches were processed. Cannot compute metrics.")
+    if not collected_activations:
+        logger.warning("compute_all_node_scores: Activation collection returned no data.")
         return {}
 
-    # Consolidate captured data: Dict[str, Dict[str, torch.Tensor]]
-    # Each list of batch tensors should be concatenated.
-    collected_data_for_metric_computation: Dict[str, Dict[str, torch.Tensor]] = {}
-    for layer_name, io_data in captured_activations.items():
-        collected_data_for_metric_computation[layer_name] = {}
-        if io_data["input"]: 
-            try: collected_data_for_metric_computation[layer_name]["input"] = torch.cat(io_data["input"]) 
-            except RuntimeError as e: logger.error(f"Error concatenating inputs for {layer_name}: {e}")
-        if io_data["output"]: 
-            try: collected_data_for_metric_computation[layer_name]["output"] = torch.cat(io_data["output"])
-            except RuntimeError as e: logger.error(f"Error concatenating outputs for {layer_name}: {e}")
-    
+    # Ensure 'verbose' is set in metric_configs based on debug_mode for compute_metrics_for_layers
+    updated_metric_configs = []
+    for m_conf in metric_configs:
+        conf_copy = m_conf.copy()
+        conf_copy.setdefault("verbose", debug_mode)
+        updated_metric_configs.append(conf_copy)
+
     # Call compute_metrics_for_layers with the collected data
-    # Pass specific metric_configs which may include kwargs for individual metrics
     layer_metric_scores = compute_metrics_for_layers(
         model=model, 
-        collected_data=collected_data_for_metric_computation, 
-        metric_configs=metric_configs, # This now includes specific kwargs per metric
+        collected_data=collected_activations, 
+        metric_configs=updated_metric_configs, # Pass updated configs
         device=eff_device
-        # force_cpu_for_large_metric_ops, configured_cnn_mode, configured_cnn_rq_op 
-        # are now expected to be part of metric_configs if a specific metric needs them,
-        # or handled by the metric implementation itself (e.g. cnn_mode by AlignmentNetwork wrapper).
     )
-    return layer_metric_scores 
+    return layer_metric_scores
 
-@torch.no_grad()
-def compute_metrics_for_layers(
-    model: nn.Module,
-    collected_data: Dict[str, Dict[str, torch.Tensor]], 
-    metric_configs: List[Dict[str, Any]], 
-    device: Union[str, torch.device],
-) -> Dict[str, Dict[str, Union[torch.Tensor, float]]]:
-    results: Dict[str, Dict[str, Union[torch.Tensor, float]]] = {}
-    model.to(device); model.eval()
-    modules_dict = {name: mod for name, mod in model.named_modules()}
-
-    for layer_name, layer_data in collected_data.items():
-        results[layer_name] = {}
-        module = modules_dict.get(layer_name)
-        if not module: continue
-        
-        l_inputs = layer_data.get("input"); l_outputs = layer_data.get("output")
-
-        for m_config in metric_configs:
-            metric_name = m_config["name"]
-            scale_by_norm = m_config.get("scale_by_norm", False)
-            specific_kwargs_for_metric = {k:v for k,v in m_config.items() if k not in ["name", "scale_by_norm"]}
-
-            try:
-                # Get the AlignmentMetric wrapper instance
-                metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm)
-                
-                # Call its compute_per_node_scores method
-                metric_val = metric_instance.compute_per_node_scores(
-                    layer_inputs=l_inputs, 
-                    layer_weights=module.weight.detach() if hasattr(module, 'weight') and module.weight is not None else None, 
-                    layer_outputs=l_outputs,
-                    device=device, 
-                    **specific_kwargs_for_metric
-                )
-                if metric_val is not None:
-                    results[layer_name][metric_name] = metric_val.item() if metric_val.numel()==1 else metric_val.cpu()
-                else: results[layer_name][metric_name] = torch.tensor(float('nan'))
-            except Exception as e:
-                verbose_logging = specific_kwargs_for_metric.get("verbose", False)
-                logger.error(f"Error computing metric '{metric_name}' for layer '{layer_name}': {e}", exc_info=verbose_logging)
-                results[layer_name][metric_name] = torch.tensor(float('nan'))
-    return results 
+# The old internal hook logic in compute_all_node_scores (make_hook_fn, etc.) is removed by this refactoring.

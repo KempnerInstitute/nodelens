@@ -36,6 +36,7 @@ def collect_layer_data(
         containing 'input' and/or 'output' tensors concatenated across batches.
         Example: {"layer1": {"input": tensor, "output": tensor}, ...}
     """
+    logger.debug(f"collect_layer_data: Called with collect_inputs={collect_inputs}, collect_outputs={collect_outputs}, num_batches={num_batches}") # DEBUG: Log received flags
     model.eval()
     model.to(device)
 
@@ -81,7 +82,24 @@ def collect_layer_data(
         return hook
 
     # Register hooks
-    module_dict = {name: mod for name, mod in model.named_modules()}
+    module_dict_base = model # Default to current model
+    
+    # Check if the model is an AlignmentNetwork and use its base_model for named_modules
+    actual_model_for_named_modules = model
+    if hasattr(model, 'module'): # If DDP wrapped, get the underlying module first
+        actual_model_for_named_modules = model.module
+
+    if hasattr(actual_model_for_named_modules, 'base_model') and hasattr(actual_model_for_named_modules, 'alignment_names'):
+        # It looks like an AlignmentNetwork, get modules from its base_model
+        logger.debug(f"collect_layer_data: Detected AlignmentNetwork, using its base_model for module lookup.")
+        module_dict_base = actual_model_for_named_modules.base_model
+    # else, module_dict_base remains the originally passed model
+
+    module_dict = {name: mod for name, mod in module_dict_base.named_modules()}
+    # Ensure debug logs are present if they were removed
+    logger.debug(f"collect_layer_data: Available module names for hooking: {list(module_dict.keys())}")
+    logger.debug(f"collect_layer_data: Target layers for hooking: {target_layers}")
+    
     for layer_name in target_layers:
         module = module_dict.get(layer_name)
         if module:
@@ -136,15 +154,22 @@ def collect_layer_data(
             final_data[layer_name] = {}
             data_dict = collected_data[layer_name]
             if "input" in data_dict and data_dict["input"]:
+                logger.debug(f"collect_layer_data: Concatenating {len(data_dict['input'])} input tensors for layer {layer_name}") # DEBUG
                 try:
                     final_data[layer_name]["input"] = torch.cat(data_dict["input"], dim=0)
                 except Exception as e:
                     logger.error(f"Error concatenating inputs for layer {layer_name}: {e}. Sizes: {[t.shape for t in data_dict['input']]}", exc_info=True)
+            elif collect_inputs:
+                 logger.debug(f"collect_layer_data: 'input' key missing or empty list for layer {layer_name} despite collect_inputs being True.") # DEBUG
+
             if "output" in data_dict and data_dict["output"]:
+                logger.debug(f"collect_layer_data: Concatenating {len(data_dict['output'])} output tensors for layer {layer_name}") # DEBUG
                 try:
                     final_data[layer_name]["output"] = torch.cat(data_dict["output"], dim=0)
                 except Exception as e:
                     logger.error(f"Error concatenating outputs for layer {layer_name}: {e}. Sizes: {[t.shape for t in data_dict['output']]}", exc_info=True)
+            elif collect_outputs:
+                 logger.debug(f"collect_layer_data: 'output' key missing or empty list for layer {layer_name} despite collect_outputs being True.") # DEBUG
 
     return final_data
 

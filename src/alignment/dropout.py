@@ -594,31 +594,48 @@ def _apply_pruning_to_single_net(
         if debug_mode:
             logger.info(f"Debug Layer-Wise/Isolated Pruning: Strategy '{strategy_key}', Frac {frac_val:.2f}")
         for l_i, layer_mod in enumerate(net_to_prune.alignment_layers):
+            layer_name_str = net_to_prune.alignment_names[l_i]
+
             if exclude_classification_layer and l_i == classification_layer_idx:
                 if debug_mode:
-                    logger.info(f"Layer-Wise/Isolated Pruning: Skipping layer {l_i} (classification layer) entirely.")
-                pruning_details_for_this_call["layer_info"][l_i] = {
+                    logger.info(f"Layer-Wise/Isolated Pruning: Skipping layer {l_i} (classification layer) '{layer_name_str}' entirely.")
+                pruning_details_for_this_call["layer_info"][layer_name_str] = {
                     "num_dropped": 0,
                     "dropped_scores_sum": 0.0,
                     "total_nodes_in_layer": layer_mod.weight.data.shape[0],
                     "skipped": True,
                 }
                 continue
+            
+            if layer_name_str not in scores_by_layer or \
+               layer_name_str not in descend_indices or \
+               layer_name_str not in ascend_indices or \
+               layer_name_str not in random_indices:
+                logger.warning(f"Layer-Wise/Isolated Pruning: Layer name '{layer_name_str}' (index {l_i}) not found in one or more score/index dictionaries. Skipping.")
+                pruning_details_for_this_call["layer_info"][layer_name_str] = {
+                    "num_dropped": 0,
+                    "dropped_scores_sum": 0.0,
+                    "total_nodes_in_layer": layer_mod.weight.data.shape[0],
+                    "skipped_due_to_missing_key": True,
+                }
+                continue
+
             out_dim = layer_mod.weight.data.shape[0]
             n_drop = int(round(frac_val * out_dim))
+            
             if n_drop <= 0:
-                pruning_details_for_this_call["layer_info"][l_i] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": out_dim}
+                pruning_details_for_this_call["layer_info"][layer_name_str] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": out_dim}
                 continue
+            
             pruned_node_indices_for_layer = []
             if strategy_key == "high_rq":
-                pruned_node_indices_for_layer = descend_indices[l_i][:n_drop]
+                pruned_node_indices_for_layer = descend_indices[layer_name_str][:n_drop]
             elif strategy_key == "low_rq":
-                pruned_node_indices_for_layer = ascend_indices[l_i][:n_drop]
+                pruned_node_indices_for_layer = ascend_indices[layer_name_str][:n_drop]
             else:
-                pruned_node_indices_for_layer = random_indices[l_i][:n_drop]
+                pruned_node_indices_for_layer = random_indices[layer_name_str][:n_drop]
 
-            # Ensure wdat is defined BEFORE the debug block and before its use
-            wdat = layer_mod.weight.data  # Define wdat here, unconditionally for this layer
+            wdat = layer_mod.weight.data
 
             if debug_mode and len(pruned_node_indices_for_layer) > 0:
                 indices_to_log = (
@@ -628,18 +645,19 @@ def _apply_pruning_to_single_net(
                 )
                 log_limit_layer = min(5, len(indices_to_log))
                 scores_for_log = []
-                if l_i in scores_by_layer:
-                    layer_scores_tensor = scores_by_layer[l_i]
+                if layer_name_str in scores_by_layer and scores_by_layer[layer_name_str] is not None:
+                    layer_scores_tensor = scores_by_layer[layer_name_str]
                     try:
                         scores_for_log = [round(layer_scores_tensor[idx].item(), 4) for idx in indices_to_log[:log_limit_layer]]
                     except IndexError:
-                        logger.warning(f"Debug Layer-Wise: Index out of bounds while fetching scores for logging layer {l_i}")
+                        logger.warning(f"Debug Layer-Wise: Index out of bounds while fetching scores for logging layer {layer_name_str}")
                         scores_for_log = ["N/A"] * log_limit_layer
                 else:
                     scores_for_log = ["N/A"] * log_limit_layer
                 logger.info(
-                    f"  Layer {l_i}: Dropping {len(indices_to_log)} nodes. Indices (first {log_limit_layer}): {indices_to_log[:log_limit_layer]} with scores: {scores_for_log}"
+                    f"  Layer {layer_name_str} (idx {l_i}): Dropping {len(indices_to_log)} nodes. Indices (first {log_limit_layer}): {indices_to_log[:log_limit_layer]} with scores: {scores_for_log}"
                 )
+            
             mask = _create_mask_from_indices(wdat.shape, pruned_node_indices_for_layer, device)
             if dropout_mode_str == "scaled":
                 frac_d_layer = n_drop / float(out_dim) if out_dim > 0 else 0.0
@@ -651,17 +669,17 @@ def _apply_pruning_to_single_net(
             else:
                 for node_idx in pruned_node_indices_for_layer:
                     if node_idx < out_dim:
-                        wdat[node_idx] = 0.0  # Corrected direct modification for zero mode
+                        wdat[node_idx] = 0.0
                         if layer_mod.bias is not None and node_idx < layer_mod.bias.data.shape[0]:
                             layer_mod.bias.data[node_idx] = 0.0
             num_actually_dropped = len(pruned_node_indices_for_layer)
             sum_scores_of_dropped = 0.0
-            if l_i in scores_by_layer and strategy_key != "random" and num_actually_dropped > 0:
+            if layer_name_str in scores_by_layer and scores_by_layer[layer_name_str] is not None and strategy_key != "random" and num_actually_dropped > 0:
                 try:
-                    sum_scores_of_dropped = scores_by_layer[l_i][pruned_node_indices_for_layer].sum().item()
+                    sum_scores_of_dropped = scores_by_layer[layer_name_str][pruned_node_indices_for_layer].sum().item()
                 except IndexError:
-                    logger.warning(f"Index error summing scores for layer {l_i} in {strategy_key}")
-            pruning_details_for_this_call["layer_info"][l_i] = {
+                    logger.warning(f"Index error summing scores for layer {layer_name_str} in {strategy_key}")
+            pruning_details_for_this_call["layer_info"][layer_name_str] = {
                 "num_dropped": num_actually_dropped,
                 "dropped_scores_sum": sum_scores_of_dropped,
                 "total_nodes_in_layer": out_dim,

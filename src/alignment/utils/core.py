@@ -9,30 +9,80 @@ import os
 import time
 import logging
 import functools
-from typing import Any, Callable, Iterable, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Iterable, List, Optional, Tuple, TypeVar, Union, Dict
 from contextlib import contextmanager
+import sys
 
 import numpy as np
 import torch
 from torch import Tensor
 
+# --- NEW: More robust setup_logging --- 
+DEFAULT_LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-def setup_logging(log_level: str = "INFO") -> None:
-    """
-    Set up logging with the specified log level.
+# Store if handlers have been added to root to avoid duplication if called multiple times
+_logging_handlers_added = False
+
+def setup_logging(
+    config: Optional[Dict[str, Any]] = None,
+    log_file_path: Optional[str] = None,
+    log_format: str = DEFAULT_LOG_FORMAT,
+    date_fmt: str = DEFAULT_DATE_FORMAT,
+    force_debug: bool = False # Flag to explicitly force DEBUG level
+):
+    global _logging_handlers_added
+    config = config or {}
     
-    Args:
-        log_level: The logging level to use (default: INFO)
-    """
-    numeric_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_level, int):
-        raise ValueError(f"Invalid log level: {log_level}")
+    # Determine overall logging level
+    log_level_str = "DEBUG" if force_debug else str(config.get("log_level", "INFO")).upper()
+    numeric_log_level = getattr(logging, log_level_str, logging.INFO)
+    if not isinstance(numeric_log_level, int): # Fallback if string is invalid
+        logging.warning(f"Invalid log_level '{log_level_str}'. Defaulting to INFO.")
+        numeric_log_level = logging.INFO
+
+    root_logger = logging.getLogger() # Get the root logger
     
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    # Set level on root logger *once* or update if new level is lower
+    # This ensures all loggers inherit at least this level.
+    if not root_logger.hasHandlers() or root_logger.level > numeric_log_level :
+        root_logger.setLevel(numeric_log_level)
+
+    # Add handlers only once to avoid duplication if setup_logging is called multiple times by different parts
+    if not _logging_handlers_added:
+        # Clear any pre-existing handlers from other libraries on first setup if necessary
+        # For robust clean slate: 
+        # for handler in root_logger.handlers[:]:
+        #     root_logger.removeHandler(handler)
+
+        # Console Handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(logging.Formatter(log_format, date_fmt))
+        # Console can have its own level, e.g., INFO, while file is DEBUG
+        # If force_debug, make console DEBUG too, otherwise use the determined numeric_log_level
+        console_handler.setLevel(logging.DEBUG if force_debug else numeric_log_level) 
+        root_logger.addHandler(console_handler)
+
+        # File Handler
+        if log_file_path:
+            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+            file_handler = logging.FileHandler(log_file_path, mode='w') # 'w' to overwrite for each run
+            file_handler.setFormatter(logging.Formatter(log_format, date_fmt))
+            # File handler always gets DEBUG if force_debug, else numeric_log_level
+            file_handler.setLevel(logging.DEBUG if force_debug else numeric_log_level) 
+            root_logger.addHandler(file_handler)
+        
+        _logging_handlers_added = True
+
+    # Log setup completion using a specific logger for this module
+    # This message will now reflect the actual effective level of the root logger.
+    setup_complete_logger = logging.getLogger(__name__) 
+    if _logging_handlers_added or force_debug: # Log if first time or if forcing debug
+        setup_complete_logger.info(
+            f"Logging setup/reconfigured. Effective Root Level: {logging.getLevelName(root_logger.getEffectiveLevel())}. "
+            f"File: {log_file_path if log_file_path else 'None'}."
+        )
+# --- End NEW setup_logging ---
 
 
 @contextmanager
