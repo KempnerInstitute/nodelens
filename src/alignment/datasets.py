@@ -16,7 +16,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
 from tqdm import tqdm
 
-from alignment.models.base import AlignmentNetwork
+# from alignment.models.base import AlignmentNetwork # Removed to break circular import
 from alignment.config import DatasetConfig, ExperimentConfig
 from alignment.models.models import get_transform_parameters
 

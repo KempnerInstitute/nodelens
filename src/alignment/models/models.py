@@ -13,8 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import alexnet
 
-from alignment.models.base import AlignmentNetwork
-from alignment.models.registry import register_model
+# from alignment.models.base import AlignmentNetwork # Moved into functions
+# from alignment.models.registry import register_model # No longer needed due to deferred registration
 
 logger = logging.getLogger(__name__)
 
@@ -230,8 +230,8 @@ class CNN2P2(nn.Module):
         return x
 
 
-# Register model constructors
-@register_model("mlp")
+# Decorator removed, registration will be done in models/__init__.py
+# @register_model("mlp")
 def create_mlp(
     # Common params from ModelConfig
     output_dim: int,
@@ -244,7 +244,8 @@ def create_mlp(
     alignment_layers: Optional[Dict[str, Any]] = None,
     cnn_mode_for_wrapper: str = "unfold", # cnn_mode from ModelConfig to be used by AlignmentNetwork
     extra_params: Optional[Dict[str, Any]] = None # from ModelConfig.extra_model_params
-) -> AlignmentNetwork:
+) -> 'AlignmentNetwork':
+    from alignment.models.base import AlignmentNetwork # Local import
     
     mlp_constructor_params = {
         "input_dim": input_dim,
@@ -276,7 +277,8 @@ def create_mlp(
     return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode_for_wrapper)
 
 
-@register_model("cnn2p2")
+# Decorator removed
+# @register_model("cnn2p2")
 def create_cnn2p2(
     # Common params from ModelConfig
     output_dim: int,
@@ -295,7 +297,8 @@ def create_cnn2p2(
     alignment_layers: Optional[Dict[str, Any]] = None,
     cnn_mode_for_wrapper: str = "unfold", # cnn_mode from ModelConfig to be used by AlignmentNetwork
     extra_params: Optional[Dict[str, Any]] = None # from ModelConfig.extra_model_params
-) -> AlignmentNetwork:
+) -> 'AlignmentNetwork':
+    from alignment.models.base import AlignmentNetwork # Local import
     
     cnn_constructor_params = {
         "in_channels": in_channels,
@@ -333,7 +336,8 @@ def create_cnn2p2(
     return AlignmentNetwork(base_model=base_model, alignment_layer_names=final_alignment_layer_names, cnn_mode=cnn_mode_for_wrapper)
 
 
-@register_model("alexnet") # This is for a custom/non-pretrained AlexNet if needed
+# Decorator removed
+# @register_model("alexnet")
 def create_alexnet(
     # Common params from ModelConfig
     output_dim: int,
@@ -342,7 +346,8 @@ def create_alexnet(
     alignment_layers: Optional[Dict[str, Any]] = None,
     cnn_mode_for_wrapper: str = "unfold", 
     extra_params: Optional[Dict[str, Any]] = None
-) -> AlignmentNetwork:
+) -> 'AlignmentNetwork':
+    from alignment.models.base import AlignmentNetwork # Local import
     # This constructor is for a basic AlexNet, likely non-pretrained torchvision one or custom.
     # If user wants pretrained, they should use model_name: "torchvision_alexnet" which is handled by registry.py directly.
     # Here, we assume extra_params might contain specific AlexNet constructor args if this isn't just torchvision.alexnet()
