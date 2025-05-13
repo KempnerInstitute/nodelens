@@ -27,7 +27,6 @@ use_ddp: false                          # Set to true to enable DDP for multi-GP
                                         # Requires launching with torchrun or similar.
                                         # e.g., torchrun --nproc_per_node=NUM_GPUS your_script.py --config this_file.yaml
 ddp_backend: "nccl"                     # DDP backend. "nccl" is recommended for NVIDIA GPUs.
-                                        # "gloo" can be used for CPU DDP (but GPU DDP is primary focus).
 # ddp_rank, ddp_world_size, ddp_local_rank are set automatically by the launch script if use_ddp is true.
 # --- End DDP Configuration ---
 
@@ -103,7 +102,7 @@ model:
 # Maps to TrainingConfig in config.py
 training:
   epochs: 5  
-  replicates: 1 # For DDP, typically train 1 replicate, DDP handles data parallelism.
+  replicates: 10 # For DDP, typically train 1 replicate, DDP handles data parallelism.
                 # If not DDP, can set >1 for multiple independent training runs.
   optimizer: "Adam"
   learning_rate: 0.001
@@ -164,7 +163,7 @@ alignment_settings:
 pruning_settings:
   dropout_min: 0.0
   dropout_max: 1.0
-  dropout_steps: 10 # Reduced for faster testing
+  dropout_steps: 30 # Reduced for faster testing
   
   dropout_mode: "scaled"                # "scaled" or "unscaled"
                                         #   "scaled": Remaining weights are scaled by 1/(1-p) (Inverted Dropout principle).
@@ -175,7 +174,7 @@ pruning_settings:
                                         #   "layer_isolated": (For experiment_type="layer_isolated_pruning") Prunes X% in one layer, evaluates, restores, then moves to next layer.
                                         #   "cascading_layer": Prunes L1, its output influences pruning of L2, etc. (Note: current batched impl. has limitations).
   exclude_classification_layer: true    
-  use_multi_strategy_dropout: false      
+  use_multi_strategy_dropout: true     
   num_batches_for_scores: 1             # Number of batches to compute pruning scores on.
 
 # -----------------------------------------------------------------------------

@@ -16,8 +16,6 @@ from alignment.utils.model_utils import (
     remove_by_idx,
     smart_pca
 )
-from alignment.utils.metrics_utils import AlignmentMetricsFactory as AlignmentMetrics
-from alignment.utils.metrics_utils import alignment as legacy_alignment_fn
 from alignment.metrics import get_metric, AlignmentMetric
 from alignment.utils.activation_utils import collect_layer_data
 
@@ -447,10 +445,26 @@ class AlignmentNetwork(nn.Module):
                  outputs.append(torch.tensor(float('nan')))
                  continue
             try:
-                out = legacy_alignment_fn(inp.to(effective_device), w, method=method, relative=relative)
-                outputs.append(out.cpu())
+                # Updated logic using the new metrics system
+                current_scale_by_norm = relative if method.upper() == "RQ" else False
+                metric_obj = get_metric(name=method, scale_by_norm=current_scale_by_norm)
+                
+                # Ensure inputs and weights are on the correct device before calling
+                # w is already on effective_device from weights_flat processing
+                # inp needs to be on effective_device
+                val = metric_obj.compute_per_node_scores(
+                    layer_inputs=inp.to(effective_device), 
+                    layer_weights=w.to(effective_device), # Ensure w is also explicitly on device, though likely already is
+                    device=effective_device 
+                    # Any other specific kwargs for this metric would go here if method was not just RQ/default.
+                    # The original legacy_alignment_fn had a generic **kwargs pass-through which is hard to replicate
+                    # perfectly without knowing all possible legacy metrics it supported and their specific kwargs.
+                    # For now, assuming 'method' (like RQ) and 'relative' were the primary drivers.
+                )
+                outputs.append(val.cpu())
+
             except Exception as e:
-                logger.error(f"Error calling legacy alignment function: {e}")
+                logger.error(f"Error calling metric system for method {method}: {e}") # Updated error message
                 outputs.append(torch.tensor(float('nan')))
         return outputs
 
