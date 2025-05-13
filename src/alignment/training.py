@@ -278,14 +278,27 @@ def train_model(
         checkpoint_freq: Frequency to save checkpoints (in epochs)
         return_history: Whether to return training history
         callbacks: Optional list of callback functions to call at the end of each epoch. 
-                   Each callback will receive a dictionary with epoch context.
-        dataset_config_for_eval: Optional dataset configuration for the validation loader.
-        ddp_rank: Rank of the current DDP process
-        ddp_world_size: Total number of DDP processes
-        loss_criterion: Optional pre-initialized loss function
+                   Each callback will receive an 'epoch_context' dictionary containing keys such as:
+                   'epoch' (int, 1-indexed), 'model' (nn.Module), 'train_loss' (float),
+                   'train_accuracy' (float), 'val_loss' (Optional[float]), 
+                   'val_accuracy' (Optional[float]), 'learning_rate' (float),
+                   'optimizer' (torch.optim.Optimizer), 'history' (Dict[str, List[Any]]).
+        dataset_config_for_eval: Optional dataset configuration object (e.g., instance of a config class
+                                   compatible with `evaluate_model`, often `dataset.config_object`)
+                                   used if `val_loader` is provided, to pass to `evaluate_model`.
+        ddp_rank: Rank of the current DDP process (default 0).
+        ddp_world_size: Total number of DDP processes (default 1).
+        loss_criterion: Optional pre-initialized loss function (e.g., nn.CrossEntropyLoss()).
+                        If None, defaults to nn.CrossEntropyLoss.
         
     Returns:
-        Dictionary containing training metrics and results
+        If `return_history` is True, returns a dictionary containing training history lists
+        (e.g., 'train_loss', 'train_accuracy', 'val_loss', 'val_accuracy', 'learning_rate').
+        Otherwise (or if `return_history` is False, which is the default if not specified though current signature implies it always returns a Dict),
+        returns a dictionary with the model, optimizer, and final epoch metrics.
+        NOTE: The function signature implies it always returns Dict[str, Any]. 
+              If return_history is False, the content of this dict is model, optimizer, final metrics.
+              If return_history is True, the content is the history dict.
     """
     if device is None:
         device = next(model.parameters()).device
@@ -887,9 +900,6 @@ def train_networks(
             # If general ensemble-level callbacks were needed, its signature would change.
             if callbacks:
                 logger.warning("Model-specific callbacks are not currently supported with 'fully_tensorized' training method. Callbacks will be ignored.")
-            # The comment below was outdated; train_networks_fully_tensorized now uses the passed loss_criterion.
-            # if loss_criterion is not None and str(loss_criterion).lower().find('crossentropyloss') == -1:
-            #      logger.warning("Custom loss_criterion provided to 'fully_tensorized' method, but it currently uses F.cross_entropy internally. This custom loss will be ignored by fully_tensorized.") 
             return train_networks_fully_tensorized(**common_args)
         except Exception as e:
             logger.error(f"Fully_tensorized training failed: {str(e)}. Falling back to sequential.", exc_info=True)

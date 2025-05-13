@@ -12,16 +12,13 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 print("Testing imports after cleanup...")
 
-# Test importing from metrics_utils directly
+# Test importing from metrics_utils directly (should be mostly deprecated)
 try:
-    from alignment.utils.metrics_utils import (
-        AlignmentMetricBase, 
-        RQMetric, 
-        AlignmentMetricsFactory
-    )
-    print("✓ Successfully imported from metrics_utils")
+    from alignment.utils.metrics_utils import AlignmentMetricBase # NodeRedundancyMetric might be here if not removed
+    # RQMetric, AlignmentMetricsFactory are removed/ported
+    print("✓ Successfully imported remaining components (if any) from metrics_utils")
 except ImportError as e:
-    print(f"✗ Failed to import from metrics_utils: {e}")
+    print(f"INFO: Could not import from metrics_utils (expected if fully deprecated): {e}")
 
 # Test importing from base.py with the updated imports
 try:

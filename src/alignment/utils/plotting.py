@@ -597,7 +597,7 @@ def log_plots_to_wandb(plot_files: List[str], tags: Optional[Dict[str, str]] = N
                 wandb.log({plot_name: wandb.Image(plot_file, **wandb_kwargs)})
     except Exception as e:
         # Other error
-        print(f"Error logging to wandb: {str(e)}")
+        logger.error(f"Error logging to wandb: {str(e)}")
 
 def plot_mean_rq_of_pruned_nodes(
     experiment_results: Dict[str, Any],
@@ -681,7 +681,11 @@ def plot_mean_rq_of_pruned_nodes(
                 
                 # Average the mean RQs for this layer/frac across all networks
                 if mean_rq_for_this_frac_layer_all_nets:
-                    mean_rq_per_fraction_this_layer.append(np.nanmean(mean_rq_for_this_frac_layer_all_nets))
+                    # Check if all elements are NaN to avoid RuntimeWarning from np.nanmean
+                    if all(np.isnan(x) for x in mean_rq_for_this_frac_layer_all_nets):
+                        mean_rq_per_fraction_this_layer.append(np.nan)
+                    else:
+                        mean_rq_per_fraction_this_layer.append(np.nanmean(mean_rq_for_this_frac_layer_all_nets))
                 else:
                     mean_rq_per_fraction_this_layer.append(np.nan)
             
@@ -809,7 +813,11 @@ def plot_per_layer_pruning_percentage(
             # Average over networks for this fraction for each layer
             for layer_idx in range(num_layers):
                 # nanmean will correctly average, ignoring NaNs. If all are NaN, result is NaN.
-                mean_val = np.nanmean(pruning_percentages_for_all_replicates_this_frac_layer[layer_idx])
+                current_layer_replicate_percentages = pruning_percentages_for_all_replicates_this_frac_layer[layer_idx]
+                if not current_layer_replicate_percentages or all(np.isnan(x) for x in current_layer_replicate_percentages):
+                    mean_val = np.nan
+                else:
+                    mean_val = np.nanmean(current_layer_replicate_percentages)
                 layer_pruning_percentages_for_strat[layer_idx].append(mean_val)
         
         for layer_idx in range(num_layers):
@@ -914,7 +922,11 @@ def plot_per_layer_contribution_to_pruning(
                         contribution_this_frac_all_layers_all_nets[layer_idx].append(0.0 if not layer_data_for_net_frac else np.nan)
             
             for layer_idx in range(num_layers):
-                mean_val = np.nanmean(contribution_this_frac_all_layers_all_nets[layer_idx])
+                current_layer_contributions = contribution_this_frac_all_layers_all_nets[layer_idx]
+                if not current_layer_contributions or all(np.isnan(x) for x in current_layer_contributions):
+                    mean_val = np.nan
+                else:
+                    mean_val = np.nanmean(current_layer_contributions)
                 layer_contribution_percentages_for_strat[layer_idx].append(mean_val)
         
         for layer_idx in range(num_layers):

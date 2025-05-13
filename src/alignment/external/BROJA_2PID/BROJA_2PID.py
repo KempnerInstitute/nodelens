@@ -27,8 +27,13 @@ from numpy import linalg as LA
 import math
 from collections import defaultdict
 import time 
+import logging
+
 log = math.log2
 ln  = math.log
+
+# Initialize logger for this module
+logger = logging.getLogger(__name__)
 
 # ECOS exp cone: (r,p,q)   w/   q>0  &  exp(r/q) \le p/q
 # Translation:     (0,1,2)   w/   2>0  &  0/2     \le ln(1/2)
@@ -547,7 +552,8 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
     bz_xz = marginal_xz(pdf)
 
     # if cone_solver=="ECOS": .....
-    if output > 0:  print("BROJA_2PID: Preparing Cone Program data",end="...")
+    if output > 0:  # print("BROJA_2PID: Preparing Cone Program data",end="...")
+        logger.info("BROJA_2PID: Preparing Cone Program data...")
     solver = Solve_w_ECOS(by_xy, bz_xz)
     solver.create_model()
     if output > 1: solver.verbose = True
@@ -559,13 +565,20 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
 
     solver.ecos_kwargs = solver_args
 
-    if output > 0: print("done.")
+    if output > 0: # print("done.")
+        logger.info("BROJA_2PID: Preparation done.") # Slightly more descriptive
 
-    if output == 1: print("BROJA_2PID: Starting solver",end="...")
-    if output > 1: print("BROJA_2PID: Starting solver.")
+    if output == 1: # print("BROJA_2PID: Starting solver",end="...")
+        logger.info("BROJA_2PID: Starting solver...")
+    if output > 1: # print("BROJA_2PID: Starting solver.")
+        logger.debug("BROJA_2PID: Starting solver (verbose). Details to follow.") # Using debug for output > 1
+    
     retval = solver.solve()
     if retval != "success":
-        print("\nCone Programming solver failed to find (near) optimal solution.\nPlease report the input probability density function to abdullah.makkeh@gmail.com\n")
+        # print("\\nCone Programming solver failed to find (near) optimal solution.\\nPlease report the input probability density function to abdullah.makkeh@gmail.com\\n")
+        error_msg = ("BROJA_2PID: Cone Programming solver failed to find (near) optimal solution. "
+                     "Please report the input probability density function to abdullah.makkeh@gmail.com")
+        logger.error(error_msg)
         if ecos_keep_solver_obj:
             return solver
         else:
@@ -573,9 +586,11 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
         #^ if (keep solver)
     #^ if (solve failure)
 
-    if output > 0:  print("\nBROJA_2PID: done.")
+    if output > 0:  # print("\\nBROJA_2PID: done.")
+        logger.info("BROJA_2PID: Solver finished.")
 
-    if output > 1:  print(solver.sol_info)
+    if output > 1:  # print(solver.sol_info)
+        logger.debug(f"BROJA_2PID: Solver info: {solver.sol_info}")
 
     entropy_X     = solver.entropy_X(pdf)
     condent       = solver.condentropy()
@@ -599,7 +614,8 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
     itic = time.process_time() 
     primal_infeas,dual_infeas = solver.check_feasibility()
     itoc = time.process_time()
-    if output > 0: print("Time to check optimiality conditions: ",itoc - itic,"secs") 
+    if output > 0: # print("Time to check optimiality conditions: ",itoc - itic,"secs") 
+        logger.info(f"BROJA_2PID: Time to check optimiality conditions: {itoc - itic:.4f} secs")
     return_data["Num_err"] = (primal_infeas, dual_infeas, max(-condent*ln(2) - dual_val, 0.0))
     return_data["Solver"] = "ECOS http://www.embotech.com/ECOS"
 

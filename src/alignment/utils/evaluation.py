@@ -19,8 +19,6 @@ from alignment.utils.model_utils import _normalize_device
 from alignment.datasets import load_dataset # Moved from evaluate_model
 from alignment.metrics import get_metric # Moved from evaluate_model
 from alignment.models.base import AlignmentNetwork # Moved from evaluate_model and evaluate
-# Corrected import for AlignmentMetricsFactory
-from alignment.utils.metrics_utils import AlignmentMetricsFactory as AlignmentMetrics 
 
 logger = logging.getLogger(__name__)
 

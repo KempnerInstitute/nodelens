@@ -451,7 +451,6 @@ class AlignmentExperiment(Experiment):
                                 scores_tensor = metrics_in_layer[metric_name_to_plot]
                                 
                                 if not isinstance(scores_tensor, torch.Tensor):
-                                    # logger.warning(f"Scores for {metric_name_to_plot} in layer {layer_name} epoch {epoch_num} is not a tensor: {type(scores_tensor)}. Skipping.")
                                     # If it's a scalar (e.g. already averaged), treat as mean with 0 std
                                     if isinstance(scores_tensor, (float, int)):
                                         mean_score = float(scores_tensor)
@@ -459,7 +458,6 @@ class AlignmentExperiment(Experiment):
                                     else: # Otherwise skip
                                         continue 
                                 elif scores_tensor.numel() == 0:
-                                    # logger.warning(f"Scores tensor for {metric_name_to_plot} in layer {layer_name} epoch {epoch_num} is empty. Skipping.")
                                     continue # Skip empty tensors
                                 else:
                                     mean_score = torch.mean(scores_tensor.float()).item()
@@ -549,9 +547,9 @@ class AlignmentExperiment(Experiment):
         self._run_initial_training(callbacks_list)
 
         # 5. Run the specific experiment logic (implemented by subclass)
-        # The 'run' method implemented by subclasses will perform the core computations
+        # The '_run_specific_logic' method implemented by subclasses will perform the core computations
         # and should store its primary output in self.results.
-        self.results = self.run()  # Call the abstract run method implemented by subclass
+        self.results = self._run_specific_logic()  # Call the RENAMED abstract method
 
         # 6. Plotting and Saving (Common Teardown/Reporting)
         self._run_plotting_and_saving()
@@ -560,14 +558,22 @@ class AlignmentExperiment(Experiment):
         # Base class Experiment.run() calls this method and returns its result.
         return self.results, self.networks
 
+    # This is the method called by the base Experiment class's execution flow.
+    def run(self) -> Tuple[Dict, List[nn.Module]]:
+        """ 
+        This method is called by the base Experiment class (or its equivalent execution trigger).
+        It orchestrates the experiment by calling execute_experiment.
+        """
+        return self.execute_experiment()
+
     # Abstract run method to be implemented by subclasses
-    def run(self) -> Dict:
+    def _run_specific_logic(self) -> Dict:
         """
         Abstract method for experiment-specific logic.
         Subclasses must implement this method to perform their computations.
         The results dictionary should be returned.
         """
-        raise NotImplementedError("Subclasses must implement the 'run' method.")
+        raise NotImplementedError("Subclasses must implement the '_run_specific_logic' method.")
 
 
 # --- Subclasses for Specific Experiment Types ---
@@ -576,14 +582,13 @@ class AlignmentExperiment(Experiment):
 class ProgressiveDropoutExperiment(AlignmentExperiment):
     """Experiment for progressive dropout based on alignment metrics."""
 
-    def run(self) -> Dict:
+    def _run_specific_logic(self) -> Dict:
         """Runs the progressive dropout experiment."""
-        logger.info("Running Progressive Dropout Experiment")
+        logger.info("Running Progressive Dropout Experiment specific logic")
 
         # Common setup: Create networks, load data, initial training (done in __init__ or called before run)
         if not self.networks or self.dataset is None:
-            raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
-        self._run_initial_training(self._setup_callbacks())  # Run initial training if needed
+            raise RuntimeError("Networks or dataset not initialized before run(). Ensure execute_experiment is called.")
 
         # Get necessary configs
         pruning_config = self.config.pruning_settings
@@ -657,14 +662,13 @@ class ProgressiveDropoutExperiment(AlignmentExperiment):
 class EigenvectorDropoutExperiment(AlignmentExperiment):
     """Experiment for eigenvector-based dropout."""
 
-    def run(self) -> Dict:
+    def _run_specific_logic(self) -> Dict:
         """Runs the eigenvector dropout experiment."""
-        logger.info("Running Eigenvector Dropout Experiment")
+        logger.info("Running Eigenvector Dropout Experiment specific logic")
 
         # Common setup
         if not self.networks or self.dataset is None:
-            raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
-        self._run_initial_training(self._setup_callbacks())  # Run initial training if needed
+            raise RuntimeError("Networks or dataset not initialized before run(). Ensure execute_experiment is called.")
 
         if not self.networks:
             logger.error("No networks available for Eigenvector Dropout Experiment.")
@@ -733,14 +737,13 @@ class EigenvectorDropoutExperiment(AlignmentExperiment):
 class LayerIsolatedPruningExperiment(AlignmentExperiment):
     """Experiment for pruning layers in isolation."""
 
-    def run(self) -> Dict:
+    def _run_specific_logic(self) -> Dict:
         """Runs the layer isolated pruning experiment."""
-        logger.info("Running Layer Isolated Pruning Experiment")
+        logger.info("Running Layer Isolated Pruning Experiment specific logic")
 
         # Common setup
         if not self.networks or self.dataset is None:
-            raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
-        self._run_initial_training(self._setup_callbacks())  # Run initial training if needed
+            raise RuntimeError("Networks or dataset not initialized before run(). Ensure execute_experiment is called.")
 
         # Get necessary configs
         pruning_config = self.config.pruning_settings
@@ -809,14 +812,13 @@ class LayerIsolatedPruningExperiment(AlignmentExperiment):
 class AlignmentAnalysisExperiment(AlignmentExperiment):
     """Meta-experiment that runs multiple alignment analyses (e.g., progressive and eigenvector)."""
 
-    def run(self) -> Dict:
+    def _run_specific_logic(self) -> Dict:
         """Runs the alignment analysis experiment."""
-        logger.info("Running Alignment Analysis Experiment")
+        logger.info("Running Alignment Analysis Experiment specific logic")
 
         # Common setup
         if not self.networks or self.dataset is None:
-            raise RuntimeError("Networks or dataset not initialized before run(). Call setup methods first.")
-        self._run_initial_training(self._setup_callbacks())  # Run initial training if needed
+            raise RuntimeError("Networks or dataset not initialized before run(). Ensure execute_experiment is called.")
 
         analysis_results = {"alignment_analysis": True}  # Mark that this meta-experiment ran
 
@@ -954,7 +956,7 @@ def cli_main():
     # Set logging level
     log_level = "WARNING" if args.quiet else "INFO"
     # Base Experiment __init__ handles logging setup if config.log_level is set, or defaults.
-    # setup_logging(log_level=log_level) # This might be redundant. Default to config or Experiment base.
+    # setup_logging(log_level=log_level) # REMOVE THIS LINE
 
     # Load configuration
     config = ExperimentConfig.load(args.config)
@@ -1048,25 +1050,8 @@ def cli_main():
     try:
         experiment = ExperimentClass(config)
 
-        # Common setup requiring config but not specific subclass logic
-        experiment.networks = experiment.create_networks()
-        experiment.dataset = load_dataset(
-            experiment.config.dataset,
-            batch_size=experiment.config.dataset.batch_size,
-            device=experiment.device,  # DDP-aware device from config
-            # --- NEW: Pass DDP flags to load_dataset ---
-            use_ddp=experiment.config.use_ddp,
-            ddp_rank=experiment.config.ddp_rank,
-            ddp_world_size=experiment.config.ddp_world_size
-            # --- End NEW ---
-        )
-
-        # The run method performs the core computation
-        results = experiment.run()
-        experiment.results = results  # Store results on instance for plotting/saving
-
-        # Common Teardown/Reporting
-        experiment._run_plotting_and_saving()  # Call plotting/saving after run completes
+        # INSTEAD, CALL THE MAIN EXPERIMENT LIFECYCLE METHOD FROM THE BASE CLASS
+        experiment.run() # Assuming the base Experiment class has a .run() method that calls self.execute_experiment()
 
         logger.info("Experiment finished successfully.")
         # Potentially print summary results here if not quiet

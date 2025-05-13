@@ -12,16 +12,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 print("Testing imports...")
 
-# Test importing from metrics_utils
+# Test importing from metrics_utils (should be mostly deprecated)
 try:
-    from alignment.utils.metrics_utils import (
-        AlignmentMetricBase, 
-        RQMetric, 
-        AlignmentMetricsFactory
-    )
-    print("✓ Successfully imported from metrics_utils")
+    from alignment.utils.metrics_utils import AlignmentMetricBase # NodeRedundancyMetric might be here if not removed
+    # RQMetric, MIMetric, WeightSimilarityMetric, AlignmentMetricsFactory are removed/ported
+    print("✓ Successfully imported remaining components (if any) from metrics_utils")
 except ImportError as e:
-    print(f"✗ Failed to import from metrics_utils: {e}")
+    print(f"INFO: Could not import from metrics_utils (expected if fully deprecated): {e}")
 
 # Test importing utils.plotting
 try:
@@ -36,9 +33,12 @@ except ImportError as e:
 # Test importing from metrics
 try:
     from alignment.metrics import (
-        AlignmentMetric,
+        AlignmentMetric, # Protocol
         get_metric,
-        register_metric
+        # register_metric # This was an example, actual registration is internal or via ALIGNMENT_METRICS_REGISTRY update
+        compute_rayleigh_quotient, # Example of a direct metric function
+        compute_mi_proj_vs_mean_input, # Example of a ported metric function
+        ALIGNMENT_METRICS_REGISTRY # The registry itself
     )
     print("✓ Successfully imported from metrics")
 except ImportError as e:
