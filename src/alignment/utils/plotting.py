@@ -5,6 +5,17 @@ import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Union, Any
 import logging
 import torch
+from torch.utils.data import DataLoader
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    wandb = None # Ensure wandb is None if not available, for type hinting or checks
+
+from alignment.config import Config, ExperimentConfig, WandbConfig # Config still used by Experiment class
+from alignment.datasets import DataSet, load_dataset
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -569,8 +580,8 @@ def log_plots_to_wandb(plot_files: List[str], tags: Optional[Dict[str, str]] = N
         tags: Optional tags to add to the plots
     """
     try:
-        import wandb
-        if wandb.run is None:
+        # import wandb # Removed from here
+        if not WANDB_AVAILABLE or wandb is None or wandb.run is None: # Check WANDB_AVAILABLE and if wandb.run is active
             return
             
         for plot_file in plot_files:
@@ -584,9 +595,6 @@ def log_plots_to_wandb(plot_files: List[str], tags: Optional[Dict[str, str]] = N
                 
                 # Log to wandb
                 wandb.log({plot_name: wandb.Image(plot_file, **wandb_kwargs)})
-    except ImportError:
-        # wandb not available
-        pass
     except Exception as e:
         # Other error
         print(f"Error logging to wandb: {str(e)}")

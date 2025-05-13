@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from alignment.models.base import AlignmentNetwork
 from alignment.config import DatasetConfig, ExperimentConfig
+from alignment.models.models import get_transform_parameters
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +465,6 @@ def load_dataset(
         else:
             # Try to load from models registry if it exists
             try:
-                from alignment.models.models import get_transform_parameters
                 model_name = None
                 if hasattr(dataset_config, 'model_name'):
                     model_name = dataset_config.model_name

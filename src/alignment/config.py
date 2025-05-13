@@ -12,6 +12,8 @@ from typing import cast, List, Dict, Union, Type, TypeVar, Optional, Any
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from omegaconf.errors import OmegaConfBaseException
 import logging
+import warnings
+import torch
 
 config_logger = logging.getLogger(__name__)
 T = TypeVar('T', bound='BaseConfig')
@@ -298,12 +300,10 @@ class DatasetConfig(BaseConfig):
     def validate(self) -> bool:
         """Validate dataset configuration."""
         if self.data_path is not None and not os.path.exists(self.data_path):
-            import warnings
             warnings.warn(f"Dataset path does not exist: {self.data_path}")
             
         if self.dataset_name not in ["MNIST", "CIFAR10", "CIFAR100", "ImageNet"]:
             # This is just a warning, not an error, as custom datasets might be used
-            import warnings
             warnings.warn(f"Unusual dataset name: {self.dataset_name}")
             
         if self.batch_size <= 0:
@@ -344,7 +344,6 @@ class TrainingConfig(BaseConfig):
             
         if self.optimizer not in ["Adam", "SGD", "RMSprop", "AdamW"]:
             # This is just a warning, not an error, as custom optimizers might be used
-            import warnings
             warnings.warn(f"Unusual optimizer name: {self.optimizer}")
             
         valid_training_methods = ["auto", "sequential", "fully_tensorized"]
@@ -450,7 +449,6 @@ class AlignmentConfig(BaseConfig):
             config_logger.warning(f"AlignmentConfig.__post_init__: self.callbacks is not a dict but also not CallbackSettings. Type: {type(self.callbacks)}. Leaving as is.")
 
     def validate(self) -> bool:
-        import warnings 
         valid_metrics = ["RQ", "NullSpace", "MI", "WeightSimilarity", "NodeRedundancy", "RankAlignment"]
         if self.metric not in valid_metrics:
             warnings.warn(f"Unusual alignment metric: {self.metric}. Supported: {valid_metrics}")
@@ -585,7 +583,6 @@ class ExperimentConfig(BaseConfig):
         """
         # Validate device
         if self.device is not None:
-            import torch
             try:
                 torch.device(self.device)
             except Exception as e:
@@ -648,7 +645,6 @@ class ExperimentArgs:
     
     def validate(self) -> bool:
         """Validate experiment arguments."""
-        import torch
         try:
             torch.device(self.device)
         except Exception as e:

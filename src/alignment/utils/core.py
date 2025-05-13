@@ -180,8 +180,6 @@ def ensure_device(device: Union[str, torch.device]) -> torch.device:
     return device
 
 
-T = TypeVar("T")
-
 def timed(func: Callable[..., T]) -> Callable[..., Tuple[T, float]]:
     """
     Decorator to time a function and return the result and elapsed time.
