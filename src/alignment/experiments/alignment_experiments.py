@@ -483,6 +483,11 @@ class AlignmentExperiment(Experiment):
                                 layer_data_for_plot["mean_scores"] = [layer_data_for_plot["mean_scores"][i] for i in sorted_indices]
                                 layer_data_for_plot["std_scores"] = [layer_data_for_plot["std_scores"][i] for i in sorted_indices]
 
+                        # ---- ADD DEBUG LOG ----
+                        if self.debug_mode and metric_name_to_plot in ["RQ", "MI_G"]:
+                            logger.debug(f"Data for plot_metric_evolution ({metric_name_to_plot}): {current_metric_evolution_for_plot}")
+                        # ---- END DEBUG LOG ----
+
                         evolution_plot_path = plot_metric_evolution(
                             metric_evolution_data=current_metric_evolution_for_plot,
                             metric_name=metric_name_to_plot,
