@@ -16,6 +16,7 @@ import datetime
 import json
 import yaml
 import time
+import traceback
 
 import numpy as np
 import torch
@@ -646,8 +647,6 @@ class ProgressiveDropoutExperiment(AlignmentExperiment):
             logger.error(f"Error during run_progressive_dropout_experiment call: {str(e)}")
             results_from_manager = {"error": str(e)}
             if self.debug_mode:
-                import traceback
-
                 logger.error(traceback.format_exc())
 
         # Add training history to the results
@@ -724,8 +723,6 @@ class EigenvectorDropoutExperiment(AlignmentExperiment):
             logger.error(f"Error during run_eigenvector_dropout_experiment call: {str(e)}")
             results_from_manager = {"error": str(e)}
             if self.debug_mode:
-                import traceback
-
                 logger.error(traceback.format_exc())
 
         # Add training history
@@ -801,8 +798,6 @@ class LayerIsolatedPruningExperiment(AlignmentExperiment):
             logger.error(f"Error during run_layer_isolated_dropout_experiment call: {str(e)}")
             results_from_manager = {"error": str(e)}
             if self.debug_mode:
-                import traceback
-
                 logger.error(traceback.format_exc())
 
         # Add training history
@@ -947,7 +942,7 @@ def get_experiment_class(experiment_type: str) -> Type[AlignmentExperiment]:
 
 def cli_main():
     """Command-line interface for running alignment experiments."""
-    import argparse
+    # import argparse # Moved to top
 
     parser = argparse.ArgumentParser(description="Neural network alignment experiment")
     parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
@@ -967,7 +962,7 @@ def cli_main():
     # --- DDP Setup ---
     is_ddp_initialized = False
     if config.use_ddp:
-        import torch.distributed as dist
+        # import torch.distributed as dist # Moved to top
 
         # import os # Already imported at top of file
 

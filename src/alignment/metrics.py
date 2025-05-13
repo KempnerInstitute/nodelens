@@ -547,20 +547,40 @@ class _AlignmentMetricImpl:
                 logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
                 return result
             
+            # --- ADDED/UPDATED CASE for Weight-based Metrics ---
+            elif metric_name_lower in ["weight_cosine_similarity", "weight_dot_similarity", "weight_euclidean_distance"]:
+                if layer_weights is None:
+                    logger.error(f"{self.name} needs layer_weights, but it is None.")
+                    return torch.empty(0, 0, device=eff_device, dtype=torch.float32) # Return 0x0 for matrix
+                
+                logger.info(f"compute_per_node_scores({self.name}): Calling metric with layer_weights.shape = {layer_weights.shape}")
+                result = self._metric_fn(layer_weights=layer_weights.to(eff_device), **fn_kwargs, **metric_specific_kwargs)
+                logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
+                return result
+            # --- END ADDED/UPDATED CASE ---
+
             elif "pid_" in metric_name_lower:
                 if not PID_AVAILABLE: 
                     logger.warning(f"PID metric {self.name} called; BROJA_2PID not available. Returning zeros.")
-                    num_n = layer_outputs.shape[1] if layer_outputs is not None else (layer_inputs.shape[1] if layer_inputs is not None else 1)
+                    num_n = layer_outputs.shape[1] if layer_outputs is not None and layer_outputs.ndim > 1 else \
+                            (layer_inputs.shape[1] if layer_inputs is not None and layer_inputs.ndim > 1 else 1)
                     return torch.zeros(num_n, device=eff_device)
                 
                 if layer_inputs is None or layer_outputs is None: 
                     logger.error(f"{self.name} needs layer_inputs and layer_outputs, but got inputs: {layer_inputs is not None}, outputs: {layer_outputs is not None}")
-                    return torch.zeros(layer_outputs.shape[1] if layer_outputs is not None else 1, device=eff_device, 
-                                     dtype=layer_outputs.dtype if layer_outputs is not None else torch.float32)
+                    # Determine a sensible default size for the zeros tensor
+                    default_size = 1
+                    if layer_outputs is not None and layer_outputs.ndim > 1:
+                        default_size = layer_outputs.shape[1]
+                    elif layer_inputs is not None and layer_inputs.ndim > 1:
+                         # This case might not be ideal if PID expects output node scores
+                        pass # default_size remains 1 or could be layer_inputs.shape[1]
+                    return torch.zeros(default_size, device=eff_device, 
+                                     dtype=layer_outputs.dtype if layer_outputs is not None else (layer_inputs.dtype if layer_inputs is not None else torch.float32))
                 
                 fn_kwargs["bins"] = bins
-                logger.info(f"compute_per_node_scores({self.name}): Calling average_pid_component with shapes - inputs: {layer_inputs.shape}, outputs: {layer_outputs.shape}")
-                result = self._metric_fn(layer_inputs.to(eff_device), layer_outputs.to(eff_device), **fn_kwargs)
+                logger.info(f"compute_per_node_scores({self.name}): Calling PID component metric with shapes - inputs: {layer_inputs.shape}, outputs: {layer_outputs.shape}")
+                result = self._metric_fn(layer_inputs.to(eff_device), layer_outputs.to(eff_device), **fn_kwargs, **metric_specific_kwargs) # Pass metric_specific_kwargs
                 logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
                 return result
             else:
@@ -1013,3 +1033,88 @@ def compute_all_node_scores(
     return layer_metric_scores
 
 # The old internal hook logic in compute_all_node_scores (make_hook_fn, etc.) is removed by this refactoring.
+
+# --- NEW METRIC: Weight Similarity ---
+@torch.no_grad()
+def compute_weight_similarity(
+    layer_weights: torch.Tensor, 
+    metric_type: str = "cosine", 
+    verbose: bool = False, # Added for signature consistency, though not used here
+    **kwargs # To catch any other unused specific kwargs passed by the metric system
+) -> torch.Tensor:
+    """
+    Measure similarity between weight vectors of a layer.
+    Note: This metric operates only on weights and does not use layer_inputs or layer_outputs.
+          The result is a pairwise similarity matrix, not per-node scores in the typical sense.
+
+    Args:
+        layer_weights: Weight tensor of the layer (out_features, in_features).
+        metric_type: Similarity metric to use ("cosine", "dot", "euclidean").
+        verbose: Unused, for signature consistency.
+        **kwargs: Unused, for signature consistency.
+
+    Returns:
+        Tensor containing pairwise similarity values [out_features, out_features].
+    """
+    if layer_weights is None or layer_weights.ndim != 2:
+        logger.warning("compute_weight_similarity: layer_weights is None or not 2D. Returning empty tensor.")
+        return torch.empty(0, device=layer_weights.device if layer_weights is not None else 'cpu')
+
+    if metric_type == "cosine":
+        # Normalize weights for cosine similarity
+        w_norm = layer_weights / (torch.norm(layer_weights, dim=1, keepdim=True) + 1e-12) # Added epsilon for stability
+        similarity = torch.mm(w_norm, w_norm.t())
+    elif metric_type == "dot":
+        similarity = torch.mm(layer_weights, layer_weights.t())
+    elif metric_type == "euclidean":
+        # cdist computes pairwise distances. For similarity, we might want 1/(1+dist) or exp(-dist), 
+        # or simply return the distance matrix. For now, returning distance.
+        similarity = torch.cdist(layer_weights, layer_weights)
+    else:
+        raise ValueError(f"Unknown weight similarity metric_type: {metric_type}. Supported: cosine, dot, euclidean")
+            
+    return similarity
+
+# Update ALIGNMENT_METRICS_REGISTRY
+# Option 1: Register one function and pass metric_type via kwargs (preferred)
+# ALIGNMENT_METRICS_REGISTRY["weight_similarity"] = compute_weight_similarity
+
+# Option 2: Create specific wrappers if metric_type needs to be part of the name (more verbose in registry)
+# This is chosen to align with how PID components are handled (distinct names for distinct operations)
+
+def compute_weight_cosine_similarity(layer_weights: torch.Tensor, **kwargs) -> torch.Tensor:
+    return compute_weight_similarity(layer_weights, metric_type="cosine", **kwargs)
+
+def compute_weight_dot_similarity(layer_weights: torch.Tensor, **kwargs) -> torch.Tensor:
+    return compute_weight_similarity(layer_weights, metric_type="dot", **kwargs)
+
+def compute_weight_euclidean_distance(layer_weights: torch.Tensor, **kwargs) -> torch.Tensor:
+    return compute_weight_similarity(layer_weights, metric_type="euclidean", **kwargs)
+
+ALIGNMENT_METRICS_REGISTRY.update({
+    "weight_cosine_similarity": compute_weight_cosine_similarity,
+    "weight_dot_similarity": compute_weight_dot_similarity,
+    "weight_euclidean_distance": compute_weight_euclidean_distance,
+    # Add other metric aliases or new metrics here
+})
+
+# ... (rest of metrics.py, including _AlignmentMetricImpl adjustments if needed for these new metrics)
+
+# In _AlignmentMetricImpl.compute_per_node_scores, we need to handle these weight-only metrics.
+# The current dispatch logic primarily expects layer_inputs or layer_outputs.
+# We might need a new category or a check if only layer_weights are needed.
+
+# Consider adjusting the dispatch in _AlignmentMetricImpl:
+# Inside _AlignmentMetricImpl.compute_per_node_scores:
+# ...
+# elif "weight_" in metric_name_lower: # Or a more specific check
+#    if layer_weights is None:
+#        logger.error(f"{self.name} needs layer_weights.")
+#        return torch.zeros(1, device=eff_device, dtype=torch.float32) # Or appropriate shape
+#    logger.info(f"compute_per_node_scores({self.name}): Calling metric with layer_weights.shape = {layer_weights.shape}")
+#    # metric_specific_kwargs might contain 'metric_type' for the generic compute_weight_similarity
+#    # If using specific registered functions like compute_weight_cosine_similarity, they handle metric_type internally.
+#    result = self._metric_fn(layer_weights=layer_weights.to(eff_device), **fn_kwargs, **metric_specific_kwargs)
+#    logger.info(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
+#    return result
+# ...

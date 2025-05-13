@@ -475,8 +475,6 @@ def progressive_dropout(
         return network_accuracies, network_losses, pruning_details_single_strat
 
 
-# Helper function to contain the actual pruning logic for a single network
-# This consolidates the if/elif pruning_mode blocks from the original progressive_dropout
 def _apply_pruning_to_single_net(
     net_to_prune: nn.Module,
     frac_val: float,
@@ -484,160 +482,152 @@ def _apply_pruning_to_single_net(
     pruning_mode: str,
     dropout_mode_str: str,
     device: torch.device,
-    scores_by_layer: Dict[int, torch.Tensor],
-    ascend_indices: Dict[int, torch.Tensor],
-    descend_indices: Dict[int, torch.Tensor],
-    random_indices: Dict[int, torch.Tensor],
+    scores_by_layer: Dict[str, torch.Tensor],
+    ascend_indices: Dict[str, torch.Tensor],
+    descend_indices: Dict[str, torch.Tensor],
+    random_indices: Dict[str, torch.Tensor],
     debug_mode: bool,
     exclude_classification_layer: bool,
 ) -> Dict[str, Any]:
-    # Correct indentation for the function body starts here
-    pruning_details_for_this_call = {
-        "layer_info": {}
-    }
-    classification_layer_idx = len(net_to_prune.alignment_layers) - 1
+    pruning_details_for_this_call = {"layer_info": {}}
+    # Assuming net_to_prune has .alignment_layers and .alignment_names attributes
+    classification_layer_name = net_to_prune.alignment_names[-1] if net_to_prune.alignment_names else None
 
     if pruning_mode == "global_joint":
-        all_nodes = []
-        for l_i, sc_tensor in scores_by_layer.items():
-            if exclude_classification_layer and l_i == classification_layer_idx:
+        all_nodes = [] # List of (layer_name_str, node_idx_in_layer, score)
+        for layer_name_str, sc_tensor in scores_by_layer.items():
+            if exclude_classification_layer and layer_name_str == classification_layer_name:
                 if debug_mode:
-                    logger.info(f"Global Pruning: Skipping layer {l_i} (classification layer) from candidate pool.")
-                pruning_details_for_this_call["layer_info"][l_i] = {
-                    "num_dropped": 0,
-                    "dropped_scores_sum": 0.0,
+                    logger.info(f"Global Pruning: Skipping layer {layer_name_str} (classification layer) from candidate pool.")
+                pruning_details_for_this_call["layer_info"][layer_name_str] = {
+                    "num_dropped": 0, "dropped_scores_sum": 0.0,
                     "total_nodes_in_layer": sc_tensor.shape[0] if sc_tensor is not None else 0,
                     "skipped": True,
                 }
                 continue
-            node_count = sc_tensor.shape[0]
-            if strategy_key == "high_rq":
-                sorted_ids_this_layer = descend_indices[l_i]
-            elif strategy_key == "low_rq":
-                sorted_ids_this_layer = ascend_indices[l_i]
-            else:
-                sorted_ids_this_layer = random_indices[l_i]
             
-            for node_idx_in_layer in sorted_ids_this_layer:
-                score = sc_tensor[node_idx_in_layer].item() if strategy_key != "random" else 0.0
-                all_nodes.append((l_i, node_idx_in_layer.item(), score))
-        
-        if strategy_key == "random": 
-            random.shuffle(all_nodes)
-        elif strategy_key == "high_rq": 
-            all_nodes.sort(key=lambda x: x[2], reverse=True)
-        elif strategy_key == "low_rq":  
-            all_nodes.sort(key=lambda x: x[2])
-
-        total_count = len(all_nodes)
-        num_drop = int(round(frac_val * total_count))
-        nodes_to_drop_info = all_nodes[:num_drop]
-
-        if debug_mode and num_drop > 0:
-            logger.info(f"Debug Global Pruning: Strategy '{strategy_key}', Frac {frac_val:.2f}, NumDrop {num_drop}")
-            log_limit = min(5, num_drop)
-            logger.info(f"  Nodes to drop (first {log_limit}): {[ (n[0], n[1], round(n[2], 4)) for n in nodes_to_drop_info[:log_limit]]}")
-            if num_drop > log_limit:
-                logger.info(f"  Nodes to drop (last {log_limit}): {[ (n[0], n[1], round(n[2], 4)) for n in nodes_to_drop_info[-log_limit:]]}")
-
-        drop_by_layer_indices = {}
-        for l_idx, n_idx, score_val in nodes_to_drop_info:
-            drop_by_layer_indices.setdefault(l_idx, []).append(n_idx)
-            if l_idx not in pruning_details_for_this_call["layer_info"]:
-                pruning_details_for_this_call["layer_info"][l_idx] = {
-                    "num_dropped": 0,
-                    "dropped_scores_sum": 0.0,
-                    "total_nodes_in_layer": scores_by_layer[l_idx].shape[0],
+            # Ensure score tensor is valid before proceeding
+            if sc_tensor is None or sc_tensor.numel() == 0:
+                logger.warning(f"Global Pruning: Skipping layer '{layer_name_str}' due to missing or empty scores tensor.")
+                pruning_details_for_this_call["layer_info"][layer_name_str] = {
+                    "num_dropped": 0, "dropped_scores_sum": 0.0,
+                    "total_nodes_in_layer": 0, "skipped_due_to_missing_scores": True,
                 }
-            pruning_details_for_this_call["layer_info"][l_idx]["num_dropped"] += 1
-            if strategy_key != "random":
-                pruning_details_for_this_call["layer_info"][l_idx]["dropped_scores_sum"] += score_val
+                continue
 
-        for l_idx_init in scores_by_layer.keys():
-            if exclude_classification_layer and l_idx_init == classification_layer_idx:
-                if l_idx_init not in pruning_details_for_this_call["layer_info"]:
-                    pruning_details_for_this_call["layer_info"][l_idx_init] = {
-                        "num_dropped": 0,
-                        "dropped_scores_sum": 0.0,
-                        "total_nodes_in_layer": scores_by_layer[l_idx_init].shape[0],
+            node_count = sc_tensor.shape[0]
+            current_layer_indices_sorted: Optional[torch.Tensor] = None
+            if strategy_key == "high_rq": current_layer_indices_sorted = descend_indices.get(layer_name_str)
+            elif strategy_key == "low_rq": current_layer_indices_sorted = ascend_indices.get(layer_name_str)
+            else: current_layer_indices_sorted = random_indices.get(layer_name_str)
+
+            if current_layer_indices_sorted is None:
+                logger.warning(f"Global Pruning: Sorted indices not found for layer '{layer_name_str}' and strategy '{strategy_key}'. Skipping layer.")
+                continue
+
+            for node_idx_in_layer_tensor in current_layer_indices_sorted:
+                node_idx_in_layer = node_idx_in_layer_tensor.item()
+                score = sc_tensor[node_idx_in_layer].item() if strategy_key != "random" else 0.0
+                all_nodes.append((layer_name_str, node_idx_in_layer, score))
+        
+        if strategy_key == "random": random.shuffle(all_nodes)
+        elif strategy_key == "high_rq": all_nodes.sort(key=lambda x: x[2], reverse=True)
+        elif strategy_key == "low_rq": all_nodes.sort(key=lambda x: x[2])
+
+        total_prunable_nodes = len(all_nodes)
+        num_drop_total = int(round(frac_val * total_prunable_nodes))
+        nodes_to_drop_info_global = all_nodes[:num_drop_total]
+
+        if debug_mode and num_drop_total > 0:
+            logger.info(f"Debug Global Pruning: Strategy '{strategy_key}', Frac {frac_val:.2f}, NumDrop {num_drop_total}")
+            log_limit = min(5, num_drop_total)
+            logger.info(f"  Nodes to drop (first {log_limit}): {[ (n[0], n[1], round(n[2], 4)) for n in nodes_to_drop_info_global[:log_limit]]}")
+            if num_drop_total > log_limit:
+                logger.info(f"  Nodes to drop (last {log_limit}): {[ (n[0], n[1], round(n[2], 4)) for n in nodes_to_drop_info_global[-log_limit:]]}")
+
+        drop_by_layer_indices_map: Dict[str, List[int]] = {}
+        for layer_name_str_global, n_idx_global, score_val_global in nodes_to_drop_info_global:
+            drop_by_layer_indices_map.setdefault(layer_name_str_global, []).append(n_idx_global)
+            if layer_name_str_global not in pruning_details_for_this_call["layer_info"]:
+                # This check ensures we use the correct total_nodes_in_layer from original scores_by_layer
+                total_nodes = scores_by_layer[layer_name_str_global].shape[0] if layer_name_str_global in scores_by_layer and scores_by_layer[layer_name_str_global] is not None else 0
+                pruning_details_for_this_call["layer_info"][layer_name_str_global] = {
+                    "num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_nodes,
+                }
+            pruning_details_for_this_call["layer_info"][layer_name_str_global]["num_dropped"] += 1
+            if strategy_key != "random":
+                pruning_details_for_this_call["layer_info"][layer_name_str_global]["dropped_scores_sum"] += score_val_global
+
+        # Initialize details for layers that might not get any nodes pruned from global pool
+        for l_name_str in net_to_prune.alignment_names:
+            if exclude_classification_layer and l_name_str == classification_layer_name:
+                if l_name_str not in pruning_details_for_this_call["layer_info"]:
+                    sc_tensor_temp = scores_by_layer.get(l_name_str)
+                    pruning_details_for_this_call["layer_info"][l_name_str] = {
+                        "num_dropped": 0, "dropped_scores_sum": 0.0,
+                        "total_nodes_in_layer": sc_tensor_temp.shape[0] if sc_tensor_temp is not None else 0,
                         "skipped": True,
                     }
-                    continue
-            if l_idx_init not in pruning_details_for_this_call["layer_info"]:
-                pruning_details_for_this_call["layer_info"][l_idx_init] = {
-                    "num_dropped": 0,
-                    "dropped_scores_sum": 0.0,
-                    "total_nodes_in_layer": scores_by_layer[l_idx_init].shape[0],
+                continue
+            if l_name_str not in pruning_details_for_this_call["layer_info"]:
+                sc_tensor_temp = scores_by_layer.get(l_name_str)
+                pruning_details_for_this_call["layer_info"][l_name_str] = {
+                    "num_dropped": 0, "dropped_scores_sum": 0.0,
+                    "total_nodes_in_layer": sc_tensor_temp.shape[0] if sc_tensor_temp is not None else 0,
                 }
 
-        for l_idx_prune, node_indices_to_prune in drop_by_layer_indices.items():
-            layer_mod = net_to_prune.alignment_layers[l_idx_prune]
-            wdat = layer_mod.weight.data
-            out_dim_layer = wdat.shape[0]
-            mask = _create_mask_from_indices(wdat.shape, node_indices_to_prune, device)
-            if dropout_mode_str == "scaled":
-                actual_dropped_count = len(node_indices_to_prune)
-                fraction_dropped_layer = actual_dropped_count / float(out_dim_layer) if out_dim_layer > 0 else 0.0
-                scale = 1.0 / (1.0 - fraction_dropped_layer) if fraction_dropped_layer < 0.9999 else 10.0
-                layer_mod.weight.data *= mask * scale
-                if layer_mod.bias is not None:
-                    bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, node_indices_to_prune, device)
-                    layer_mod.bias.data *= bias_mask * scale
-            else:
-                layer_mod.weight.data *= mask
-                if layer_mod.bias is not None:
-                    bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, node_indices_to_prune, device)
-                    layer_mod.bias.data *= bias_mask
+        # Find the actual nn.Module for each layer_name_str to pass to the helper
+        module_map = {name: mod for name, mod in net_to_prune.named_modules()}
+        for layer_name_str_to_prune, node_indices_list in drop_by_layer_indices_map.items():
+            actual_layer_module = module_map.get(layer_name_str_to_prune)
+            if actual_layer_module and node_indices_list:
+                _apply_pruning_to_layer_module(actual_layer_module, node_indices_list, dropout_mode_str, device)
+            elif not actual_layer_module:
+                logger.warning(f"Global Pruning: Could not find module for layer name '{layer_name_str_to_prune}' in net_to_prune.")
 
     elif pruning_mode in ["layer_wise", "layer_isolated"]:
-        classification_layer_idx = len(net_to_prune.alignment_layers) - 1
-        if debug_mode:
-            logger.info(f"Debug Layer-Wise/Isolated Pruning: Strategy '{strategy_key}', Frac {frac_val:.2f}")
+        if debug_mode: logger.info(f"Debug Layer-Wise/Isolated Pruning: Strategy '{strategy_key}', Frac {frac_val:.2f}")
+        
         for l_i, layer_mod in enumerate(net_to_prune.alignment_layers):
             layer_name_str = net_to_prune.alignment_names[l_i]
 
-            if exclude_classification_layer and l_i == classification_layer_idx:
+            if exclude_classification_layer and layer_name_str == classification_layer_name:
                 if debug_mode:
                     logger.info(f"Layer-Wise/Isolated Pruning: Skipping layer {l_i} (classification layer) '{layer_name_str}' entirely.")
+                total_nodes = layer_mod.weight.data.shape[0] if hasattr(layer_mod, 'weight') and layer_mod.weight is not None else 0
                 pruning_details_for_this_call["layer_info"][layer_name_str] = {
-                    "num_dropped": 0,
-                    "dropped_scores_sum": 0.0,
-                    "total_nodes_in_layer": layer_mod.weight.data.shape[0],
-                    "skipped": True,
+                    "num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_nodes, "skipped": True,
                 }
                 continue
             
-            if layer_name_str not in scores_by_layer or \
-               layer_name_str not in descend_indices or \
-               layer_name_str not in ascend_indices or \
-               layer_name_str not in random_indices:
-                logger.warning(f"Layer-Wise/Isolated Pruning: Layer name '{layer_name_str}' (index {l_i}) not found in one or more score/index dictionaries. Skipping.")
+            current_layer_scores = scores_by_layer.get(layer_name_str)
+            if current_layer_scores is None or current_layer_scores.numel() == 0:
+                logger.warning(f"Layer-Wise Pruning: Scores missing or empty for layer '{layer_name_str}'. Skipping.")
+                total_nodes = layer_mod.weight.data.shape[0] if hasattr(layer_mod, 'weight') and layer_mod.weight is not None else 0
                 pruning_details_for_this_call["layer_info"][layer_name_str] = {
-                    "num_dropped": 0,
-                    "dropped_scores_sum": 0.0,
-                    "total_nodes_in_layer": layer_mod.weight.data.shape[0],
-                    "skipped_due_to_missing_key": True,
+                    "num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_nodes, "skipped_due_to_missing_scores": True,
                 }
                 continue
 
             out_dim = layer_mod.weight.data.shape[0]
             n_drop = int(round(frac_val * out_dim))
-            
+            pruning_details_for_this_call["layer_info"][layer_name_str] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": out_dim}
+
             if n_drop <= 0:
-                pruning_details_for_this_call["layer_info"][layer_name_str] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": out_dim}
                 continue
             
-            pruned_node_indices_for_layer = []
-            if strategy_key == "high_rq":
-                pruned_node_indices_for_layer = descend_indices[layer_name_str][:n_drop]
-            elif strategy_key == "low_rq":
-                pruned_node_indices_for_layer = ascend_indices[layer_name_str][:n_drop]
-            else:
-                pruned_node_indices_for_layer = random_indices[layer_name_str][:n_drop]
+            indices_for_layer: Optional[torch.Tensor] = None
+            if strategy_key == "high_rq": indices_for_layer = descend_indices.get(layer_name_str)
+            elif strategy_key == "low_rq": indices_for_layer = ascend_indices.get(layer_name_str)
+            else: indices_for_layer = random_indices.get(layer_name_str)
 
-            wdat = layer_mod.weight.data
+            if indices_for_layer is None or indices_for_layer.numel() == 0:
+                logger.warning(f"Layer-Wise Pruning: Sorted indices not found or empty for layer '{layer_name_str}' (strategy: {strategy_key}). Skipping pruning for this layer.")
+                continue
+                
+            pruned_node_indices_for_layer = indices_for_layer[:n_drop]
 
-            if debug_mode and len(pruned_node_indices_for_layer) > 0:
+            if debug_mode and pruned_node_indices_for_layer.numel() > 0:
                 indices_to_log = (
                     pruned_node_indices_for_layer.tolist()
                     if isinstance(pruned_node_indices_for_layer, torch.Tensor)
@@ -658,59 +648,105 @@ def _apply_pruning_to_single_net(
                     f"  Layer {layer_name_str} (idx {l_i}): Dropping {len(indices_to_log)} nodes. Indices (first {log_limit_layer}): {indices_to_log[:log_limit_layer]} with scores: {scores_for_log}"
                 )
             
-            mask = _create_mask_from_indices(wdat.shape, pruned_node_indices_for_layer, device)
-            if dropout_mode_str == "scaled":
-                frac_d_layer = n_drop / float(out_dim) if out_dim > 0 else 0.0
-                scale = 1.0 / (1.0 - frac_d_layer) if frac_d_layer < 0.9999 else 10.0
-                layer_mod.weight.data *= mask * scale
-                if layer_mod.bias is not None:
-                    bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, pruned_node_indices_for_layer, device)
-                    layer_mod.bias.data *= bias_mask * scale
-            else:
-                for node_idx in pruned_node_indices_for_layer:
-                    if node_idx < out_dim:
-                        wdat[node_idx] = 0.0
-                        if layer_mod.bias is not None and node_idx < layer_mod.bias.data.shape[0]:
-                            layer_mod.bias.data[node_idx] = 0.0
-            num_actually_dropped = len(pruned_node_indices_for_layer)
-            sum_scores_of_dropped = 0.0
-            if layer_name_str in scores_by_layer and scores_by_layer[layer_name_str] is not None and strategy_key != "random" and num_actually_dropped > 0:
+            _apply_pruning_to_layer_module(layer_mod, pruned_node_indices_for_layer, dropout_mode_str, device, out_dim_for_scaling=out_dim)
+            
+            # Update details
+            pruning_details_for_this_call["layer_info"][layer_name_str]["num_dropped"] = pruned_node_indices_for_layer.numel()
+            if strategy_key != "random" and current_layer_scores is not None and pruned_node_indices_for_layer.numel() > 0:
                 try:
-                    sum_scores_of_dropped = scores_by_layer[layer_name_str][pruned_node_indices_for_layer].sum().item()
+                    pruning_details_for_this_call["layer_info"][layer_name_str]["dropped_scores_sum"] = current_layer_scores[pruned_node_indices_for_layer].sum().item()
                 except IndexError:
                     logger.warning(f"Index error summing scores for layer {layer_name_str} in {strategy_key}")
-            pruning_details_for_this_call["layer_info"][layer_name_str] = {
-                "num_dropped": num_actually_dropped,
-                "dropped_scores_sum": sum_scores_of_dropped,
-                "total_nodes_in_layer": out_dim,
-            }
 
     elif pruning_mode == "cascading_layer":
-        logger.warning("Cascading_layer pruning within batched multi-strategy evaluation is not fully optimized by this helper.")
-        for l_i, layer_mod in enumerate(net_to_prune.alignment_layers):
-            # Placeholder: Actual cascading logic is complex and not fully implemented here for batched mode
-            # For now, it effectively does nothing in this path if _apply_pruning_to_single_net is called for cascading
-            # We should ensure pruning_details_for_this_call is populated for all layers even if skipped by cascading here.
-            if l_i not in pruning_details_for_this_call["layer_info"]:
-                pruning_details_for_this_call["layer_info"][l_i] = {
-                    "num_dropped": 0,
-                    "dropped_scores_sum": 0.0,
-                    "total_nodes_in_layer": layer_mod.weight.shape[0],
-                    "skipped": True,  # Indicating this mode didn't prune it here
+        # Cascading logic is complex and might not directly use _apply_pruning_to_layer_module in a simple loop.
+        # It needs its own detailed implementation which considers dependencies between layers.
+        # For now, this remains a placeholder as in the original code for the multi-strategy path.
+        logger.warning("Cascading_layer pruning logic within _apply_pruning_to_single_net is complex and not fully refactored to use _apply_pruning_to_layer_module in this pass.")
+        # Ensure all layers are in details for now
+        for l_name in net_to_prune.alignment_names:
+            if l_name not in pruning_details_for_this_call["layer_info"]:
+                 sc_tensor_temp = scores_by_layer.get(l_name)
+                 total_nodes_temp = sc_tensor_temp.shape[0] if sc_tensor_temp is not None else net_to_prune.alignment_layers[net_to_prune.alignment_names.index(l_name)].weight.shape[0]
+                 pruning_details_for_this_call["layer_info"][l_name] = {
+                    "num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_nodes_temp, "skipped_cascading_placeholder": True
                 }
-            pass
-
-    # Corrected indentation for the final else
     else:
         logger.warning(f"Unrecognized pruning_mode={pruning_mode} in _apply_pruning_to_single_net.")
-        # Ensure all layers are in details if mode is unknown, to avoid key errors later
-        for l_idx_unknown in range(len(net_to_prune.alignment_layers)):
-            if l_idx_unknown not in pruning_details_for_this_call["layer_info"]:
-                layer_node_count = net_to_prune.alignment_layers[l_idx_unknown].weight.shape[0]
-                pruning_details_for_this_call["layer_info"][l_idx_unknown] = {
-                    "num_dropped": 0,
-                    "dropped_scores_sum": 0.0,
-                    "total_nodes_in_layer": layer_node_count,
+        # Populate details for all layers if mode is unknown
+        for l_name in net_to_prune.alignment_names:
+            if l_name not in pruning_details_for_this_call["layer_info"]:
+                sc_tensor_temp = scores_by_layer.get(l_name)
+                total_nodes_temp = sc_tensor_temp.shape[0] if sc_tensor_temp is not None else net_to_prune.alignment_layers[net_to_prune.alignment_names.index(l_name)].weight.shape[0]
+                pruning_details_for_this_call["layer_info"][l_name] = {
+                    "num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_nodes_temp
                 }
 
     return pruning_details_for_this_call
+
+
+def _apply_pruning_to_layer_module(
+    layer_mod: nn.Module,
+    indices_to_drop: Union[List[int], torch.Tensor],
+    dropout_mode_str: str,
+    device: torch.device,
+    out_dim_for_scaling: Optional[int] = None # For layer_wise scaling, out_dim might differ from wdat.shape[0] if grouped conv
+) -> None:
+    """
+    Applies pruning (masking and optional scaling) to a single layer module.
+
+    Args:
+        layer_mod: The nn.Module layer to prune (e.g., nn.Linear, nn.Conv2d).
+        indices_to_drop: List or Tensor of node indices to prune from the output dimension.
+        dropout_mode_str: 'scaled' or 'unscaled'.
+        device: The torch device.
+        out_dim_for_scaling: The reference output dimension for calculating scaling factor.
+                             If None, uses layer_mod.weight.data.shape[0].
+    """
+    if not hasattr(layer_mod, 'weight') or layer_mod.weight is None:
+        logger.warning(f"Layer {layer_mod} has no weight attribute or weight is None. Skipping pruning.")
+        return
+
+    wdat = layer_mod.weight.data
+    actual_out_dim = wdat.shape[0]
+    
+    # Ensure indices_to_drop is a tensor for _create_mask_from_indices
+    if isinstance(indices_to_drop, list):
+        if not indices_to_drop: # Empty list, no pruning
+            return
+        indices_to_drop_tensor = torch.tensor(indices_to_drop, device=device, dtype=torch.long)
+    elif isinstance(indices_to_drop, torch.Tensor):
+        indices_to_drop_tensor = indices_to_drop.to(device=device, dtype=torch.long)
+    else:
+        logger.error(f"_apply_pruning_to_layer_module: indices_to_drop must be a list or tensor, got {type(indices_to_drop)}")
+        return
+
+    if indices_to_drop_tensor.numel() == 0:
+        return # No nodes to drop
+
+    mask = _create_mask_from_indices(wdat.shape, indices_to_drop_tensor, device)
+    
+    if dropout_mode_str == "scaled":
+        # Use provided out_dim_for_scaling if available, otherwise use the layer's actual output dimension
+        reference_out_dim = out_dim_for_scaling if out_dim_for_scaling is not None else actual_out_dim
+        if reference_out_dim == 0: # Avoid division by zero
+            logger.warning("Reference output dimension for scaling is 0. Skipping scaling.")
+            scale = 1.0
+        else:
+            # Ensure indices_to_drop are within the bounds of reference_out_dim for correct fraction calculation
+            valid_indices_for_fraction = indices_to_drop_tensor[indices_to_drop_tensor < reference_out_dim]
+            num_actually_dropped_for_scaling = valid_indices_for_fraction.numel()
+            
+            fraction_dropped_layer = num_actually_dropped_for_scaling / float(reference_out_dim)
+            scale = 1.0 / (1.0 - fraction_dropped_layer) if fraction_dropped_layer < 0.9999 else 10.0
+        
+        layer_mod.weight.data.mul_(mask).mul_(scale)
+        if layer_mod.bias is not None:
+            # Bias mask should always be based on actual_out_dim of the bias itself
+            bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, indices_to_drop_tensor, device)
+            layer_mod.bias.data.mul_(bias_mask).mul_(scale)
+    else: # unscaled (zeroing out)
+        layer_mod.weight.data.mul_(mask) # Apply mask by multiplication (zeros out False positions)
+        if layer_mod.bias is not None:
+            bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, indices_to_drop_tensor, device)
+            layer_mod.bias.data.mul_(bias_mask)
