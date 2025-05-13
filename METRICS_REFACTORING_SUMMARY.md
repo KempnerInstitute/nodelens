@@ -28,6 +28,14 @@ The metrics system refactoring has been successfully completed. This document su
    - Added a `tests/README_TESTS.md` describing the test organization and coverage
    - Updated `REFACTORING_METRICS.md` with the current status of the refactoring
 
+5. **Codebase reorganization and cleanup:**
+   - Created a dedicated `benchmarks` directory for performance evaluation scripts
+   - Moved utility scripts to the `scripts` directory
+   - Moved test files to the `tests` directory
+   - Archived debug files that are no longer needed
+   - Added README files to document the purpose of each directory
+   - Created a cleanup script to remove unnecessary files from the root directory
+
 ## Structural Improvements
 
 1. **Consolidated metrics systems:**
@@ -45,6 +53,11 @@ The metrics system refactoring has been successfully completed. This document su
    - Consistent parameter names and default values
    - Proper type hints for improved IDE support and static type checking
 
+4. **Organized directory structure:**
+   - Clear separation between source code, tests, scripts, and benchmarks
+   - More intuitive file organization makes it easier to navigate the codebase
+   - Reduced clutter in the root directory improves project maintainability
+
 ## Current State
 
 The metrics system now has a unified architecture:
@@ -53,6 +66,14 @@ The metrics system now has a unified architecture:
 2. **Access:** Metrics are accessed via `get_metric(name, scale_by_norm)`
 3. **Dispatch:** The `_AlignmentMetricImpl` class provides a consistent dispatch system
 4. **High-level functions:** `compute_metrics_for_layers` and `compute_all_node_scores` provide integration points
+
+The codebase structure is now more organized:
+
+1. **src/alignment/**: Core source code
+2. **tests/**: Unit and integration tests
+3. **scripts/**: Utility scripts and tools
+4. **benchmarks/**: Performance evaluation scripts
+5. **_archive/**: Archived code that may be useful for reference
 
 ## Recommendations for Future Work
 
@@ -78,10 +99,6 @@ The metrics system now has a unified architecture:
    - Create visual examples of each metric on toy datasets
    - Add references to papers for each metric for better understanding of mathematical foundations
 
-6. **Cleanup:**
-   - Remove or archive any remaining benchmark scripts that duplicate functionality
-   - Consider creating a dedicated benchmarking folder separate from tests
-
 ## Conclusion
 
-The metrics refactoring has successfully consolidated all alignment metrics into a unified, well-tested system. Users now have a single, consistent interface for accessing all metrics, with improved documentation and robust error handling. 
+The metrics refactoring has successfully consolidated all alignment metrics into a unified, well-tested system. Users now have a single, consistent interface for accessing all metrics, with improved documentation and robust error handling. Additionally, the reorganized codebase structure provides a more maintainable and navigable project layout. 
