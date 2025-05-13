@@ -819,7 +819,10 @@ def plot_per_layer_pruning_percentage(
         
         ax.set_ylabel("% Nodes Pruned in Layer")
         ax.set_title(f"Strategy: {strategy.replace('_', ' ').title()}")
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        # Only add legend if there are plotted lines with labels
+        handles, labels = ax.get_legend_handles_labels()
+        if handles: # or if labels:
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
         ax.grid(True)
         ax.set_ylim(0, 105) # Percentage
 
@@ -920,7 +923,10 @@ def plot_per_layer_contribution_to_pruning(
         
         ax.set_ylabel("% Contribution to Total Pruned")
         ax.set_title(f"Strategy: {strategy.replace('_', ' ').title()}")
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        # Only add legend if there are plotted lines with labels
+        handles, labels = ax.get_legend_handles_labels()
+        if handles: # or if labels:
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
         ax.grid(True)
         ax.set_ylim(0, 105)
 

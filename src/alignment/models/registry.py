@@ -10,8 +10,17 @@ from typing import Dict, Type, Callable, Optional, Any, Union, List, Tuple
 
 import torch
 import torch.nn as nn
-import torchvision # NEW: Import torchvision
-from transformers import AutoModel # Moved to top
+import torchvision
+
+# Make transformers an optional dependency
+try:
+    from transformers import AutoModel
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    AutoModel = None  # Define as None to avoid NameError if not imported
+    # Logger might not be initialized yet if this is top-level, so print or log later
+    # print("INFO: transformers library not found. Hugging Face models will not be available.")
 
 from alignment.config import ModelConfig, MLPParamsConfig, CNN2P2ParamsConfig, ExternalModelParamsConfig
 from alignment.models.base import AlignmentNetwork
@@ -19,35 +28,28 @@ from alignment.models.base import AlignmentNetwork
 
 logger = logging.getLogger(__name__)
 
+# Log transformers availability after logger is initialized
+if not TRANSFORMERS_AVAILABLE:
+    logger.info("transformers library not found. Hugging Face models will not be available.")
 
 # Registry of model constructors
 _MODEL_REGISTRY: Dict[str, Callable[..., AlignmentNetwork]] = {}
 
 
-def register_model(name: str) -> Callable:
+def register_model_function(name: str, fn: Callable[..., AlignmentNetwork]):
     """
-    Decorator to register a model constructor in the global registry.
+    Register a model constructor in the global registry.
     
     Args:
         name: Unique identifier for the model
-        
-    Returns:
-        Decorator function that registers the model constructor
-    
-    Example:
-        @register_model("resnet18")
-        def create_resnet18(**kwargs):
-            return AlignmentNetwork(...)
+        fn: The constructor function (e.g., create_mlp)
     """
-    def decorator(fn: Callable[..., AlignmentNetwork]) -> Callable[..., AlignmentNetwork]:
-        if name in _MODEL_REGISTRY:
-            logger.warning(f"Model {name} already registered, overwriting previous registration")
-        _MODEL_REGISTRY[name] = fn
-        return fn
-    return decorator
+    if name in _MODEL_REGISTRY:
+        logger.warning(f"Model {name} already registered, overwriting previous registration")
+    _MODEL_REGISTRY[name] = fn
 
 
-def get_model_constructor(model_name: str) -> Callable[..., AlignmentNetwork]:
+def get_model_constructor(model_name: str) -> Optional[Callable[..., AlignmentNetwork]]:
     """
     Get the constructor function for a registered model.
     
@@ -79,9 +81,9 @@ def get_model_constructor(model_name: str) -> Callable[..., AlignmentNetwork]:
     if model_name_lower in registry_lower:
         return registry_lower[model_name_lower]
     else:
-        # It's an external model type (torchvision_, hf_, external)
-        # create_model will handle the actual loading for these.
-        return None # Signal to create_model that this is an external type to be handled there
+        # It's an external model type (torchvision_, hf_, external) or not found by explicit name
+        # create_model will handle these cases based on model_name_lower prefixes or external_params
+        return None # Signal to create_model to handle external/prefix or if truly not found
 
 
 def create_model(config: ModelConfig) -> AlignmentNetwork:
@@ -103,45 +105,48 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
     cnn_mode_for_alignment_network = config.cnn_mode if config.cnn_mode is not None else "unfold"
 
     # --- Handle Model Creation based on model_name --- 
-    if model_name_lower == "mlp":
-        if not config.mlp_params:
-            raise ValueError("model_name is MLP, but mlp_params are not configured in ModelConfig.")
-        mlp_p = config.mlp_params
-        # Call the registered MLP constructor (e.g., create_mlp from models.py)
-        # It should expect common params + specific MLP params.
-        model_constructor = get_model_constructor("MLP") # Case-sensitive, ensure registry matches
-        base_model_instance = model_constructor(
-            output_dim=config.output_dim,
-            dropout_rate=config.dropout_rate, # Pass common dropout rate
-            input_dim=mlp_p.input_dim,
-            hidden_dims=mlp_p.hidden_dims,
-            activation=mlp_p.activation,
-            # Pass cnn_mode for AlignmentNetwork wrapper if create_mlp returns base model
-            # OR if create_mlp itself instantiates AlignmentNetwork, it should use this.
-            cnn_mode_for_wrapper=cnn_mode_for_alignment_network, 
-            extra_params=config.extra_model_params
-        )
+    model_constructor = get_model_constructor(config.model_name) # Use config.model_name directly
 
-    elif model_name_lower == "cnn2p2":
-        if not config.cnn2p2_params:
-            raise ValueError("model_name is CNN2P2, but cnn2p2_params are not configured in ModelConfig.")
-        cnn_p = config.cnn2p2_params
-        model_constructor = get_model_constructor("CNN2P2")
-        base_model_instance = model_constructor(
-            output_dim=config.output_dim,
-            dropout_rate=config.dropout_rate,
-            in_channels=cnn_p.in_channels,
-            conv_channels=cnn_p.conv_channels,
-            kernel_sizes=cnn_p.kernel_sizes,
-            strides=cnn_p.strides,
-            paddings=cnn_p.paddings,
-            pool_kernel_size=cnn_p.pool_kernel_size,
-            pool_stride=cnn_p.pool_stride,
-            hidden_fc_dim=cnn_p.hidden_fc_dim,
-            example_input_hw=cnn_p.example_input_hw,
-            cnn_mode_for_wrapper=cnn_mode_for_alignment_network,
-            extra_params=config.extra_model_params
-        )
+    if model_constructor:
+        # This handles explicitly registered internal models like MLP, CNN2P2, alexnet
+        # We need to pass the correct parameters based on model_name_lower
+        constructor_args = {
+            "output_dim": config.output_dim,
+            "dropout_rate": config.dropout_rate,
+            "alignment_layers": alignment_layers_config, # Common for AlignmentNetwork wrapper
+            "cnn_mode_for_wrapper": cnn_mode_for_alignment_network,
+            "extra_params": config.extra_model_params
+        }
+        if model_name_lower == "mlp" and config.mlp_params:
+            mlp_p = config.mlp_params
+            constructor_args.update({
+                "input_dim": mlp_p.input_dim,
+                "hidden_dims": mlp_p.hidden_dims,
+                "activation": mlp_p.activation
+            })
+        elif model_name_lower == "cnn2p2" and config.cnn2p2_params:
+            cnn_p = config.cnn2p2_params
+            constructor_args.update({
+                "in_channels": cnn_p.in_channels,
+                "conv_channels": cnn_p.conv_channels,
+                "kernel_sizes": cnn_p.kernel_sizes,
+                "strides": cnn_p.strides,
+                "paddings": cnn_p.paddings,
+                "pool_kernel_size": cnn_p.pool_kernel_size,
+                "pool_stride": cnn_p.pool_stride,
+                "hidden_fc_dim": cnn_p.hidden_fc_dim,
+                "example_input_hw": cnn_p.example_input_hw
+            })
+        elif model_name_lower == "alexnet":
+            # create_alexnet in models.py primarily needs output_dim, dropout_rate, alignment_layers, cnn_mode, extra_params
+            pass # common args are already included
+        else:
+            # Should not happen if get_model_constructor returned a function for a known internal model
+            raise ValueError(f"Internal model constructor found for '{config.model_name}', but specific params not handled.")
+
+        # The constructors (create_mlp, etc.) are expected to return an AlignmentNetwork instance.
+        alignment_network_instance = model_constructor(**constructor_args)
+        return alignment_network_instance
 
     elif model_name_lower.startswith("torchvision_") or \
          model_name_lower.startswith("hf_") or \
@@ -200,14 +205,15 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
                 logger.error(f"Failed to load torchvision model '{ext_p.name_or_path}': {e}"); raise
         
         elif ext_p.source == "huggingface_transformers":
+            if not TRANSFORMERS_AVAILABLE:
+                logger.error("Cannot load Hugging Face model: 'transformers' library not installed. Please install it if you intend to use Hugging Face models.")
+                raise ImportError("transformers library is required to load Hugging Face models.")
             try:
-                # from transformers import AutoModel # Removed from here
+                # AutoModel is already imported or None
                 base_model_instance = AutoModel.from_pretrained(ext_p.name_or_path)
                 logger.info(f"Loaded Hugging Face model '{ext_p.name_or_path}'.")
                 logger.warning(f"HF model '{ext_p.name_or_path}' output adaptation to output_dim={config.output_dim} not auto-handled.")
 
-            except ImportError:
-                logger.error("transformers library not installed for Hugging Face models."); raise
             except Exception as e:
                 logger.error(f"Failed to load Hugging Face model '{ext_p.name_or_path}': {e}"); raise
         else:

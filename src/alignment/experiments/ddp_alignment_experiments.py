@@ -5,6 +5,7 @@ import sys
 import random
 import traceback
 import argparse
+import logging
 
 import torch
 import torch.distributed as dist
@@ -17,6 +18,10 @@ from alignment.config import ExperimentConfig
 # Import the factory function to get the correct experiment class
 from alignment.experiments.alignment_experiments import get_experiment_class 
 
+# Basic logger for the main DDP runner process (before workers spawn and set up their own)
+# This will go to console.
+main_runner_logger = logging.getLogger("DDP_RUNNER")
+
 def ddp_worker(rank, world_size, cfg):
     """
     Each worker process:
@@ -25,67 +30,101 @@ def ddp_worker(rank, world_size, cfg):
       - modify cfg to reflect rank's device
       - build and run the specified AlignmentExperiment
     """
+    # Each worker can have its own logger if needed, or rely on Experiment's logger
+    worker_logger = logging.getLogger(f"DDP_WORKER_RANK_{rank}")
+    # The Experiment class will set up more detailed file/console logging via setup_logging
+
     try:
         os.environ["MASTER_ADDR"] = "127.0.0.1"
-        os.environ["MASTER_PORT"] = str(cfg.ddp_port) # ddp_port is added to cfg in main
+        os.environ["MASTER_PORT"] = str(cfg.ddp_port)
         
-        # Use ddp_backend from config
-        backend = getattr(cfg, 'ddp_backend', 'nccl') # Default to nccl if not in config
+        backend = getattr(cfg, 'ddp_backend', 'nccl')
         dist.init_process_group(backend, rank=rank, world_size=world_size)
 
         torch.cuda.set_device(rank)
         device = torch.device(f"cuda:{rank}")
-        cfg.device = str(device)  # Store as string for ExperimentConfig compatibility
-        cfg.ddp_rank = rank # Store rank and world_size in config for experiment to use
+        cfg.device = str(device)
+        cfg.ddp_rank = rank
         cfg.ddp_world_size = world_size
-        cfg.ddp_local_rank = rank # Assuming one process per GPU
+        cfg.ddp_local_rank = rank
 
-        print(f"\n[DDP_RANK={rank}] world_size={world_size}, port={cfg.ddp_port}, device={device}, backend={backend}")
+        # Use worker_logger for messages specific to this worker's setup phase
+        worker_logger.info(f"Worker initialized. World_size={world_size}, Port={cfg.ddp_port}, Device={device}, Backend={backend}")
 
-        # Get the appropriate experiment class based on config
         ExperimentClass = get_experiment_class(cfg.experiment_type)
-        experiment = ExperimentClass(cfg) # Pass the modified cfg
+        # The ExperimentClass __init__ will call setup_logging based on cfg
+        experiment = ExperimentClass(cfg)
         
-        # The experiment.run() itself should handle DDP awareness for its internal logic
-        # such as data loading, model wrapping, and metric aggregation where necessary.
-        # The Experiment base class in alignment_experiments.py now has more DDP logic.
-        results, nets = experiment.execute_experiment() # Use the unified execution method
-
-        # Result saving and other rank 0 tasks are typically handled within the experiment
-        # or its _run_plotting_and_saving method, which should be DDP-aware.
-        # This ddp_worker mainly sets up the DDP environment and launches the experiment.
+        results, nets = experiment.execute_experiment()
 
     except Exception as e:
-        print(f"[DDP_RANK={rank}] ERROR => {e}")
-        traceback.print_exc()
-        raise e
+        worker_logger.error(f"ERROR => {e}\n{traceback.format_exc()}")
+        # No need to raise e again if mp.spawn join=True, as it will propagate
+        # However, if we want to ensure the entire script exits non-zero, raising is good.
+        raise # Re-raise the exception to ensure mp.spawn sees it and potentially aborts other processes
     finally:
-        dist.destroy_process_group()
-        print(f"[DDP_RANK={rank}] Exiting rank {rank}...")
+        if dist.is_initialized(): # Check if initialized before trying to destroy
+            dist.destroy_process_group()
+        worker_logger.info(f"Exiting worker rank {rank}...")
 
 def main():
-    parser = argparse.ArgumentParser(description="DDP trainer for GeneralAlignmentExperiment")
+    # Basic configuration for the main_runner_logger (console only)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+    parser = argparse.ArgumentParser(description="DDP launcher for Alignment Experiments")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
     args = parser.parse_args()
 
     cfg = ExperimentConfig.load(args.config)
 
-    # e.g. read how many GPUs from cfg.ddp_world_size (or default 4)
-    world_size = getattr(cfg, "ddp_world_size", 4)
-    ddp_port = random.randint(20000, 30000)
-    # store it in cfg for ddp_worker usage
-    cfg.ddp_port = ddp_port
+    world_size = getattr(cfg, "ddp_world_size", 1) # Default to 1 if not specified (for non-DDP test)
+    if world_size <= 0:
+        main_runner_logger.warning(f"ddp_world_size in config is {world_size}, must be >= 1. Setting to 1.")
+        world_size = 1
+    
+    cfg.ddp_world_size = world_size # Ensure cfg reflects the world_size being used
 
-    print(f"Launching {world_size} processes with tcp://127.0.0.1:{ddp_port} for DDP.")
-    torch.multiprocessing.set_start_method("spawn", force=True)
+    if world_size > 1:
+        ddp_port = getattr(cfg, "ddp_port", None) # Check if port is already in config
+        if ddp_port is None:
+            ddp_port = random.randint(20000, 30000)
+            cfg.ddp_port = ddp_port # Store it in cfg for ddp_worker usage
+        
+        main_runner_logger.info(f"Launching {world_size} DDP processes with MASTER_PORT={ddp_port}.")
+        # Ensure CUDA is available if world_size > 1 and backend is nccl (common case)
+        if not torch.cuda.is_available() and getattr(cfg, 'ddp_backend', 'nccl') == 'nccl':
+            main_runner_logger.error("CUDA not available, but ddp_world_size > 1 and backend is nccl. DDP will likely fail.")
+            # Potentially exit or force CPU backend if appropriate, for now just warn.
 
-    mp.spawn(
-        ddp_worker,
-        nprocs=world_size,
-        args=(world_size, cfg),
-        join=True
-    )
-    print("All DDP processes done successfully.")
+        if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
+            main_runner_logger.warning(
+                f"Requested DDP world size {world_size} but only {torch.cuda.device_count()} GPUs available/detected. "
+                f"Ensure this is intended (e.g., for multi-node CPU DDP or if GPUs are masked).")
+
+        torch.multiprocessing.set_start_method("spawn", force=True)
+        try:
+            mp.spawn(
+                ddp_worker,
+                nprocs=world_size,
+                args=(world_size, cfg),
+                join=True
+            )
+            main_runner_logger.info("All DDP processes finished.")
+        except Exception as e:
+            main_runner_logger.error(f"DDP run failed with an exception in one of the workers: {e}")
+            # No need to print traceback again if worker logged it.
+    else:
+        main_runner_logger.info("ddp_world_size is 1. Running in single-process mode (no DDP spawn).")
+        # Directly call worker logic for rank 0 / single process
+        # This makes the script usable for single GPU/CPU runs without DDP setup.
+        cfg.device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+        cfg.ddp_rank = 0
+        cfg.ddp_world_size = 1
+        cfg.ddp_local_rank = 0
+        ExperimentClass = get_experiment_class(cfg.experiment_type)
+        experiment = ExperimentClass(cfg)
+        experiment.execute_experiment()
+        main_runner_logger.info("Single-process run finished.")
 
 if __name__ == "__main__":
     main()

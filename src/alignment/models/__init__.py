@@ -1,7 +1,7 @@
 """
 Models package for alignment analysis.
 
-This package contains neural network model implementations and utilities
+This module contains neural network model implementations and utilities
 for model instantiation, registration, and manipulation.
 """
 
@@ -10,26 +10,30 @@ import logging
 import torch
 from typing import List, Dict, Any, Union, Optional
 
-# Import registry components
+# Import registry components first (as it defines _MODEL_REGISTRY and register_model_function)
+from . import registry 
+# Import model implementations (which define create_mlp, etc., but no longer use decorators)
+from . import models 
+
+# Explicitly register models after both modules are imported
+registry.register_model_function("mlp", models.create_mlp)
+registry.register_model_function("cnn2p2", models.create_cnn2p2)
+registry.register_model_function("alexnet", models.create_alexnet)
+
+# Re-export key symbols for the public API of this package
 from alignment.models.registry import (
-    register_model,
+    # register_model_function, # Not typically part of public API, used internally here
     create_model,
     get_model_constructor,
     get_available_models
 )
-
-# Import model implementations to ensure they're registered
 from alignment.models.models import (
     MLP,
     CNN2P2,
-    create_mlp,
-    create_cnn2p2,
-    create_alexnet,
+    # create_mlp, create_cnn2p2, create_alexnet are not usually part of public API this way
     get_model_dataset_parameters,
     get_transform_parameters
 )
-
-# Import base classes and utilities
 from alignment.models.base import AlignmentNetwork
 
 logger = logging.getLogger(__name__)
@@ -123,24 +127,31 @@ def load_model_family(family_dir: str, device: Optional[torch.device] = None) ->
     logger.info(f"Successfully loaded {len(models)} models from {family_dir}")
     return models
 
-# Export public API
+# Update __all__ according to what should be public from this package
 __all__ = [
-    # Registry
-    "register_model",
+    # Registry and creation
     "create_model",
     "get_model_constructor",
     "get_available_models",
     
-    # Models
+    # Model classes
     "MLP",
-    "CNN2P2",
+    "CNN2P2", # CNN is an alias defined below if needed for backward compatibility
     "AlignmentNetwork",
     
     # Loading functions
     "load_model",
     "load_model_family",
     
-    # Utilities
+    # Utilities from models.models
     "get_model_dataset_parameters",
-    "get_transform_parameters"
-] 
+    "get_transform_parameters",
+
+    # Backward compatibility alias (if still desired)
+    # "CNN", 
+]
+
+# Backward compatibility alias
+CNN = models.CNN2P2 # Access it via the imported models module
+if "CNN" not in __all__:
+    __all__.append("CNN") 

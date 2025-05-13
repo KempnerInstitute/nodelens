@@ -66,10 +66,15 @@ class ExperimentRunner:
         self.setup_paths()
         
         # Set up metric based on configuration
-        if hasattr(config, 'alignment') and hasattr(config.alignment, 'metric'):
+        if hasattr(config, 'alignment_settings') and config.alignment_settings is not None and hasattr(config.alignment_settings, 'metric'): # Check for alignment_settings and then metric
+            self.metric = get_metric(config.alignment_settings.metric)
+            if self.debug_mode:
+                logger.info(f"Using metric: {config.alignment_settings.metric}")
+        elif hasattr(config, 'alignment') and hasattr(config.alignment, 'metric'): # Fallback for older config structure
+            logger.warning("Accessing metric from config.alignment.metric. Please update config to use alignment_settings.metric.")
             self.metric = get_metric(config.alignment.metric)
             if self.debug_mode:
-                logger.info(f"Using metric: {config.alignment.metric}")
+                logger.info(f"Using metric (from legacy config.alignment): {config.alignment.metric}")
     
     def setup_paths(self):
         """Set up paths for experiment outputs."""
@@ -330,12 +335,26 @@ class ExperimentRunner:
         }
         
         # Run progressive dropout if configured
-        if self.config.alignment.run_progressive:
+        run_prog = False
+        if hasattr(self.config, 'alignment_settings') and self.config.alignment_settings is not None:
+            run_prog = getattr(self.config.alignment_settings, 'run_progressive', True) # Default to True if attribute exists but not set
+        elif hasattr(self.config, 'alignment') and hasattr(self.config.alignment, 'run_progressive'): # Fallback
+            logger.warning("Accessing run_progressive from config.alignment. Please update config to use alignment_settings.run_progressive.")
+            run_prog = self.config.alignment.run_progressive
+
+        if run_prog:
             logger.info(f"Running progressive dropout experiment")
             results["progressive_dropout"] = self.run_progressive_dropout(networks, dataset)
         
         # Run eigenvector dropout if configured
-        if self.config.alignment.run_eigenvector:
+        run_eig = False
+        if hasattr(self.config, 'alignment_settings') and self.config.alignment_settings is not None:
+            run_eig = getattr(self.config.alignment_settings, 'run_eigenvector', False) # Default to False
+        elif hasattr(self.config, 'alignment') and hasattr(self.config.alignment, 'run_eigenvector'): # Fallback
+            logger.warning("Accessing run_eigenvector from config.alignment. Please update config to use alignment_settings.run_eigenvector.")
+            run_eig = self.config.alignment.run_eigenvector
+            
+        if run_eig:
             logger.info("Running eigenvector dropout experiment")
             results["eigenvector_dropout"] = self.run_eigenvector_dropout(networks[0], dataset)
         
