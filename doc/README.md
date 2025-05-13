@@ -20,7 +20,8 @@ Welcome to the Network Alignment Analysis documentation. This directory contains
 - [Background](background.md) - Background information on alignment analysis
 - [Development Roadmap](ROADMAP.md) - Future development plans
 
-## Links to Refactoring Summaries
+## Summaries
 
-- [Metrics Refactoring Summary](../METRICS_REFACTORING_SUMMARY.md)
-- [Codebase Cleanup Summary](../CODEBASE_CLEANUP_SUMMARY.md)
+- [Documentation Reorganization](summaries/DOCUMENTATION_SUMMARY.md) - Summary of documentation reorganization
+- [Codebase Cleanup](summaries/CODEBASE_CLEANUP_SUMMARY.md) - Summary of codebase cleanup
+- [Metrics Refactoring](summaries/METRICS_REFACTORING_SUMMARY.md) - Summary of metrics refactoring
