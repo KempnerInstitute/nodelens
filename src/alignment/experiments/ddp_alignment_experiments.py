@@ -9,11 +9,13 @@ import argparse
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from torch.nn.parallel import DistributedDataParallel as DDP
+# DDP import is not directly used, torch.nn.parallel.DistributedDataParallel is used by experiment if needed
+# from torch.nn.parallel import DistributedDataParallel as DDP 
 
 # Assuming your new codebase modules (the ones that contain your config and experiment):
 from alignment.config import ExperimentConfig
-from alignment.experiments.alignment_experiments import GeneralAlignmentExperiment
+# Import the factory function to get the correct experiment class
+from alignment.experiments.alignment_experiments import get_experiment_class 
 
 def ddp_worker(rank, world_size, cfg):
     """
@@ -21,28 +23,37 @@ def ddp_worker(rank, world_size, cfg):
       - init process group
       - set device
       - modify cfg to reflect rank's device
-      - build and run the GeneralAlignmentExperiment
+      - build and run the specified AlignmentExperiment
     """
     try:
         os.environ["MASTER_ADDR"] = "127.0.0.1"
-        os.environ["MASTER_PORT"] = str(cfg.ddp_port)
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        os.environ["MASTER_PORT"] = str(cfg.ddp_port) # ddp_port is added to cfg in main
+        
+        # Use ddp_backend from config
+        backend = getattr(cfg, 'ddp_backend', 'nccl') # Default to nccl if not in config
+        dist.init_process_group(backend, rank=rank, world_size=world_size)
 
         torch.cuda.set_device(rank)
         device = torch.device(f"cuda:{rank}")
-        cfg.device = device  # so the experiment uses the correct GPU
+        cfg.device = str(device)  # Store as string for ExperimentConfig compatibility
+        cfg.ddp_rank = rank # Store rank and world_size in config for experiment to use
+        cfg.ddp_world_size = world_size
+        cfg.ddp_local_rank = rank # Assuming one process per GPU
 
-        print(f"\n[DDP_RANK={rank}] world_size={world_size}, port={cfg.ddp_port}, device={device}")
+        print(f"\n[DDP_RANK={rank}] world_size={world_size}, port={cfg.ddp_port}, device={device}, backend={backend}")
 
-        # Build & run your GeneralAlignmentExperiment from the new codebase
-        experiment = GeneralAlignmentExperiment(cfg)
-        if cfg.just_plot:
-            experiment.plot_from_existing()
-        else:
-            results, nets = experiment.run()
-            # Only rank=0 might save results
-            if rank == 0 and not cfg.no_save:
-                experiment.save_results(results)
+        # Get the appropriate experiment class based on config
+        ExperimentClass = get_experiment_class(cfg.experiment_type)
+        experiment = ExperimentClass(cfg) # Pass the modified cfg
+        
+        # The experiment.run() itself should handle DDP awareness for its internal logic
+        # such as data loading, model wrapping, and metric aggregation where necessary.
+        # The Experiment base class in alignment_experiments.py now has more DDP logic.
+        results, nets = experiment.execute_experiment() # Use the unified execution method
+
+        # Result saving and other rank 0 tasks are typically handled within the experiment
+        # or its _run_plotting_and_saving method, which should be DDP-aware.
+        # This ddp_worker mainly sets up the DDP environment and launches the experiment.
 
     except Exception as e:
         print(f"[DDP_RANK={rank}] ERROR => {e}")

@@ -13,7 +13,7 @@ experiment_type: "progressive_dropout"    # Options:
                                         #   "layer_isolated_pruning" - Prunes/evaluates one layer at a time (generates N plots).
 results_path: "results"                   # Base path for saving all outputs.
 use_timestamp: true                     # If true, appends a YYYYMMDD_HHMMSS timestamp to `results_path`.
-debug_mode: true                       # MODIFIED: Set to true for testing callbacks
+debug_mode: false                       # MODIFIED: Set to true for testing callbacks
 
 device: "cuda"                          # "cuda", "cuda:0", "cpu". Ignored if use_ddp is true (device set by local_rank).
 save_networks: true                     # If true, final trained/pruned network models are saved.

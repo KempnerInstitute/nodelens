@@ -272,15 +272,17 @@ def enhance_cnn_configuration(config):
     if is_cnn_model:
         logger.info(f"Detected CNN model: {config.model.model_name}")
 
-        # Set appropriate CNN mode based on model architecture
+        # Set appropriate CNN mode on config.model.cnn_mode
         if "ResNet" in config.model.model_name or "VGG" in config.model.model_name:
             # More complex architectures benefit from batch_patch_combined
-            config.extra.cnn_mode = "batch_patch_combined"
-            logger.info(f"Setting CNN mode to 'batch_patch_combined' for {config.model.model_name}")
+            config.model.cnn_mode = "batch_patch_combined"
+            logger.info(f"Setting model.cnn_mode to 'batch_patch_combined' for {config.model.model_name}")
         else:
             # Simpler CNN architectures use the standard unfold approach
-            config.extra.cnn_mode = "unfold"
-            logger.info(f"Setting CNN mode to 'unfold' for {config.model.model_name}")
+            # Ensure it's set if it was None, otherwise respect existing value if not ResNet/VGG
+            if config.model.cnn_mode is None: 
+                config.model.cnn_mode = "unfold"
+            logger.info(f"Ensuring model.cnn_mode is set for {config.model.model_name} (current: '{config.model.cnn_mode}')")
 
     return config
 

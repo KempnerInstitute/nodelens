@@ -17,7 +17,7 @@ from alignment.utils.model_utils import (
     smart_pca
 )
 from alignment.utils.metrics_utils import AlignmentMetricsFactory as AlignmentMetrics
-from alignment.utils.metrics_utils import alignment
+from alignment.utils.metrics_utils import alignment as legacy_alignment_fn
 from alignment.metrics import get_metric, AlignmentMetric
 from alignment.utils.activation_utils import collect_layer_data
 
@@ -441,7 +441,6 @@ class AlignmentNetwork(nn.Module):
             return [torch.tensor(float('nan')) for _ in self.alignment_names]
 
         outputs = []
-        from alignment.utils.metrics_utils import alignment as legacy_alignment_fn 
         
         for inp, w in zip(preprocessed_inputs, weights_flat):
             if inp is None or w is None:

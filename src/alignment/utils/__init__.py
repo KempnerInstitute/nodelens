@@ -44,15 +44,8 @@ from alignment.utils.model_utils import (
     smart_pca
 )
 
-# Define these functions that were previously imported from alignment.plotting
-# They're likely not used anymore, but we'll define them as empty functions to avoid import errors
-def plot_pruning_experiments(*args, **kwargs):
-    print("WARNING: plot_pruning_experiments is deprecated. Use functions from alignment.utils.plotting instead.")
-    return None
-
-def plot_per_layer_independent(*args, **kwargs):
-    print("WARNING: plot_per_layer_independent is deprecated. Use functions from alignment.utils.plotting instead.")
-    return None
+# Removed deprecated plotting functions: plot_pruning_experiments, plot_per_layer_independent
+# They were stubs printing warnings. Their functionality should be covered by other plotting utilities.
 
 __all__ = [
     # Plotting functions
@@ -60,8 +53,6 @@ __all__ = [
     'plot_experiment_summary',
     'plot_dropout_comparison',
     'log_plots_to_wandb',
-    'plot_pruning_experiments',
-    'plot_per_layer_independent',
     
     # Core utilities
     'setup_logging',

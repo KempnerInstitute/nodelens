@@ -184,15 +184,20 @@ class ExperimentRunner:
         Returns:
             Dictionary with results
         """
-        # Get dropout parameters from config
-        dropout_min = self.config.alignment.dropout_min
-        dropout_max = self.config.alignment.dropout_max
-        num_dropout_steps = self.config.alignment.dropout_steps
+        # Get dropout parameters from config.pruning_settings
+        pruning_config = self.config.pruning_settings
+        dropout_min = pruning_config.dropout_min
+        dropout_max = pruning_config.dropout_max
+        num_dropout_steps = pruning_config.dropout_steps
         dropout_fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
-        
-        # Get pruning and dropout modes
-        pruning_mode = getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
-        dropout_mode = getattr(self.config.extra, "dropout_mode", "scaled")
+        if 0.0 not in dropout_fractions: # Ensure baseline is present
+            dropout_fractions = sorted(list(set([0.0] + dropout_fractions)))
+        elif len(dropout_fractions) == 1 and dropout_fractions[0] != 0.0: # handles case of single non-zero step
+             dropout_fractions = [0.0] + dropout_fractions
+
+        # Get pruning and dropout modes from config.pruning_settings
+        pruning_mode = pruning_config.dropout_pruning_mode
+        dropout_mode = pruning_config.dropout_mode
         
         logger.info(f"Running progressive dropout with pruning_mode={pruning_mode}, dropout_mode={dropout_mode}")
         
@@ -260,15 +265,20 @@ class ExperimentRunner:
         Returns:
             Dictionary with results
         """
-        # Get dropout parameters from config
-        dropout_min = self.config.alignment.dropout_min
-        dropout_max = self.config.alignment.dropout_max
-        num_dropout_steps = self.config.alignment.dropout_steps
+        # Get dropout parameters from config.pruning_settings
+        pruning_config = self.config.pruning_settings
+        dropout_min = pruning_config.dropout_min
+        dropout_max = pruning_config.dropout_max
+        num_dropout_steps = pruning_config.dropout_steps
         dropout_fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
-        
-        # Get dropout mode from config
-        dropout_mode = getattr(self.config.extra, "dropout_mode", "scaled")
-        pruning_mode = getattr(self.config.extra, "dropout_pruning_mode", "global_joint")
+        if 0.0 not in dropout_fractions: # Ensure baseline is present
+            dropout_fractions = sorted(list(set([0.0] + dropout_fractions)))
+        elif len(dropout_fractions) == 1 and dropout_fractions[0] != 0.0:
+             dropout_fractions = [0.0] + dropout_fractions
+
+        # Get dropout mode from config.pruning_settings
+        dropout_mode = pruning_config.dropout_mode
+        pruning_mode = pruning_config.dropout_pruning_mode # Also from pruning_settings
         
         # Run the experiment
         results = run_eigenvector_dropout_experiment(

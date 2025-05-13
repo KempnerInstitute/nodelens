@@ -11,6 +11,7 @@ from typing import Dict, Type, Callable, Optional, Any, Union, List, Tuple
 import torch
 import torch.nn as nn
 import torchvision # NEW: Import torchvision
+from transformers import AutoModel # Moved to top
 
 from alignment.config import ModelConfig, MLPParamsConfig, CNN2P2ParamsConfig, ExternalModelParamsConfig
 from alignment.models.base import AlignmentNetwork
@@ -200,7 +201,7 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
         
         elif ext_p.source == "huggingface_transformers":
             try:
-                from transformers import AutoModel 
+                # from transformers import AutoModel # Removed from here
                 base_model_instance = AutoModel.from_pretrained(ext_p.name_or_path)
                 logger.info(f"Loaded Hugging Face model '{ext_p.name_or_path}'.")
                 logger.warning(f"HF model '{ext_p.name_or_path}' output adaptation to output_dim={config.output_dim} not auto-handled.")

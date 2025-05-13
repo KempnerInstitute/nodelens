@@ -70,6 +70,7 @@ from alignment.utils.core import (
     to_tensor,
     check_iterable,
     ensure_device,
+    timed
 )
 
 from alignment.utils.math import (
@@ -78,8 +79,6 @@ from alignment.utils.math import (
     matrix_angles,
     project_to_subspace,
 )
-
-from alignment.utils.core import timed
 
 # Training
 from alignment.training import (

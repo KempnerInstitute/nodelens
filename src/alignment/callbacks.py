@@ -8,7 +8,6 @@ import torch
 from torch.utils.data import DataLoader
 
 # Updated imports for refactored metrics and data collection
-# from alignment.metrics import get_metric, compute_all_node_scores # OLD
 from alignment.metrics import compute_metrics_for_layers # NEW
 from alignment.utils.activation_utils import collect_layer_data # NEW
 from alignment.models import AlignmentNetwork # Assuming AlignmentNetwork is in alignment.models

@@ -9,6 +9,7 @@ import logging
 import time
 import copy
 from typing import Dict, List, Tuple, Union, Optional, Any
+import traceback
 
 import numpy as np
 import torch
@@ -273,7 +274,6 @@ def run_progressive_dropout_experiment(
 
     except Exception as e:
         logger.error(f"Error in run_progressive_dropout_experiment: {str(e)}")
-        import traceback
         logger.error(traceback.format_exc())
         results["error"] = str(e)
     
@@ -349,7 +349,6 @@ def run_eigenvector_dropout_experiment(
             
         except Exception as e:
             logger.error(f"Error in eigenvector dropout at fraction {dropout_fraction}: {str(e)}")
-            import traceback
             logger.error(traceback.format_exc())
             results["accuracies"]["eigenvector"].append(0.0)
             results["losses"]["eigenvector"].append(100.0)
@@ -499,18 +498,20 @@ def run_layer_isolated_dropout_experiment(
                     
                     metrics_for_this_rep = all_network_metrics_precomputed[net_rep_idx]
                     target_layer_module = net_copy.alignment_layers[layer_to_isolate_idx]
+                    layer_name_str = net_copy.alignment_names[layer_to_isolate_idx]
+
                     out_dim = target_layer_module.weight.data.shape[0]
                     n_drop = int(round(frac_val * out_dim))
 
-                    if n_drop > 0 and layer_to_isolate_idx in metrics_for_this_rep["scores"]:
+                    if n_drop > 0 and layer_name_str in metrics_for_this_rep["scores"] and metrics_for_this_rep["scores"][layer_name_str] is not None:
                         indices_map = {
                             "high_rq": metrics_for_this_rep["desc_indices"],
                             "low_rq": metrics_for_this_rep["asc_indices"],
                             "random": metrics_for_this_rep["rand_indices"]
                         }
-                        sorted_indices_for_layer = indices_map[strategy].get(layer_to_isolate_idx)
+                        sorted_indices_for_layer = indices_map[strategy].get(layer_name_str)
                         
-                        if sorted_indices_for_layer is not None:
+                        if sorted_indices_for_layer is not None and sorted_indices_for_layer.numel() > 0:
                             indices_to_drop = sorted_indices_for_layer[:n_drop]
                             wdat = target_layer_module.weight.data
                             mask = _create_mask_from_indices(wdat.shape, indices_to_drop, device)

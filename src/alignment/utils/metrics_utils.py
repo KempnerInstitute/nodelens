@@ -1,8 +1,9 @@
 """
-Metrics utility functions for the alignment package.
+Alternative/legacy metrics utility functions for the alignment package.
 
-This module provides the core implementations of alignment metrics that
-are used by both metrics.py and alignment_metrics.py to avoid circular dependencies.
+This module provides a distinct set of alignment metric implementations and a factory.
+It is used in some tests and potentially older evaluation paths. 
+It is separate from the primary metrics system in `alignment.metrics.py`.
 """
 
 import numpy as np

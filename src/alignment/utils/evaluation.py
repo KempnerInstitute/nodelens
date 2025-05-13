@@ -16,6 +16,11 @@ import torch.distributed as dist
 
 # Updated import to reflect moved utility functions
 from alignment.utils.model_utils import _normalize_device
+from alignment.datasets import load_dataset # Moved from evaluate_model
+from alignment.metrics import get_metric # Moved from evaluate_model
+from alignment.models.base import AlignmentNetwork # Moved from evaluate_model and evaluate
+# Corrected import for AlignmentMetricsFactory
+from alignment.utils.metrics_utils import AlignmentMetricsFactory as AlignmentMetrics 
 
 logger = logging.getLogger(__name__)
 
@@ -315,9 +320,9 @@ def evaluate_model(
     Returns:
         Dictionary containing evaluation metrics (loss, accuracy, optional alignment).
     """
-    from alignment.datasets import load_dataset # Moved import here for clarity
-    from alignment.metrics import get_metric # Moved import here
-    from alignment.models.base import AlignmentNetwork # Import AlignmentNetwork for isinstance check
+    # from alignment.datasets import load_dataset # Moved to top
+    # from alignment.metrics import get_metric # Moved to top
+    # from alignment.models.base import AlignmentNetwork # Moved to top
 
     if device is None:
         try:
@@ -487,8 +492,8 @@ def evaluate(
     Returns:
         Dictionary of evaluation results. If multiple nets, results are lists under keys.
     """
-    from alignment.metrics import AlignmentMetrics # Local import for class, consider top-level
-    from alignment.models.base import AlignmentNetwork # For isinstance check
+    # from alignment.metrics import AlignmentMetrics # Now imported at top correctly
+    # from alignment.models.base import AlignmentNetwork # Already at top
 
     if not isinstance(nets, list):
         nets = [nets]
