@@ -50,9 +50,32 @@ For checking HPC cluster related code, there's a MWE
 [here](cluster/ddp-example/), note that details will differ regarding the HPC
 system etc.
 
-## Usage and Tutorial
-Detailed usage and tutorials can be found in a dedicated markdown file 
-[here](docs/usage.md).
+## Documentation
+
+The codebase is fully documented with comprehensive guides and API references:
+
+- [Main Documentation](doc/DOCUMENTATION.md): Overview of the entire codebase
+- [Metrics System](doc/metrics/README.md): Documentation for the metrics system
+- [Experiment Framework](doc/experiment/README.md): Guide to running experiments
+- [Performance Optimizations](doc/performance/README.md): Tensorized training and multi-strategy dropout
+- [API Reference](doc/api/README.md): Comprehensive API reference
+
+### Guides and Tutorials
+
+- [Usage Guide](doc/usage.md): How to use the codebase
+- [Pruning Modes](doc/pruning_modes.md): Documentation for different pruning strategies
+
+## Codebase Structure
+
+The codebase is organized into the following directories:
+
+- `src/alignment/`: Core source code implementing alignment metrics and algorithms
+- `tests/`: Unit and integration tests
+- `scripts/`: Utility scripts for running experiments and analysis
+- `benchmarks/`: Performance evaluation scripts
+- `configs/`: Configuration files for experiments
+- `results/`: Output directory for experiment results
+- `doc/`: Documentation
 
 ## Contributing
 Feel free to contribute to this project by opening issues or submitting pull

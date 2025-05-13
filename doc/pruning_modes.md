@@ -68,9 +68,9 @@ extra:
 |                | (Different % per layer)     | (Exact X% per layer)        |
 +----------------+-----------------------------+-----------------------------+
 | All Layers     | "global"                    | "per_layer_combined"        |
-| Simultaneously | (original v1)               | (v2-like)                   |
+| Simultaneously | (original v1)               |                             |
 +----------------+-----------------------------+-----------------------------+
 | One Layer      | N/A                         | "per_layer_independent"     |
-| at a Time      |                             | (new option)                |
+| at a Time      |                             |                             |
 +----------------+-----------------------------+-----------------------------+
 ``` 
