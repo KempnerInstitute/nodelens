@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import yaml
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 try:
@@ -122,17 +122,23 @@ class Experiment(ABC):
             log_dir = os.path.join(self.working_dir, "logs")
             os.makedirs(log_dir, exist_ok=True)
             
-            # Call setup_logging with just the log_level parameter
-            log_level = self.config.get("log_level", "INFO")
-            setup_logging(log_level=log_level)
+            # Convert OmegaConf to dict for logging setup, handle if config is already dict (e.g. in tests)
+            config_dict_for_logging = OmegaConf.to_container(self.config, resolve=True) if isinstance(self.config, (DictConfig, ListConfig)) else self.config
             
-            # Set up file handler manually
-            log_file = os.path.join(log_dir, "experiment.log")
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-            logging.getLogger().addHandler(file_handler)
+            # Ensure debug_mode is a boolean for force_debug
+            debug_mode_val = False
+            if isinstance(config_dict_for_logging, dict):
+                debug_mode_val = config_dict_for_logging.get("debug_mode", False)
+            elif hasattr(config_dict_for_logging, "debug_mode"): # For dataclass instances not yet dict
+                debug_mode_val = config_dict_for_logging.debug_mode
+
+            setup_logging(
+                config=config_dict_for_logging, 
+                log_file_path=os.path.join(log_dir, "experiment.log"),
+                force_debug=bool(debug_mode_val) # Pass debug_mode to force_debug, ensure boolean
+            )
             
-            logger.info(f"Set up logging with level {log_level}, writing to {log_file}")
+            logger.info(f"Initialized experiment in {self.working_dir}")
         
         # Initialize random seeds
         self._set_random_seeds()
