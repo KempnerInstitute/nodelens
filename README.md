@@ -1,6 +1,7 @@
 # Network Alignment Analysis
 
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://your-username.github.io/alignment/)
 
 This repository is for a project to understand the structure of neural
 networks with a method called "alignment". It contains modules which make
@@ -14,20 +15,10 @@ The code requires a basic ML python environment. Setup can be done with a
 standard python environment manager like conda (or mamba!). To get started,
 clone the repository from GitHub, then navigate to the cloned folder. 
 
-Create your environment with the following command. Mamba is much faster than
-conda, but replace `mamba` with `conda` if you haven't installed `mamba`.
-
 ```
 mamba env create -f environment.yml
 mamba activate networkAlignmentAnalysis
 ```
-
-If this doesn't work, it's probably because of the pytorch packages. Try 
-commenting out the pytorch packages from the environment.yml file, then using
-the above line to create and activate your environment. Type `nvidia-smi` in
-your terminal to figure out the right CUDA version to use, and install them
-using the instructions on the pytorch 
-[website](https://pytorch.org/get-started/locally/).
 
 ## Installation
 
@@ -41,16 +32,11 @@ There's no unit test, but to check if the install was successful, run the
 following script while in the environment and in the top directory:
 
 ```
-python experiment.py configs/config_alignment_stats.yaml
+python src/alignment/experiments/alignment_experiments.py --config configs/config_alignment_experiment.yaml
 ```
 
-Note that you need to at least fill in the two place holders in the config file for dataset path and results path.
 
-For checking HPC cluster related code, there's a MWE 
-[here](cluster/ddp-example/), note that details will differ regarding the HPC
-system etc.
-
-## Documentation
+## Documentatio
 
 The codebase is fully documented with comprehensive guides and API references:
 
@@ -59,6 +45,10 @@ The codebase is fully documented with comprehensive guides and API references:
 - [Experiment Framework](doc/experiment/README.md): Guide to running experiments
 - [Performance Optimizations](doc/performance/README.md): Tensorized training and multi-strategy dropout
 - [API Reference](doc/api/README.md): Comprehensive API reference
+
+### Online Documentation
+
+For a more user-friendly documentation experience, visit our [GitHub Pages site](https://your-username.github.io/alignment/).
 
 ### Guides and Tutorials
 
