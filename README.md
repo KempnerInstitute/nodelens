@@ -1,7 +1,7 @@
 # Network Alignment Analysis
 
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://your-username.github.io/alignment/)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://github.com/KempnerInstitute/alignment/)
 
 This repository is for a project to understand the structure of neural
 networks with a method called "alignment". It contains modules which make
@@ -48,7 +48,7 @@ The codebase is fully documented with comprehensive guides and API references:
 
 ### Online Documentation
 
-For a more user-friendly documentation experience, visit our [GitHub Pages site](https://your-username.github.io/alignment/).
+For a more user-friendly documentation experience, visit our [GitHub Pages site](https://github.com/KempnerInstitute/alignment/).
 
 ### Guides and Tutorials
 
@@ -62,7 +62,7 @@ The codebase is organized into the following directories:
 - `src/alignment/`: Core source code implementing alignment metrics and algorithms
 - `tests/`: Unit and integration tests
 - `scripts/`: Utility scripts for running experiments and analysis
-- `benchmarks/`: Performance evaluation scripts
+- `benchmarks/`: Performance evaluation scripts (just for tests)
 - `configs/`: Configuration files for experiments
 - `results/`: Output directory for experiment results
 - `doc/`: Documentation
