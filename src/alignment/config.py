@@ -568,12 +568,13 @@ class ExperimentConfig(BaseConfig):
                 if pruning_mode == "layer_isolated":
                     self.experiment_type = "layer_isolated_pruning"
                     config_logger.info(f"Experiment type AUTO resolved to 'layer_isolated_pruning' based on dropout_pruning_mode.")
-                elif pruning_mode in ["global_joint", "layer_wise", "cascading_layer"]:
+                elif pruning_mode in ["global_joint", "layer_wise"]:
                     self.experiment_type = "progressive_dropout"
                     config_logger.info(f"Experiment type AUTO resolved to 'progressive_dropout' based on dropout_pruning_mode: {pruning_mode}.")
-                # Add other inferences here if needed, e.g., for eigenvector_dropout based on some other setting
+                elif pruning_mode == "cascading_layer":
+                    self.experiment_type = "cascading_layer_pruning"
+                    config_logger.info(f"Experiment type AUTO resolved to 'cascading_layer_pruning' based on dropout_pruning_mode.")
                 else:
-                    # Default or raise error if AUTO cannot be resolved from pruning_mode
                     config_logger.warning(f"Experiment type AUTO could not be resolved from dropout_pruning_mode '{pruning_mode}'. Defaulting to 'progressive_dropout'.")
                     self.experiment_type = "progressive_dropout"
             else:
@@ -657,8 +658,20 @@ class ExperimentConfig(BaseConfig):
             raise ValueError(
                 "Invalid configuration: experiment_type 'progressive_dropout' cannot be used with "
                 "dropout_pruning_mode 'layer_isolated'. For layer-isolated pruning, "
-                "set experiment_type to 'layer_isolated_pruning'."
+                "set experiment_type to 'layer_isolated_pruning' or AUTO."
             )
+        # Add validation for cascading_layer_pruning experiment type
+        if self.experiment_type == "cascading_layer_pruning" and \
+           self.pruning_settings and \
+           self.pruning_settings.dropout_pruning_mode != "cascading_layer":
+            # If they explicitly set experiment_type to cascading, mode should match or be auto-inferred
+            config_logger.warning(
+                f"Experiment_type is 'cascading_layer_pruning', but dropout_pruning_mode is '{self.pruning_settings.dropout_pruning_mode}'. "
+                f"Expected 'cascading_layer'. The experiment will run as cascading."
+            )
+            # Optionally, could force self.pruning_settings.dropout_pruning_mode = "cascading_layer" here
+        
+        logger.debug("ExperimentConfig.validate_config() completed.")
 
         return True
 

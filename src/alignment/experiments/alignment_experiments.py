@@ -43,7 +43,7 @@ from alignment.utils.plotting import (
     plot_metric_evolution,
 )
 from alignment.datasets import get_dataset, load_dataset
-from alignment.dropout_manager import run_layer_isolated_dropout_experiment, run_progressive_dropout_experiment, run_eigenvector_dropout_experiment
+from alignment.dropout_manager import run_layer_isolated_dropout_experiment, run_progressive_dropout_experiment, run_eigenvector_dropout_experiment, run_cascading_layer_pruning_experiment
 
 # Import for callbacks
 from torch.utils.data import DataLoader  # Ensure DataLoader is imported
@@ -969,6 +969,64 @@ class AlignmentAnalysisExperiment(AlignmentExperiment):
         return analysis_results
 
 
+# --- NEW EXPERIMENT SUBCLASS FOR CASCADING LAYER PRUNING ---
+class CascadingLayerPruningExperiment(AlignmentExperiment):
+    """Experiment for cascading layer pruning."""
+
+    def _run_specific_logic(self) -> Dict:
+        """Runs the cascading layer pruning experiment."""
+        logger.info("Running Cascading Layer Pruning Experiment specific logic")
+
+        if not self.networks or self.dataset is None:
+            raise RuntimeError("Networks or dataset not initialized. Ensure execute_experiment is called.")
+
+        pruning_config = self.config.pruning_settings
+        alignment_config = self.config.alignment_settings # For metric, cnn_mode etc.
+
+        # Dropout fractions
+        dropout_min = pruning_config.dropout_min
+        dropout_max = pruning_config.dropout_max
+        num_dropout_steps = pruning_config.dropout_steps
+        _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist() if num_dropout_steps > 0 else [0.0, dropout_max]
+        if 0.0 not in _fractions: _fractions = [0.0] + _fractions
+        dropout_fractions = sorted(list(set(_fractions)))
+
+        metric_to_use = self.metric
+        if metric_to_use is None:
+            raise ValueError("Metric not initialized for cascading layer pruning.")
+
+        logger.info(
+            f"Using metric: {metric_to_use.name} for score calculation in cascading prune. "
+            f"DropoutMode: {pruning_config.dropout_mode}, ExcludeCls: {pruning_config.exclude_classification_layer}"
+        )
+        
+        results_from_manager = {}
+        try:
+            results_from_manager = run_cascading_layer_pruning_experiment(
+                networks=self.networks,
+                dataset=self.dataset,
+                dropout_fractions=dropout_fractions,
+                metric_instance=metric_to_use,
+                device=self.device,
+                dropout_mode=pruning_config.dropout_mode,
+                show_progress=True,
+                debug_mode=self.debug_mode,
+                exclude_classification_layer_config=pruning_config.exclude_classification_layer,
+                num_batches_for_pre_scoring=pruning_config.num_batches_for_scores, # For the initial full-network scoring pass
+                force_cpu_for_large_metric_ops=alignment_config.force_cpu_for_large_metric_ops,
+                configured_cnn_mode=alignment_config.cnn_mode, # For score computation
+                configured_cnn_rq_op=alignment_config.cnn_rq_aggregation_op # For score computation
+            )
+        except Exception as e:
+            logger.error(f"Error during run_cascading_layer_pruning_experiment call: {str(e)}")
+            results_from_manager = {"error": str(e)}
+            if self.debug_mode:
+                logger.error(traceback.format_exc())
+
+        results_from_manager["training_history"] = self.training_history
+        return results_from_manager
+
+
 # --- Factory Function ---
 
 
@@ -982,6 +1040,8 @@ def get_experiment_class(experiment_type: str) -> Type[AlignmentExperiment]:
         return LayerIsolatedPruningExperiment
     elif experiment_type == "alignment_analysis":
         return AlignmentAnalysisExperiment
+    elif experiment_type == "cascading_layer_pruning": # Added new type
+        return CascadingLayerPruningExperiment
     else:
         raise ValueError(f"Unsupported experiment type: {experiment_type}")
 
