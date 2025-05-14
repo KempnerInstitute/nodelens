@@ -840,7 +840,18 @@ def compute_metrics_for_layers(
                     logger.warning(f"compute_metrics_for_layers: Metric value for '{metric_name}' is None")
             except Exception as e:
                 logger.error(f"Error computing metric '{metric_name}' for layer '{layer_name}': {e}", exc_info=True)
-    logger.info(f"compute_metrics_for_layers: === EXITING FUNCTION ===. Results: {results}")
+    
+    # Summarize results for INFO log
+    results_summary = {}
+    for layer_name, metrics_dict in results.items():
+        results_summary[layer_name] = {}
+        for metric_name, value in metrics_dict.items():
+            if isinstance(value, torch.Tensor):
+                results_summary[layer_name][metric_name] = f"Tensor shape: {value.shape}, device: {value.device}, dtype: {value.dtype}"
+            else:
+                results_summary[layer_name][metric_name] = str(value)
+    logger.info(f"compute_metrics_for_layers: === EXITING FUNCTION ===. Results summary: {results_summary}")
+    logger.debug(f"compute_metrics_for_layers: Full results: {results}") # Keep full results at DEBUG level
     return results 
 
 # --- NEW: Pairwise Metric Calculation ---

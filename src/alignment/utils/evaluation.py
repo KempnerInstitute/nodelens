@@ -176,6 +176,7 @@ def evaluate_networks_ensemble(
     # Use reduction='sum' for CrossEntropyLoss if averaging loss manually later by total samples
     # Or use reduction='mean' if criterion itself should average over batch for each network
     criterion: nn.Module = nn.CrossEntropyLoss(reduction='sum'),
+    show_batch_progress: bool = True, # New parameter to control internal progress bar
     # --- NEW: DDP Parameters (ensemble eval is typically single-process but good for signature consistency) ---
     ddp_rank: int = 0,
     ddp_world_size: int = 1
@@ -190,6 +191,7 @@ def evaluate_networks_ensemble(
         data_loader (torch.utils.data.DataLoader): DataLoader for the evaluation dataset.
         device (torch.device): The device to perform evaluation on.
         criterion (nn.Module): The loss function.
+        show_batch_progress: bool - Whether to show batch-level progress during evaluation
         ddp_rank: DDP rank.
         ddp_world_size: DDP world size.
 
@@ -219,9 +221,11 @@ def evaluate_networks_ensemble(
     total_samples_processed = 0
 
     is_main_process = (ddp_rank == 0)
-    # Progress bar for ensemble evaluation, only on main process
-    progress_bar_disabled = not is_main_process if ddp_world_size > 1 else False
-    batch_iterator = tqdm(data_loader, desc="Ensemble Eval", disable=progress_bar_disabled)
+    # Progress bar for ensemble evaluation, only on main process, and controlled by show_batch_progress
+    # The outer disable condition (not is_main_process and ddp_world_size > 1) is for DDP.
+    # We add a simple OR condition for show_batch_progress=False.
+    disable_internal_progress_bar = (not is_main_process if ddp_world_size > 1 else False) or not show_batch_progress
+    batch_iterator = tqdm(data_loader, desc="Ensemble Eval", disable=disable_internal_progress_bar)
 
     with torch.no_grad():
         for inputs, targets in batch_iterator: # Consider tqdm(data_loader, desc="Ensemble Eval") if verbose
