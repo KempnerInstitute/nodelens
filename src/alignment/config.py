@@ -526,8 +526,8 @@ class ExperimentConfig(BaseConfig):
     """Main experiment configuration."""
     
     # Experiment metadata
-    experiment_name: str = "default_experiment" # Added for clarity
-    experiment_type: str = "progressive_dropout"
+    experiment_name: str = "default_experiment"
+    experiment_type: str = "AUTO"  # Changed default to AUTO
     results_path: str = "results"
     use_timestamp: bool = True
     
@@ -561,6 +561,26 @@ class ExperimentConfig(BaseConfig):
     extra: ExtraConfig = field(default_factory=ExtraConfig)
     
     def __post_init__(self):
+        # Auto-determine experiment_type if set to "AUTO"
+        if self.experiment_type == "AUTO":
+            if self.pruning_settings:
+                pruning_mode = self.pruning_settings.dropout_pruning_mode
+                if pruning_mode == "layer_isolated":
+                    self.experiment_type = "layer_isolated_pruning"
+                    config_logger.info(f"Experiment type AUTO resolved to 'layer_isolated_pruning' based on dropout_pruning_mode.")
+                elif pruning_mode in ["global_joint", "layer_wise", "cascading_layer"]:
+                    self.experiment_type = "progressive_dropout"
+                    config_logger.info(f"Experiment type AUTO resolved to 'progressive_dropout' based on dropout_pruning_mode: {pruning_mode}.")
+                # Add other inferences here if needed, e.g., for eigenvector_dropout based on some other setting
+                else:
+                    # Default or raise error if AUTO cannot be resolved from pruning_mode
+                    config_logger.warning(f"Experiment type AUTO could not be resolved from dropout_pruning_mode '{pruning_mode}'. Defaulting to 'progressive_dropout'.")
+                    self.experiment_type = "progressive_dropout"
+            else:
+                # Default if pruning_settings is not available for some reason
+                config_logger.warning("Experiment type AUTO specified, but pruning_settings are missing. Defaulting to 'progressive_dropout'.")
+                self.experiment_type = "progressive_dropout"
+
         if self.wandb is not None and isinstance(self.wandb, dict):
              config_logger.debug(f"ExperimentConfig.__post_init__: self.wandb is a dict, attempting to cast to WandbConfig.")
              try:
@@ -629,6 +649,16 @@ class ExperimentConfig(BaseConfig):
         # Validate DDP config
         if self.use_ddp and self.ddp_backend not in ["nccl", "gloo", "mpi"]:
             raise ValueError(f"Invalid ddp_backend: {self.ddp_backend}. Supported: nccl, gloo, mpi")
+
+        # Validate pruning settings against experiment type
+        if self.experiment_type == "progressive_dropout" and \
+           self.pruning_settings and \
+           self.pruning_settings.dropout_pruning_mode == "layer_isolated":
+            raise ValueError(
+                "Invalid configuration: experiment_type 'progressive_dropout' cannot be used with "
+                "dropout_pruning_mode 'layer_isolated'. For layer-isolated pruning, "
+                "set experiment_type to 'layer_isolated_pruning'."
+            )
 
         return True
 

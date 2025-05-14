@@ -10,6 +10,8 @@ import time
 import copy
 from typing import Dict, List, Tuple, Union, Optional, Any
 import traceback
+import os
+import concurrent.futures
 
 import numpy as np
 import torch
@@ -19,7 +21,7 @@ import random
 
 from alignment.metrics import AlignmentMetric, compute_all_node_scores
 from alignment.dropout import progressive_dropout, eigenvector_dropout, _normalize_device, _create_mask_from_indices, _evaluate_model_accuracy, _ensure_model_on_device, _apply_pruning_to_layer_module
-from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader
+from alignment.utils.evaluation import evaluate_networks, evaluate_on_loader, evaluate_networks_ensemble
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +376,16 @@ def run_layer_isolated_dropout_experiment(
     configured_cnn_rq_op: Optional[str] = "mean"
 ) -> Dict:
     logger.info("Starting Layer Isolated Dropout Experiment")
+    
+    # --- Potential Fix: Limit PyTorch internal threading when using Python threads --- 
+    try:
+        previous_torch_threads = torch.get_num_threads()
+        torch.set_num_threads(1)
+        logger.info(f"Set PyTorch num_threads to 1 for layer-isolated experiment. Previous: {previous_torch_threads}")
+    except Exception as e:
+        logger.warning(f"Could not set PyTorch num_threads: {e}")
+    # --- End Potential Fix ---
+
     device = _normalize_device(device)
 
     num_original_networks = len(original_networks)
@@ -384,10 +396,26 @@ def run_layer_isolated_dropout_experiment(
     results = {
         "dropout_fractions": dropout_fractions,
         "accuracies_isolated": {},
-        "stds_isolated": {}
+        "stds_isolated": {},
+        "pre_pruning_layer_stats": {},
+        "pruning_details": {st: {0: {}} for st in ["high_rq", "low_rq", "random"]} # Store avg details under a single net_idx like 0
     }
 
+    # Initialize the pruning_details structure for each fraction and layer for averaging later
+    for strategy in ["high_rq", "low_rq", "random"]:
+        for frac_idx in range(len(dropout_fractions) -1): # For non-baseline fractions where pruning happens
+            results["pruning_details"][strategy][0][frac_idx] = {}
+            for layer_name_key_init in original_networks[0].alignment_names if hasattr(original_networks[0], 'alignment_names') else [name for name, _ in original_networks[0].named_modules() if hasattr(_, 'weight')]:
+                results["pruning_details"][strategy][0][frac_idx][layer_name_key_init] = {
+                    "num_dropped_sum_reps": 0,
+                    "dropped_scores_sum_total_reps": 0.0,
+                    "total_nodes_in_layer_sum_reps": 0, # Will be same for all reps, but good to sum and avg
+                    "replicates_contributing": 0
+                }
+
     all_network_metrics_precomputed = [] 
+    pre_pruning_stats_accumulator = {}
+
     metric_config_for_isolated_pruning = [{
         "name": metric.name, 
         "scale_by_norm": metric.scale_by_norm,
@@ -464,6 +492,21 @@ def run_layer_isolated_dropout_experiment(
             "alignment_names": net_rep.alignment_names if hasattr(net_rep, 'alignment_names') else [name for name, _ in net_rep.named_modules() if hasattr(_, 'weight')] # Store alignment names
         })
 
+        # Accumulate pre-pruning stats for this replicate
+        for l_name_stat, score_tensor_stat in scores_this_rep_single_metric.items():
+            if score_tensor_stat is not None and isinstance(score_tensor_stat, torch.Tensor) and score_tensor_stat.numel() > 0:
+                if l_name_stat not in pre_pruning_stats_accumulator:
+                    pre_pruning_stats_accumulator[l_name_stat] = {"means": [], "stds": []}
+                pre_pruning_stats_accumulator[l_name_stat]["means"].append(torch.mean(score_tensor_stat).item())
+                pre_pruning_stats_accumulator[l_name_stat]["stds"].append(torch.std(score_tensor_stat).item())
+
+    # Store the averaged pre_pruning_layer_stats in results
+    for l_name_stat_avg, stats_lists_avg in pre_pruning_stats_accumulator.items():
+        results["pre_pruning_layer_stats"][l_name_stat_avg] = {
+            "avg_mean_rq": np.mean(stats_lists_avg["means"]) if stats_lists_avg["means"] else np.nan,
+            "avg_std_rq": np.mean(stats_lists_avg["stds"]) if stats_lists_avg["stds"] else np.nan
+        }
+
     if not all_network_metrics_precomputed or not all_network_metrics_precomputed[0]["scores"]:
         logger.error("Failed to pre-compute metrics for any network.")
         return {}
@@ -471,76 +514,99 @@ def run_layer_isolated_dropout_experiment(
     # Use alignment_names from the first precomputed network to determine num_layers consistently
     # This assumes all networks have the same alignment_names structure if more than one original_network
     first_net_alignment_names = all_network_metrics_precomputed[0]["alignment_names"]
-    num_layers = len(first_net_alignment_names)
     classification_layer_name = first_net_alignment_names[-1] if first_net_alignment_names else None
 
     strategies_to_run = ["high_rq", "low_rq", "random"]
+
+    # --- Sequential Layer Isolation --- 
+    logger.info("Starting sequential layer isolation logic.")
+
     for strategy in strategies_to_run:
         results["accuracies_isolated"][strategy] = {layer_name: [] for layer_name in first_net_alignment_names}
         results["stds_isolated"][strategy] = {layer_name: [] for layer_name in first_net_alignment_names}
 
-        # Iterate by layer_name_str using the order from the first network's alignment_names
-        for layer_to_isolate_name_str in tqdm(first_net_alignment_names, desc=f"Isolating Layers (Strat: {strategy})"):
-            # Find the integer index corresponding to this name for consistent iteration logic if needed
-            # For this refactor, we primarily use layer_name_str directly.
-            layer_to_isolate_idx = first_net_alignment_names.index(layer_to_isolate_name_str)
+        pbar_desc = f"Isolating Layers (Strat: {strategy})"
+        layer_iterator = tqdm(first_net_alignment_names, desc=pbar_desc, disable=not show_progress, leave=False)
+        
+        for layer_to_isolate_name_str in layer_iterator:
+            if show_progress: layer_iterator.set_postfix_str(f"Processing {layer_to_isolate_name_str}")
 
             if exclude_classification_layer_config and layer_to_isolate_name_str == classification_layer_name:
-                # ... (baseline calculation for skipped classification layer) ...
-                baseline_accuracies_replicates = [_evaluate_model_accuracy(net, dataset.test_loader, device) for net in original_networks]
-                avg_baseline_acc = np.mean(baseline_accuracies_replicates) if baseline_accuracies_replicates else np.nan
-                std_baseline_acc = np.std(baseline_accuracies_replicates) if baseline_accuracies_replicates else np.nan
+                baseline_accuracies_replicates_cls = []
+                # Ensure _shared_baseline_cls_accs is an attribute of the function for persistence across calls if needed,
+                # or compute fresh if this function is always called once per experiment.
+                # For simplicity, assume it's okay to re-evaluate original networks if this branch is hit multiple times (e.g. per strategy)
+                # though ideally, this baseline is computed once for the whole experiment.
+                # However, the structure here is per-strategy, so let's get baseline for all original nets.
+                if not hasattr(run_layer_isolated_dropout_experiment, f'_shared_baseline_accs_strat_{strategy}'):
+                    if debug_mode: logger.debug(f"[{strategy}] Evaluating all original networks for baseline once.")
+                    _, baselines = evaluate_networks_ensemble(original_networks, dataset.test_loader, device, show_batch_progress=False)
+                    setattr(run_layer_isolated_dropout_experiment, f'_shared_baseline_accs_strat_{strategy}', baselines)
+                
+                baseline_accuracies_replicates_cls = getattr(run_layer_isolated_dropout_experiment, f'_shared_baseline_accs_strat_{strategy}')
+                avg_baseline_acc = np.mean(baseline_accuracies_replicates_cls) if baseline_accuracies_replicates_cls else np.nan
+                std_baseline_acc = np.std(baseline_accuracies_replicates_cls) if baseline_accuracies_replicates_cls else np.nan
                 results["accuracies_isolated"][strategy][layer_to_isolate_name_str] = [avg_baseline_acc] * len(dropout_fractions)
                 results["stds_isolated"][strategy][layer_to_isolate_name_str] = [std_baseline_acc] * len(dropout_fractions)
+                if show_progress: layer_iterator.set_postfix_str(f"{layer_to_isolate_name_str} (CLS baseline: {avg_baseline_acc:.2f}%)")
                 continue
 
-            accuracies_this_layer_all_fracs_avg_reps = []
-            stds_this_layer_all_fracs_avg_reps = []
+            # To store results for the current (layer_to_isolate, strategy) across all fractions
+            mean_accuracies_for_this_layer_strat = []
+            std_accuracies_for_this_layer_strat = []
 
-            baseline_accuracies_replicates = [_evaluate_model_accuracy(net, dataset.test_loader, device) for net in original_networks]
-            accuracies_this_layer_all_fracs_avg_reps.append(np.mean(baseline_accuracies_replicates) if baseline_accuracies_replicates else np.nan)
-            stds_this_layer_all_fracs_avg_reps.append(np.std(baseline_accuracies_replicates) if baseline_accuracies_replicates else np.nan)
+            # Handle fraction 0.0 (baseline for this isolated layer context)
+            # This means evaluating all original networks without any pruning.
+            # This baseline should be the same for all isolated layers (when frac=0 for that layer).
+            # We can reuse the _shared_baseline_accs_strat_{strategy} if available and computed above.
+            if hasattr(run_layer_isolated_dropout_experiment, f'_shared_baseline_accs_strat_{strategy}'):
+                baselines_for_0_frac = getattr(run_layer_isolated_dropout_experiment, f'_shared_baseline_accs_strat_{strategy}')
+            else: # Should have been computed if CLS layer was hit, but compute if not.
+                if debug_mode: logger.debug(f"[{strategy}] Evaluating all original networks for 0.0 fraction baseline.")
+                _, baselines_for_0_frac = evaluate_networks_ensemble(original_networks, dataset.test_loader, device, show_batch_progress=False)
+                setattr(run_layer_isolated_dropout_experiment, f'_shared_baseline_accs_strat_{strategy}', baselines_for_0_frac)
 
-            for frac_val in dropout_fractions[1:]:
-                current_frac_accuracies_over_replicates = []
+            mean_accuracies_for_this_layer_strat.append(np.mean(baselines_for_0_frac) if baselines_for_0_frac else np.nan)
+            std_accuracies_for_this_layer_strat.append(np.std(baselines_for_0_frac) if baselines_for_0_frac else np.nan)
+
+            # Iterate through non-zero dropout fractions
+            for frac_val in dropout_fractions[1:]: 
+                if debug_mode: logger.debug(f"[{strategy}/{layer_to_isolate_name_str}] Processing frac {frac_val:.2f}")
+                replicates_pruned_for_this_fraction = []
+                valid_replicate_indices_for_this_fraction = [] # To map results back if some reps fail
+
                 for net_rep_idx in range(num_original_networks):
-                    net_copy = copy.deepcopy(original_networks[net_rep_idx])
-                    _ensure_model_on_device(net_copy, device)
-                    net_copy.eval()
+                    if debug_mode: task_id_str_rep = f"Net {net_rep_idx}, Layer {layer_to_isolate_name_str}, Strat {strategy}, Frac {frac_val:.2f}"
                     
+                    t_start_deepcopy_frac = time.time()
+                    net_copy_pruning = copy.deepcopy(original_networks[net_rep_idx])
+                    if debug_mode: logger.debug(f"[{task_id_str_rep}] Deepcopy time: {time.time() - t_start_deepcopy_frac:.4f}s")
+                    
+                    _ensure_model_on_device(net_copy_pruning, device)
+                    net_copy_pruning.eval()
+
                     metrics_for_this_rep = all_network_metrics_precomputed[net_rep_idx]
+                    target_layer_module_prune = None
+                    if not hasattr(net_copy_pruning, 'alignment_names') or not hasattr(net_copy_pruning, 'alignment_layers') or \
+                       len(net_copy_pruning.alignment_names) != len(net_copy_pruning.alignment_layers):
+                        logger.error(f"[{task_id_str_rep}] Mismatch in alignment attributes. Skipping this replicate for this fraction.")
+                        # replicates_pruned_for_this_fraction.append(None) # Placeholder for failed rep
+                        continue # Skip this replicate
                     
-                    # --- Robust module lookup for the target layer --- 
-                    target_layer_module = None
-                    if not hasattr(net_copy, 'alignment_names') or not hasattr(net_copy, 'alignment_layers') or \
-                       len(net_copy.alignment_names) != len(net_copy.alignment_layers):
-                        logger.error(f"Layer Isolated: Mismatch or missing alignment_names/alignment_layers in net_copy for rep {net_rep_idx}. Cannot find target layer '{layer_to_isolate_name_str}'. Skipping this replicate for this fraction.")
-                        current_frac_accuracies_over_replicates.append(np.nan)
-                        continue # To next replicate
-                    
-                    module_map_from_alignment_lists_for_copy = {
-                        name: net_copy.alignment_layers[i]
-                        for i, name in enumerate(net_copy.alignment_names)
-                    }
-                    target_layer_module = module_map_from_alignment_lists_for_copy.get(layer_to_isolate_name_str)
+                    module_map_copy = {name: net_copy_pruning.alignment_layers[i] for i, name in enumerate(net_copy_pruning.alignment_names)}
+                    target_layer_module_prune = module_map_copy.get(layer_to_isolate_name_str)
 
-                    if not target_layer_module:
-                        logger.warning(f"Layer Isolated: Could not find module for layer '{layer_to_isolate_name_str}' in net_copy {net_rep_idx} using alignment_names mapping. Evaluating unpruned network for this replicate.")
-                        # Append accuracy of the unpruned copy if target layer can't be resolved for pruning
-                        current_frac_accuracies_over_replicates.append(_evaluate_model_accuracy(net_copy, dataset.test_loader, device))
-                        continue # To next replicate
-                    # --- End robust module lookup ---
+                    if not target_layer_module_prune or not hasattr(target_layer_module_prune, 'weight') or target_layer_module_prune.weight is None:
+                        logger.warning(f"[{task_id_str_rep}] Target layer not found/no weights. Adding unpruned network to batch for this fraction.")
+                        # Fallback: add the unpruned copy to the batch to get its accuracy
+                        replicates_pruned_for_this_fraction.append(net_copy_pruning) 
+                        valid_replicate_indices_for_this_fraction.append(net_rep_idx)
+                        continue # Skip pruning for this rep, use original
 
-                    if not hasattr(target_layer_module, 'weight') or target_layer_module.weight is None:
-                        logger.warning(f"Layer '{layer_to_isolate_name_str}' (resolved module: {type(target_layer_module).__name__}) has no weights in network copy {net_rep_idx}. Evaluating unpruned network for this replicate.")
-                        current_frac_accuracies_over_replicates.append(_evaluate_model_accuracy(net_copy, dataset.test_loader, device))
-                        continue # To next replicate
-                        
-                    out_dim = target_layer_module.weight.data.shape[0]
+                    out_dim = target_layer_module_prune.weight.data.shape[0]
                     n_drop = int(round(frac_val * out_dim))
 
-                    # Use layer_to_isolate_name_str to access score/index dictionaries
-                    if n_drop > 0 and layer_to_isolate_name_str in metrics_for_this_rep["scores"] and metrics_for_this_rep["scores"][layer_to_isolate_name_str] is not None:
+                    if n_drop > 0:
                         indices_map = {
                             "high_rq": metrics_for_this_rep["desc_indices"],
                             "low_rq": metrics_for_this_rep["asc_indices"],
@@ -550,17 +616,127 @@ def run_layer_isolated_dropout_experiment(
                         
                         if sorted_indices_for_layer is not None and sorted_indices_for_layer.numel() > 0:
                             indices_to_drop = sorted_indices_for_layer[:n_drop]
-                            # Call the new shared pruning utility
-                            _apply_pruning_to_layer_module(target_layer_module, indices_to_drop, dropout_mode, device, out_dim_for_scaling=out_dim)
-                        else:
-                            if debug_mode: logger.warning(f"Layer '{layer_to_isolate_name_str}' (idx {layer_to_isolate_idx}) has no valid sorted indices for strategy {strategy}, rep {net_rep_idx}. No pruning applied.")
+                            # Record pruning details for this replicate, for this isolated layer
+                            # These will be aggregated later.
+                            current_layer_scores = metrics_for_this_rep["scores"].get(layer_to_isolate_name_str)
+                            scores_of_dropped_nodes_sum = 0.0
+                            if current_layer_scores is not None and strategy != "random":
+                                try:
+                                    scores_of_dropped_nodes_sum = current_layer_scores[indices_to_drop].sum().item()
+                                except IndexError:
+                                    logger.warning(f"[{task_id_str_rep}] Index error summing scores for dropped nodes.")
+                            
+                            # Store details for later aggregation
+                            frac_idx_for_details = dropout_fractions.index(frac_val) -1 # 0-indexed for pruned_fractions
+                            if frac_idx_for_details >=0:
+                                layer_details_agg = results["pruning_details"][strategy][0][frac_idx_for_details].setdefault(layer_to_isolate_name_str, {
+                                    "num_dropped_sum_reps": 0,
+                                    "dropped_scores_sum_total_reps": 0.0,
+                                    "total_nodes_in_layer_sum_reps": 0,
+                                    "replicates_contributing": 0
+                                })
+                                layer_details_agg["num_dropped_sum_reps"] += n_drop
+                                layer_details_agg["dropped_scores_sum_total_reps"] += scores_of_dropped_nodes_sum
+                                layer_details_agg["total_nodes_in_layer_sum_reps"] += out_dim
+                                layer_details_agg["replicates_contributing"] += 1
+
+                            t_start_prune_apply = time.time()
+                            _apply_pruning_to_layer_module(target_layer_module_prune, indices_to_drop, dropout_mode, device, out_dim_for_scaling=out_dim)
+                            if debug_mode: logger.debug(f"[{task_id_str_rep}] Apply Pruning time: {time.time() - t_start_prune_apply:.4f}s")
+                        elif debug_mode:
+                             logger.warning(f"[{task_id_str_rep}] No valid sorted indices. No pruning applied for frac {frac_val}.")
                     
-                    current_frac_accuracies_over_replicates.append(_evaluate_model_accuracy(net_copy, dataset.test_loader, device))
+                    replicates_pruned_for_this_fraction.append(net_copy_pruning)
+                    valid_replicate_indices_for_this_fraction.append(net_rep_idx)
                 
-                accuracies_this_layer_all_fracs_avg_reps.append(np.mean(current_frac_accuracies_over_replicates) if current_frac_accuracies_over_replicates else np.nan)
-                stds_this_layer_all_fracs_avg_reps.append(np.std(current_frac_accuracies_over_replicates) if current_frac_accuracies_over_replicates else np.nan)
-            
-            results["accuracies_isolated"][strategy][layer_to_isolate_name_str] = accuracies_this_layer_all_fracs_avg_reps
-            results["stds_isolated"][strategy][layer_to_isolate_name_str] = stds_this_layer_all_fracs_avg_reps
+                # Batch evaluate all replicates for this fraction
+                if replicates_pruned_for_this_fraction:
+                    if debug_mode: logger.debug(f"[{strategy}/{layer_to_isolate_name_str}/Frac {frac_val:.2f}] Evaluating batch of {len(replicates_pruned_for_this_fraction)} replicates.")
+                    t_start_eval_batch = time.time()
+                    _, accuracies_batch = evaluate_networks_ensemble(replicates_pruned_for_this_fraction, dataset.test_loader, device, show_batch_progress=False)
+                    if debug_mode: logger.debug(f"[{strategy}/{layer_to_isolate_name_str}/Frac {frac_val:.2f}] Batch eval time: {time.time() - t_start_eval_batch:.4f}s")
+                    
+                    # Store results, mapping back to original number of replicates with NaNs if any failed
+                    all_replicate_accuracies_this_fraction = [np.nan] * num_original_networks
+                    for i, original_idx in enumerate(valid_replicate_indices_for_this_fraction):
+                        if i < len(accuracies_batch):
+                             all_replicate_accuracies_this_fraction[original_idx] = accuracies_batch[i]
+                    
+                    mean_accuracies_for_this_layer_strat.append(np.nanmean(all_replicate_accuracies_this_fraction) if np.any(~np.isnan(all_replicate_accuracies_this_fraction)) else np.nan)
+                    std_accuracies_for_this_layer_strat.append(np.nanstd(all_replicate_accuracies_this_fraction) if np.any(~np.isnan(all_replicate_accuracies_this_fraction)) else np.nan)
+                else:
+                    # All replicates failed for this fraction
+                    mean_accuracies_for_this_layer_strat.append(np.nan)
+                    std_accuracies_for_this_layer_strat.append(np.nan)
+                
+                # Cleanup: delete the copied networks for this fraction
+                for net_to_del in replicates_pruned_for_this_fraction:
+                    del net_to_del
+                if debug_mode and replicates_pruned_for_this_fraction: 
+                    logger.debug(f"[{strategy}/{layer_to_isolate_name_str}/Frac {frac_val:.2f}] Deleted {len(replicates_pruned_for_this_fraction)} network copies.")
+
+            results["accuracies_isolated"][strategy][layer_to_isolate_name_str] = mean_accuracies_for_this_layer_strat
+            results["stds_isolated"][strategy][layer_to_isolate_name_str] = std_accuracies_for_this_layer_strat
+            if show_progress: layer_iterator.set_postfix_str(f"{layer_to_isolate_name_str} done. Last mean acc: {mean_accuracies_for_this_layer_strat[-1]:.2f}%" if mean_accuracies_for_this_layer_strat else f"{layer_to_isolate_name_str} done.")
+    
+    # Finalize aggregated pruning_details (calculate averages)
+    for strategy in strategies_to_run:
+        for frac_idx in range(len(dropout_fractions) - 1):
+            if frac_idx in results["pruning_details"][strategy][0]:
+                for layer_name_key_finalize in results["pruning_details"][strategy][0][frac_idx]:
+                    agg_data = results["pruning_details"][strategy][0][frac_idx][layer_name_key_finalize]
+                    num_reps_contrib = agg_data.pop("replicates_contributing", 0)
+                    if num_reps_contrib > 0:
+                        final_num_dropped = agg_data.pop("num_dropped_sum_reps",0) / num_reps_contrib
+                        final_dropped_scores_sum = agg_data.pop("dropped_scores_sum_total_reps", 0.0) / num_reps_contrib
+                        final_total_nodes = agg_data.pop("total_nodes_in_layer_sum_reps", 0) / num_reps_contrib
+                        
+                        results["pruning_details"][strategy][0][frac_idx][layer_name_key_finalize] = {
+                            "num_dropped": final_num_dropped,
+                            "dropped_scores_sum": final_dropped_scores_sum,
+                            "total_nodes_in_layer": final_total_nodes
+                        }
+                    else: # No replicates contributed, fill with skippable data
+                         results["pruning_details"][strategy][0][frac_idx][layer_name_key_finalize] = {
+                            "num_dropped": 0,
+                            "dropped_scores_sum": 0.0,
+                            "total_nodes_in_layer": 0, # Or get from pre_pruning_stats if more robust
+                            "skipped": True
+                        }
+            # For other layers not isolated in this frac_idx (which is all others for layer_isolated)
+            # their num_dropped should be 0. The plotting function should handle this by seeing num_dropped = 0.
+            # The current structure will only have the isolated layer's details for each frac_idx.
+            # plot_mean_rq_of_pruned_nodes expects data for all layers for each frac_idx.
+            # We need to ensure all layers are present in the dict for each frac_idx.
+            if frac_idx in results["pruning_details"][strategy][0]:
+                all_layers_for_frac = results["pruning_details"][strategy][0][frac_idx]
+                for layer_name_fill in first_net_alignment_names:
+                    if layer_name_fill not in all_layers_for_frac:
+                        # This layer was not the isolated one for any replicate at this frac_idx (which is expected)
+                        # Add placeholder data for non-isolated layers
+                        # Get total_nodes from pre_pruning_stats if available
+                        total_nodes_val = 0
+                        if pre_pruning_stats_accumulator.get(layer_name_fill):
+                           # This is not ideal, as pre_pruning_stats_accumulator might not be fully reflective of a single rep's total nodes
+                           # A better approach might be to access it via all_network_metrics_precomputed[0]["scores"][layer_name_fill].shape[0]
+                           # For simplicity here, let's use what's available or default to 0
+                           first_rep_scores = all_network_metrics_precomputed[0]["scores"]
+                           if layer_name_fill in first_rep_scores and first_rep_scores[layer_name_fill] is not None:
+                               total_nodes_val = first_rep_scores[layer_name_fill].shape[0]
+
+                        all_layers_for_frac[layer_name_fill] = {
+                            "num_dropped": 0,
+                            "dropped_scores_sum": 0.0,
+                            "total_nodes_in_layer": total_nodes_val,
+                            "skipped": False # Not skipped in the sense of error, just not targeted
+                        }
+
+    # Restore PyTorch threads if changed
+    if 'previous_torch_threads' in locals():
+        try:
+            torch.set_num_threads(previous_torch_threads)
+            logger.info(f"Restored PyTorch num_threads to {previous_torch_threads}.")
+        except Exception as e:
+            logger.warning(f"Could not restore PyTorch num_threads: {e}")
 
     return results

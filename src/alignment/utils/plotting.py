@@ -624,21 +624,23 @@ def plot_mean_rq_of_pruned_nodes(
         return None 
 
     num_networks = 0
-    num_layers = 0
+    num_layers = 0 # This will now represent the count of unique layer names
     first_valid_strategy = strategies_to_plot[0]
+    sorted_layer_name_keys = []
+
     if first_valid_strategy in pruning_details and pruning_details[first_valid_strategy]:
-        # Get a net_idx that exists for this strategy
         valid_net_indices = list(pruning_details[first_valid_strategy].keys())
         if valid_net_indices:
-            first_net_idx = valid_net_indices[0]
-            num_networks = len(pruning_details[first_valid_strategy])
+            first_net_idx = valid_net_indices[0] # Should be 0 for layer_isolated averaged data
+            num_networks = len(pruning_details[first_valid_strategy]) # Should be 1 for layer_isolated
             if first_net_idx in pruning_details[first_valid_strategy] and pruning_details[first_valid_strategy][first_net_idx]:
-                # Get a frac_idx that exists for this net
                 valid_frac_indices = list(pruning_details[first_valid_strategy][first_net_idx].keys())
                 if valid_frac_indices:
                     first_frac_idx = valid_frac_indices[0]
                     if first_frac_idx in pruning_details[first_valid_strategy][first_net_idx] and pruning_details[first_valid_strategy][first_net_idx][first_frac_idx]:
-                        num_layers = len(pruning_details[first_valid_strategy][first_net_idx][first_frac_idx].keys())
+                        # Get layer names (keys) and sort them for consistent panel ordering
+                        sorted_layer_name_keys = sorted(list(pruning_details[first_valid_strategy][first_net_idx][first_frac_idx].keys()))
+                        num_layers = len(sorted_layer_name_keys)
 
     if num_networks == 0 or num_layers == 0:
         logger.warning("Could not determine num_networks/num_layers for mean RQ plot.")
@@ -654,9 +656,9 @@ def plot_mean_rq_of_pruned_nodes(
 
     fig.suptitle(f"{title_prefix}: Mean RQ of Pruned Nodes vs. Dropout Fraction", fontsize=16)
 
-    for layer_idx in range(num_layers):
-        ax = axes_flat[layer_idx]
-        ax.set_title(f"Layer {layer_idx}")
+    for panel_idx, layer_name_key in enumerate(sorted_layer_name_keys):
+        ax = axes_flat[panel_idx]
+        ax.set_title(f"Layer: {layer_name_key}") # Use actual layer name for title
         plotted_something_in_ax = False
 
         for strategy in strategies_to_plot:
@@ -666,7 +668,8 @@ def plot_mean_rq_of_pruned_nodes(
             for frac_idx in range(len(pruned_fractions)):
                 mean_rq_for_this_frac_layer_all_nets = []
                 for net_idx in range(num_networks):
-                    layer_data_for_net_frac_layer = pruning_details.get(strategy, {}).get(net_idx, {}).get(frac_idx, {}).get(layer_idx)
+                    # Fetch layer data using layer_name_key instead of integer layer_idx
+                    layer_data_for_net_frac_layer = pruning_details.get(strategy, {}).get(net_idx, {}).get(frac_idx, {}).get(layer_name_key)
                     
                     if layer_data_for_net_frac_layer and not layer_data_for_net_frac_layer.get("skipped", False):
                         num_dropped = layer_data_for_net_frac_layer.get("num_dropped", 0)
@@ -696,9 +699,10 @@ def plot_mean_rq_of_pruned_nodes(
         if plotted_something_in_ax:
             ax.legend()
         ax.grid(True)
-        if layer_idx // ncols == nrows -1 or nrows == 1 : # xlabel for bottom row
+        # Use panel_idx for layout checks, assuming sorted_layer_name_keys determines the panels
+        if panel_idx // ncols == nrows -1 or nrows == 1 : 
              ax.set_xlabel("Dropout Fraction")
-        if layer_idx % ncols == 0: # ylabel for first column
+        if panel_idx % ncols == 0: 
              ax.set_ylabel("Mean RQ of Pruned Nodes")
 
     # Hide any unused subplots if num_layers doesn't fill the grid
@@ -1037,65 +1041,88 @@ def plot_layer_isolated_dropout_results(
         logger.warning("No strategies found in accuracies_isolated.")
         return []
 
-    # Determine num_layers from the first strategy and first layer data if possible
-    num_layers = 0
-    if accuracies_isolated[strategies_present[0]]:
-        num_layers = len(accuracies_isolated[strategies_present[0]].keys())
+    # Determine all unique layer names that were isolated across any strategy
+    all_isolated_layer_names = set()
+    for strategy in strategies_present:
+        if accuracies_isolated[strategy]: # Check if strategy data exists
+            all_isolated_layer_names.update(accuracies_isolated[strategy].keys())
     
-    if num_layers == 0:
-        logger.warning("Could not determine number of layers for layer-isolated plot.")
+    sorted_layer_names = sorted(list(all_isolated_layer_names))
+    num_unique_layers = len(sorted_layer_names)
+
+    if num_unique_layers == 0:
+        logger.warning("Could not determine any layers for layer-isolated plot.")
         return []
 
     plot_files = []
     
-    # Create one figure per strategy, each figure having N panels (one per isolated layer)
-    for strategy in strategies_present:
-        if not accuracies_isolated[strategy]: # No data for this strategy
-            continue
+    # Strategy colors and markers (consistent with plot_dropout_results)
+    strategy_colors = {"high_rq": "#d62728", "low_rq": "#2ca02c", "random": "#1f77b4", "eigenvector": "#ff7f0e"}
+    strategy_markers = {"high_rq": "o", "low_rq": "s", "random": "^", "eigenvector": "D"}
+    strategy_labels = {
+        "high_rq": "Prune Highest RQ", 
+        "low_rq": "Prune Lowest RQ", 
+        "random": "Random Pruning",
+        "eigenvector": "Eigenvector Pruning"
+    }
 
-        ncols_fig = 2 if num_layers > 2 else 1
-        nrows_fig = (num_layers + ncols_fig - 1) // ncols_fig
-        fig, axes = plt.subplots(nrows_fig, ncols_fig, figsize=(8 * ncols_fig, 6 * nrows_fig), sharex=True, sharey=True, squeeze=False)
-        axes_flat = axes.flatten()
-        fig.suptitle(f"{title_prefix} - Strategy: {strategy.replace('_',' ').title()}\n(Accuracy vs. Pruning Fraction of Isolated Layer)", fontsize=16)
+    # Create ONE figure with N panels (one per isolated layer)
+    ncols_fig = 2 if num_unique_layers > 2 else 1
+    nrows_fig = (num_unique_layers + ncols_fig - 1) // ncols_fig
+    fig, axes = plt.subplots(nrows_fig, ncols_fig, figsize=(8 * ncols_fig, 6 * nrows_fig), sharex=True, sharey=True, squeeze=False)
+    axes_flat = axes.flatten()
+    fig.suptitle(f"{title_prefix}: Impact of Isolating Layer Pruning\n(Network Accuracy vs. Fraction Pruned from Single Layer)", fontsize=16)
 
-        for layer_idx in range(num_layers):
-            ax = axes_flat[layer_idx]
-            ax.set_title(f"Isolating Layer {layer_idx}")
+    for panel_idx, layer_name_key in enumerate(sorted_layer_names):
+        ax = axes_flat[panel_idx]
+        ax.set_title(f"Isolating Layer: {layer_name_key}")
+        plotted_something_on_ax = False
 
-            accs_this_layer_strat = accuracies_isolated[strategy].get(layer_idx, [])
-            stds_this_layer_strat = stds_isolated.get(strategy, {}).get(layer_idx, [])
+        for strategy in strategies_present: # Iterate through available strategies
+            if not accuracies_isolated.get(strategy) or not accuracies_isolated[strategy].get(layer_name_key):
+                continue # Skip if this strategy or layer_name not present for this strategy
+
+            accs_this_layer_strat = accuracies_isolated[strategy].get(layer_name_key, [])
+            stds_this_layer_strat = stds_isolated.get(strategy, {}).get(layer_name_key, [])
 
             if accs_this_layer_strat:
-                # Ensure lengths match dropout_fractions for plotting
                 valid_len = min(len(dropout_fractions), len(accs_this_layer_strat))
                 plot_fractions = dropout_fractions[:valid_len]
                 plot_accs = accs_this_layer_strat[:valid_len]
                 plot_stds = stds_this_layer_strat[:valid_len] if len(stds_this_layer_strat) >= valid_len else np.zeros(valid_len)
                 
-                ax.errorbar(plot_fractions, plot_accs, yerr=plot_stds, marker='o', linestyle='-', capsize=3, label=f"Layer {layer_idx} Isolated")
-                ax.grid(True)
-                ax.set_ylim(0, 105) # Assuming accuracy percentage
-            else:
-                ax.text(0.5, 0.5, "No data", horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
-            
-            if layer_idx // ncols_fig == nrows_fig - 1 or nrows_fig == 1:
-                ax.set_xlabel("Fraction Pruned from This Layer")
-            if layer_idx % ncols_fig == 0:
-                ax.set_ylabel("Network Accuracy (%)")
+                ax.errorbar(plot_fractions, plot_accs, yerr=plot_stds, 
+                            marker=strategy_markers.get(strategy, 'x'), 
+                            color=strategy_colors.get(strategy, 'k'),
+                            label=strategy_labels.get(strategy, strategy),
+                            linestyle='-', capsize=3)
+                plotted_something_on_ax = True
         
-        # Hide unused subplots
-        for i in range(num_layers, nrows_fig * ncols_fig):
-            fig.delaxes(axes_flat[i])
+        if plotted_something_on_ax:
+            ax.legend(fontsize=9)
+            ax.grid(True)
+            ax.set_ylim(0, 105) # Assuming accuracy percentage
+        else:
+            ax.text(0.5, 0.5, "No data for this layer", horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
+        
+        if panel_idx // ncols_fig == nrows_fig - 1 or nrows_fig == 1: # X-label for bottom row panels
+            ax.set_xlabel("Fraction Pruned from This Layer")
+        if panel_idx % ncols_fig == 0: # Y-label for first column panels
+            ax.set_ylabel("Network Accuracy (%)")
+    
+    # Hide unused subplots
+    for i in range(num_unique_layers, nrows_fig * ncols_fig):
+        fig.delaxes(axes_flat[i])
 
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        plot_filename = os.path.join(save_dir, f"{title_prefix.lower().replace(' ', '_')}_strategy_{strategy}_isolated_layers.png")
-        plt.savefig(plot_filename)
-        logger.info(f"Saved layer-isolated plot for strategy {strategy} to {plot_filename}")
-        if show_plots:
-            plt.show()
-        plt.close(fig)
-        plot_files.append(plot_filename)
+    plt.tight_layout(rect=[0, 0, 1, 0.95]) # Adjust layout to make space for suptitle
+    plot_filename = os.path.join(save_dir, f"{title_prefix.lower().replace(' ', '_')}_isolated_layers_summary.png")
+    plt.savefig(plot_filename)
+    logger.info(f"Saved consolidated layer-isolated plot to {plot_filename}")
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    plot_files.append(plot_filename) # Now returns a list with a single filename
+
     return plot_files 
 
 def plot_metric_evolution(
