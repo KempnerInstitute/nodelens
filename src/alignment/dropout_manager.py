@@ -182,7 +182,8 @@ def run_progressive_dropout_experiment(
 
     try:
         strategies = ["high_rq", "low_rq", "random"]
-        strategy_pbar = tqdm(strategies, desc="Processing Strategies", position=0, disable=not show_progress)
+        # Remove the tqdm wrapper here as it's no longer directly iterated in a way that updates it.
+        # strategy_pbar = tqdm(strategies, desc="Processing Strategies", position=0, disable=not show_progress)
         
         # If AlignmentExperiment.use_multi_strategy_dropout is True, we can call progressive_dropout ONCE.
         # Otherwise, we loop here and call it per strategy.

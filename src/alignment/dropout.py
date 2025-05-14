@@ -478,42 +478,59 @@ def progressive_dropout(
         
         # --- Batched Evaluation (after all pruning tasks are done) ---
         logger.info("Starting batched evaluation of pruned networks.")
-        # Reverting to sequential evaluation loop
-        for frac_idx_enum, frac_val_actual in enumerate(dropout_fractions[1:]):
-            for st_key in strategies_to_run:
-                eval_key_current = (frac_idx_enum, st_key)
-                pruned_networks_for_batch_eval = grouped_pruned_nets_for_eval.get(eval_key_current)
 
-                if pruned_networks_for_batch_eval and not all(net is None for net in pruned_networks_for_batch_eval) :
-                    valid_nets_for_eval = [n for n in pruned_networks_for_batch_eval if n is not None]
-                    if len(valid_nets_for_eval) < len(pruned_networks_for_batch_eval) and debug_mode:
-                        logger.warning(f"Strategy {st_key}, Frac Idx {frac_idx_enum}: Found {len(pruned_networks_for_batch_eval) - len(valid_nets_for_eval)} None networks (due to errors). Evaluating only valid ones.")
+        # Create a list of (frac_idx_enum, st_key) for the new progress bar
+        evaluation_combos = []
+        # frac_idx_enum will correspond to the index in the results list *after* the baseline.
+        for frac_idx_enum_val, _ in enumerate(dropout_fractions[1:]):
+            for st_key_val in strategies_to_run:
+                evaluation_combos.append((frac_idx_enum_val, st_key_val))
+        
+        # New progress bar for the sequential evaluation combinations
+        # This progress bar will only be active if show_progress is True.
+        eval_combo_iterator = evaluation_combos
+        if show_progress:
+            eval_combo_iterator = tqdm(evaluation_combos, desc="Evaluating Dropped Ensembles", leave=False)
 
-                    if valid_nets_for_eval:
-                        # Call evaluate_networks_ensemble directly, using the original dataset.test_loader
-                        batch_avg_losses, batch_avg_accuracies = evaluate_networks_ensemble(
-                            valid_nets_for_eval, dataset.test_loader, device, nn.CrossEntropyLoss(reduction="sum")
-                        )
-                        
-                        current_net_idx_in_valid_batch = 0
-                        for original_net_idx_eval_loop in range(len(networks)):
-                            if pruned_networks_for_batch_eval[original_net_idx_eval_loop] is not None: 
-                                network_accuracies_all[st_key][original_net_idx_eval_loop].append(batch_avg_accuracies[current_net_idx_in_valid_batch])
-                                network_losses_all[st_key][original_net_idx_eval_loop].append(batch_avg_losses[current_net_idx_in_valid_batch]) # Assuming batch_avg_losses is also per-network
-                                current_net_idx_in_valid_batch +=1
-                            else:
-                                network_accuracies_all[st_key][original_net_idx_eval_loop].append(float('nan'))
-                                network_losses_all[st_key][original_net_idx_eval_loop].append(float('nan'))
-                    else: 
-                        for original_net_idx_fill_nan in range(len(networks)):
-                            network_accuracies_all[st_key][original_net_idx_fill_nan].append(float('nan'))
-                            network_losses_all[st_key][original_net_idx_fill_nan].append(float('nan'))
+        for frac_idx_enum, st_key in eval_combo_iterator:
+            eval_key_current = (frac_idx_enum, st_key)
+            pruned_networks_for_batch_eval = grouped_pruned_nets_for_eval.get(eval_key_current)
+
+            if pruned_networks_for_batch_eval and not all(net is None for net in pruned_networks_for_batch_eval) :
+                valid_nets_for_eval = [n for n in pruned_networks_for_batch_eval if n is not None]
+                if len(valid_nets_for_eval) < len(pruned_networks_for_batch_eval) and debug_mode:
+                    logger.warning(f"Strategy {st_key}, Frac Idx {frac_idx_enum}: Found {len(pruned_networks_for_batch_eval) - len(valid_nets_for_eval)} None networks (due to errors). Evaluating only valid ones.")
+
+                if valid_nets_for_eval:
+                    # Call evaluate_networks_ensemble directly, using the original dataset.test_loader
+                    # and disable its internal progress bar
+                    batch_avg_losses, batch_avg_accuracies = evaluate_networks_ensemble(
+                        valid_nets_for_eval, 
+                        dataset.test_loader, 
+                        device, 
+                        nn.CrossEntropyLoss(reduction="sum"),
+                        show_batch_progress=False # Disable internal bar
+                    )
+                    
+                    current_net_idx_in_valid_batch = 0
+                    for original_net_idx_eval_loop in range(len(networks)):
+                        if pruned_networks_for_batch_eval[original_net_idx_eval_loop] is not None: 
+                            network_accuracies_all[st_key][original_net_idx_eval_loop].append(batch_avg_accuracies[current_net_idx_in_valid_batch])
+                            network_losses_all[st_key][original_net_idx_eval_loop].append(batch_avg_losses[current_net_idx_in_valid_batch]) # Assuming batch_avg_losses is also per-network
+                            current_net_idx_in_valid_batch +=1
+                        else:
+                            network_accuracies_all[st_key][original_net_idx_eval_loop].append(float('nan'))
+                            network_losses_all[st_key][original_net_idx_eval_loop].append(float('nan'))
                 else: 
-                    if debug_mode:
-                        logger.info(f"No networks to evaluate for strategy {st_key}, fraction index {frac_idx_enum}.")
-                    for net_idx_fill in range(len(networks)):
-                        network_accuracies_all[st_key][net_idx_fill].append(float('nan'))
-                        network_losses_all[st_key][net_idx_fill].append(float('nan'))
+                    for original_net_idx_fill_nan in range(len(networks)):
+                        network_accuracies_all[st_key][original_net_idx_fill_nan].append(float('nan'))
+                        network_losses_all[st_key][original_net_idx_fill_nan].append(float('nan'))
+            else: 
+                if debug_mode:
+                    logger.info(f"No networks to evaluate for strategy {st_key}, fraction index {frac_idx_enum}.")
+                for net_idx_fill in range(len(networks)):
+                    network_accuracies_all[st_key][net_idx_fill].append(float('nan'))
+                    network_losses_all[st_key][net_idx_fill].append(float('nan'))
 
         return network_accuracies_all, network_losses_all, pruning_details_all
 
