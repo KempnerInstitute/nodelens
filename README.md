@@ -40,11 +40,11 @@ python src/alignment/experiments/alignment_experiments.py --config configs/confi
 
 The codebase is fully documented with comprehensive guides and API references:
 
-- [Main Documentation](doc/DOCUMENTATION.md): Overview of the entire codebase
-- [Metrics System](doc/metrics/README.md): Documentation for the metrics system
-- [Experiment Framework](doc/experiment/README.md): Guide to running experiments
-- [Performance Optimizations](doc/performance/README.md): Tensorized training and multi-strategy dropout
-- [API Reference](doc/api/README.md): Comprehensive API reference
+- [Main Documentation](documentation.md): Overview of the entire codebase
+- [Metrics System](metrics/README.md): Documentation for the metrics system
+- [Experiment Framework](experiment/README.md): Guide to running experiments
+- [Performance Optimizations](performance/README.md): Tensorized training and multi-strategy dropout
+- [API Reference](api/README.md): Comprehensive API reference
 
 ### Online Documentation
 
@@ -52,8 +52,9 @@ For a more user-friendly documentation experience, visit our [GitHub Pages site]
 
 ### Guides and Tutorials
 
-- [Usage Guide](doc/usage.md): How to use the codebase
-- [Pruning Modes](doc/pruning_modes.md): Documentation for different pruning strategies
+- [Usage Guide](usage.md): How to use the codebase
+- [Pruning Modes](pruning_modes.md): Documentation for different pruning strategies
+- [Configuration Reference](configuration.md): Detailed configuration options
 
 ## Codebase Structure
 

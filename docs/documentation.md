@@ -51,7 +51,7 @@ To run a simple experiment with default settings:
 python experiment.py configs/config_alignment_stats.yaml
 ```
 
-For more detailed usage instructions, see the [Usage Guide](usage).
+For more detailed usage instructions, see the [Usage Guide](usage.md).
 
 ## Codebase Structure
 
@@ -129,7 +129,7 @@ The alignment metrics system measures various properties of neural networks:
   - `weight_dot_similarity`: Dot product similarity between weight vectors
   - `weight_euclidean_distance`: Euclidean distance between weight vectors
 
-For more details, see the [Metrics Documentation](metrics/README).
+For more details, see the [Metrics Documentation](metrics/README.md).
 
 ## Experiment Framework
 
@@ -140,7 +140,7 @@ The experiment framework provides tools for setting up, running, and analyzing a
 - Integration with Weights & Biases for experiment monitoring
 - Distributed training support for HPC environments
 
-See the [Experiment Documentation](experiment/README) for details.
+See the [Experiment Documentation](experiment/README.md) for details.
 
 ## Performance Optimizations
 
@@ -154,7 +154,7 @@ The codebase includes several optimizations for efficient experimentation:
 
 - **Parallelized Strategy Evaluation**: Process all pruning strategies simultaneously for 2.5-3x speedup
 
-See the [Performance Documentation](performance/README) for benchmarks and usage details.
+See the [Performance Documentation](performance/README.md) for benchmarks and usage details.
 
 ## API Reference
 
@@ -217,8 +217,8 @@ results = dropout.run_dropout_experiment(data_loader, steps=10)
 
 Example scripts demonstrating key functionality:
 
-- [Basic Alignment Analysis](examples/basic_alignment)
-- [Progressive Dropout Experiment](examples/progressive_dropout)
-- [Multi-Network Training](examples/multi_network_training)
+# - [Basic Alignment Analysis](examples/basic_alignment.md) # Removing as examples/ not copied
+# - [Progressive Dropout Experiment](examples/progressive_dropout.md) # Removing as examples/ not copied
+# - [Multi-Network Training](examples/multi_network_training.md) # Removing as examples/ not copied
 
 For more examples, see the `scripts/` directory. 

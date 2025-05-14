@@ -41,6 +41,7 @@ nav:
     - Tensorized Implementations: 'tensorized/README.md'
   - Guides:
     - Usage Guide: 'usage.md'
+    - Configuration Reference: 'configuration.md'
     - Pruning Modes: 'pruning_modes.md'
     - Background: 'background.md'
     - Development Roadmap: 'roadmap.md'

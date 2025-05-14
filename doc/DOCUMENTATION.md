@@ -217,8 +217,8 @@ results = dropout.run_dropout_experiment(data_loader, steps=10)
 
 Example scripts demonstrating key functionality:
 
-- [Basic Alignment Analysis](examples/basic_alignment.md)
-- [Progressive Dropout Experiment](examples/progressive_dropout.md)
-- [Multi-Network Training](examples/multi_network_training.md)
+# - [Basic Alignment Analysis](examples/basic_alignment.md) # Removing as examples/ not copied
+# - [Progressive Dropout Experiment](examples/progressive_dropout.md) # Removing as examples/ not copied
+# - [Multi-Network Training](examples/multi_network_training.md) # Removing as examples/ not copied
 
 For more examples, see the `scripts/` directory. 
