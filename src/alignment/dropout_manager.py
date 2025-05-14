@@ -740,3 +740,66 @@ def run_layer_isolated_dropout_experiment(
             logger.warning(f"Could not restore PyTorch num_threads: {e}")
 
     return results
+
+
+def run_cascading_layer_pruning_experiment(
+    networks: List[nn.Module],
+    dataset,
+    dropout_fractions: List[float],
+    metric_instance: AlignmentMetric,
+    device="cuda",
+    dropout_mode: str = "scaled",
+    show_progress: bool = True,
+    debug_mode: bool = False,
+    exclude_classification_layer_config: bool = True,
+    num_batches_for_pre_scoring: Optional[int] = 5, 
+    force_cpu_for_large_metric_ops: bool = True,
+    configured_cnn_mode: Optional[str] = "unfold",
+    configured_cnn_rq_op: Optional[str] = "mean"
+) -> Dict:
+    """
+    Run cascading layer pruning experiment.
+    Placeholder for now. True cascading requires dynamic score re-evaluation.
+    This initial version will implement a "Simple Cascade": 
+    prune layers sequentially based on original scores.
+    """
+    logger.info("Starting (Placeholder) Cascading Layer Pruning Experiment Manager")
+    device = _normalize_device(device)
+    
+    results = {
+        "dropout_fractions": dropout_fractions,
+        "accuracies": { "cascading": [] }, # One accuracy list for this strategy
+        "stds": { "cascading": [] },
+        "pruning_details": { "cascading": {0: {}} }, # Store details under net_idx 0 (averaged)
+        "pre_pruning_layer_stats": {}
+    }
+
+    if not networks:
+        logger.warning("No networks provided to run_cascading_layer_pruning_experiment.")
+        return results
+
+    # TODO: Implement the "Simple Cascade" logic here:
+    # 1. Pre-compute all node scores for all networks (similar to progressive_dropout_manager)
+    #    - This will populate results["pre_pruning_layer_stats"]
+    # 2. For each dropout_fraction:
+    # 3.   For each network_replicate:
+    # 4.     net_copy = deepcopy(original_replicate)
+    # 5.     For each layer Li in net_copy.alignment_layers (sequentially):
+    # 6.       Prune F% of nodes from Li in net_copy, based on Li's original scores (from step 1)
+    # 7.     Evaluate the fully cascaded-pruned net_copy.
+    # 8.   Aggregate accuracies over replicates (mean, std) for this fraction.
+    # 9.   Collect and aggregate pruning_details.
+
+    logger.warning("run_cascading_layer_pruning_experiment is a placeholder. Full logic not yet implemented.")
+    # Fill with NaNs for now so the experiment runs without crashing plotting etc.
+    num_replicates = len(networks)
+    for frac in dropout_fractions:
+        results["accuracies"]["cascading"].append(np.nan)
+        results["stds"]["cascading"].append(np.nan)
+    # Ensure pruning_details has frac_idx keys
+    for frac_idx in range(len(dropout_fractions) -1):
+        results["pruning_details"]["cascading"][0][frac_idx] = {} 
+        # Populate with layer keys and empty details if needed by plotting
+        # For now, leave as empty dict, plotting might handle missing layers gracefully or skip.
+
+    return results
