@@ -509,15 +509,32 @@ def run_layer_isolated_dropout_experiment(
                     net_copy.eval()
                     
                     metrics_for_this_rep = all_network_metrics_precomputed[net_rep_idx]
-                    # Find the module corresponding to layer_to_isolate_name_str in net_copy
+                    
+                    # --- Robust module lookup for the target layer --- 
                     target_layer_module = None
-                    module_map = {name: mod for name, mod in net_copy.named_modules()}
-                    target_layer_module = module_map.get(layer_to_isolate_name_str)
+                    if not hasattr(net_copy, 'alignment_names') or not hasattr(net_copy, 'alignment_layers') or \
+                       len(net_copy.alignment_names) != len(net_copy.alignment_layers):
+                        logger.error(f"Layer Isolated: Mismatch or missing alignment_names/alignment_layers in net_copy for rep {net_rep_idx}. Cannot find target layer '{layer_to_isolate_name_str}'. Skipping this replicate for this fraction.")
+                        current_frac_accuracies_over_replicates.append(np.nan)
+                        continue # To next replicate
+                    
+                    module_map_from_alignment_lists_for_copy = {
+                        name: net_copy.alignment_layers[i]
+                        for i, name in enumerate(net_copy.alignment_names)
+                    }
+                    target_layer_module = module_map_from_alignment_lists_for_copy.get(layer_to_isolate_name_str)
 
-                    if not target_layer_module or not hasattr(target_layer_module, 'weight') or target_layer_module.weight is None:
-                        logger.warning(f"Layer '{layer_to_isolate_name_str}' not found or has no weights in network copy {net_rep_idx}. Skipping pruning for this rep.")
+                    if not target_layer_module:
+                        logger.warning(f"Layer Isolated: Could not find module for layer '{layer_to_isolate_name_str}' in net_copy {net_rep_idx} using alignment_names mapping. Evaluating unpruned network for this replicate.")
+                        # Append accuracy of the unpruned copy if target layer can't be resolved for pruning
                         current_frac_accuracies_over_replicates.append(_evaluate_model_accuracy(net_copy, dataset.test_loader, device))
-                        continue
+                        continue # To next replicate
+                    # --- End robust module lookup ---
+
+                    if not hasattr(target_layer_module, 'weight') or target_layer_module.weight is None:
+                        logger.warning(f"Layer '{layer_to_isolate_name_str}' (resolved module: {type(target_layer_module).__name__}) has no weights in network copy {net_rep_idx}. Evaluating unpruned network for this replicate.")
+                        current_frac_accuracies_over_replicates.append(_evaluate_model_accuracy(net_copy, dataset.test_loader, device))
+                        continue # To next replicate
                         
                     out_dim = target_layer_module.weight.data.shape[0]
                     n_drop = int(round(frac_val * out_dim))

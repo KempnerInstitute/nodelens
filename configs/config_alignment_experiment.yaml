@@ -168,7 +168,7 @@ pruning_settings:
   dropout_mode: "scaled"                # "scaled" or "unscaled"
                                         #   "scaled": Remaining weights are scaled by 1/(1-p) (Inverted Dropout principle).
                                         #   "unscaled" (or "zero"): Weights are simply zeroed out.
-  dropout_pruning_mode: "layer_wise"  # "global_joint", "layer_wise", "layer_isolated", "cascading_layer"
+  dropout_pruning_mode: "layer_isolated"  # "global_joint", "layer_wise", "layer_isolated", "cascading_layer"
                                         #   "global_joint": Considers all nodes from all prunable layers together. Ranks globally by score and prunes top X% overall.
                                         #   "layer_wise": Prunes X% from *each* prunable layer independently, based on scores within that layer.
                                         #   "layer_isolated": (For experiment_type="layer_isolated_pruning") Prunes X% in one layer, evaluates, restores, then moves to next layer.
