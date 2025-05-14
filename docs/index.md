@@ -30,11 +30,11 @@ pip install -e .[all]
 
 ## Quick Links
 
-- [Documentation Overview](documentation.md)
-- [Metrics System](metrics/README.md)
-- [Experiment Framework](experiment/README.md)
-- [Usage Guide](usage.md)
-- [API Reference](api/README.md)
+- [Documentation Overview](documentation)
+- [Metrics System](metrics/README)
+- [Experiment Framework](experiment/README)
+- [Usage Guide](usage)
+- [API Reference](api/README)
 
 ## Citation
 

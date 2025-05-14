@@ -3,7 +3,7 @@
 slurm-*.out
 *.pt
 *.mat
-
+data/
 # cluster jobs
 jobs/
 # VSCODE
@@ -18,9 +18,10 @@ _archive/
 notebooks/
 # Byte-compiled / optimized / DLL files
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
-
+src/alignment.egg-info/
 # C extensions
 *.so
 
