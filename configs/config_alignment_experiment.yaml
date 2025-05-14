@@ -6,7 +6,8 @@
 # I. Experiment Metadata & Core Execution
 # -----------------------------------------------------------------------------
 experiment_name: "mlp_mnist_nested_config_test"
-experiment_type: "progressive_dropout"    # Options: 
+experiment_type: "AUTO"    # Options: 
+                                        #   "AUTO" - Automatically selects the best experiment type based on the dataset.
                                         #   "progressive_dropout" - Prunes nodes iteratively and measures performance.
                                         #   "eigenvector_dropout" - Prunes based on eigenvectors of alignment metric.
                                         #   "alignment_analysis"  - Runs both progressive and (if configured) eigenvector dropout.

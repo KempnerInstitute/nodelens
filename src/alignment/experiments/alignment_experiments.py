@@ -194,14 +194,35 @@ class AlignmentExperiment(Experiment):
     def get_basename(self) -> str:
         """
         Get the base name for the experiment. Overrides base Experiment method if needed.
-        Uses experiment_name from config if available, otherwise falls back to model/dataset.
+        Uses experiment_name from config if available, otherwise falls back to model/dataset
+        and includes pruning mode if relevant.
         """
         if hasattr(self.config, "experiment_name") and self.config.experiment_name:
-            return self.config.experiment_name
+            base = self.config.experiment_name
         else:
-            # Fallback name construction
             model_name = self.config.model.model_name if hasattr(self.config, "model") else "unknown_model"
-            return f"alignment_{model_name}_{self.current_dataset_name}"
+            dataset_n = self.current_dataset_name
+            base = f"{model_name}_{dataset_n}"
+
+        # Append experiment type and pruning mode for clarity if not in a custom name
+        if not (hasattr(self.config, "experiment_name") and self.config.experiment_name):
+            exp_type = self.config.experiment_type
+            pruning_mode_str = ""
+            if exp_type == "progressive_dropout":
+                if hasattr(self.config, "pruning_settings") and self.config.pruning_settings.dropout_pruning_mode:
+                    pruning_mode_str = f"_{self.config.pruning_settings.dropout_pruning_mode}"
+                base = f"{exp_type}{pruning_mode_str}_{base}"
+            elif exp_type == "layer_isolated_pruning":
+                base = f"{exp_type}_{base}" # dropout_pruning_mode is less critical here
+            elif exp_type == "eigenvector_dropout":
+                if hasattr(self.config, "pruning_settings") and self.config.pruning_settings.dropout_pruning_mode:
+                    pruning_mode_str = f"_{self.config.pruning_settings.dropout_pruning_mode}"
+                base = f"{exp_type}{pruning_mode_str}_{base}"
+            elif exp_type == "alignment_analysis":
+                 base = f"{exp_type}_{base}"
+            # Else, just the model_dataset base name is used
+
+        return base
 
     def create_networks(self) -> List[nn.Module]:
         """
@@ -387,6 +408,16 @@ class AlignmentExperiment(Experiment):
             )
             eig_results_data = self.results.get("eigenvector_dropout", self.results if self.config.experiment_type == "eigenvector_dropout" else None)
 
+            # --- DEBUG LOGGING FOR PLOTTING --- 
+            logger.info(f"[Plotting] Experiment Type: {self.config.experiment_type}")
+            if self.config.experiment_type == "layer_isolated_pruning":
+                logger.info(f"[Plotting] iso_results_data keys: {list(iso_results_data.keys()) if iso_results_data else 'None'}")
+                if iso_results_data and "accuracies_isolated" in iso_results_data:
+                    logger.info(f"[Plotting] 'accuracies_isolated' key FOUND in iso_results_data for layer_isolated_pruning.")
+                else:
+                    logger.warning("[Plotting] 'accuracies_isolated' key NOT FOUND in iso_results_data for layer_isolated_pruning.")
+            # --- END DEBUG LOGGING ---
+
             title_prefix = self.config.experiment_name
             show_all_plots = self.config.show_all
             pruning_mode_plot = self.config.pruning_settings.dropout_pruning_mode
@@ -409,9 +440,25 @@ class AlignmentExperiment(Experiment):
                         plot_files_generated.append(rq_stats_plot)
 
             if iso_results_data and "accuracies_isolated" in iso_results_data:
-                iso_plots = plot_layer_isolated_dropout_results(iso_results_data, self.figure_path, title_prefix, show_all_plots)
-                if iso_plots:
-                    plot_files_generated.extend(iso_plots)
+                logger.info(f"[Plotting] Calling plot_layer_isolated_dropout_results for experiment type {self.config.experiment_type}") # DEBUG
+                iso_acc_plots = plot_layer_isolated_dropout_results(iso_results_data, self.figure_path, title_prefix, show_all_plots)
+                if iso_acc_plots:
+                    plot_files_generated.extend(iso_acc_plots)
+                
+                # Add pre_pruning_layer_stats plot for layer_isolated if data exists
+                if iso_results_data.get("pre_pruning_layer_stats"):
+                    logger.info(f"[Plotting] Calling plot_rq_stats_per_layer for layer_isolated_pruning.")
+                    iso_rq_stats_plot = plot_rq_stats_per_layer(iso_results_data, self.figure_path, title_prefix, show_all_plots)
+                    if iso_rq_stats_plot:
+                        plot_files_generated.append(iso_rq_stats_plot)
+                
+                # Add mean_rq_of_pruned_nodes plot for layer_isolated if data exists
+                # This plot will show, for each isolated layer panel, the mean RQ of nodes pruned from it.
+                if iso_results_data.get("pruning_details") and iso_results_data.get("pre_pruning_layer_stats"):
+                    logger.info(f"[Plotting] Calling plot_mean_rq_of_pruned_nodes for layer_isolated_pruning.")
+                    iso_mean_rq_pruned_plot = plot_mean_rq_of_pruned_nodes(iso_results_data, self.figure_path, title_prefix, show_all_plots)
+                    if iso_mean_rq_pruned_plot:
+                        plot_files_generated.append(iso_mean_rq_pruned_plot)
 
             if eig_results_data and "accuracies" in eig_results_data:
                 eig_acc_plots = plot_dropout_results(eig_results_data, self.figure_path, title_prefix, pruning_mode_plot, dropout_mode_plot)
