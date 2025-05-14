@@ -14,6 +14,7 @@ import random
 import traceback
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Union, Any
+import concurrent.futures
 
 import numpy as np
 import torch
@@ -323,6 +324,7 @@ def progressive_dropout(
     use_multi_strategy: bool = False,
     debug_mode: bool = False,
     exclude_classification_layer_config: bool = True,
+    max_workers: Optional[int] = None,
 ) -> Tuple[
     Union[Dict[int, List[float]], Dict[str, Dict[int, List[float]]]],
     Union[Dict[int, List[float]], Dict[str, Dict[int, List[float]]]],
@@ -332,6 +334,7 @@ def progressive_dropout(
 
     if use_multi_strategy:
         logger.info("Running progressive_dropout in multi-strategy mode with batched evaluation of replicates.")
+        logger.info(f"Parallel execution will use up to {max_workers or os.cpu_count()} workers.")
 
         strategies_to_run = ["high_rq", "low_rq", "random"]
         network_accuracies_all: Dict[str, Dict[int, List[float]]] = {st: {} for st in strategies_to_run}
@@ -348,19 +351,15 @@ def progressive_dropout(
             baseline_loss = 100.0 - baseline_acc
             if debug_mode:
                 logger.info(f"Multi-strategy: Baseline Acc for Net {net_idx}: {baseline_acc:.2f}%")
-            for st_key in strategies_to_run:
-                network_accuracies_all[st_key][net_idx] = [baseline_acc]
-                network_losses_all[st_key][net_idx] = [baseline_loss]
+            
+            for st_key_init in strategies_to_run:
+                network_accuracies_all[st_key_init][net_idx] = [baseline_acc]
+                network_losses_all[st_key_init][net_idx] = [baseline_loss]
 
             current_net_scores_by_layer = all_networks_scores_by_layer[net_idx]
             current_net_ascend_indices = all_networks_ascend_indices[net_idx]
             current_net_descend_indices = all_networks_descend_indices[net_idx]
             current_net_random_indices = all_networks_random_indices[net_idx]
-
-            original_weights_this_net = {l_idx: lm.weight.data.clone() for l_idx, lm in enumerate(original_net_rep.alignment_layers)}
-            original_biases_this_net = {
-                l_idx: lm.bias.data.clone() for l_idx, lm in enumerate(original_net_rep.alignment_layers) if lm.bias is not None
-            }
 
             all_original_network_metrics_struct.append(
                 {
@@ -369,52 +368,152 @@ def progressive_dropout(
                     "ascend_indices": current_net_ascend_indices,
                     "descend_indices": current_net_descend_indices,
                     "random_indices": current_net_random_indices,
-                    "original_weights": original_weights_this_net,
-                    "original_biases": original_biases_this_net,
                 }
             )
-
-        for frac_idx, frac_val in enumerate(dropout_fractions[1:]):
+        
+        pruning_tasks = []
+        for frac_idx_enum, frac_val_actual in enumerate(dropout_fractions[1:]):
             for st_key in strategies_to_run:
-                pruned_networks_for_batch_eval = []
-                current_frac_strat_pruning_details = []
+                for net_idx, net_metrics_info in enumerate(all_original_network_metrics_struct):
+                    pruning_tasks.append({
+                        "original_net_idx": net_idx,
+                        "frac_val": frac_val_actual,
+                        "frac_idx_enum": frac_idx_enum,
+                        "strategy": st_key,
+                        "net_metrics": net_metrics_info,
+                        "original_network_ref": networks[net_idx],
+                        "pruning_mode": pruning_mode,
+                        "dropout_mode_str": dropout_mode,
+                        "device": device,
+                        "debug_mode": debug_mode,
+                        "exclude_classification_layer": exclude_classification_layer_config,
+                    })
 
-                for net_metrics_info in all_original_network_metrics_struct:
-                    original_net_idx = net_metrics_info["net_idx"]
-                    net_to_prune = copy.deepcopy(networks[original_net_idx])
-                    _ensure_model_on_device(net_to_prune, device)
-                    net_to_prune.eval()
+        if pruning_tasks:
+            logger.info(f"Created {len(pruning_tasks)} pruning tasks for parallel execution.")
+        else:
+            logger.info("No pruning tasks created (dropout_fractions[1:] was empty).")
 
-                    single_net_pruning_details = _apply_pruning_to_single_net(
-                        net_to_prune,
-                        frac_val,
-                        st_key,
-                        pruning_mode,
-                        dropout_mode,
-                        device,
-                        net_metrics_info["scores_by_layer"],
-                        net_metrics_info["ascend_indices"],
-                        net_metrics_info["descend_indices"],
-                        net_metrics_info["random_indices"],
-                        debug_mode,
-                        exclude_classification_layer=exclude_classification_layer_config,
-                    )
-                    pruned_networks_for_batch_eval.append(net_to_prune)
-                    current_frac_strat_pruning_details.append(single_net_pruning_details["layer_info"])
+        def _execute_single_pruning_task(task_args):
+            original_net_idx = task_args["original_net_idx"]
+            frac_val = task_args["frac_val"]
+            frac_idx_enum = task_args["frac_idx_enum"]
+            strategy = task_args["strategy"]
+            net_metrics = task_args["net_metrics"]
+            original_network_ref = task_args["original_network_ref"]
 
-                if pruned_networks_for_batch_eval:
-                    batch_avg_losses, batch_avg_accuracies = evaluate_networks_ensemble(
-                        pruned_networks_for_batch_eval, dataset.test_loader, device, nn.CrossEntropyLoss(reduction="sum")
-                    )
+            pm = task_args["pruning_mode"]
+            dm_str = task_args["dropout_mode_str"]
+            dev = task_args["device"]
+            dbg_md = task_args["debug_mode"]
+            excl_cls = task_args["exclude_classification_layer"]
 
-                    for original_net_idx in range(len(networks)):
-                        network_accuracies_all[st_key][original_net_idx].append(batch_avg_accuracies[original_net_idx])
-                        network_losses_all[st_key][original_net_idx].append(100.0 - batch_avg_accuracies[original_net_idx])
+            if dbg_md:
+                logger.debug(f"Starting task: Net {original_net_idx}, Frac {frac_val:.2f} (idx {frac_idx_enum}), Strat {strategy}")
+            
+            net_to_prune = copy.deepcopy(original_network_ref)
+            _ensure_model_on_device(net_to_prune, dev)
+            net_to_prune.eval()
 
-                for original_net_idx in range(len(networks)):
-                    if frac_idx not in pruning_details_all[st_key][original_net_idx]:
-                        pruning_details_all[st_key][original_net_idx][frac_idx] = {}
-                    pruning_details_all[st_key][original_net_idx][frac_idx] = current_frac_strat_pruning_details[original_net_idx]
+            single_net_pruning_details = _apply_pruning_to_single_net(
+                net_to_prune,
+                frac_val,
+                strategy,
+                pm,
+                dm_str,
+                dev,
+                net_metrics["scores_by_layer"],
+                net_metrics["ascend_indices"],
+                net_metrics["descend_indices"],
+                net_metrics["random_indices"],
+                dbg_md,
+                exclude_classification_layer=excl_cls,
+            )
+            if dbg_md:
+                logger.debug(f"Finished task: Net {original_net_idx}, Frac {frac_val:.2f}, Strat {strategy}")
+            return (original_net_idx, frac_idx_enum, strategy, net_to_prune, single_net_pruning_details["layer_info"])
+
+        grouped_pruned_nets_for_eval: Dict[Tuple[int, str], List[Optional[nn.Module]]] = {}
+        
+        num_workers = max_workers if max_workers is not None else os.cpu_count()
+        
+        for frac_idx_enum, _ in enumerate(dropout_fractions[1:]):
+            for st_key in strategies_to_run:
+                grouped_pruned_nets_for_eval[(frac_idx_enum, st_key)] = [None] * len(networks)
+
+        if pruning_tasks:
+            logger.info(f"Starting ThreadPoolExecutor with {num_workers} workers to process pruning tasks.")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures_map = {executor.submit(_execute_single_pruning_task, task): task for task in pruning_tasks}
+                
+                iterable_futures = concurrent.futures.as_completed(futures_map)
+                if show_progress:
+                    iterable_futures = tqdm(iterable_futures, total=len(pruning_tasks), desc="Pruning Tasks")
+
+                processed_tasks_count = 0
+                for future in iterable_futures:
+                    task_info_for_log = futures_map[future] # Get original task args for logging
+                    try:
+                        net_idx_res, frac_idx_enum_res, strategy_res, pruned_net_res, details_res = future.result()
+                        if debug_mode:
+                            logger.debug(f"Successfully completed task: Net {net_idx_res}, Frac Idx {frac_idx_enum_res}, Strat {strategy_res}")
+                        
+                        eval_key = (frac_idx_enum_res, strategy_res)
+                        if eval_key in grouped_pruned_nets_for_eval:
+                             grouped_pruned_nets_for_eval[eval_key][net_idx_res] = pruned_net_res
+                        else:
+                             logger.warning(f"Evaluation key {eval_key} not found during results collection. This is unexpected.")
+
+                        if frac_idx_enum_res not in pruning_details_all[strategy_res][net_idx_res]:
+                             pruning_details_all[strategy_res][net_idx_res][frac_idx_enum_res] = {}
+                        pruning_details_all[strategy_res][net_idx_res][frac_idx_enum_res] = details_res
+                    
+                    except Exception as exc:
+                        task_info = futures_map[future]
+                        logger.error(f"Task original_net_idx={task_info['original_net_idx']}, frac={task_info['frac_val']:.2f}, strat={task_info['strategy']} generated an exception: {exc}")
+                    finally:
+                        processed_tasks_count += 1
+                
+                logger.info(f"All {processed_tasks_count}/{len(pruning_tasks)} submitted tasks processed by ThreadPoolExecutor.")
+        
+        # --- Batched Evaluation (after all pruning tasks are done) ---
+        logger.info("Starting batched evaluation of pruned networks.")
+        # Reverting to sequential evaluation loop
+        for frac_idx_enum, frac_val_actual in enumerate(dropout_fractions[1:]):
+            for st_key in strategies_to_run:
+                eval_key_current = (frac_idx_enum, st_key)
+                pruned_networks_for_batch_eval = grouped_pruned_nets_for_eval.get(eval_key_current)
+
+                if pruned_networks_for_batch_eval and not all(net is None for net in pruned_networks_for_batch_eval) :
+                    valid_nets_for_eval = [n for n in pruned_networks_for_batch_eval if n is not None]
+                    if len(valid_nets_for_eval) < len(pruned_networks_for_batch_eval) and debug_mode:
+                        logger.warning(f"Strategy {st_key}, Frac Idx {frac_idx_enum}: Found {len(pruned_networks_for_batch_eval) - len(valid_nets_for_eval)} None networks (due to errors). Evaluating only valid ones.")
+
+                    if valid_nets_for_eval:
+                        # Call evaluate_networks_ensemble directly, using the original dataset.test_loader
+                        batch_avg_losses, batch_avg_accuracies = evaluate_networks_ensemble(
+                            valid_nets_for_eval, dataset.test_loader, device, nn.CrossEntropyLoss(reduction="sum")
+                        )
+                        
+                        current_net_idx_in_valid_batch = 0
+                        for original_net_idx_eval_loop in range(len(networks)):
+                            if pruned_networks_for_batch_eval[original_net_idx_eval_loop] is not None: 
+                                network_accuracies_all[st_key][original_net_idx_eval_loop].append(batch_avg_accuracies[current_net_idx_in_valid_batch])
+                                network_losses_all[st_key][original_net_idx_eval_loop].append(batch_avg_losses[current_net_idx_in_valid_batch]) # Assuming batch_avg_losses is also per-network
+                                current_net_idx_in_valid_batch +=1
+                            else:
+                                network_accuracies_all[st_key][original_net_idx_eval_loop].append(float('nan'))
+                                network_losses_all[st_key][original_net_idx_eval_loop].append(float('nan'))
+                    else: 
+                        for original_net_idx_fill_nan in range(len(networks)):
+                            network_accuracies_all[st_key][original_net_idx_fill_nan].append(float('nan'))
+                            network_losses_all[st_key][original_net_idx_fill_nan].append(float('nan'))
+                else: 
+                    if debug_mode:
+                        logger.info(f"No networks to evaluate for strategy {st_key}, fraction index {frac_idx_enum}.")
+                    for net_idx_fill in range(len(networks)):
+                        network_accuracies_all[st_key][net_idx_fill].append(float('nan'))
+                        network_losses_all[st_key][net_idx_fill].append(float('nan'))
 
         return network_accuracies_all, network_losses_all, pruning_details_all
 
@@ -490,11 +589,10 @@ def _apply_pruning_to_single_net(
     exclude_classification_layer: bool,
 ) -> Dict[str, Any]:
     pruning_details_for_this_call = {"layer_info": {}}
-    # Assuming net_to_prune has .alignment_layers and .alignment_names attributes
     classification_layer_name = net_to_prune.alignment_names[-1] if net_to_prune.alignment_names else None
 
     if pruning_mode == "global_joint":
-        all_nodes = [] # List of (layer_name_str, node_idx_in_layer, score)
+        all_nodes = []
         for layer_name_str, sc_tensor in scores_by_layer.items():
             if exclude_classification_layer and layer_name_str == classification_layer_name:
                 if debug_mode:
@@ -506,7 +604,6 @@ def _apply_pruning_to_single_net(
                 }
                 continue
             
-            # Ensure score tensor is valid before proceeding
             if sc_tensor is None or sc_tensor.numel() == 0:
                 logger.warning(f"Global Pruning: Skipping layer '{layer_name_str}' due to missing or empty scores tensor.")
                 pruning_details_for_this_call["layer_info"][layer_name_str] = {
@@ -549,7 +646,6 @@ def _apply_pruning_to_single_net(
         for layer_name_str_global, n_idx_global, score_val_global in nodes_to_drop_info_global:
             drop_by_layer_indices_map.setdefault(layer_name_str_global, []).append(n_idx_global)
             if layer_name_str_global not in pruning_details_for_this_call["layer_info"]:
-                # This check ensures we use the correct total_nodes_in_layer from original scores_by_layer
                 total_nodes = scores_by_layer[layer_name_str_global].shape[0] if layer_name_str_global in scores_by_layer and scores_by_layer[layer_name_str_global] is not None else 0
                 pruning_details_for_this_call["layer_info"][layer_name_str_global] = {
                     "num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_nodes,
@@ -558,7 +654,6 @@ def _apply_pruning_to_single_net(
             if strategy_key != "random":
                 pruning_details_for_this_call["layer_info"][layer_name_str_global]["dropped_scores_sum"] += score_val_global
 
-        # Initialize details for layers that might not get any nodes pruned from global pool
         for l_name_str in net_to_prune.alignment_names:
             if exclude_classification_layer and l_name_str == classification_layer_name:
                 if l_name_str not in pruning_details_for_this_call["layer_info"]:
@@ -576,7 +671,6 @@ def _apply_pruning_to_single_net(
                     "total_nodes_in_layer": sc_tensor_temp.shape[0] if sc_tensor_temp is not None else 0,
                 }
 
-        # Find the actual nn.Module for each layer_name_str to pass to the helper
         module_map = {name: mod for name, mod in net_to_prune.named_modules()}
         for layer_name_str_to_prune, node_indices_list in drop_by_layer_indices_map.items():
             actual_layer_module = module_map.get(layer_name_str_to_prune)
@@ -659,11 +753,7 @@ def _apply_pruning_to_single_net(
                     logger.warning(f"Index error summing scores for layer {layer_name_str} in {strategy_key}")
 
     elif pruning_mode == "cascading_layer":
-        # Cascading logic is complex and might not directly use _apply_pruning_to_layer_module in a simple loop.
-        # It needs its own detailed implementation which considers dependencies between layers.
-        # For now, this remains a placeholder as in the original code for the multi-strategy path.
         logger.warning("Cascading_layer pruning logic within _apply_pruning_to_single_net is complex and not fully refactored to use _apply_pruning_to_layer_module in this pass.")
-        # Ensure all layers are in details for now
         for l_name in net_to_prune.alignment_names:
             if l_name not in pruning_details_for_this_call["layer_info"]:
                  sc_tensor_temp = scores_by_layer.get(l_name)
@@ -673,7 +763,6 @@ def _apply_pruning_to_single_net(
                 }
     else:
         logger.warning(f"Unrecognized pruning_mode={pruning_mode} in _apply_pruning_to_single_net.")
-        # Populate details for all layers if mode is unknown
         for l_name in net_to_prune.alignment_names:
             if l_name not in pruning_details_for_this_call["layer_info"]:
                 sc_tensor_temp = scores_by_layer.get(l_name)
@@ -690,19 +779,8 @@ def _apply_pruning_to_layer_module(
     indices_to_drop: Union[List[int], torch.Tensor],
     dropout_mode_str: str,
     device: torch.device,
-    out_dim_for_scaling: Optional[int] = None # For layer_wise scaling, out_dim might differ from wdat.shape[0] if grouped conv
+    out_dim_for_scaling: Optional[int] = None
 ) -> None:
-    """
-    Applies pruning (masking and optional scaling) to a single layer module.
-
-    Args:
-        layer_mod: The nn.Module layer to prune (e.g., nn.Linear, nn.Conv2d).
-        indices_to_drop: List or Tensor of node indices to prune from the output dimension.
-        dropout_mode_str: 'scaled' or 'unscaled'.
-        device: The torch device.
-        out_dim_for_scaling: The reference output dimension for calculating scaling factor.
-                             If None, uses layer_mod.weight.data.shape[0].
-    """
     if not hasattr(layer_mod, 'weight') or layer_mod.weight is None:
         logger.warning(f"Layer {layer_mod} has no weight attribute or weight is None. Skipping pruning.")
         return
@@ -710,9 +788,8 @@ def _apply_pruning_to_layer_module(
     wdat = layer_mod.weight.data
     actual_out_dim = wdat.shape[0]
     
-    # Ensure indices_to_drop is a tensor for _create_mask_from_indices
     if isinstance(indices_to_drop, list):
-        if not indices_to_drop: # Empty list, no pruning
+        if not indices_to_drop:
             return
         indices_to_drop_tensor = torch.tensor(indices_to_drop, device=device, dtype=torch.long)
     elif isinstance(indices_to_drop, torch.Tensor):
@@ -722,18 +799,16 @@ def _apply_pruning_to_layer_module(
         return
 
     if indices_to_drop_tensor.numel() == 0:
-        return # No nodes to drop
+        return
 
     mask = _create_mask_from_indices(wdat.shape, indices_to_drop_tensor, device)
     
     if dropout_mode_str == "scaled":
-        # Use provided out_dim_for_scaling if available, otherwise use the layer's actual output dimension
         reference_out_dim = out_dim_for_scaling if out_dim_for_scaling is not None else actual_out_dim
-        if reference_out_dim == 0: # Avoid division by zero
+        if reference_out_dim == 0:
             logger.warning("Reference output dimension for scaling is 0. Skipping scaling.")
             scale = 1.0
         else:
-            # Ensure indices_to_drop are within the bounds of reference_out_dim for correct fraction calculation
             valid_indices_for_fraction = indices_to_drop_tensor[indices_to_drop_tensor < reference_out_dim]
             num_actually_dropped_for_scaling = valid_indices_for_fraction.numel()
             
@@ -742,11 +817,10 @@ def _apply_pruning_to_layer_module(
         
         layer_mod.weight.data.mul_(mask).mul_(scale)
         if layer_mod.bias is not None:
-            # Bias mask should always be based on actual_out_dim of the bias itself
             bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, indices_to_drop_tensor, device)
             layer_mod.bias.data.mul_(bias_mask).mul_(scale)
-    else: # unscaled (zeroing out)
-        layer_mod.weight.data.mul_(mask) # Apply mask by multiplication (zeros out False positions)
+    else:
+        layer_mod.weight.data.mul_(mask)
         if layer_mod.bias is not None:
             bias_mask = _create_mask_from_indices(layer_mod.bias.data.shape, indices_to_drop_tensor, device)
             layer_mod.bias.data.mul_(bias_mask)

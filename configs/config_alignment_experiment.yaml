@@ -71,7 +71,7 @@ model:
   # (Example 1) MLP Parameters (if model_name: "MLP")
   mlp_params:
     input_dim: 784
-    hidden_dims: [256, 128] # Example: Two hidden layers
+    hidden_dims: [100, 100, 50] # Example: Two hidden layers
     activation: "relu"
 
   # (Example 2) CNN2P2 Parameters (if model_name: "CNN2P2") - Comment out if using MLP or external
@@ -175,8 +175,8 @@ pruning_settings:
                                         #   "cascading_layer": Prunes L1, its output influences pruning of L2, etc. (Note: current batched impl. has limitations).
   exclude_classification_layer: true    
   use_multi_strategy_dropout: true     
-  num_batches_for_scores: 1             # Number of batches to compute pruning scores on.
-
+  num_batches_for_scores: null             # Number of batches to compute pruning scores on.
+  
 # -----------------------------------------------------------------------------
 # VII. Checkpointing & Logging Configuration
 # -----------------------------------------------------------------------------
