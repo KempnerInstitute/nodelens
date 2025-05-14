@@ -671,30 +671,46 @@ def _apply_pruning_to_single_net(
             if strategy_key != "random":
                 pruning_details_for_this_call["layer_info"][layer_name_str_global]["dropped_scores_sum"] += score_val_global
 
-        for l_name_str in net_to_prune.alignment_names:
-            if exclude_classification_layer and l_name_str == classification_layer_name:
-                if l_name_str not in pruning_details_for_this_call["layer_info"]:
-                    sc_tensor_temp = scores_by_layer.get(l_name_str)
-                    pruning_details_for_this_call["layer_info"][l_name_str] = {
-                        "num_dropped": 0, "dropped_scores_sum": 0.0,
-                        "total_nodes_in_layer": sc_tensor_temp.shape[0] if sc_tensor_temp is not None else 0,
-                        "skipped": True,
+        # Create a direct map from alignment_names to alignment_layers for reliable module fetching
+        if not hasattr(net_to_prune, 'alignment_names') or not hasattr(net_to_prune, 'alignment_layers') or \
+           len(net_to_prune.alignment_names) != len(net_to_prune.alignment_layers):
+            logger.error("Global Pruning: Mismatch or missing alignment_names/alignment_layers in net_to_prune. Cannot reliably map names to modules for pruning.")
+            # Populate details for all layers indicating skip if critical structure is missing
+            for l_name_str_skip in scores_by_layer.keys(): # Use keys from scores_by_layer as they were intended for pruning
+                if l_name_str_skip not in pruning_details_for_this_call["layer_info"]:
+                    sc_tensor_skip = scores_by_layer.get(l_name_str_skip)
+                    total_nodes_skip = sc_tensor_skip.shape[0] if sc_tensor_skip is not None else 0
+                    pruning_details_for_this_call["layer_info"][l_name_str_skip] = {
+                        "num_dropped": 0, "dropped_scores_sum": 0.0, 
+                        "total_nodes_in_layer": total_nodes_skip,
+                        "skipped_due_to_mapping_error": True
                     }
-                continue
-            if l_name_str not in pruning_details_for_this_call["layer_info"]:
-                sc_tensor_temp = scores_by_layer.get(l_name_str)
-                pruning_details_for_this_call["layer_info"][l_name_str] = {
-                    "num_dropped": 0, "dropped_scores_sum": 0.0,
-                    "total_nodes_in_layer": sc_tensor_temp.shape[0] if sc_tensor_temp is not None else 0,
-                }
+                else: # If already exists, just add the skipped flag
+                    pruning_details_for_this_call["layer_info"][l_name_str_skip]["skipped_due_to_mapping_error"] = True
+            return pruning_details_for_this_call
 
-        module_map = {name: mod for name, mod in net_to_prune.named_modules()}
+        module_map_from_alignment_lists = {
+            name: net_to_prune.alignment_layers[i]
+            for i, name in enumerate(net_to_prune.alignment_names)
+        }
+
         for layer_name_str_to_prune, node_indices_list in drop_by_layer_indices_map.items():
-            actual_layer_module = module_map.get(layer_name_str_to_prune)
+            actual_layer_module = module_map_from_alignment_lists.get(layer_name_str_to_prune)
             if actual_layer_module and node_indices_list:
                 _apply_pruning_to_layer_module(actual_layer_module, node_indices_list, dropout_mode_str, device)
             elif not actual_layer_module:
-                logger.warning(f"Global Pruning: Could not find module for layer name '{layer_name_str_to_prune}' in net_to_prune.")
+                # This warning should ideally not be hit if the above checks pass and layer_name_str_to_prune was derived from scores_by_layer.keys()
+                # which should align with alignment_names.
+                logger.warning(f"Global Pruning: Could not find module for layer name '{layer_name_str_to_prune}' using alignment_names mapping. This might indicate an inconsistency.")
+                # Update details for this specific layer if it was targeted for pruning but module not found
+                if layer_name_str_to_prune in pruning_details_for_this_call["layer_info"]:
+                    pruning_details_for_this_call["layer_info"][layer_name_str_to_prune]["skipped_module_not_found_in_map"] = True
+                else: # Should already be in details from earlier loop, but as a fallback
+                    pruning_details_for_this_call["layer_info"][layer_name_str_to_prune] = {
+                        "num_dropped": 0, "dropped_scores_sum": 0.0, 
+                        "total_nodes_in_layer": scores_by_layer.get(layer_name_str_to_prune).shape[0] if scores_by_layer.get(layer_name_str_to_prune) is not None else 0,
+                        "skipped_module_not_found_in_map": True
+                    }
 
     elif pruning_mode in ["layer_wise", "layer_isolated"]:
         if debug_mode: logger.info(f"Debug Layer-Wise/Isolated Pruning: Strategy '{strategy_key}', Frac {frac_val:.2f}")
