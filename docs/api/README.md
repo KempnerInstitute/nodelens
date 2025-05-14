@@ -102,7 +102,7 @@ scores = compute_all_node_scores(
 
 ### Available Metrics
 
-See the [Metrics Documentation](metrics/README) for a full list of available metrics.
+See the [Metrics Documentation](metrics/README.md) for a full list of available metrics.
 
 ## Experiment API
 

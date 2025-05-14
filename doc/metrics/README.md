@@ -11,8 +11,10 @@ The alignment metrics system measures various properties of neural networks, foc
 The system is built around a central registry of metrics and a dispatch mechanism for computing them:
 
 - `ALIGNMENT_METRICS_REGISTRY`: Maps metric names to metric functions
-- `get_metric()`: Returns a metric object configured with the requested parameters
-- `_AlignmentMetricImpl`: Implements the metric calculation with proper dispatch logic
+- `get_metric()`: Returns a metric object configured with the requested parameters. Metric-specific parameters (e.g., `scale_by_norm` for RQ, `bins` for MI) are typically passed here.
+- `_AlignmentMetricImpl`: Implements the metric calculation with proper dispatch logic.
+
+When running experiments via the experiment runner, some metric configurations are also sourced from the `alignment_settings` block in your main configuration file (see [Configuration Documentation](configuration.md) for details).
 
 ## Available Metrics
 
@@ -66,7 +68,8 @@ scores = mi_bin_metric.compute_per_node_scores(
 mi_proj_metric = get_metric("mi_proj_vs_mean_input")
 scores = mi_proj_metric.compute_per_node_scores(
     layer_inputs=inputs,
-    layer_weights=weights
+    layer_weights=weights,
+    bins=30 # Default is 30 for this specific metric
 )
 ```
 
@@ -109,8 +112,8 @@ Usage:
 # Shared information component
 pid_si_metric = get_metric("pid_si")
 scores = pid_si_metric.compute_per_node_scores(
-    layer_inputs=inputs,
-    layer_outputs=outputs,
+    layer_inputs=inputs,  # Or layer_outputs depending on exact PID formulation
+    layer_outputs=outputs, # Or target_outputs
     bins=20  # Optional, default=10
 )
 ```
@@ -132,12 +135,70 @@ cosine_metric = get_metric("weight_cosine_similarity")
 sim_matrix = cosine_metric.compute_per_node_scores(layer_weights=weights)
 ```
 
+### NullSpace Metrics (Details TBD)
+
+*Valid metric name: `NullSpace`*
+
+This metric is intended to measure properties related to the null space of weight matrices.
+(Further details, specific parameters, and usage examples need to be documented based on its full implementation and registration in `alignment.metrics.py`.)
+
+| Metric Name | Description |
+|-------------|-------------|
+| `nullspace` (Tentative) | Measures properties related to the null space of weight matrices. |
+
+Usage:
+```python
+# Usage example TBD
+# nullspace_metric = get_metric("NullSpace", **specific_params)
+# scores = nullspace_metric.compute_per_node_scores(...)
+```
+
+### Rank Alignment Metrics (Details TBD)
+
+*Valid metric name: `RankAlignment`*
+
+This metric is intended to measure alignment of singular vectors or other rank-related properties between matrices (e.g., weight matrices or activation covariance matrices).
+(Further details, specific parameters, and usage examples need to be documented based on its full implementation and registration in `alignment.metrics.py`.)
+
+| Metric Name | Description |
+|-------------|-------------|
+| `rank_alignment` (Tentative) | Measures rank-related alignment properties. |
+
+Usage:
+```python
+# Usage example TBD
+# rank_metric = get_metric("RankAlignment", **specific_params)
+# scores = rank_metric.compute_per_node_scores(...)
+```
+
 ## Common Parameters
 
-Most metrics accept these common parameters:
+When using `get_metric(...).compute_per_node_scores(...)`, many metrics accept:
 
-- `verbose`: Print detailed debugging information
-- `force_cpu_for_large_metric_ops`: Offload large computations to CPU for memory efficiency
+- `layer_inputs: Optional[torch.Tensor]`: Input activations to a layer.
+- `layer_weights: Optional[torch.Tensor]`: Weight matrix of a layer.
+- `layer_outputs: Optional[torch.Tensor]`: Output activations from a layer.
+- `device: Optional[Union[str, torch.device]]`: Computation device.
+- `min_samples_for_cov: int = 2`: Minimum samples for covariance-based metrics.
+- `target_outputs: Optional[torch.Tensor]`: Target outputs, e.g., for some MI variants.
+- `bins: int = 10`: Default number of bins for histogram-based metrics (can be overridden).
+- `verbose: bool = False`: Print detailed debugging information.
+- `force_cpu_for_large_metric_ops: bool = False` (default in `get_metric` context, but can be `True` from `AlignmentConfig`): Offload large computations to CPU.
+- Additional `**metric_specific_kwargs` can be passed.
+
+## Experiment-Level Metric Configurations
+
+When metrics are computed via the experiment runner (using `ExperimentConfig`), parameters from the `alignment_settings` block in your YAML configuration file are also used. These include:
+
+- `metric: str`: The primary metric to compute (e.g., "RQ", "MI").
+- `scale_by_norm: bool`: Specifically for RQ, whether to scale by norm (passed to `get_metric`).
+- `cnn_mode: str`: For CNNs, how feature maps are processed ("unfold", "patchwise", etc.). This affects how `layer_inputs` are shaped for metric computation.
+- `cnn_rq_aggregation_op: str`: For RQ on CNNs, how scores are aggregated ("mean", "max", etc.).
+- `run_progressive: bool`: (Likely relates to experiment flow rather than a direct metric parameter).
+- `run_eigenvector: bool`: (Likely relates to RQ computation, possibly for eigenvector analysis).
+- `force_cpu_for_large_metric_ops: bool`: Global override for forcing CPU.
+
+Refer to the [Configuration Documentation](configuration.md#alignment-configuration-alignmentconfig) for full details on these settings.
 
 ## High-Level Utility Functions
 
