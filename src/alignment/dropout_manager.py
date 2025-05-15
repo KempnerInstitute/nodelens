@@ -766,11 +766,13 @@ def run_cascading_layer_pruning_experiment(
     logger.info("Starting (Placeholder) Cascading Layer Pruning Experiment Manager")
     device = _normalize_device(device)
     
+    strategies_to_run_cascade = ["high_rq", "low_rq", "random"]
+
     results = {
         "dropout_fractions": dropout_fractions,
-        "accuracies": { "cascading": [] }, # One accuracy list for this strategy
-        "stds": { "cascading": [] },
-        "pruning_details": { "cascading": {0: {}} }, # Store details under net_idx 0 (averaged)
+        "accuracies": {st: [] for st in strategies_to_run_cascade}, 
+        "stds": {st: [] for st in strategies_to_run_cascade},
+        "pruning_details": {st: {0: {}} for st in strategies_to_run_cascade}, 
         "pre_pruning_layer_stats": {}
     }
 
@@ -778,28 +780,240 @@ def run_cascading_layer_pruning_experiment(
         logger.warning("No networks provided to run_cascading_layer_pruning_experiment.")
         return results
 
-    # TODO: Implement the "Simple Cascade" logic here:
-    # 1. Pre-compute all node scores for all networks (similar to progressive_dropout_manager)
-    #    - This will populate results["pre_pruning_layer_stats"]
-    # 2. For each dropout_fraction:
-    # 3.   For each network_replicate:
-    # 4.     net_copy = deepcopy(original_replicate)
-    # 5.     For each layer Li in net_copy.alignment_layers (sequentially):
-    # 6.       Prune F% of nodes from Li in net_copy, based on Li's original scores (from step 1)
-    # 7.     Evaluate the fully cascaded-pruned net_copy.
-    # 8.   Aggregate accuracies over replicates (mean, std) for this fraction.
-    # 9.   Collect and aggregate pruning_details.
+    # --- 1. Pre-compute scores and indices for ALL networks ONCE (similar to progressive_dropout) ---
+    all_networks_scores_by_layer_list = []
+    all_networks_ascend_indices_list = []
+    all_networks_descend_indices_list = []
+    all_networks_random_indices_list = []
+    pre_pruning_stats_accumulator = {}
 
-    logger.warning("run_cascading_layer_pruning_experiment is a placeholder. Full logic not yet implemented.")
-    # Fill with NaNs for now so the experiment runs without crashing plotting etc.
-    num_replicates = len(networks)
-    for frac in dropout_fractions:
-        results["accuracies"]["cascading"].append(np.nan)
-        results["stds"]["cascading"].append(np.nan)
-    # Ensure pruning_details has frac_idx keys
-    for frac_idx in range(len(dropout_fractions) -1):
-        results["pruning_details"]["cascading"][0][frac_idx] = {} 
-        # Populate with layer keys and empty details if needed by plotting
-        # For now, leave as empty dict, plotting might handle missing layers gracefully or skip.
+    logger.info(f"Cascading Pruning: Pre-computing scores & indices for {len(networks)} network replicates.")
+    metric_config_for_cascading = [{
+        "name": metric_instance.name, 
+        "scale_by_norm": metric_instance.scale_by_norm,
+        "force_cpu_for_large_metric_ops": force_cpu_for_large_metric_ops,
+        "configured_cnn_mode": configured_cnn_mode,
+        "configured_cnn_rq_op": configured_cnn_rq_op
+    }]
 
+    for net_idx, net_rep in enumerate(tqdm(networks, desc="Cascading: Preparing Network Metrics", disable=not show_progress)):
+        _ensure_model_on_device(net_rep, device)
+        net_rep.eval()
+        
+        scores_dict_of_dict = compute_all_node_scores(
+            model=net_rep, 
+            metric_configs=metric_config_for_cascading, 
+            device=device, 
+            data_loader=dataset.test_loader,
+            num_batches=num_batches_for_pre_scoring,
+            debug_mode=debug_mode
+        )
+        
+        current_net_scores = {} 
+        if scores_dict_of_dict:
+            # Extract scores for the primary metric_instance.name
+            for layer_name_key in scores_dict_of_dict: 
+                metric_data_for_layer = scores_dict_of_dict[layer_name_key]
+                if metric_instance.name in metric_data_for_layer: 
+                    score_value = metric_data_for_layer[metric_instance.name]
+                    if score_value is not None and isinstance(score_value, torch.Tensor) and score_value.numel() > 0 and not torch.isnan(score_value).all():
+                        current_net_scores[layer_name_key] = score_value
+        all_networks_scores_by_layer_list.append(current_net_scores)
+
+        asc_indices, desc_indices, rand_indices = {}, {}, {}
+        for l_name, scores_tensor in current_net_scores.items():
+            if scores_tensor is not None: # Ensure scores_tensor is not None before processing
+                count = scores_tensor.shape[0]
+                asc_indices[l_name] = torch.argsort(scores_tensor, descending=False)
+                desc_indices[l_name] = torch.argsort(scores_tensor, descending=True)
+                all_layer_node_indices = list(range(count))
+                random.shuffle(all_layer_node_indices)
+                rand_indices[l_name] = torch.tensor(all_layer_node_indices, device=device, dtype=torch.long)
+                
+                if l_name not in pre_pruning_stats_accumulator:
+                    pre_pruning_stats_accumulator[l_name] = {"means": [], "stds": []}
+                pre_pruning_stats_accumulator[l_name]["means"].append(torch.mean(scores_tensor).item())
+                pre_pruning_stats_accumulator[l_name]["stds"].append(torch.std(scores_tensor).item())
+            else:
+                logger.warning(f"Cascading Pruning: Scores tensor for layer '{l_name}' is None for net {net_idx}. Cannot generate sorted indices.")
+
+        all_networks_ascend_indices_list.append(asc_indices)
+        all_networks_descend_indices_list.append(desc_indices)
+        all_networks_random_indices_list.append(rand_indices)
+
+    for l_name_stat, stats_lists in pre_pruning_stats_accumulator.items():
+        results["pre_pruning_layer_stats"][l_name_stat] = {
+            "avg_mean_rq": np.mean(stats_lists["means"]) if stats_lists["means"] else np.nan,
+            "avg_std_rq": np.mean(stats_lists["stds"]) if stats_lists["stds"] else np.nan
+        }
+    # --- End of Pre-computation ---
+
+    # Main loop over strategies to apply within the cascade
+    for cascade_internal_strategy in strategies_to_run_cascade:
+        logger.info(f"Cascading Pruning: Running with internal strategy: {cascade_internal_strategy}")
+        strategy_accuracies_all_fractions = []
+        strategy_stds_all_fractions = []
+
+        # Handle baseline (fraction 0.0) - evaluate original networks
+        if 0.0 in dropout_fractions:
+            if not hasattr(run_cascading_layer_pruning_experiment, '_shared_baseline_accuracies'):
+                logger.info("Cascading Pruning: Evaluating baseline for original networks (once).")
+                _, baseline_reps_accs = evaluate_networks_ensemble(networks, dataset.test_loader, device, show_batch_progress=False)
+                run_cascading_layer_pruning_experiment._shared_baseline_accuracies = baseline_reps_accs
+            baseline_replicate_accuracies = run_cascading_layer_pruning_experiment._shared_baseline_accuracies
+            strategy_accuracies_all_fractions.append(np.mean(baseline_replicate_accuracies) if baseline_replicate_accuracies else np.nan)
+            strategy_stds_all_fractions.append(np.std(baseline_replicate_accuracies) if baseline_replicate_accuracies else np.nan)
+
+        fractions_to_prune = [f for f in dropout_fractions if f > 0.0]
+        if not fractions_to_prune and 0.0 not in dropout_fractions: # Only if 0.0 was not even in original list
+            logger.info(f"Cascading Pruning (Strat: {cascade_internal_strategy}): No dropout fractions to process.")
+            # Fill this strategy's results with NaNs if no fractions at all
+            results["accuracies"][cascade_internal_strategy] = [np.nan] * len(dropout_fractions)
+            results["stds"][cascade_internal_strategy] = [np.nan] * len(dropout_fractions)
+            continue # Next strategy
+        elif not fractions_to_prune and 0.0 in dropout_fractions: # Only baseline was run
+            logger.info(f"Cascading Pruning (Strat: {cascade_internal_strategy}): Only baseline fraction (0.0) processed.")
+            # Ensure results for this strategy reflect only the baseline if it was the only fraction
+            while len(strategy_accuracies_all_fractions) < len(dropout_fractions):
+                strategy_accuracies_all_fractions.append(np.nan)
+                strategy_stds_all_fractions.append(np.nan)
+            results["accuracies"][cascade_internal_strategy] = strategy_accuracies_all_fractions
+            results["stds"][cascade_internal_strategy] = strategy_stds_all_fractions
+            continue # Next strategy
+
+        frac_pbar_desc = f"True Cascading (Strat: {cascade_internal_strategy}) Fractions"
+        frac_pbar = tqdm(fractions_to_prune, desc=frac_pbar_desc, disable=not show_progress, leave=True)
+        
+        for frac_idx_enum, frac_val in enumerate(frac_pbar):
+            current_frac_pruning_details_for_avg = {}
+            accuracies_this_fraction_all_replicates = []
+
+            for net_idx, original_network_ref in enumerate(networks):
+                if show_progress and isinstance(frac_pbar, tqdm):
+                    frac_pbar.set_postfix_str(f"NetRep {net_idx+1}/{len(networks)}")
+
+                net_copy = copy.deepcopy(original_network_ref)
+                _ensure_model_on_device(net_copy, device)
+                net_copy.eval()
+                
+                layers_to_prune_in_copy = net_copy.alignment_layers
+                layer_names_in_copy = net_copy.alignment_names
+                classification_layer_name = layer_names_in_copy[-1] if layer_names_in_copy else None
+                rep_frac_pruning_details = {}
+
+                if debug_mode: logger.debug(f"TrueCascading: Net {net_idx}, Frac {frac_val:.2f}, Strat {cascade_internal_strategy} - Starting layer cascade")
+
+                for layer_idx_in_cascade, layer_mod_to_prune in enumerate(layers_to_prune_in_copy):
+                    layer_name_actual = layer_names_in_copy[layer_idx_in_cascade]
+                    task_id_str_rep_layer = f"Net {net_idx}, Layer {layer_name_actual}, Strat {cascade_internal_strategy}, Frac {frac_val:.2f}"
+
+                    if exclude_classification_layer_config and layer_name_actual == classification_layer_name:
+                        # ... (record 0-dropped details for CLS layer) ...
+                        original_cls_score_tensor = all_networks_scores_by_layer_list[net_idx].get(layer_name_actual) # Use original scores for total nodes info
+                        total_cls_nodes = original_cls_score_tensor.shape[0] if original_cls_score_tensor is not None else 0
+                        rep_frac_pruning_details[layer_name_actual] = {
+                            "num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_cls_nodes
+                        }
+                        continue
+
+                    # --- TRUE CASCADE: Re-calculate scores for the current layer based on the current state of net_copy ---
+                    if debug_mode: logger.debug(f"[{task_id_str_rep_layer}] Re-calculating scores for layer {layer_name_actual}")
+                    current_dynamic_scores_dict_of_dict = compute_all_node_scores(
+                        model=net_copy, # Pass the iteratively pruned network
+                        metric_configs=metric_config_for_cascading, 
+                        device=device, 
+                        data_loader=dataset.test_loader, 
+                        num_batches=num_batches_for_pre_scoring,
+                        debug_mode=debug_mode # Can be very verbose
+                    )
+                    node_scores_for_this_layer_dynamically = None
+                    if current_dynamic_scores_dict_of_dict and \
+                       layer_name_actual in current_dynamic_scores_dict_of_dict and \
+                       metric_instance.name in current_dynamic_scores_dict_of_dict[layer_name_actual]:
+                        score_tensor_val_dyn = current_dynamic_scores_dict_of_dict[layer_name_actual][metric_instance.name]
+                        if score_tensor_val_dyn is not None and isinstance(score_tensor_val_dyn, torch.Tensor) and score_tensor_val_dyn.numel() > 0:
+                            node_scores_for_this_layer_dynamically = score_tensor_val_dyn
+                    
+                    if node_scores_for_this_layer_dynamically is None:
+                        if debug_mode: logger.warning(f"[{task_id_str_rep_layer}] No dynamic scores found. Skipping pruning.")
+                        total_nodes_val_sc = layer_mod_to_prune.weight.shape[0] if hasattr(layer_mod_to_prune, 'weight') and layer_mod_to_prune.weight is not None else 0
+                        rep_frac_pruning_details[layer_name_actual] = {"num_dropped": 0, "dropped_scores_sum": 0.0, "total_nodes_in_layer": total_nodes_val_sc}
+                        continue
+                    # --- End TRUE CASCADE score calculation ---
+
+                    out_dim_layer = layer_mod_to_prune.weight.shape[0]
+                    n_drop_layer = int(round(frac_val * out_dim_layer))
+                    num_dropped_this_layer = 0
+                    sum_scores_dropped_this_layer = 0.0
+
+                    if n_drop_layer > 0:
+                        # Generate sorted indices based on these NEWLY computed dynamic scores
+                        dynamic_asc_indices = torch.argsort(node_scores_for_this_layer_dynamically, descending=False)
+                        dynamic_desc_indices = torch.argsort(node_scores_for_this_layer_dynamically, descending=True)
+                        dynamic_rand_indices_list = list(range(node_scores_for_this_layer_dynamically.shape[0]))
+                        random.shuffle(dynamic_rand_indices_list)
+                        dynamic_rand_indices = torch.tensor(dynamic_rand_indices_list, device=device, dtype=torch.long)
+                        
+                        dynamic_indices_map = {
+                            "high_rq": dynamic_desc_indices,
+                            "low_rq": dynamic_asc_indices,
+                            "random": dynamic_rand_indices
+                        }
+                        sorted_indices_for_this_layer_dynamically = dynamic_indices_map[cascade_internal_strategy]
+                        
+                        if sorted_indices_for_this_layer_dynamically.numel() > 0:
+                            indices_to_drop_layer = sorted_indices_for_this_layer_dynamically[:n_drop_layer]
+                            if cascade_internal_strategy != "random":
+                                try:
+                                    sum_scores_dropped_this_layer = node_scores_for_this_layer_dynamically[indices_to_drop_layer].sum().item()
+                                except IndexError:
+                                    logger.warning(f"[{task_id_str_rep_layer}] Index error summing dynamic scores for dropped nodes.")
+                            
+                            _apply_pruning_to_layer_module(layer_mod_to_prune, indices_to_drop_layer, dropout_mode, device, out_dim_for_scaling=out_dim_layer)
+                            num_dropped_this_layer = len(indices_to_drop_layer)
+                            if debug_mode: logger.debug(f"[{task_id_str_rep_layer}] Pruned {num_dropped_this_layer}/{out_dim_layer} nodes using dynamic scores.")
+                        elif debug_mode:
+                            logger.warning(f"[{task_id_str_rep_layer}] No dynamic sorted indices generated. No pruning.")
+                    
+                    rep_frac_pruning_details[layer_name_actual] = {
+                        "num_dropped": num_dropped_this_layer,
+                        "dropped_scores_sum": sum_scores_dropped_this_layer,
+                        "total_nodes_in_layer": out_dim_layer
+                    }
+                
+                # Evaluate the fully cascaded-pruned net_copy for this replicate and fraction
+                current_accuracy = _evaluate_model_accuracy(net_copy, dataset.test_loader, device)
+                accuracies_this_fraction_all_replicates.append(current_accuracy)
+
+                # Aggregate pruning details for this replicate into current_frac_pruning_details_for_avg
+                for layer_name_pd_rep, details_pd_rep in rep_frac_pruning_details.items():
+                    if layer_name_pd_rep not in current_frac_pruning_details_for_avg:
+                         # Initialize if somehow missed (e.g. a layer name not in initial first_net_alignment_names)
+                        current_frac_pruning_details_for_avg[layer_name_pd_rep] = {
+                            "num_dropped_sum_reps": 0, "dropped_scores_sum_total_reps": 0.0,
+                            "total_nodes_in_layer_sum_reps": 0, "replicates_contributing": 0
+                        }
+                    current_frac_pruning_details_for_avg[layer_name_pd_rep]["num_dropped_sum_reps"] += details_pd_rep["num_dropped"]
+                    current_frac_pruning_details_for_avg[layer_name_pd_rep]["dropped_scores_sum_total_reps"] += details_pd_rep["dropped_scores_sum"]
+                    current_frac_pruning_details_for_avg[layer_name_pd_rep]["total_nodes_in_layer_sum_reps"] += details_pd_rep["total_nodes_in_layer"]
+                    current_frac_pruning_details_for_avg[layer_name_pd_rep]["replicates_contributing"] += 1
+            
+            # Aggregate accuracies for this fraction
+            if accuracies_this_fraction_all_replicates:
+                strategy_accuracies_all_fractions.append(np.mean(accuracies_this_fraction_all_replicates))
+                strategy_stds_all_fractions.append(np.std(accuracies_this_fraction_all_replicates))
+            else:
+                strategy_accuracies_all_fractions.append(np.nan)
+                strategy_stds_all_fractions.append(np.nan)
+            
+            # Store/finalize aggregated pruning details for this fraction and strategy
+            results["pruning_details"][cascade_internal_strategy][0][frac_idx_enum] = current_frac_pruning_details_for_avg
+
+        results["accuracies"][cascade_internal_strategy] = strategy_accuracies_all_fractions
+        results["stds"][cascade_internal_strategy] = strategy_stds_all_fractions
+    
+    logger.info("Cascading Layer Pruning Experiment Manager finished.")
+    # Clear shared attribute after experiment run if desired, or manage its lifecycle if this func is called multiple times in one script run.
+    if hasattr(run_cascading_layer_pruning_experiment, '_shared_baseline_accuracies'):
+        delattr(run_cascading_layer_pruning_experiment, '_shared_baseline_accuracies')
     return results

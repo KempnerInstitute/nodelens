@@ -617,10 +617,10 @@ def plot_mean_rq_of_pruned_nodes(
         logger.warning("No pruned_fractions for plotting mean RQ.")
         return None
 
-    # Include "random" strategy now
-    strategies_to_plot = [s for s in pruning_details.keys() if s in ["high_rq", "low_rq", "random"]]
+    # Include "random" strategy now, and also "cascading" if present
+    strategies_to_plot = [s for s in pruning_details.keys() if s in ["high_rq", "low_rq", "random", "cascading"]]
     if not strategies_to_plot:
-        logger.warning("No relevant strategies found in pruning_details for mean RQ plot.")
+        logger.warning("No relevant strategies (high_rq, low_rq, random, cascading) found in pruning_details for mean RQ plot.")
         return None 
 
     num_networks = 0

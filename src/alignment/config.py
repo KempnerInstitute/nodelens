@@ -671,7 +671,7 @@ class ExperimentConfig(BaseConfig):
             )
             # Optionally, could force self.pruning_settings.dropout_pruning_mode = "cascading_layer" here
         
-        logger.debug("ExperimentConfig.validate_config() completed.")
+        config_logger.debug("ExperimentConfig.validate_config() completed.")
 
         return True
 
