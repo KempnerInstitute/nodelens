@@ -14,6 +14,7 @@ from omegaconf.errors import OmegaConfBaseException
 import logging
 import warnings
 import torch
+from alignment.metrics import ALIGNMENT_METRICS_REGISTRY
 
 config_logger = logging.getLogger(__name__)
 T = TypeVar('T', bound='BaseConfig')
@@ -424,7 +425,7 @@ class CallbackSettings(BaseConfig):
 @dataclass
 class AlignmentConfig(BaseConfig):
     """Configuration for alignment metric calculation."""
-    metric: str = "RQ"
+    metric: List[str] = field(default_factory=lambda: ["RQ"])
     scale_by_norm: bool = False
     cnn_mode: str = "unfold"
     cnn_rq_aggregation_op: str = "mean"
@@ -434,14 +435,27 @@ class AlignmentConfig(BaseConfig):
     force_cpu_for_large_metric_ops: bool = True
 
     def __post_init__(self):
-        # If OmegaConf.to_object correctly instantiates CallbackSettings from a dict
-        # based on the type hint, this explicit cast might not be strictly necessary.
-        # However, it's a good safeguard for cases where `callbacks` might be populated
-        # as a dict through other means or if older OmegaConf versions are less robust.
         if self.callbacks is not None and isinstance(self.callbacks, dict):
             config_logger.debug(f"AlignmentConfig.__post_init__: self.callbacks is a dict, attempting to cast to CallbackSettings.")
             try:
-                self.callbacks = CallbackSettings(**self.callbacks)
+                # Ensure that MetricTrackerConfig items are correctly instantiated if they are dicts
+                processed_metrics_for_callback = []
+                if 'alignment_metrics' in self.callbacks and isinstance(self.callbacks['alignment_metrics'], list):
+                    for item_conf_dict in self.callbacks['alignment_metrics']:
+                        if isinstance(item_conf_dict, dict):
+                            processed_metrics_for_callback.append(MetricTrackerConfig(**item_conf_dict))
+                        elif isinstance(item_conf_dict, MetricTrackerConfig):
+                            processed_metrics_for_callback.append(item_conf_dict)
+                        else:
+                            raise ValueError(f"Invalid item type in callback alignment_metrics: {type(item_conf_dict)}")
+                    # Create a new dict for CallbackSettings constructor to avoid modifying the original
+                    callback_args = {k: v for k, v in self.callbacks.items() if k != 'alignment_metrics'}
+                    callback_args['alignment_metrics'] = processed_metrics_for_callback
+                    self.callbacks = CallbackSettings(**callback_args)
+                else:
+                     # If alignment_metrics is not a list or not present, try direct instantiation
+                     self.callbacks = CallbackSettings(**self.callbacks)
+
             except Exception as e:
                 config_logger.error(f"Failed to cast AlignmentConfig.callbacks to CallbackSettings in __post_init__: {e}. Setting to None.")
                 self.callbacks = None
@@ -449,10 +463,17 @@ class AlignmentConfig(BaseConfig):
             config_logger.warning(f"AlignmentConfig.__post_init__: self.callbacks is not a dict but also not CallbackSettings. Type: {type(self.callbacks)}. Leaving as is.")
 
     def validate(self) -> bool:
-        valid_metrics = ["RQ", "NullSpace", "MI", "WeightSimilarity", "NodeRedundancy", "RankAlignment"]
-        if self.metric not in valid_metrics:
-            warnings.warn(f"Unusual alignment metric: {self.metric}. Supported: {valid_metrics}")
+        """Validate alignment settings."""
+        if not self.metric: # Check if the list is empty
+            raise ValueError("alignment_settings.metric list cannot be empty. Please specify at least one metric.")
         
+        valid_metrics_registry = ALIGNMENT_METRICS_REGISTRY.keys()
+        for metric_name in self.metric: # Iterate through the list of metrics
+            if not isinstance(metric_name, str):
+                raise ValueError(f"Invalid type for metric name in alignment_settings.metric: {metric_name}. Expected str.")
+            if metric_name.lower() not in valid_metrics_registry:
+                warnings.warn(f"Specified metric '{metric_name}' in alignment_settings.metric not in ALIGNMENT_METRICS_REGISTRY. Available: {list(valid_metrics_registry)}")
+
         valid_cnn_modes = ["unfold", "patchwise", "batch_patch_combined", "filter_patch_summary", "filter_specific_covariance_rq"]
         if self.cnn_mode not in valid_cnn_modes:
             raise ValueError(f"Invalid CNN mode: '{self.cnn_mode}'. Supported: {valid_cnn_modes}")
@@ -463,6 +484,7 @@ class AlignmentConfig(BaseConfig):
         
         if self.callbacks is not None:
             if not isinstance(self.callbacks, CallbackSettings):
+                # This check might be redundant if __post_init__ handles it, but good for safety
                 raise ValueError(f"AlignmentConfig.callbacks is not a CallbackSettings instance after __post_init__. Type: {type(self.callbacks)}")
             self.callbacks.validate()
         return True

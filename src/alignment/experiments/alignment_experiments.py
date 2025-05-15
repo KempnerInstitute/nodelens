@@ -34,10 +34,10 @@ from alignment.utils.core import setup_logging
 from alignment.utils.plotting import (
     plot_dropout_results,
     plot_experiment_summary,
-    plot_mean_rq_of_pruned_nodes,
+    plot_mean_score_of_pruned_nodes,
     plot_per_layer_pruning_percentage,
     plot_per_layer_contribution_to_pruning,
-    plot_rq_stats_per_layer,
+    plot_score_stats_per_layer,
     plot_layer_isolated_dropout_results,
     log_plots_to_wandb,
     plot_metric_evolution,
@@ -132,49 +132,57 @@ class AlignmentExperiment(Experiment):
         self.pruning_metric_instances: List[AlignmentMetric] = []
 
         if hasattr(self.config, "alignment_settings") and self.config.alignment_settings is not None:
-            primary_metric_name = self.config.alignment_settings.metric # This is legacy, might be the first of pruning_metrics
-            all_pruning_metric_names = self.config.alignment_settings.pruning_metrics
-            scale_by_norm_default = self.config.alignment_settings.scale_by_norm # Default scale_by_norm
+            # MODIFIED: Read directly from self.config.alignment_settings.metric (which is now a list)
+            metric_names_from_config = self.config.alignment_settings.metric
+            scale_by_norm_default = self.config.alignment_settings.scale_by_norm # Global default
 
-            if not all_pruning_metric_names: # Fallback if pruning_metrics is empty
-                logger.warning("AlignmentConfig.pruning_metrics is empty. Falling back to AlignmentConfig.metric for primary metric.")
-                all_pruning_metric_names = [primary_metric_name] if primary_metric_name else []
-                if not all_pruning_metric_names: # If still empty, use RQ as a hard default
-                     all_pruning_metric_names = ["RQ"]
-                     logger.warning("No pruning metrics specified. Defaulting to RQ.")
+            if not metric_names_from_config or not isinstance(metric_names_from_config, list):
+                logger.warning(
+                    "AlignmentConfig.metric is empty, not a list, or not specified. Defaulting to [\"RQ\"]."
+                )
+                metric_names_from_config = ["RQ"]
 
-
-            for metric_name in all_pruning_metric_names:
-                # TODO: Allow per-metric scale_by_norm if config supports it in the future.
-                # For now, use the global scale_by_norm for all.
+            for metric_name in metric_names_from_config:
+                if not isinstance(metric_name, str):
+                    logger.warning(f"Invalid metric name type found in config: {metric_name}. Skipping.")
+                    continue
                 try:
                     instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm_default)
                     if instance:
                         self.pruning_metric_instances.append(instance)
                         if self.primary_metric is None: # Assign the first valid instance as primary
                             self.primary_metric = instance
-                    else:
-                        logger.error(f"Metric '{metric_name}' could not be initialized from registry.")
+                    # else: # get_metric raises ValueError if metric not found, so no explicit None check needed here
+                    #    logger.error(f"Metric '{metric_name}' could not be initialized from registry (get_metric returned None).")
                 except ValueError as e:
                     logger.error(f"Error initializing metric '{metric_name}': {e}")
             
             if not self.pruning_metric_instances:
-                logger.error("No pruning metric instances could be initialized. Falling back to default RQ.")
-                default_align_conf = AlignmentConfig()
-                self.primary_metric = get_metric(name=default_align_conf.metric, scale_by_norm=default_align_conf.scale_by_norm)
-                self.pruning_metric_instances = [self.primary_metric]
+                logger.error("No pruning metric instances could be initialized from config. Falling back to default RQ.")
+                # Fallback to a hardcoded default if all else fails
+                try:
+                    self.primary_metric = get_metric(name="RQ", scale_by_norm=scale_by_norm_default)
+                    self.pruning_metric_instances = [self.primary_metric]
+                except ValueError as e:
+                    logger.critical(f"CRITICAL: Default RQ metric could not be initialized: {e}. Pruning experiments may fail.")
+                    # self.pruning_metric_instances will remain empty, and self.primary_metric None.
 
             if self.primary_metric:
                  logger.info(f"Initialized primary metric: {self.primary_metric.name} (scale_by_norm={self.primary_metric.scale_by_norm})")
+            else:
+                 logger.warning("No primary metric could be initialized.")
             logger.info(f"Initialized {len(self.pruning_metric_instances)} pruning metric instances: {[m.name for m in self.pruning_metric_instances]}")
 
         else:
-            logger.error("alignment_settings not found in config or metric not specified!")
-            default_align_conf = AlignmentConfig()
-            self.primary_metric = get_metric(name=default_align_conf.metric, scale_by_norm=default_align_conf.scale_by_norm)
-            self.pruning_metric_instances = [self.primary_metric]
-            logger.warning(f"Falling back to default alignment metric: {self.primary_metric.name}")
-            logger.info(f"Initialized pruning metric instances: {[m.name for m in self.pruning_metric_instances]}")
+            logger.error("alignment_settings not found in config!")
+            # Fallback to a hardcoded default if alignment_settings is entirely missing
+            try:
+                self.primary_metric = get_metric(name="RQ", scale_by_norm=False) # Provide a default scale_by_norm
+                self.pruning_metric_instances = [self.primary_metric]
+                logger.warning(f"Falling back to default alignment metric: {self.primary_metric.name}")
+                logger.info(f"Initialized pruning metric instances: {[m.name for m in self.pruning_metric_instances]}")
+            except ValueError as e:
+                logger.critical(f"CRITICAL: Default RQ metric could not be initialized on fallback: {e}. Pruning experiments may fail.")
 
     # --- NEW: Method to initialize loss criterion ---
     def _initialize_loss_criterion(self):
@@ -425,128 +433,136 @@ class AlignmentExperiment(Experiment):
     def _run_plotting_and_saving(self):
         """Handles plotting and saving results after the main experiment logic."""
         logger.info(f"Completed main computation for {self.config.experiment_type} experiment")
-        overall_plot_files_generated: List[str] = [] # Collect all plot files from all metrics
+        overall_plot_files_generated: List[str] = []
 
-        # training_history is now expected to be at the top level of self.results for multi-metric experiments
-        # or within the single result dict for eigenvector_dropout.
-        training_history_data = self.results.get("training_history")
+        training_history_data = self.results.get("training_history") # training_history is top-level
 
-        # Determine the base results dictionary to iterate over if multiple metrics were processed.
-        # For single-metric experiments like eigenvector_dropout, results_to_process_by_metric will contain one entry.
         results_to_process_by_metric: Dict[str, Dict[str, Any]] = {}
 
-        if self.config.experiment_type in ["progressive_dropout", "layer_isolated_pruning", "cascading_layer_pruning"]:
-            # These experiments now produce results keyed by metric name (excluding training_history)
+        if self.config.experiment_type in ["progressive_dropout", "layer_isolated_pruning", "cascading_layer_pruning", "eigenvector_dropout"]:
+            # These experiments now produce results directly as {metric_name: metric_results_dict, ...}
+            # (excluding training_history which is handled separately)
             for key, value in self.results.items():
-                if key != "training_history":
+                if key != "training_history" and isinstance(value, dict): # Ensure value is a dict (metric_results)
                     results_to_process_by_metric[key] = value
         elif self.config.experiment_type == "alignment_analysis":
-            # Progressive dropout part is multi-metric, eigenvector is single (primary) metric
+            # AlignmentAnalysis nests results under "progressive_dropout" and "eigenvector_dropout"
+            # Both of these will now be dicts keyed by metric name.
             if "progressive_dropout" in self.results and isinstance(self.results["progressive_dropout"], dict):
-                for key, value in self.results["progressive_dropout"].items():
-                    if key != "training_history": # training_history might be nested here too
-                         results_to_process_by_metric[f"prog_{key}"] = value # Prefix to distinguish
-            if "eigenvector_dropout" in self.results:
-                # Eigenvector uses the primary metric, so its name is effectively self.primary_metric.name
-                primary_metric_name = self.primary_metric.name if self.primary_metric else "eigenvector_primary"
-                results_to_process_by_metric[primary_metric_name] = self.results["eigenvector_dropout"]
-        elif self.config.experiment_type == "eigenvector_dropout":
-            # Eigenvector uses the primary metric
-            primary_metric_name = self.primary_metric.name if self.primary_metric else "eigenvector_primary"
-            results_to_process_by_metric[primary_metric_name] = self.results
+                for metric_name, metric_results in self.results["progressive_dropout"].items():
+                    if metric_name != "training_history" and isinstance(metric_results, dict):
+                         results_to_process_by_metric[f"prog_{metric_name}"] = metric_results
+            
+            if "eigenvector_dropout" in self.results and isinstance(self.results["eigenvector_dropout"], dict):
+                for metric_name, metric_results in self.results["eigenvector_dropout"].items():
+                    if metric_name != "training_history" and isinstance(metric_results, dict):
+                         results_to_process_by_metric[f"eig_{metric_name}"] = metric_results 
         else:
-            # Fallback or other experiment types that might not be multi-metric yet
-            logger.warning(f"Plotting logic for experiment type {self.config.experiment_type} might not fully support multi-metric results structure.")
-            # Attempt to plot if self.results looks like a single metric's results
-            if isinstance(self.results, dict) and "accuracies" in self.results: # Basic check
-                 results_to_process_by_metric["unknown_metric"] = self.results
+            logger.warning(f"Plotting logic for experiment type {self.config.experiment_type} might not fully support multi-metric results structure or is not a recognized experiment type for standard plotting.")
+            # Attempt to plot if self.results itself looks like a single metric's results (legacy or unknown type)
+            if isinstance(self.results, dict) and "accuracies" in self.results and "dropout_fractions" in self.results:
+                 logger.info("Attempting to plot self.results as a single metric's data.")
+                 results_to_process_by_metric["unknown_metric_type_direct_results"] = self.results
 
-        if not results_to_process_by_metric:
-            logger.warning("No metric-specific results found to plot. Skipping plotting.")
+        if not results_to_process_by_metric and not (self.config.experiment_type == "alignment_analysis" and not self.config.alignment_settings.run_progressive and not self.config.alignment_settings.run_eigenvector) :
+            # Only warn if not an alignment_analysis run where both sub-experiments were disabled
+            logger.warning("No metric-specific results found to plot. Skipping main plotting loop.")
             if "error" in self.results:
                  logger.error(f"Experiment run resulted in an error: {self.results['error']}")
-            # Save raw results even if plotting is skipped
-            results_filename = f"{self.config.experiment_name}_{self.config.experiment_type}_results.pkl"
+            # Save raw results even if plotting is skipped (base self.results)
+            results_filename = f"{self.config.experiment_name}_{self.config.experiment_type}_main_results.pkl"
             self.save_results(self.results, filename=results_filename)
-            return
-
+            # Still attempt to plot metric evolution if tracker ran
+            # This plotting part is moved after the main loop for results_to_process_by_metric
+        
         # Loop through each metric's results and generate plots
-        for metric_name, metric_specific_results in results_to_process_by_metric.items():
-            if not isinstance(metric_specific_results, dict) or "error" in metric_specific_results:
-                logger.warning(f"Skipping plotting for metric '{metric_name}' due to missing data or error: {metric_specific_results.get('error')}")
+        for metric_key_in_plot_dict, metric_specific_results_for_plot in results_to_process_by_metric.items():
+            # metric_key_in_plot_dict could be "RQ", "MI_G", or "prog_RQ", "eig_RQ" etc.
+            # We need the actual metric name for axis labels and consistent naming.
+            actual_metric_name_for_plot = metric_key_in_plot_dict
+            if metric_key_in_plot_dict.startswith("prog_"):
+                actual_metric_name_for_plot = metric_key_in_plot_dict[len("prog_"):]
+            elif metric_key_in_plot_dict.startswith("eig_"):
+                actual_metric_name_for_plot = metric_key_in_plot_dict[len("eig_"):]
+            # else, it's a direct metric name or "unknown_metric_type_direct_results"
+
+            if not isinstance(metric_specific_results_for_plot, dict) or "error" in metric_specific_results_for_plot:
+                logger.warning(f"Skipping plotting for metric key '{metric_key_in_plot_dict}' due to missing data or error: {metric_specific_results_for_plot.get('error')}")
                 continue
 
-            logger.info(f"[Plotting] Generating plots for metric: {metric_name}")
-            metric_plot_files: List[str] = []
+            logger.info(f"[Plotting] Generating plots for metric key: {metric_key_in_plot_dict} (Actual Metric: {actual_metric_name_for_plot})")
+            current_metric_plot_files: List[str] = [] # Renamed to avoid conflict with outer scope if this was nested differently before
 
-            title_prefix_with_metric = f"{self.config.experiment_name}_{metric_name}"
+            # Use metric_key_in_plot_dict for unique filenames if it includes prefixes like prog_ or eig_
+            title_prefix_for_current_plot = f"{self.config.experiment_name}_{metric_key_in_plot_dict}"
             show_all_plots = self.config.show_all
-            pruning_mode_plot = self.config.pruning_settings.dropout_pruning_mode
-            dropout_mode_plot = self.config.pruning_settings.dropout_mode
+            pruning_mode_plot = self.config.pruning_settings.dropout_pruning_mode # This is a global setting
+            dropout_mode_plot = self.config.pruning_settings.dropout_mode # Global
 
-            # Standard plots (Progressive, Cascading, Eigenvector)
-            # For AlignmentAnalysis, this will apply to prog_{metric} and the primary_metric for eigenvector
-            if "accuracies" in metric_specific_results: # A common key for these types
+            # Determine effective experiment type for this specific plot based on metric_key_in_plot_dict
+            effective_exp_type_for_plot = self.config.experiment_type
+            if metric_key_in_plot_dict.startswith("prog_"):
+                effective_exp_type_for_plot = "progressive_dropout"
+            elif metric_key_in_plot_dict.startswith("eig_"):
+                effective_exp_type_for_plot = "eigenvector_dropout"
+            # For direct metric keys, effective_exp_type_for_plot remains self.config.experiment_type
+
+            if "accuracies" in metric_specific_results_for_plot: 
                 effective_pruning_mode_title = pruning_mode_plot
-                current_exp_type_for_plot = self.config.experiment_type
-                if metric_name.startswith("prog_") and self.config.experiment_type == "alignment_analysis":
-                    current_exp_type_for_plot = "progressive_dropout"
-                elif metric_name == (self.primary_metric.name if self.primary_metric else "eigenvector_primary") and \
-                     self.config.experiment_type in ["alignment_analysis", "eigenvector_dropout"]:
-                    current_exp_type_for_plot = "eigenvector_dropout"
-                elif self.config.experiment_type == "cascading_layer_pruning":
-                     effective_pruning_mode_title = "cascading_layer" # Override for cascading title
+                if effective_exp_type_for_plot == "cascading_layer_pruning":
+                     effective_pruning_mode_title = "cascading_layer"
                 
-                # Use generic strategy keys "high_score", "low_score" if present
-                # The plot_dropout_results function might need slight adjustment if it expects specific keys like "high_rq"
-                # For now, we assume it can handle the data if "accuracies" field matches structure.
-                acc_plots = plot_dropout_results(metric_specific_results, self.figure_path, title_prefix_with_metric, effective_pruning_mode_title, dropout_mode_plot)
-                if acc_plots: metric_plot_files.extend(acc_plots if isinstance(acc_plots, list) else [acc_plots])
+                acc_plots = plot_dropout_results(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, effective_pruning_mode_title, dropout_mode_plot, metric_name_for_plot=actual_metric_name_for_plot)
+                if acc_plots: current_metric_plot_files.extend(acc_plots if isinstance(acc_plots, list) else [acc_plots])
 
-                if metric_specific_results.get("pruning_details") and metric_specific_results.get("pre_pruning_layer_stats"):
-                    mean_score_plot = plot_mean_rq_of_pruned_nodes(metric_specific_results, self.figure_path, title_prefix_with_metric, show_all_plots, metric_name_for_axis=metric_name)
-                    if mean_score_plot: metric_plot_files.append(mean_score_plot)
+                if metric_specific_results_for_plot.get("pruning_details") and metric_specific_results_for_plot.get("pre_pruning_layer_stats"):
+                    mean_score_plot = plot_mean_score_of_pruned_nodes(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, show_all_plots, metric_name_for_axis=actual_metric_name_for_plot)
+                    if mean_score_plot: current_metric_plot_files.append(mean_score_plot)
 
-                    if current_exp_type_for_plot == "progressive_dropout":
-                        percent_plot = plot_per_layer_pruning_percentage(metric_specific_results, self.figure_path, title_prefix_with_metric, show_all_plots)
-                        if percent_plot: metric_plot_files.append(percent_plot)
-                        contrib_plot = plot_per_layer_contribution_to_pruning(metric_specific_results, self.figure_path, title_prefix_with_metric, show_all_plots)
-                        if contrib_plot: metric_plot_files.append(contrib_plot)
+                    if effective_exp_type_for_plot == "progressive_dropout":
+                        percent_plot = plot_per_layer_pruning_percentage(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, show_all_plots)
+                        if percent_plot: current_metric_plot_files.append(percent_plot)
+                        contrib_plot = plot_per_layer_contribution_to_pruning(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, show_all_plots)
+                        if contrib_plot: current_metric_plot_files.append(contrib_plot)
                 
-                if metric_specific_results.get("pre_pruning_layer_stats"):
-                    score_stats_plot = plot_rq_stats_per_layer(metric_specific_results, self.figure_path, title_prefix_with_metric, show_all_plots, metric_name_for_axis=metric_name)
-                    if score_stats_plot: metric_plot_files.append(score_stats_plot)
+                if metric_specific_results_for_plot.get("pre_pruning_layer_stats"):
+                    score_stats_plot = plot_score_stats_per_layer(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, show_all_plots, metric_name_for_axis=actual_metric_name_for_plot)
+                    if score_stats_plot: current_metric_plot_files.append(score_stats_plot)
 
-            # Layer Isolated Pruning plots
-            if self.config.experiment_type == "layer_isolated_pruning" and "accuracies_isolated" in metric_specific_results:
-                iso_acc_plots = plot_layer_isolated_dropout_results(metric_specific_results, self.figure_path, title_prefix_with_metric, show_all_plots)
-                if iso_acc_plots: metric_plot_files.extend(iso_acc_plots)
+            if effective_exp_type_for_plot == "layer_isolated_pruning" and "accuracies_isolated" in metric_specific_results_for_plot:
+                iso_acc_plots = plot_layer_isolated_dropout_results(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, show_all_plots, metric_name_for_plot=actual_metric_name_for_plot)
+                if iso_acc_plots: current_metric_plot_files.extend(iso_acc_plots)
                 
-                if metric_specific_results.get("pre_pruning_layer_stats"):
-                    iso_score_stats_plot = plot_rq_stats_per_layer(metric_specific_results, self.figure_path, title_prefix_with_metric, show_all_plots, metric_name_for_axis=metric_name)
-                    if iso_score_stats_plot: metric_plot_files.append(iso_score_stats_plot)
+                if metric_specific_results_for_plot.get("pre_pruning_layer_stats"):
+                    iso_score_stats_plot = plot_score_stats_per_layer(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, show_all_plots, metric_name_for_axis=actual_metric_name_for_plot)
+                    if iso_score_stats_plot: current_metric_plot_files.append(iso_score_stats_plot)
                 
-                if metric_specific_results.get("pruning_details") and metric_specific_results.get("pre_pruning_layer_stats"):
-                    iso_mean_score_pruned_plot = plot_mean_rq_of_pruned_nodes(metric_specific_results, self.figure_path, title_prefix_with_metric, show_all_plots, metric_name_for_axis=metric_name)
-                    if iso_mean_score_pruned_plot: metric_plot_files.append(iso_mean_score_pruned_plot)
+                if metric_specific_results_for_plot.get("pruning_details") and metric_specific_results_for_plot.get("pre_pruning_layer_stats"):
+                    iso_mean_score_pruned_plot = plot_mean_score_of_pruned_nodes(metric_specific_results_for_plot, self.figure_path, title_prefix_for_current_plot, show_all_plots, metric_name_for_axis=actual_metric_name_for_plot)
+                    if iso_mean_score_pruned_plot: current_metric_plot_files.append(iso_mean_score_pruned_plot)
             
-            overall_plot_files_generated.extend(metric_plot_files)
+            overall_plot_files_generated.extend(current_metric_plot_files)
 
         # Summary plot for alignment_analysis (compares progressive vs eigenvector for primary metric)
         if self.config.experiment_type == "alignment_analysis":
-            prog_results_for_summary = results_to_process_by_metric.get(f"prog_{self.primary_metric.name if self.primary_metric else 'RQ'}")
-            eig_results_for_summary = results_to_process_by_metric.get(self.primary_metric.name if self.primary_metric else "eigenvector_primary")
+            primary_metric_name_for_summary = self.primary_metric.name if self.primary_metric else "RQ" # Fallback if primary_metric is somehow None
+            prog_key_for_summary = f"prog_{primary_metric_name_for_summary}"
+            eig_key_for_summary = f"eig_{primary_metric_name_for_summary}"
+
+            prog_results_for_summary = results_to_process_by_metric.get(prog_key_for_summary)
+            eig_results_for_summary = results_to_process_by_metric.get(eig_key_for_summary)
+            
             if prog_results_for_summary and eig_results_for_summary:
                 summary_data_for_plot = {
                     "progressive_dropout": prog_results_for_summary,
-                    "eigenvector_dropout": eig_results_for_summary
+                    "eigenvector_dropout": eig_results_for_summary 
                 }
-                title_prefix_summary = f"{self.config.experiment_name}_{self.primary_metric.name if self.primary_metric else 'summary'}"
+                title_prefix_summary = f"{self.config.experiment_name}_{primary_metric_name_for_summary}_summary"
                 summary_path = plot_experiment_summary(summary_data_for_plot, self.figure_path, title_prefix_summary)
                 if summary_path:
                     overall_plot_files_generated.append(summary_path)
             else:
-                logger.warning("Could not generate summary plot for alignment_analysis: missing progressive or eigenvector results for the primary metric.")
+                logger.warning(f"Could not generate summary plot for alignment_analysis: missing progressive ('{prog_key_for_summary}') or eigenvector ('{eig_key_for_summary}') results for the primary metric.")
 
         # Plot metric evolution from tracker (metric-specific by design)
         if self.metric_tracker_instance and self.metric_tracker_instance.metrics_evolution:
@@ -761,10 +777,9 @@ class EigenvectorDropoutExperiment(AlignmentExperiment):
     """Experiment for eigenvector-based dropout."""
 
     def _run_specific_logic(self) -> Dict:
-        """Runs the eigenvector dropout experiment."""
+        """Runs the eigenvector dropout experiment for each specified metric."""
         logger.info("Running Eigenvector Dropout Experiment specific logic")
 
-        # Common setup
         if not self.networks or self.dataset is None:
             raise RuntimeError("Networks or dataset not initialized before run(). Ensure execute_experiment is called.")
 
@@ -772,14 +787,24 @@ class EigenvectorDropoutExperiment(AlignmentExperiment):
             logger.error("No networks available for Eigenvector Dropout Experiment.")
             return {"error": "No networks found."}
 
-        network_to_use = self.networks[0]  # Eigenvector typically runs on one network
-        logger.info(f"Using the first network replicate (of {len(self.networks)}) for eigenvector dropout.")
+        # MODIFIED: Iterate over all pruning_metric_instances
+        metrics_to_process = self.pruning_metric_instances
+        if not metrics_to_process:
+            logger.error("No metrics initialized properly for Eigenvector Dropout!")
+            # Attempt to re-initialize if necessary, though _initialize_metric should have handled fallbacks
+            self._initialize_metric()
+            metrics_to_process = self.pruning_metric_instances
+            if not metrics_to_process:
+                # If still no metrics after re-init, this is a critical failure.
+                return {"error": "Failed to initialize any metrics for Eigenvector Dropout."}
 
-        # Get necessary configs
+        overall_results_by_metric: Dict[str, Dict] = {}
+        network_to_use = self.networks[0]  # Eigenvector typically runs on one network replicate
+        logger.info(f"Using the first network replicate (of {len(self.networks)}) for all eigenvector dropout runs.")
+
         pruning_config = self.config.pruning_settings
-        alignment_config = self.config.alignment_settings
+        # alignment_config = self.config.alignment_settings # Not directly used here, metric instance has scale_by_norm
 
-        # Prepare dropout fractions
         dropout_min = pruning_config.dropout_min
         dropout_max = pruning_config.dropout_max
         num_dropout_steps = pruning_config.dropout_steps
@@ -795,41 +820,36 @@ class EigenvectorDropoutExperiment(AlignmentExperiment):
 
         dropout_mode_val = pruning_config.dropout_mode
         pruning_mode_for_eigen = pruning_config.dropout_pruning_mode
-        metric_to_use = self.primary_metric
 
-        if metric_to_use is None:
-            logger.error("Primary metric not initialized for eigenvector dropout.")
-            self._initialize_metric()
-            metric_to_use = self.primary_metric
-            if metric_to_use is None:
-                raise ValueError("Failed to initialize primary metric for eigenvector dropout.")
+        for metric_to_use in metrics_to_process:
+            current_metric_name = metric_to_use.name
+            logger.info(f"Eigenvector Dropout: Processing for metric: {current_metric_name}")
+            logger.info(f"  Using metric: {current_metric_name}, PruningMode: {pruning_mode_for_eigen}, DropoutMode: {dropout_mode_val}")
 
-        logger.info(f"Using metric: {metric_to_use.name}, PruningMode: {pruning_mode_for_eigen}, DropoutMode: {dropout_mode_val}")
+            single_metric_results = {}
+            try:
+                # run_eigenvector_dropout_experiment is the manager function
+                single_metric_results = run_eigenvector_dropout_experiment(
+                    network=network_to_use, # Pass a fresh copy if manager modifies it, though it shouldn't for just one frac
+                    dataset=self.dataset,
+                    dropout_fractions=dropout_fractions,
+                    metric=metric_to_use, # Current metric in the loop
+                    device=self.device,
+                    dropout_mode=dropout_mode_val,
+                    pruning_mode=pruning_mode_for_eigen,
+                    show_progress=True, # Or self.config.show_progress
+                    debug_mode=self.debug_mode,
+                )
+            except Exception as e:
+                logger.error(f"Error during run_eigenvector_dropout_experiment call for metric {current_metric_name}: {str(e)}")
+                single_metric_results = {"error": str(e)}
+                if self.debug_mode:
+                    logger.error(traceback.format_exc())
+            
+            overall_results_by_metric[current_metric_name] = single_metric_results
 
-        # Call the manager function (or directly the dropout function if manager is simple)
-        # The dropout_manager module has run_eigenvector_dropout_experiment
-        results_from_manager = {}
-        try:
-            results_from_manager = run_eigenvector_dropout_experiment(
-                network=network_to_use,
-                dataset=self.dataset,
-                dropout_fractions=dropout_fractions,
-                metric=metric_to_use,
-                device=self.device,
-                dropout_mode=dropout_mode_val,
-                pruning_mode=pruning_mode_for_eigen,
-                show_progress=True,
-                debug_mode=self.debug_mode,
-            )
-        except Exception as e:
-            logger.error(f"Error during run_eigenvector_dropout_experiment call: {str(e)}")
-            results_from_manager = {"error": str(e)}
-            if self.debug_mode:
-                logger.error(traceback.format_exc())
-
-        # Add training history
-        results_from_manager["training_history"] = self.training_history
-        return results_from_manager
+        overall_results_by_metric["training_history"] = self.training_history
+        return overall_results_by_metric
 
 
 class LayerIsolatedPruningExperiment(AlignmentExperiment):
@@ -918,51 +938,50 @@ class AlignmentAnalysisExperiment(AlignmentExperiment):
     """Meta-experiment that runs multiple alignment analyses (e.g., progressive and eigenvector)."""
 
     def _run_specific_logic(self) -> Dict:
-        """Runs the alignment analysis experiment."""
+        """Runs the alignment analysis experiment, iterating over metrics for both sub-experiments."""
         logger.info("Running Alignment Analysis Experiment specific logic")
 
-        # Common setup
         if not self.networks or self.dataset is None:
             raise RuntimeError("Networks or dataset not initialized before run(). Ensure execute_experiment is called.")
 
-        analysis_results = {"alignment_analysis": True}  # Mark that this meta-experiment ran
+        analysis_results: Dict[str, Any] = {"alignment_analysis": True} 
 
-        # Run Progressive Dropout if configured
-        if self.config.alignment_settings.run_progressive:
-            logger.info("Running progressive dropout as part of alignment analysis")
-            
-            pruning_config = self.config.pruning_settings
-            alignment_config = self.config.alignment_settings
-            dropout_min = pruning_config.dropout_min
-            dropout_max = pruning_config.dropout_max
-            num_dropout_steps = pruning_config.dropout_steps
-            if num_dropout_steps <= 0:
-                _fractions = [0.0, dropout_max]
-            elif num_dropout_steps == 1:
-                _fractions = [dropout_min, dropout_max]
-            else:
-                _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
-            if 0.0 not in _fractions:
-                _fractions = [0.0] + _fractions
-            dropout_fractions = sorted(list(set(_fractions)))
-            
-            # MODIFIED: Use the list of pruning_metric_instances
-            metrics_to_use_for_progressive = self.pruning_metric_instances
-            if not metrics_to_use_for_progressive:
-                # Attempt to re-initialize if empty (should have been caught by _initialize_metric earlier)
-                self._initialize_metric()
-                metrics_to_use_for_progressive = self.pruning_metric_instances
-                if not metrics_to_use_for_progressive:
-                     raise ValueError("No metrics initialized for progressive dropout in analysis.")
-            
-            logger.info(f"AlignmentAnalysis using metrics for progressive dropout: {[m.name for m in metrics_to_use_for_progressive]}")
+        pruning_config = self.config.pruning_settings
+        alignment_config = self.config.alignment_settings # For cnn_mode, force_cpu etc.
 
+        # Prepare dropout fractions (common for both sub-experiments)
+        dropout_min = pruning_config.dropout_min
+        dropout_max = pruning_config.dropout_max
+        num_dropout_steps = pruning_config.dropout_steps
+        if num_dropout_steps <= 0: _fractions = [0.0, dropout_max]
+        elif num_dropout_steps == 1: _fractions = [dropout_min, dropout_max]
+        else: _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
+        if 0.0 not in _fractions: _fractions = [0.0] + _fractions
+        dropout_fractions = sorted(list(set(_fractions)))
+        
+        metrics_to_process = self.pruning_metric_instances
+        if not metrics_to_process:
+            logger.error("No metrics initialized for Alignment Analysis!")
+            self._initialize_metric() # Re-attempt initialization
+            metrics_to_process = self.pruning_metric_instances
+            if not metrics_to_process:
+                # If still no metrics, this is a critical failure.
+                analysis_results["error"] = "Failed to initialize any metrics for Alignment Analysis."
+                analysis_results["training_history"] = self.training_history # Still add history
+                return analysis_results
+
+        # Run Progressive Dropout if configured (will run for all metrics in metrics_to_process)
+        if alignment_config.run_progressive:
+            logger.info("Alignment Analysis: Running progressive dropout part for all configured metrics.")
+            logger.info(f"  Metrics for progressive dropout: {[m.name for m in metrics_to_process]}")
             try:
-                prog_results = run_progressive_dropout_experiment(
+                # run_progressive_dropout_experiment now handles the list of metrics internally
+                # and returns results keyed by metric name.
+                prog_results_by_metric = run_progressive_dropout_experiment(
                     self.networks,
                     self.dataset,
                     dropout_fractions,
-                    metrics_to_use_for_progressive, # MODIFIED
+                    metrics_to_process, # Pass the full list
                     self.device,
                     pruning_mode=pruning_config.dropout_pruning_mode,
                     dropout_mode=pruning_config.dropout_mode,
@@ -974,49 +993,46 @@ class AlignmentAnalysisExperiment(AlignmentExperiment):
                     configured_cnn_mode=alignment_config.cnn_mode,
                     configured_cnn_rq_op=alignment_config.cnn_rq_aggregation_op,
                 )
-                analysis_results["progressive_dropout"] = prog_results
+                analysis_results["progressive_dropout"] = prog_results_by_metric
             except Exception as e:
                 logger.error(f"Error running progressive dropout within analysis: {e}")
                 analysis_results["progressive_dropout"] = {"error": str(e)}
+        else:
+            logger.info("Alignment Analysis: Skipping progressive dropout part as per config.")
 
-        # Run Eigenvector Dropout if configured (uses self.primary_metric)
-        if self.config.alignment_settings.run_eigenvector:
-            logger.info("Running eigenvector dropout as part of alignment analysis")
+        # Run Eigenvector Dropout if configured (will also run for all metrics in metrics_to_process)
+        if alignment_config.run_eigenvector:
+            logger.info("Alignment Analysis: Running eigenvector dropout part for all configured metrics.")
+            logger.info(f"  Metrics for eigenvector dropout: {[m.name for m in metrics_to_process]}")
+            
             if not self.networks:
                 logger.error("No networks available for Eigenvector Dropout in analysis.")
-                analysis_results["eigenvector_dropout"] = {"error": "No networks found."}
-            elif self.primary_metric is None: # Eigenvector dropout uses one primary metric
-                logger.error("Primary metric not initialized for Eigenvector Dropout in analysis.")
-                analysis_results["eigenvector_dropout"] = {"error": "Primary metric not initialized."}
+                analysis_results["eigenvector_dropout"] = {"error": "No networks found for eigenvector part."}
             else:
-                network_to_use = self.networks[0]
-                pruning_config = self.config.pruning_settings
-                # Fractions prepared as above
-                dropout_min = pruning_config.dropout_min
-                dropout_max = pruning_config.dropout_max
-                num_dropout_steps = pruning_config.dropout_steps
-                if num_dropout_steps <= 0: _fractions = [0.0, dropout_max]
-                elif num_dropout_steps == 1: _fractions = [dropout_min, dropout_max]
-                else: _fractions = np.linspace(dropout_min, dropout_max, num_dropout_steps).tolist()
-                if 0.0 not in _fractions: _fractions = [0.0] + _fractions
-                dropout_fractions = sorted(list(set(_fractions)))
-
-                try:
-                    eig_results = run_eigenvector_dropout_experiment(
-                        network=network_to_use,
-                        dataset=self.dataset,
-                        dropout_fractions=dropout_fractions,
-                        metric=self.primary_metric, # Uses the primary_metric
-                        device=self.device,
-                        dropout_mode=pruning_config.dropout_mode,
-                        pruning_mode=pruning_config.dropout_pruning_mode,
-                        show_progress=True,
-                        debug_mode=self.debug_mode,
-                    )
-                    analysis_results["eigenvector_dropout"] = eig_results
-                except Exception as e:
-                    logger.error(f"Error running eigenvector dropout within analysis: {e}")
-                    analysis_results["eigenvector_dropout"] = {"error": str(e)}
+                network_to_use_for_eigen = self.networks[0] # Eigenvector typically uses one network replicate
+                eigen_results_by_metric: Dict[str, Dict] = {}
+                for metric_instance in metrics_to_process:
+                    current_metric_name = metric_instance.name
+                    logger.info(f"  Eigenvector Dropout for metric: {current_metric_name}")
+                    try:
+                        eig_single_metric_results = run_eigenvector_dropout_experiment(
+                            network=network_to_use_for_eigen, # Consider fresh copy for each metric if needed
+                            dataset=self.dataset,
+                            dropout_fractions=dropout_fractions,
+                            metric=metric_instance,
+                            device=self.device,
+                            dropout_mode=pruning_config.dropout_mode,
+                            pruning_mode=pruning_config.dropout_pruning_mode,
+                            show_progress=True,
+                            debug_mode=self.debug_mode,
+                        )
+                        eigen_results_by_metric[current_metric_name] = eig_single_metric_results
+                    except Exception as e:
+                        logger.error(f"Error running eigenvector dropout for metric {current_metric_name} within analysis: {e}")
+                        eigen_results_by_metric[current_metric_name] = {"error": str(e)}
+                analysis_results["eigenvector_dropout"] = eigen_results_by_metric
+        else:
+            logger.info("Alignment Analysis: Skipping eigenvector dropout part as per config.")
 
         analysis_results["training_history"] = self.training_history
         return analysis_results
