@@ -5,7 +5,8 @@
 # -----------------------------------------------------------------------------
 # I. Experiment Metadata & Core Execution
 # -----------------------------------------------------------------------------
-experiment_name: "mlp_mnist_nested_config_test"
+# experiment_name: "mlp_mnist_nested_config_test"
+experiment_name: "cnn_mnist_nested_config_test"
 experiment_type: "AUTO"    # Options: 
                                         #   "AUTO" - Automatically selects the best experiment type based on the dataset.
                                         #   "progressive_dropout" - Prunes nodes iteratively and measures performance.
@@ -76,17 +77,17 @@ model:
     hidden_dims: [100, 100, 50] # Example: Two hidden layers
     activation: "relu"
 
-  # (Example 2) CNN2P2 Parameters (if model_name: "CNN2P2") - Comment out if using MLP or external
-  # cnn2p2_params:
-  #   in_channels: 1
-  #   conv_channels: [32, 64]
-  #   kernel_sizes: [5, 5]
-  #   strides: [1, 1]
-  #   paddings: [2, 2]
-  #   pool_kernel_size: 2
-  #   pool_stride: 2
-  #   hidden_fc_dim: 128
-  #   example_input_hw: [28, 28]
+  # CNN2P2 Parameters (if model_name: "CNN2P2") - Comment out if using MLP or external
+  cnn2p2_params:
+    in_channels: 1
+    conv_channels: [32, 64]
+    kernel_sizes: [5, 5]
+    strides: [1, 1]
+    paddings: [2, 2]
+    pool_kernel_size: 2
+    pool_stride: 2
+    hidden_fc_dim: 128
+    example_input_hw: [28, 28]
 
   # (Example 3) External Model Parameters (if model_name indicates an external model, e.g., "torchvision_alexnet")
   # external_params:            # Used if model_name is "torchvision_alexnet", "hf_bert-base-uncased", or just "external"
@@ -127,7 +128,7 @@ alignment_settings:
   # process CNN features IF they receive them in a specific format (e.g. from AlignmentNetwork's precomputation).
   # The ModelConfig.cnn_mode determines how AlignmentNetwork itself preprocesses and provides these features.
   # These two should ideally be consistent or ModelConfig.cnn_mode dictates the format received by metric functions.
-  cnn_mode: "filter_specific_covariance_rq" # Options: "unfold", "patchwise", "batch_patch_combined", "filter_patch_summary", "filter_specific_covariance_rq"
+  cnn_mode: "unfold" # Options: "unfold", "patchwise", "batch_patch_combined", "filter_patch_summary", "filter_specific_covariance_rq"
   # Detailed options for alignment_settings.cnn_mode (how metrics process CNN features):
   #   "unfold": Assumes features are [batch_size * num_patches, feature_dim] (e.g., from AlignmentNetwork cnn_mode="unfold").
   #             For RQ, computes ONE covariance matrix from ALL these patch features (from ONE original data batch).
@@ -170,7 +171,7 @@ pruning_settings:
   dropout_mode: "scaled"                # "scaled" or "unscaled"
                                         #   "scaled": Remaining weights are scaled by 1/(1-p) (Inverted Dropout principle).
                                         #   "unscaled" (or "zero"): Weights are simply zeroed out.
-  dropout_pruning_mode: "cascading_layer"  # "global_joint", "layer_wise", "layer_isolated", "cascading_layer"
+  dropout_pruning_mode: "layer_wise"  # "global_joint", "layer_wise", "layer_isolated", "cascading_layer"
                                         #   "global_joint": Considers all nodes from all prunable layers together. Ranks globally by score and prunes top X% overall.
                                         #   "layer_wise": Prunes X% from *each* prunable layer independently, based on scores within that layer.
                                         #   "layer_isolated": (For experiment_type="layer_isolated_pruning") Prunes X% in one layer, evaluates, restores, then moves to next layer.
