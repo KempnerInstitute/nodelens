@@ -1,0 +1,43 @@
+alignment:
+  dropout_max: 0.9
+  dropout_min: 0.0
+  dropout_steps: 10
+  metric: rq
+  run_eigenvector: false
+  run_progressive: true
+  scale_by_norm: false
+checkpoint: {}
+checkpointing:
+  checkpoint_frequency: 1
+  load_checkpoint: false
+  save_checkpoints: false
+  use_wandb: true
+dataset:
+  batch_size: 1024
+  data_path: data
+  dataset_name: MNIST
+device: cuda
+experiment_type: progressive_dropout
+extra:
+  cnn_mode: unfold
+  dropout_mode: scaled
+  dropout_pruning_mode: layer_wise
+  exclude_classification_layer: true
+  training_method: fully_tensorized
+just_plot: false
+model:
+  alignment_layers: null
+  dropout_rate: 0.0
+  model_name: MLP
+no_save: false
+results_path: results
+save_networks: true
+show_all: false
+timestamp: null
+training:
+  epochs: 10
+  learning_rate: 0.001
+  optimizer: adam
+  replicates: 5
+  weight_decay: 0.0
+use_timestamp: true

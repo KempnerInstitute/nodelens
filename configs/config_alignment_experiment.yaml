@@ -1,0 +1,203 @@
+# Alignment Experiment Configuration
+# This configuration file defines parameters for neural network alignment experiments
+# that analyze the relationship between alignment, dropout, and network performance.
+
+# -----------------------------------------------------------------------------
+# I. Experiment Metadata & Core Execution
+# -----------------------------------------------------------------------------
+experiment_name: "mlp_mnist_nested_config_test"
+# experiment_name: "cnn_mnist_nested_config_test"
+experiment_type: "AUTO"    # Options: 
+                                        #   "AUTO" - Automatically selects the best experiment type based on the dataset.
+                                        #   "progressive_dropout" - Prunes nodes iteratively and measures performance.
+                                        #   "eigenvector_dropout" - Prunes based on eigenvectors of alignment metric.
+                                        #   "alignment_analysis"  - Runs both progressive and (if configured) eigenvector dropout.
+                                        #   "layer_isolated_pruning" - Prunes/evaluates one layer at a time (generates N plots).
+                                        #   "cascading_layer_pruning" - Prunes layers sequentially, L1 then L2 etc (simple version).
+results_path: "results"                   # Base path for saving all outputs.
+use_timestamp: true                     # If true, appends a YYYYMMDD_HHMMSS timestamp to `results_path`.
+debug_mode: false                       # MODIFIED: Set to true for testing callbacks
+
+device: "cuda"                          # "cuda", "cuda:0", "cpu". Ignored if use_ddp is true (device set by local_rank).
+save_networks: true                     # If true, final trained/pruned network models are saved.
+no_save: false                          # Master switch: if true, nothing is saved to disk.
+just_plot: false                        # If true, loads existing results and only generates plots.
+show_all: false                         # If true, matplotlib plots will be displayed interactively.
+seed: 422                              # MODIFIED: Set a seed for reproducibility during testing
+
+# --- NEW: DDP (Distributed Data Parallel) Configuration ---
+use_ddp: false                          # Set to true to enable DDP for multi-GPU training.
+                                        # Requires launching with torchrun or similar.
+                                        # e.g., torchrun --nproc_per_node=NUM_GPUS your_script.py --config this_file.yaml
+ddp_backend: "nccl"                     # DDP backend. "nccl" is recommended for NVIDIA GPUs.
+# ddp_rank, ddp_world_size, ddp_local_rank are set automatically by the launch script if use_ddp is true.
+# --- End DDP Configuration ---
+
+# -----------------------------------------------------------------------------
+# II. Dataset Configuration
+# -----------------------------------------------------------------------------
+# Maps to DatasetConfig in config.py
+dataset:
+  dataset_name: "MNIST"                 # Options: "MNIST", "CIFAR10", "CIFAR100", "ImageNet".
+  data_path: "./data"                   # Root directory for dataset files (use relative like ./data or absolute path).
+  batch_size: 1024                      # Batch size for DataLoaders (per GPU if DDP is used).
+  num_workers: 4                        # Number of worker processes for DataLoader (per DDP process).
+
+# -----------------------------------------------------------------------------
+# III. Model Configuration (NEW STRUCTURE)
+# -----------------------------------------------------------------------------
+# Maps to ModelConfig in config.py
+model:
+  # --- Identifier and Common Parameters ---
+  model_name: "MLP" # Options: "MLP", "CNN2P2", "torchvision_alexnet", "torchvision_resnet18", "hf_bert-base-uncased", etc.
+  output_dim: 10    # Number of output classes. Used by the final layer of the model.
+  dropout_rate: 0.0 # General dropout rate that internal model constructors might use.
+  
+  # --- CNN Mode for AlignmentNetwork Wrapper ---
+  # Defines how the AlignmentNetwork wrapper (if the model is a CNN) preprocesses its inputs for metric calculation.
+  # Options: "unfold", "patchwise", "batch_patch_combined". Default in code is "unfold".
+  cnn_mode: "unfold"
+
+  # --- Alignment Layers Specification (Common) ---
+  # Optional: Specify layers for AlignmentNetwork to analyze. Names must match model.named_modules().
+  # If null, AlignmentNetwork attempts to find all layers with weights.
+  alignment_layers: null 
+  # Example for AlexNet:
+  # alignment_layers:
+  #   "features.0": 0
+  #   "features.3": 1
+  #   "classifier.6": 5
+
+  # --- Model-Specific Parameter Blocks ---
+  # Only include and populate ONE of the following blocks based on model_name.
+  
+  # (Example 1) MLP Parameters (if model_name: "MLP")
+  mlp_params:
+    input_dim: 784
+    hidden_dims: [100, 100, 50] # Example: Two hidden layers
+    activation: "relu"
+
+  # CNN2P2 Parameters (if model_name: "CNN2P2") - Comment out if using MLP or external
+  cnn2p2_params:
+    in_channels: 1
+    conv_channels: [32, 64]
+    kernel_sizes: [5, 5]
+    strides: [1, 1]
+    paddings: [2, 2]
+    pool_kernel_size: 2
+    pool_stride: 2
+    hidden_fc_dim: 128
+    example_input_hw: [28, 28]
+
+  # (Example 3) External Model Parameters (if model_name indicates an external model, e.g., "torchvision_alexnet")
+  # external_params:            # Used if model_name is "torchvision_alexnet", "hf_bert-base-uncased", or just "external"
+  #   source: "torchvision"      # Options: "torchvision", "huggingface_transformers"
+  #   name_or_path: "alexnet"   # e.g., "alexnet", "resnet18" for torchvision; "bert-base-uncased" for hf
+  #   pretrained: true            # Load pretrained weights (True/False)
+  #   freeze_feature_extractor: false # Freeze all layers except the classifier (True/False)
+
+  # --- Ad-hoc Parameters for Internal Constructors (Use Sparingly) ---
+  extra_model_params: {} # For any other specific kwargs to pass to internal model constructors (create_mlp, create_cnn2p2)
+
+# -----------------------------------------------------------------------------
+# IV. Training Configuration
+# -----------------------------------------------------------------------------
+# Maps to TrainingConfig in config.py
+training:
+  epochs: 5  
+  replicates: 10 # For DDP, typically train 1 replicate, DDP handles data parallelism.
+                # If not DDP, can set >1 for multiple independent training runs.
+  optimizer: "Adam"
+  learning_rate: 0.001
+  momentum: 0.9         
+  loss: "cross_entropy"
+  training_method: "auto" # "auto", "sequential", "fully_tensorized". 
+                          # "fully_tensorized" is for non-DDP multi-replicate speedup on one GPU.
+                          # With DDP, "sequential" is typically used for the single replicate.
+  train_before_dropout: true # Whether to run initial training phase before dropout experiments.
+
+# -----------------------------------------------------------------------------
+# V. Alignment Metric Calculation Settings
+# -----------------------------------------------------------------------------
+# Maps to alignment_settings: AlignmentConfig in config.py
+alignment_settings:
+  metric:
+    - "RQ"
+    #- "MI_G"
+    #- "Node_Redundancy"
+  scale_by_norm: false                  # Global default for scale_by_norm
+  
+  # cnn_mode below is for how metric calculation functions (e.g. compute_all_node_scores)
+  # process CNN features IF they receive them in a specific format (e.g. from AlignmentNetwork's precomputation).
+  # The ModelConfig.cnn_mode determines how AlignmentNetwork itself preprocesses and provides these features.
+  # These two should ideally be consistent or ModelConfig.cnn_mode dictates the format received by metric functions.
+  cnn_mode: "unfold" # Options: "unfold", "patchwise", "batch_patch_combined", "filter_patch_summary", "filter_specific_covariance_rq"
+  # Detailed options for alignment_settings.cnn_mode (how metrics process CNN features):
+  #   "unfold": Assumes features are [batch_size * num_patches, feature_dim] (e.g., from AlignmentNetwork cnn_mode="unfold").
+  #             For RQ, computes ONE covariance matrix from ALL these patch features (from ONE original data batch).
+  #             Each filter's RQ is then computed against this single, global covariance matrix.
+  #             Matches typical RQ definition but can be memory-intensive.
+  #   "filter_patch_summary": (Specific to RQ metric) For each filter, computes a score based on its interaction 
+  #                           with every input patch it sees (e.g., mean/max of SQUARED COSINE SIMILARITIES 
+  #                           between filter and patches). Memory-efficient. Not mathematically identical to covariance-based RQ.
+  #   "filter_specific_covariance_rq": (Specific to RQ metric) For each filter, computes its full covariance-based RQ. 
+  #                                    The covariance is derived from all unfolded input patches (from ONE original batch) 
+  #                                    that the filter processes. Mathematically standard RQ per filter. Computationally intensive.
+  #   "patchwise": Expects features like [batch_size, num_patches, feature_dim]. Intended for metrics that process per-patch.
+  #                (Currently requires metric-specific support not fully integrated into general path for all metrics).
+  #   "batch_patch_combined": Similar effect to "unfold" for how data is shaped for global covariance calculations.
+
+  cnn_rq_aggregation_op: "mean"         # If cnn_mode for metric is "filter_patch_summary" for RQ: "mean", "max", "var", "sum".
+  force_cpu_for_large_metric_ops: false # If true, attempts to offload large tensor ops in metrics (like cov mat) to CPU.
+  
+  run_progressive: true                 # For experiment_type="alignment_analysis", whether to run progressive dropout part.
+  run_eigenvector: false                # For experiment_type="alignment_analysis", whether to run eigenvector dropout part.
+  
+  callbacks: # Configure metrics to track during training
+    alignment_metrics:
+      - name: "RQ"
+        num_batches: 5          # Batches for callback metrics. null for all test batches.
+      - name: "MI_G"             # Gaussian MI
+        num_batches: 5          
+      # - name: "PID_SI"        # PID Shared Info (Requires BROJA_2PID to be correctly placed and importable)
+      #   num_batches: 1
+
+# -----------------------------------------------------------------------------
+# VI. Pruning Experiment Settings
+# -----------------------------------------------------------------------------
+# Maps to pruning_settings: PruningConfig in config.py
+pruning_settings:
+  dropout_min: 0.0
+  dropout_max: 1.0
+  dropout_steps: 30 # Reduced for faster testing
+  
+  dropout_mode: "scaled"                # "scaled" or "unscaled"
+                                        #   "scaled": Remaining weights are scaled by 1/(1-p) (Inverted Dropout principle).
+                                        #   "unscaled" (or "zero"): Weights are simply zeroed out.
+  dropout_pruning_mode: "layer_wise"  # "global_joint", "layer_wise", "layer_isolated", "cascading_layer"
+                                        #   "global_joint": Considers all nodes from all prunable layers together. Ranks globally by score and prunes top X% overall.
+                                        #   "layer_wise": Prunes X% from *each* prunable layer independently, based on scores within that layer.
+                                        #   "layer_isolated": (For experiment_type="layer_isolated_pruning") Prunes X% in one layer, evaluates, restores, then moves to next layer.
+                                        #   "cascading_layer": Prunes L1, its output influences pruning of L2, etc. (Note: current batched impl. has limitations).
+  exclude_classification_layer: true    
+  use_multi_strategy_dropout: true     
+  num_batches_for_scores: null             # Number of batches to compute pruning scores on.
+  
+# -----------------------------------------------------------------------------
+# VII. Checkpointing & Logging Configuration
+# -----------------------------------------------------------------------------
+checkpointing:
+  save_checkpoints: false
+  checkpoint_frequency: 1
+  load_checkpoint: false
+  
+wandb:
+  use_wandb: true
+  wandb_project: "neural_alignment_refactored"
+  wandb_entity: "your_wandb_entity" # <<< IMPORTANT: Update with your W&B entity or remove line for default
+
+extra:
+  log_frequency: 1
+  log_images: true
+  detailed_logging: true
+  # dummy_extra_param: null 
