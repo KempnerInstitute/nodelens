@@ -452,6 +452,7 @@ class AlignmentMetric(Protocol):
         layer_inputs: Optional[torch.Tensor] = None, 
         layer_weights: Optional[torch.Tensor] = None, 
         layer_outputs: Optional[torch.Tensor] = None,
+        module_instance: Optional[nn.Module] = None, # Added module_instance
         device: Optional[Union[str, torch.device]] = None,
         min_samples_for_cov: int = 2, 
         target_outputs: Optional[torch.Tensor] = None,
@@ -472,6 +473,7 @@ class _AlignmentMetricImpl:
         layer_inputs: Optional[torch.Tensor] = None, 
         layer_weights: Optional[torch.Tensor] = None, 
         layer_outputs: Optional[torch.Tensor] = None,
+        module_instance: Optional[nn.Module] = None, # Added module_instance
         device: Optional[Union[str, torch.device]] = None,
         min_samples_for_cov: int = 2,
         target_outputs: Optional[torch.Tensor] = None,
@@ -488,77 +490,106 @@ class _AlignmentMetricImpl:
             else: raise ValueError("Cannot determine device for metric calculation.")
         eff_device = torch.device(device) if isinstance(device, str) else device
         
-        # Log input tensors for debugging
-        logger.debug(f"compute_per_node_scores({self.name}): Tensor availability - " +  # Ensure this is debug
+        logger.debug(f"compute_per_node_scores({self.name}): Tensor availability - " +
                    f"inputs: {layer_inputs is not None}, weights: {layer_weights is not None}, " +
-                   f"outputs: {layer_outputs is not None}")
+                   f"outputs: {layer_outputs is not None}, module: {module_instance is not None}")
         
         if layer_inputs is not None:
-            logger.debug(f"compute_per_node_scores({self.name}): layer_inputs.shape = {layer_inputs.shape}, " +  # Ensure this is debug
+            logger.debug(f"compute_per_node_scores({self.name}): layer_inputs.shape = {layer_inputs.shape}, " +
                        f"dtype = {layer_inputs.dtype}, device = {layer_inputs.device}")
         if layer_weights is not None:
-            logger.debug(f"compute_per_node_scores({self.name}): layer_weights.shape = {layer_weights.shape}, " +  # Ensure this is debug
+            logger.debug(f"compute_per_node_scores({self.name}): layer_weights.shape = {layer_weights.shape}, " +
                        f"dtype = {layer_weights.dtype}, device = {layer_weights.device}")
         if layer_outputs is not None:
-            logger.debug(f"compute_per_node_scores({self.name}): layer_outputs.shape = {layer_outputs.shape}, " +  # Ensure this is debug
+            logger.debug(f"compute_per_node_scores({self.name}): layer_outputs.shape = {layer_outputs.shape}, " +
                        f"dtype = {layer_outputs.dtype}, device = {layer_outputs.device}")
         
-        # Extract relevant kwargs for specific metric functions, pass others via **fn_kwargs
         fn_kwargs = {"verbose": verbose}
         force_cpu_flag = metric_specific_kwargs.get("force_cpu_for_large_metric_ops", False)
-        # configured_cnn_mode = metric_specific_kwargs.get("configured_cnn_mode", "unfold") # Example if needed
-        # configured_cnn_rq_op = metric_specific_kwargs.get("configured_cnn_rq_op", "mean") # Example if needed
+        configured_cnn_mode = metric_specific_kwargs.get("configured_cnn_mode", "unfold")
 
         try:
             if "rayleigh_quotient" in metric_name_lower or "rq" in metric_name_lower:
                 if layer_inputs is None or layer_weights is None: 
                     logger.error(f"{self.name} needs layer_inputs and layer_weights, but got inputs: {layer_inputs is not None}, weights: {layer_weights is not None}")
-                    # Return an empty tensor with correct device/dtype instead of raising error
-                    if layer_weights is not None:
-                        return torch.zeros(layer_weights.shape[0], device=eff_device, dtype=layer_weights.dtype)
-                    else:
-                        return torch.zeros(1, device=eff_device, dtype=torch.float32)
+                    default_dtype = layer_weights.dtype if layer_weights is not None else torch.float32
+                    default_size = layer_weights.shape[0] if layer_weights is not None else 1
+                    return torch.zeros(default_size, device=eff_device, dtype=default_dtype)
+
+                layer_inputs_for_rq = layer_inputs
+                layer_weights_for_rq = layer_weights
+
+                is_cnn_layer = isinstance(module_instance, (nn.Conv1d, nn.Conv2d, nn.Conv3d))
                 
-                # Check tensor shapes and dimensions
-                if layer_inputs.ndim != 2:
-                    layer_inputs_reshaped = layer_inputs
-                    if layer_inputs.ndim > 2 and layer_inputs.shape[0] > 0:
-                        logger.debug(f"compute_per_node_scores({self.name}): Reshaping layer_inputs from {layer_inputs.shape} to [batch_size, features]") # Ensure this is debug
-                        layer_inputs_reshaped = layer_inputs.flatten(start_dim=1)
-                    else:
-                        logger.error(f"compute_per_node_scores({self.name}): Cannot reshape layer_inputs with ndim {layer_inputs.ndim}")
-                        return torch.zeros(layer_weights.shape[0], device=eff_device, dtype=layer_weights.dtype)
-                else:
-                    layer_inputs_reshaped = layer_inputs
-                    
-                if layer_weights.ndim != 2:
-                    layer_weights_reshaped = layer_weights
-                    if layer_weights.ndim > 2 and layer_weights.shape[0] > 0:
-                        logger.debug(f"compute_per_node_scores({self.name}): Reshaping layer_weights from {layer_weights.shape} to [out_features, in_features]") # Ensure this is debug
-                        layer_weights_reshaped = layer_weights.reshape(layer_weights.shape[0], -1)
-                    else:
-                        logger.error(f"compute_per_node_scores({self.name}): Cannot reshape layer_weights with ndim {layer_weights.ndim}")
-                        return torch.zeros(layer_weights.shape[0], device=eff_device, dtype=layer_weights.dtype)
-                else:
-                    layer_weights_reshaped = layer_weights
-                
-                # Check for dimension mismatch and fix
-                if layer_inputs_reshaped.shape[1] != layer_weights_reshaped.shape[1]:
-                    min_dim = min(layer_weights_reshaped.shape[1], layer_inputs_reshaped.shape[1])
-                    logger.warning(f"compute_per_node_scores({self.name}): Dimension mismatch - inputs: {layer_inputs_reshaped.shape[1]}, weights: {layer_weights_reshaped.shape[1]}. Using first {min_dim} dimensions.")
-                    if min_dim == 0:
-                        logger.error(f"compute_per_node_scores({self.name}): No common feature dimensions.")
-                        return torch.zeros(layer_weights_reshaped.shape[0], device=eff_device, dtype=layer_weights_reshaped.dtype)
-                    layer_weights_reshaped = layer_weights_reshaped[:, :min_dim]
-                    layer_inputs_reshaped = layer_inputs_reshaped[:, :min_dim]
+                if is_cnn_layer and configured_cnn_mode == "unfold" and module_instance is not None:
+                    logger.debug(f"RQ for CNN layer ({module_instance.__class__.__name__}) with 'unfold' mode. Preparing unfolded inputs.")
+                    # Ensure layer_inputs is 4D for Conv2d unfold, 3D for Conv1d
+                    if isinstance(module_instance, nn.Conv2d) and layer_inputs.ndim == 2: # E.g. [B, C*H*W]
+                        # Attempt to infer original C, H, W if possible, though risky.
+                        # This path assumes layer_inputs might be pre-flattened from activation collection.
+                        # Best if collect_layer_data provides original spatial dimensions for inputs.
+                        # For now, if it's 2D, we can't reliably unfold.
+                        # If collect_layer_data always gives [B, C, H, W] for conv inputs, this branch isn't needed.
+                        logger.warning(f"RQ for Conv2D: layer_inputs are 2D. Unfolding requires spatial dims. Input shape: {layer_inputs.shape}")
+                        # Fallback to standard flattening if unfolding isn't possible
+                        layer_inputs_for_rq = layer_inputs.flatten(start_dim=1) if layer_inputs.ndim > 2 else layer_inputs
+                        layer_weights_for_rq = layer_weights.reshape(layer_weights.shape[0], -1) if layer_weights.ndim > 2 else layer_weights
+
+                    elif (isinstance(module_instance, nn.Conv2d) and layer_inputs.ndim == 4) or \
+                         (isinstance(module_instance, nn.Conv1d) and layer_inputs.ndim == 3):
+                        
+                        k_size = module_instance.kernel_size
+                        stride = module_instance.stride
+                        padding = module_instance.padding
+                        dilation = module_instance.dilation
+
+                        if isinstance(module_instance, nn.Conv3d): #理论上conv3d也可以unfold，但这里我们先跳过
+                             logger.warning(f"RQ for Conv3D with unfold not yet fully implemented. Falling back to flatten. Module: {module_instance}")
+                             layer_inputs_for_rq = layer_inputs.flatten(start_dim=1) if layer_inputs.ndim > 2 else layer_inputs
+                             layer_weights_for_rq = layer_weights.reshape(layer_weights.shape[0], -1) if layer_weights.ndim > 2 else layer_weights
+                        else: # Conv1D or Conv2D
+                            unfolded_inputs = F.unfold(layer_inputs, kernel_size=k_size, stride=stride, padding=padding, dilation=dilation)
+                            # unfolded_inputs shape for Conv2D: [B, C_in*kH*kW, L_out (num_patches)]
+                            # unfolded_inputs shape for Conv1D: [B, C_in*kW, L_out (num_patches)]
+                            
+                            # Reshape for covariance: X should be [num_observations, num_features]
+                            # num_observations = B * L_out, num_features = C_in*kH*kW (or C_in*kW for Conv1D)
+                            unfolded_inputs = unfolded_inputs.permute(0, 2, 1).contiguous() 
+                            layer_inputs_for_rq = unfolded_inputs.view(-1, unfolded_inputs.size(2)) 
+                            
+                            layer_weights_for_rq = layer_weights.reshape(layer_weights.shape[0], -1)
+                            logger.debug(f"  Unfolded inputs shape for RQ: {layer_inputs_for_rq.shape}")
+                            logger.debug(f"  Reshaped weights shape for RQ: {layer_weights_for_rq.shape}")
+                    else: # Not a Conv layer where unfold is applicable or input dims not as expected
+                        logger.debug(f"RQ: Applying standard flattening. Layer type: {module_instance.__class__.__name__ if module_instance else 'Unknown'}, input_ndim: {layer_inputs.ndim}")
+                        layer_inputs_for_rq = layer_inputs.flatten(start_dim=1) if layer_inputs.ndim > 2 else layer_inputs
+                        layer_weights_for_rq = layer_weights.reshape(layer_weights.shape[0], -1) if layer_weights.ndim > 2 else layer_weights
+
+                else: # Standard processing (not CNN or not unfold mode)
+                    layer_inputs_for_rq = layer_inputs.flatten(start_dim=1) if layer_inputs.ndim > 2 else layer_inputs
+                    layer_weights_for_rq = layer_weights.reshape(layer_weights.shape[0], -1) if layer_weights.ndim > 2 else layer_weights
+
+                # Dimension matching check (moved from compute_rayleigh_quotient here, after potential unfold)
+                if layer_inputs_for_rq.shape[1] != layer_weights_for_rq.shape[1]:
+                    min_dim = min(layer_weights_for_rq.shape[1], layer_inputs_for_rq.shape[1])
+                    if min_dim == 0 : # Prevent error if one dimension becomes 0
+                        logger.error(f"{self.name}: Zero common feature dimension after processing for layer. Inputs: {layer_inputs_for_rq.shape}, Weights: {layer_weights_for_rq.shape}. Returning zeros.")
+                        return torch.zeros(layer_weights_for_rq.shape[0], device=eff_device, dtype=layer_weights_for_rq.dtype)
+
+                    logger.warning(
+                        f"{self.name} ({module_instance.__class__.__name__ if module_instance else 'Unknown'}): Dimension mismatch AFTER unfold/flatten. "
+                        f"Inputs: {layer_inputs_for_rq.shape[1]}, Weights: {layer_weights_for_rq.shape[1]}. Using first {min_dim} dims."
+                    )
+                    layer_weights_for_rq = layer_weights_for_rq[:, :min_dim]
+                    layer_inputs_for_rq = layer_inputs_for_rq[:, :min_dim]
                 
                 fn_kwargs["relative"] = self.scale_by_norm
                 fn_kwargs["min_samples_for_cov"] = min_samples_for_cov
-                fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag # Pass it on
+                fn_kwargs["force_cpu_for_large_metric_ops"] = force_cpu_flag
                 
-                logger.debug(f"compute_per_node_scores({self.name}): Calling compute_rayleigh_quotient with shapes - inputs: {layer_inputs_reshaped.shape}, weights: {layer_weights_reshaped.shape}") # Ensure this is debug
-                result = self._metric_fn(layer_inputs_reshaped.to(eff_device), layer_weights_reshaped.to(eff_device), **fn_kwargs)
-                logger.debug(f"compute_per_node_scores({self.name}): Result shape: {result.shape}") # Ensure this is debug
+                logger.debug(f"compute_per_node_scores({self.name}): Calling compute_rayleigh_quotient with shapes - inputs: {layer_inputs_for_rq.shape}, weights: {layer_weights_for_rq.shape}")
+                result = self._metric_fn(layer_inputs_for_rq.to(eff_device), layer_weights_for_rq.to(eff_device), **fn_kwargs)
+                logger.debug(f"compute_per_node_scores({self.name}): Result shape: {result.shape}")
                 return result
             
             elif "mi_gaussian" in metric_name_lower or "mi_g" in metric_name_lower:
@@ -742,9 +773,14 @@ def compute_metrics_for_layers(
     
     # Adjust module lookup based on whether model has base_model
     target_model_for_modules = model
-    if hasattr(model, 'base_model') and isinstance(model.base_model, nn.Module):
-        logger.debug("compute_metrics_for_layers: Using model.base_model to resolve module names.") # CHANGED to debug
-        target_model_for_modules = model.base_model
+    if hasattr(model, 'module'): # Check for DDP wrapper first
+        logger.debug("compute_metrics_for_layers: Model is DDP-wrapped. Using model.module to resolve module names.")
+        target_model_for_modules = model.module # Get the underlying model
+    
+    # Now check for base_model on the (potentially unwrapped) model
+    if hasattr(target_model_for_modules, 'base_model') and isinstance(target_model_for_modules.base_model, nn.Module):
+        logger.debug("compute_metrics_for_layers: Using base_model of AlignmentNetwork to resolve module names.") # CHANGED to debug
+        target_model_for_modules = target_model_for_modules.base_model
     else:
         logger.debug("compute_metrics_for_layers: Using model directly to resolve module names.") # CHANGED to debug
         
@@ -772,27 +808,20 @@ def compute_metrics_for_layers(
             logger.warning(f"compute_metrics_for_layers: Module '{layer_name}' (from collected_data) not found in resolved model_modules for weight/type lookup.")
             continue
         
+        current_layer_weights_data = None
         if hasattr(module, 'weight') and module.weight is not None:
-            logger.debug(f"compute_metrics_for_layers: Layer '{layer_name}' weight shape: {module.weight.shape}") # CHANGED to debug
-            # Check for NaN or Inf values in weights
-            if torch.isnan(module.weight).any() or torch.isinf(module.weight).any():
+            current_layer_weights_data = module.weight.detach()
+            logger.debug(f"compute_metrics_for_layers: Layer '{layer_name}' weight shape: {current_layer_weights_data.shape}") # CHANGED to debug
+            if torch.isnan(current_layer_weights_data).any() or torch.isinf(current_layer_weights_data).any():
                 logger.warning(f"compute_metrics_for_layers: Layer '{layer_name}' weights contain NaN or Inf values!")
         else:
-            logger.warning(f"compute_metrics_for_layers: Layer '{layer_name}' has no weight attribute or it's None.")
-            continue  # Skip this layer if no weights are available
+            logger.debug(f"compute_metrics_for_layers: Layer '{layer_name}' has no weight attribute or it's None. Some metrics might not be applicable.")
+            # Allow continuing for metrics that don't need weights (e.g. MI on outputs only)
         
         l_inputs = layer_data.get("input")
         l_outputs = layer_data.get("output")
         
-        # Verify dimensions match for RQ computation
-        weights_shape = module.weight.shape
-        if l_inputs is not None and weights_shape[1] != l_inputs.shape[1]:
-            logger.warning(f"compute_metrics_for_layers: Dimension mismatch for '{layer_name}': weights_shape[1]={weights_shape[1]}, l_inputs.shape[1]={l_inputs.shape[1]}")
-            if weights_shape[1] < l_inputs.shape[1]:
-                logger.info(f"compute_metrics_for_layers: Truncating input features for '{layer_name}' from {l_inputs.shape[1]} to {weights_shape[1]}")
-                l_inputs = l_inputs[:, :weights_shape[1]]
-            else:
-                logger.warning(f"compute_metrics_for_layers: Input features for '{layer_name}' are fewer than weight features. This may cause issues.")
+        # Dimension check moved to specific metrics if crucial (e.g. RQ)
 
         if not metric_configs: 
             logger.warning(f"compute_metrics_for_layers: metric_configs is empty for layer '{layer_name}'. No metrics will be computed.")
@@ -807,27 +836,22 @@ def compute_metrics_for_layers(
             
             logger.debug(f"compute_metrics_for_layers: Attempting to compute metric '{metric_name}' for layer '{layer_name}'.") # CHANGED to debug
             scale_by_norm = m_config.get("scale_by_norm", False)
-            specific_kwargs_for_metric = {k:v for k,v in m_config.items() if k not in ["name", "scale_by_norm"]}
             
-            results[layer_name][metric_name] = torch.tensor(float('nan')) # Initialize with NaN
+            specific_kwargs_for_metric = {k:v for k,v in m_config.items() if k not in ["name", "scale_by_norm", "num_batches"]}
+            
+            results[layer_name][metric_name] = torch.tensor(float('nan')) 
 
             try:
                 logger.debug(f"compute_metrics_for_layers: Getting metric instance for '{metric_name}' with scale_by_norm={scale_by_norm}") # CHANGED to debug
                 metric_instance = get_metric(name=metric_name, scale_by_norm=scale_by_norm)
-                current_layer_weights = module.weight.detach() if hasattr(module, 'weight') and module.weight is not None else None
                 
-                if metric_name.upper() == "RQ":
-                    logger.debug(f"compute_metrics_for_layers (RQ Pre-Call): Layer '{layer_name}', l_inputs is None: {l_inputs is None}, current_layer_weights is None: {current_layer_weights is None}") # CHANGED to debug
-                    if isinstance(l_inputs, torch.Tensor):
-                        logger.debug(f"compute_metrics_for_layers (RQ Pre-Call): Layer '{layer_name}', l_inputs.shape: {l_inputs.shape}") # CHANGED to debug
-                    if isinstance(current_layer_weights, torch.Tensor):
-                        logger.debug(f"compute_metrics_for_layers (RQ Pre-Call): Layer '{layer_name}', current_layer_weights.shape: {current_layer_weights.shape}") # CHANGED to debug
-
-                logger.debug(f"compute_metrics_for_layers: Calling compute_per_node_scores with kwargs: {specific_kwargs_for_metric}") # CHANGED to debug
+                # Pass the actual module instance to compute_per_node_scores
+                logger.debug(f"compute_metrics_for_layers: Calling compute_per_node_scores with kwargs: {specific_kwargs_for_metric}, module_instance: {type(module)}")
                 metric_val = metric_instance.compute_per_node_scores(
                     layer_inputs=l_inputs, 
-                    layer_weights=current_layer_weights, 
+                    layer_weights=current_layer_weights_data, 
                     layer_outputs=l_outputs,
+                    module_instance=module, # Pass the module instance
                     device=device, 
                     **specific_kwargs_for_metric
                 )
