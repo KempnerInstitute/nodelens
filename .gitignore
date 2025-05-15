@@ -15,7 +15,7 @@ data/
 #notebooks/
 #notebooks/data/*
 #notebooks/.ipynb_checkpoints/*
-_archive/
+
 notebooks/
 # Byte-compiled / optimized / DLL files
 __pycache__/
