@@ -100,9 +100,9 @@ def run_progressive_dropout_experiment(
         metric_configs_for_pruning.append({
             "name": m_instance.name,
             "scale_by_norm": m_instance.scale_by_norm,
-            "force_cpu_for_large_metric_ops": force_cpu_for_large_metric_ops,
-            "configured_cnn_mode": configured_cnn_mode,
-            "configured_cnn_rq_op": configured_cnn_rq_op
+        "force_cpu_for_large_metric_ops": force_cpu_for_large_metric_ops,
+        "configured_cnn_mode": configured_cnn_mode,
+        "configured_cnn_rq_op": configured_cnn_rq_op
             # Add any other relevant kwargs from m_instance if they exist and are needed by compute_all_node_scores
         })
         pre_pruning_stats_accumulator_by_metric[m_instance.name] = {}
@@ -187,6 +187,34 @@ def run_progressive_dropout_experiment(
         
         all_networks_metric_processing_data.append(current_net_rep_metric_data)
 
+    # --- Debugging Log --- 
+    if debug_mode and all_networks_metric_processing_data:
+        logger.debug("Contents of all_networks_metric_processing_data[0] (first network replicate):")
+        for metric_name_debug, metric_specific_data in all_networks_metric_processing_data[0].items():
+            if metric_name_debug == "random_indices_by_layer": 
+                logger.debug(f"  Metric-Agnostic Key: {metric_name_debug}")
+                # Optionally log some info about random_indices if needed
+                # for layer_name_debug, rand_indices_tensor in metric_specific_data.items():
+                #    logger.debug(f"    Layer {layer_name_debug}: Random Indices Shape = {rand_indices_tensor.shape}")
+                continue 
+            
+            logger.debug(f"  Data for Metric: {metric_name_debug}")
+            if "scores_by_layer" in metric_specific_data:
+                scores_by_layer_debug = metric_specific_data["scores_by_layer"]
+                if not scores_by_layer_debug:
+                    logger.debug(f"    Scores_by_layer for {metric_name_debug} is empty.")
+                for layer_name_debug, score_tensor_debug in scores_by_layer_debug.items():
+                    if score_tensor_debug is not None and score_tensor_debug.numel() > 0:
+                        logger.debug(f"      Layer {layer_name_debug}: Mean Score = {torch.mean(score_tensor_debug.float()).item():.4f}, Std = {torch.std(score_tensor_debug.float()).item():.4f}, Shape = {score_tensor_debug.shape}")
+                    elif score_tensor_debug is not None: # Empty tensor
+                            logger.debug(f"      Layer {layer_name_debug}: Score Tensor is empty, Shape = {score_tensor_debug.shape}")
+                    else:
+                        logger.debug(f"      Layer {layer_name_debug}: Score Tensor is None.")
+            else:
+                logger.debug(f"    'scores_by_layer' not found for metric {metric_name_debug}.")
+        logger.debug("-" * 50) # Separator
+    # --- End Debugging Log ---
+
     # --- End of Pre-computation for all metrics and networks ---
 
     # Main loop over each metric instance
@@ -197,14 +225,13 @@ def run_progressive_dropout_experiment(
         # Initialize results structure for this metric
         current_metric_results = {
             "dropout_fractions": dropout_fractions,
-            "accuracies": {"high_score": [], "low_score": [], "random": []}, # Generic strategy names
+            "accuracies": {"high_score": [], "low_score": [], "random": []},
             "losses": {"high_score": [], "low_score": [], "random": []},
             "stds": {"high_score": [], "low_score": [], "random": []},
             "pruning_details": {st: {} for st in ["high_score", "low_score", "random"]},
-            "pre_pruning_layer_stats": {} # Will be populated from accumulator
+            "pre_pruning_layer_stats": {}
         }
 
-        # Populate pre-pruning stats for the current metric
         if current_metric_name in pre_pruning_stats_accumulator_by_metric:
             for l_name_stat, stats_lists in pre_pruning_stats_accumulator_by_metric[current_metric_name].items():
                 current_metric_results["pre_pruning_layer_stats"][l_name_stat] = {
@@ -212,11 +239,9 @@ def run_progressive_dropout_experiment(
                     "avg_std_score": np.mean(stats_lists["stds"]) if stats_lists["stds"] else np.nan
                 }
         
-        # Prepare data slices for the current metric to pass to progressive_dropout
         current_metric_all_networks_scores_by_layer = []
         current_metric_all_networks_ascend_indices = []
         current_metric_all_networks_descend_indices = []
-        # Random indices are the same for all metrics for a given network
         current_metric_all_networks_random_indices = [
             net_data["random_indices_by_layer"] for net_data in all_networks_metric_processing_data
         ]
@@ -226,12 +251,11 @@ def run_progressive_dropout_experiment(
                 current_metric_all_networks_scores_by_layer.append(net_data[current_metric_name]["scores_by_layer"])
                 current_metric_all_networks_ascend_indices.append(net_data[current_metric_name]["ascend_indices_by_layer"])
                 current_metric_all_networks_descend_indices.append(net_data[current_metric_name]["descend_indices_by_layer"])
-            else: # Should not happen if populated correctly, but add placeholders
+            else: 
                 logger.warning(f"Data for metric {current_metric_name} not found for a network replicate. Appending empty scores/indices.")
                 current_metric_all_networks_scores_by_layer.append({})
                 current_metric_all_networks_ascend_indices.append({})
                 current_metric_all_networks_descend_indices.append({})
-
 
         # Create deep copies of original networks for this metric's run
         networks_for_pruning_this_metric = [copy.deepcopy(net) for net in networks]
@@ -240,39 +264,34 @@ def run_progressive_dropout_experiment(
 
         try:
             logger.info(f"Calling progressive_dropout (use_multi_strategy=True) for metric: {current_metric_name}")
-            # The 'strategy' parameter to progressive_dropout will be ignored if use_multi_strategy is True,
-            # as it internally runs "high_score", "low_score", "random" based on the scores provided.
             accuracies_all_strategies, losses_all_strategies, details_all_strategies = progressive_dropout(
                 networks_for_pruning_this_metric,
                 current_metric_all_networks_scores_by_layer,
                 current_metric_all_networks_ascend_indices,
                 current_metric_all_networks_descend_indices,
-                current_metric_all_networks_random_indices, # Pass the metric-agnostic random indices
+                current_metric_all_networks_random_indices,
                 dataset=dataset,
                 dropout_fractions=dropout_fractions,
                 device=device,
                 pruning_mode=pruning_mode,
                 dropout_mode=dropout_mode,
-                strategy='high_score', # This will be effectively "high score of current metric"
-                show_progress=show_progress, 
-                use_multi_strategy=True, 
+                strategy='high_score',
+                show_progress=show_progress,
+                use_multi_strategy=True,
                 debug_mode=debug_mode,
-                exclude_classification_layer_config=exclude_classification_layer_config
+                exclude_classification_layer_config=exclude_classification_layer_config,
+                max_workers=None
             )
 
-            current_metric_results["pruning_details"] = details_all_strategies # Stored under "high_score", "low_score", "random"
-
+            current_metric_results["pruning_details"] = details_all_strategies
             num_fractions_total = len(dropout_fractions)
-
-            # Strategies used internally by progressive_dropout (when use_multi_strategy=True)
-            internal_strategies = ["high_score", "low_score", "random"] 
+            internal_strategies = ["high_score", "low_score", "random"]
 
             for strategy_key in internal_strategies:
                 if strategy_key in accuracies_all_strategies:
                     accs_per_net_for_this_strategy = accuracies_all_strategies[strategy_key]
                     mean_accuracies_for_strategy = []
                     std_accuracies_for_strategy = []
-
                     for frac_idx_overall in range(num_fractions_total):
                         accuracies_this_frac_all_replicates = []
                         for net_idx_rep in range(len(networks)):
@@ -283,7 +302,6 @@ def run_progressive_dropout_experiment(
                                 accuracies_this_frac_all_replicates.append(np.nan)
                                 if debug_mode:
                                     logger.warning(f"Metric {current_metric_name}: Missing accuracy data for strategy '{strategy_key}', net {net_idx_rep}, fraction_idx {frac_idx_overall}")
-
                         if accuracies_this_frac_all_replicates:
                             mean_acc = np.nanmean(accuracies_this_frac_all_replicates)
                             std_acc = np.nanstd(accuracies_this_frac_all_replicates)
@@ -296,10 +314,8 @@ def run_progressive_dropout_experiment(
                         else:
                             mean_accuracies_for_strategy.append(np.nan)
                             std_accuracies_for_strategy.append(np.nan)
-                    
                     current_metric_results["accuracies"][strategy_key] = mean_accuracies_for_strategy
                     current_metric_results["stds"][strategy_key] = std_accuracies_for_strategy
-                    # Populate losses if available and needed
                     if losses_all_strategies and strategy_key in losses_all_strategies:
                         losses_per_net_for_this_strategy = losses_all_strategies[strategy_key]
                         mean_losses_for_strategy = []
@@ -313,22 +329,18 @@ def run_progressive_dropout_experiment(
                                     losses_this_frac_all_replicates.append(np.nan)
                             mean_losses_for_strategy.append(np.nanmean(losses_this_frac_all_replicates) if losses_this_frac_all_replicates else np.nan)
                         current_metric_results["losses"][strategy_key] = mean_losses_for_strategy
-
-
                 else:
                     logger.warning(f"Metric {current_metric_name}: Strategy {strategy_key} not found in progressive_dropout results. Filling with NaNs.")
                     current_metric_results["accuracies"][strategy_key] = [np.nan] * num_fractions_total
                     current_metric_results["stds"][strategy_key] = [np.nan] * num_fractions_total
                     current_metric_results["losses"][strategy_key] = [np.nan] * num_fractions_total
-            
             results_by_metric[current_metric_name] = current_metric_results
-
-        except Exception as e:
+        except Exception as e: 
             logger.error(f"Error in run_progressive_dropout_experiment for metric {current_metric_name}: {str(e)}")
             logger.error(traceback.format_exc())
-            results_by_metric[current_metric_name] = {"error": str(e)} # Store error for this metric
+            results_by_metric[current_metric_name] = {"error": str(e)}
     
-    return results_by_metric # MODIFIED: Return the dict structured by metric
+    return results_by_metric
 
 
 def run_eigenvector_dropout_experiment(

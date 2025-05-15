@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from warnings import warn
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Union, Tuple
+from typing import Dict, Any, Optional, Union, Tuple, TYPE_CHECKING
 
 import torch
 import torchvision
@@ -16,9 +16,13 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
 from tqdm import tqdm
 
-# from alignment.models.base import AlignmentNetwork # Removed to break circular import
-from alignment.config import DatasetConfig, ExperimentConfig
 from alignment.models.models import get_transform_parameters
+
+# from alignment.models.base import AlignmentNetwork # Removed to break circular import
+
+# Import ExperimentConfig directly if it's used in __main__ block at runtime
+if TYPE_CHECKING:
+    from alignment.config import DatasetConfig, ExperimentConfig # Keep ExperimentConfig here for type hints if needed elsewhere
 
 logger = logging.getLogger(__name__)
 
@@ -423,7 +427,7 @@ def get_dataset(
 
 
 def load_dataset(
-    dataset_config: Union[DatasetConfig, Dict[str, Any]],
+    dataset_config: Union['DatasetConfig', Dict[str, Any]],
     batch_size: Optional[int] = None,
     device: Optional[Union[str, torch.device]] = None,
     transform_params: Optional[Dict[str, Any]] = None,
@@ -509,6 +513,8 @@ def load_dataset(
 
 
 if __name__ == "__main__":
+    # Local import for direct script execution
+    from alignment.config import ExperimentConfig 
     try:
         yaml_path, args_list = sys.argv[1], sys.argv[2:]
     except IndexError:

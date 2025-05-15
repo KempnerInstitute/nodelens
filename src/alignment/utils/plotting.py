@@ -2,7 +2,7 @@ import os
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, TYPE_CHECKING
 import logging
 import torch
 from torch.utils.data import DataLoader
@@ -15,7 +15,11 @@ except ImportError:
     WANDB_AVAILABLE = False
     wandb = None  # Ensure wandb is None if not available, for type hinting or checks
 
-from alignment.config import Config, ExperimentConfig, WandbConfig  # Config still used by Experiment class
+if TYPE_CHECKING:
+    from alignment.config import ExperimentConfig, WandbConfig  # Config is an alias for ExperimentConfig
+    # If Config is also needed directly and is not just an alias:
+    # from alignment.config import Config 
+
 from alignment.datasets import DataSet, load_dataset
 
 # Set up logger
@@ -566,7 +570,7 @@ def log_plots_to_wandb(plot_files: List[str], tags: Optional[Dict[str, str]] = N
         logger.error(f"Error logging to wandb: {str(e)}")
 
 
-def plot_mean_rq_of_pruned_nodes(
+def plot_mean_score_of_pruned_nodes(
     experiment_results: Dict[str, Any],
     save_dir: str,
     title_prefix: str = "Mean Score of Pruned Nodes by Layer",  # Generic title

@@ -5,8 +5,8 @@
 # -----------------------------------------------------------------------------
 # I. Experiment Metadata & Core Execution
 # -----------------------------------------------------------------------------
-# experiment_name: "mlp_mnist_nested_config_test"
-experiment_name: "cnn_mnist_nested_config_test"
+experiment_name: "mlp_mnist_nested_config_test"
+# experiment_name: "cnn_mnist_nested_config_test"
 experiment_type: "AUTO"    # Options: 
                                         #   "AUTO" - Automatically selects the best experiment type based on the dataset.
                                         #   "progressive_dropout" - Prunes nodes iteratively and measures performance.
@@ -121,8 +121,11 @@ training:
 # -----------------------------------------------------------------------------
 # Maps to alignment_settings: AlignmentConfig in config.py
 alignment_settings:
-  metric: "RQ"                          # Primary metric for pruning scores. Options: "RQ", "MI_G", "PID_SI", etc. (see metrics.py ALIGNMENT_METRICS_REGISTRY)
-  scale_by_norm: false                  # For RQ: whether to scale by trace of covariance matrix.
+  metric:
+    - "RQ"
+    #- "MI_G"
+    #- "Node_Redundancy"
+  scale_by_norm: false                  # Global default for scale_by_norm
   
   # cnn_mode below is for how metric calculation functions (e.g. compute_all_node_scores)
   # process CNN features IF they receive them in a specific format (e.g. from AlignmentNetwork's precomputation).

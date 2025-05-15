@@ -310,10 +310,10 @@ def progressive_dropout_multi_strategy(
 
 def progressive_dropout(
     networks: List[nn.Module],
-    all_networks_scores_by_layer: List[Dict[int, torch.Tensor]],
-    all_networks_ascend_indices: List[Dict[int, torch.Tensor]],
-    all_networks_descend_indices: List[Dict[int, torch.Tensor]],
-    all_networks_random_indices: List[Dict[int, torch.Tensor]],
+    all_networks_scores_by_layer: List[Dict[str, torch.Tensor]],
+    all_networks_ascend_indices: List[Dict[str, torch.Tensor]],
+    all_networks_descend_indices: List[Dict[str, torch.Tensor]],
+    all_networks_random_indices: List[Dict[str, torch.Tensor]],
     dataset,
     dropout_fractions: List[float],
     device: Union[str, torch.device] = "cuda",
@@ -532,7 +532,41 @@ def progressive_dropout(
                     network_accuracies_all[st_key][net_idx_fill].append(float('nan'))
                     network_losses_all[st_key][net_idx_fill].append(float('nan'))
 
-        return network_accuracies_all, network_losses_all, pruning_details_all
+        # Map strategy keys to generic score-based keys for the output
+        final_network_accuracies_all = {}
+        final_network_losses_all = {}
+        final_pruning_details_all = {}
+
+        key_map = {
+            "high_rq": "high_score",
+            "low_rq": "low_score",
+            "random": "random"
+        }
+
+        for old_key, generic_key in key_map.items():
+            if old_key in network_accuracies_all:
+                final_network_accuracies_all[generic_key] = network_accuracies_all[old_key]
+            if old_key in network_losses_all:
+                final_network_losses_all[generic_key] = network_losses_all[old_key]
+            if old_key in pruning_details_all: # Ensure pruning_details_all also exists and is structured by these keys
+                final_pruning_details_all[generic_key] = pruning_details_all[old_key]
+            # If a generic key was expected but not found via mapping (e.g. if strategies_to_run was different)
+            # and it's not 'random', it might indicate an issue or need to copy if already generic.
+            # However, given strategies_to_run, this should cover it.
+
+        # If any strategy was directly named generically and not in key_map, ensure it's carried over.
+        # This is unlikely given the current hardcoded strategies_to_run = ["high_rq", "low_rq", "random"]
+        for st_key in network_accuracies_all: # Check original dict
+            if st_key not in key_map and st_key not in final_network_accuracies_all:
+                final_network_accuracies_all[st_key] = network_accuracies_all[st_key]
+        for st_key in network_losses_all:
+            if st_key not in key_map and st_key not in final_network_losses_all:
+                final_network_losses_all[st_key] = network_losses_all[st_key]
+        for st_key in pruning_details_all:
+             if st_key not in key_map and st_key not in final_pruning_details_all:
+                final_pruning_details_all[st_key] = pruning_details_all[st_key]
+
+        return final_network_accuracies_all, final_network_losses_all, final_pruning_details_all
 
     else:
         logger.info(f"Starting progressive_dropout (single-strategy path): strategy={strategy}, " f"mode={pruning_mode}, dropout_mode={dropout_mode}")
