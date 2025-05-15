@@ -399,14 +399,31 @@ class AlignmentExperiment(Experiment):
         plot_files_generated = []
 
         if self.results and "error" not in self.results:
-            # Generic plotting based on expected keys from different experiment types
-            prog_results_data = self.results.get(
-                "progressive_dropout", self.results if self.config.experiment_type == "progressive_dropout" else None
-            )
-            iso_results_data = self.results.get(
-                "layer_isolated_pruning", self.results if self.config.experiment_type == "layer_isolated_pruning" else None
-            )
-            eig_results_data = self.results.get("eigenvector_dropout", self.results if self.config.experiment_type == "eigenvector_dropout" else None)
+            # Determine which data to use for standard plots based on experiment type
+            data_for_standard_plots = None
+            if self.config.experiment_type == "progressive_dropout":
+                # For progressive_dropout, results might be nested under a "progressive_dropout" key 
+                # if called from alignment_analysis, or be top-level.
+                data_for_standard_plots = self.results.get("progressive_dropout")
+                if data_for_standard_plots is None: # Not nested, so self.results is the direct data
+                    data_for_standard_plots = self.results 
+            elif self.config.experiment_type == "cascading_layer_pruning":
+                data_for_standard_plots = self.results  # Results are direct from this experiment type
+            elif self.config.experiment_type == "eigenvector_dropout":
+                # Similar to progressive, might be nested or direct
+                data_for_standard_plots = self.results.get("eigenvector_dropout")
+                if data_for_standard_plots is None:
+                    data_for_standard_plots = self.results
+            elif self.config.experiment_type == "alignment_analysis":
+                # For alignment_analysis, standard plots are typically for its progressive_dropout part
+                data_for_standard_plots = self.results.get("progressive_dropout")
+            # If data_for_standard_plots is still None here, it means the experiment type
+            # doesn't fit the standard plot structure (e.g. layer_isolated is handled separately)
+            # or results are missing.
+
+            iso_results_data = None
+            if self.config.experiment_type == "layer_isolated_pruning":
+                iso_results_data = self.results 
 
             # --- DEBUG LOGGING FOR PLOTTING --- 
             logger.info(f"[Plotting] Experiment Type: {self.config.experiment_type}")
@@ -423,22 +440,39 @@ class AlignmentExperiment(Experiment):
             pruning_mode_plot = self.config.pruning_settings.dropout_pruning_mode
             dropout_mode_plot = self.config.pruning_settings.dropout_mode
 
-            if prog_results_data and "accuracies" in prog_results_data:
-                acc_plots = plot_dropout_results(prog_results_data, self.figure_path, title_prefix, pruning_mode_plot, dropout_mode_plot)
+            # Plotting for Progressive Dropout, Cascading, Eigenvector types (standard single-panel accuracy plot)
+            if data_for_standard_plots and "accuracies" in data_for_standard_plots:
+                # Determine the effective pruning mode for the title, esp. for cascading
+                effective_pruning_mode_title = pruning_mode_plot
+                if self.config.experiment_type == "cascading_layer_pruning":
+                    effective_pruning_mode_title = "cascading_layer"
+                
+                acc_plots = plot_dropout_results(data_for_standard_plots, self.figure_path, title_prefix, effective_pruning_mode_title, dropout_mode_plot)
                 if acc_plots:
                     plot_files_generated.extend(acc_plots if isinstance(acc_plots, list) else [acc_plots])
-                if "pruning_details" in prog_results_data and "pre_pruning_layer_stats" in prog_results_data:
-                    plot_paths = [
-                        plot_mean_rq_of_pruned_nodes(prog_results_data, self.figure_path, title_prefix, show_all_plots),
-                        plot_per_layer_pruning_percentage(prog_results_data, self.figure_path, title_prefix, show_all_plots),
-                        plot_per_layer_contribution_to_pruning(prog_results_data, self.figure_path, title_prefix, show_all_plots),
-                    ]
-                    plot_files_generated.extend([p for p in plot_paths if p])
-                if prog_results_data.get("pre_pruning_layer_stats"):
-                    rq_stats_plot = plot_rq_stats_per_layer(prog_results_data, self.figure_path, title_prefix, show_all_plots)
+                
+                # Detail plots (Mean RQ of pruned, Per-layer pruning %, Layer contribution, Pre-pruning stats)
+                # These generally expect the structure from progressive_dropout or the adapted one from cascading.
+                if data_for_standard_plots.get("pruning_details") and data_for_standard_plots.get("pre_pruning_layer_stats"):
+                    # This plot_mean_rq_of_pruned_nodes expects multi-strategy data if available from progressive_dropout,
+                    # or single "cascading" strategy data from cascading_layer_pruning.
+                    mean_rq_plot = plot_mean_rq_of_pruned_nodes(data_for_standard_plots, self.figure_path, title_prefix, show_all_plots)
+                    if mean_rq_plot: plot_files_generated.append(mean_rq_plot)
+
+                    # These two plots are more specific to progressive_dropout's global/layer-wise interpretation
+                    # and may not be as informative for cascading_layer_pruning where each layer is hit by F%.
+                    if self.config.experiment_type == "progressive_dropout":
+                        percent_plot = plot_per_layer_pruning_percentage(data_for_standard_plots, self.figure_path, title_prefix, show_all_plots)
+                        if percent_plot: plot_files_generated.append(percent_plot)
+                        contrib_plot = plot_per_layer_contribution_to_pruning(data_for_standard_plots, self.figure_path, title_prefix, show_all_plots)
+                        if contrib_plot: plot_files_generated.append(contrib_plot)
+                
+                if data_for_standard_plots.get("pre_pruning_layer_stats"):
+                    rq_stats_plot = plot_rq_stats_per_layer(data_for_standard_plots, self.figure_path, title_prefix, show_all_plots)
                     if rq_stats_plot:
                         plot_files_generated.append(rq_stats_plot)
 
+            # Plotting for Layer Isolated Pruning type (special N-panel plot)
             if iso_results_data and "accuracies_isolated" in iso_results_data:
                 logger.info(f"[Plotting] Calling plot_layer_isolated_dropout_results for experiment type {self.config.experiment_type}") # DEBUG
                 iso_acc_plots = plot_layer_isolated_dropout_results(iso_results_data, self.figure_path, title_prefix, show_all_plots)
@@ -460,15 +494,10 @@ class AlignmentExperiment(Experiment):
                     if iso_mean_rq_pruned_plot:
                         plot_files_generated.append(iso_mean_rq_pruned_plot)
 
-            if eig_results_data and "accuracies" in eig_results_data:
-                eig_acc_plots = plot_dropout_results(eig_results_data, self.figure_path, title_prefix, pruning_mode_plot, dropout_mode_plot)
-                if eig_acc_plots:
-                    plot_files_generated.extend(eig_acc_plots if isinstance(eig_acc_plots, list) else [eig_acc_plots])
-
             # Summary plot only makes sense if alignment_analysis ran and produced both sub-results
-            if self.config.experiment_type == "alignment_analysis" and prog_results_data and eig_results_data:
+            if self.config.experiment_type == "alignment_analysis" and data_for_standard_plots and data_for_standard_plots.get("eigenvector_dropout"):
                 summary_path = plot_experiment_summary(
-                    {"progressive_dropout": prog_results_data, "eigenvector_dropout": eig_results_data}, self.figure_path, title_prefix
+                    {"progressive_dropout": data_for_standard_plots, "eigenvector_dropout": data_for_standard_plots.get("eigenvector_dropout")}, self.figure_path, title_prefix
                 )
                 if summary_path:
                     plot_files_generated.append(summary_path)
