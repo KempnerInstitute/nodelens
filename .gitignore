@@ -3,21 +3,26 @@
 slurm-*.out
 *.pt
 *.mat
-
+data/
 # cluster jobs
 jobs/
-
 # VSCODE
 .vscode/
-
+results/
 # WANDB
 wandb/
+data/
+#notebooks/
+#notebooks/data/*
+#notebooks/.ipynb_checkpoints/*
 
+notebooks/
 # Byte-compiled / optimized / DLL files
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
-
+src/alignment.egg-info/
 # C extensions
 *.so
 
