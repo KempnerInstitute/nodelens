@@ -1,0 +1,89 @@
+alignment_settings:
+  callbacks:
+    alignment_metrics: []
+  cnn_mode: filter_patch_summary
+  cnn_rq_aggregation_op: max
+  force_cpu_for_large_metric_ops: false
+  metric: RQ
+  run_eigenvector: false
+  run_progressive: true
+  scale_by_norm: false
+checkpointing:
+  checkpoint_frequency: 1
+  load_checkpoint: false
+  save_checkpoints: false
+dataset:
+  batch_size: 1024
+  data_path: data
+  dataset_name: MNIST
+  num_workers: 4
+debug_mode: false
+device: cuda
+experiment_name: mlp_mnist_global_joint_test_callback_test
+experiment_type: progressive_dropout
+extra:
+  detailed_logging: true
+  dummy_extra_param: null
+  log_frequency: 1
+  log_images: true
+just_plot: false
+model:
+  activation: relu
+  alignment_layers: null
+  conv_channels:
+  - 32
+  - 64
+  dropout_rate: 0.0
+  example_input_hw:
+  - 28
+  - 28
+  extra_model_params: {}
+  hidden_dims:
+  - 128
+  - 64
+  hidden_fc_dim: 128
+  in_channels: 1
+  input_dim: 784
+  kernel_sizes:
+  - 5
+  - 5
+  model_name: CNN2P2
+  output_dim: 10
+  paddings:
+  - 2
+  - 2
+  pool_kernel_size: 2
+  pool_stride: 2
+  strides:
+  - 1
+  - 1
+no_save: false
+pruning_settings:
+  dropout_max: 0.9
+  dropout_min: 0.0
+  dropout_mode: scaled
+  dropout_pruning_mode: layer_wise
+  dropout_steps: 30
+  exclude_classification_layer: true
+  num_batches_for_scores: 5
+  use_multi_strategy_dropout: false
+results_path: results
+save_networks: true
+seed: 422
+show_all: false
+timestamp: null
+training:
+  epochs: 5
+  learning_rate: 0.001
+  loss: cross_entropy
+  momentum: 0.9
+  optimizer: Adam
+  replicates: 10
+  train_before_dropout: true
+  training_method: auto
+  weight_decay: 0.0
+use_timestamp: true
+wandb:
+  use_wandb: true
+  wandb_entity: your_wandb_entity
+  wandb_project: neural_alignment

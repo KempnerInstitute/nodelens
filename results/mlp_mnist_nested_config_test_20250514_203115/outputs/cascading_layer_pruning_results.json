@@ -1,0 +1,794 @@
+{
+  "dropout_fractions": [
+    0.0,
+    0.034482758620689655,
+    0.06896551724137931,
+    0.10344827586206896,
+    0.13793103448275862,
+    0.1724137931034483,
+    0.20689655172413793,
+    0.24137931034482757,
+    0.27586206896551724,
+    0.3103448275862069,
+    0.3448275862068966,
+    0.3793103448275862,
+    0.41379310344827586,
+    0.4482758620689655,
+    0.48275862068965514,
+    0.5172413793103449,
+    0.5517241379310345,
+    0.5862068965517241,
+    0.6206896551724138,
+    0.6551724137931034,
+    0.6896551724137931,
+    0.7241379310344828,
+    0.7586206896551724,
+    0.7931034482758621,
+    0.8275862068965517,
+    0.8620689655172413,
+    0.896551724137931,
+    0.9310344827586207,
+    0.9655172413793103,
+    1.0
+  ],
+  "accuracies": {
+    "cascading": [
+      95.60400000000001,
+      95.57200000000002,
+      95.23100000000001,
+      94.611,
+      93.78,
+      92.361,
+      88.80000000000001,
+      85.6,
+      82.83699999999999,
+      79.74100000000001,
+      76.44800000000001,
+      70.006,
+      68.583,
+      64.186,
+      60.94100000000001,
+      55.461,
+      51.39,
+      46.451,
+      41.822,
+      34.669,
+      30.648999999999994,
+      25.204,
+      22.935000000000002,
+      21.881999999999998,
+      18.462,
+      14.613000000000003,
+      13.719,
+      10.068,
+      9.597,
+      10.012
+    ]
+  },
+  "stds": {
+    "cascading": [
+      0.24690889007891378,
+      0.20346006979257844,
+      0.2506172380344187,
+      0.727632462167542,
+      0.947818548035434,
+      1.3797641102739269,
+      3.0549108006617782,
+      5.115812740904421,
+      7.085792898469443,
+      5.809107418528252,
+      5.201332137058738,
+      6.941546225445743,
+      8.228139583162163,
+      10.23248571951117,
+      9.706107819306355,
+      6.117248482773935,
+      7.129511904751966,
+      5.844493904522444,
+      8.36829110392319,
+      8.303703330442389,
+      8.113426464817438,
+      5.735941422295037,
+      4.927693679603065,
+      7.004089948023227,
+      6.8544683236557455,
+      2.8451539501404834,
+      2.620402450006487,
+      2.737940101609237,
+      2.7779526633835934,
+      0.19958957888627343
+    ]
+  },
+  "pruning_details": {
+    "cascading": {
+      "0": {
+        "0": {
+          "network.0": {
+            "num_dropped": 3.0,
+            "dropped_scores_sum": 4.914492869377137,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 3.0,
+            "dropped_scores_sum": 9.280301952362061,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 2.0,
+            "dropped_scores_sum": 6.531540822982788,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "1": {
+          "network.0": {
+            "num_dropped": 7.0,
+            "dropped_scores_sum": 19.727646255493163,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 7.0,
+            "dropped_scores_sum": 27.811929321289064,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 3.0,
+            "dropped_scores_sum": 11.152385425567626,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "2": {
+          "network.0": {
+            "num_dropped": 10.0,
+            "dropped_scores_sum": 33.2016040802002,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 10.0,
+            "dropped_scores_sum": 45.33083839416504,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 5.0,
+            "dropped_scores_sum": 22.985666847229005,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "3": {
+          "network.0": {
+            "num_dropped": 14.0,
+            "dropped_scores_sum": 52.697543716430665,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 14.0,
+            "dropped_scores_sum": 73.19658966064453,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 7.0,
+            "dropped_scores_sum": 38.27451019287109,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "4": {
+          "network.0": {
+            "num_dropped": 17.0,
+            "dropped_scores_sum": 68.16522674560547,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 17.0,
+            "dropped_scores_sum": 96.67441101074219,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 9.0,
+            "dropped_scores_sum": 56.604134750366214,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "5": {
+          "network.0": {
+            "num_dropped": 21.0,
+            "dropped_scores_sum": 89.68357467651367,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 21.0,
+            "dropped_scores_sum": 131.22287368774414,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 10.0,
+            "dropped_scores_sum": 67.58475189208984,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "6": {
+          "network.0": {
+            "num_dropped": 24.0,
+            "dropped_scores_sum": 106.40628356933594,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 24.0,
+            "dropped_scores_sum": 159.13332824707032,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 12.0,
+            "dropped_scores_sum": 91.03473052978515,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "7": {
+          "network.0": {
+            "num_dropped": 28.0,
+            "dropped_scores_sum": 129.53407363891603,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 28.0,
+            "dropped_scores_sum": 199.17135467529297,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 14.0,
+            "dropped_scores_sum": 116.91177368164062,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "8": {
+          "network.0": {
+            "num_dropped": 31.0,
+            "dropped_scores_sum": 147.528759765625,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 31.0,
+            "dropped_scores_sum": 230.6002227783203,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 16.0,
+            "dropped_scores_sum": 145.74915161132813,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "9": {
+          "network.0": {
+            "num_dropped": 34.0,
+            "dropped_scores_sum": 166.18405456542968,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 34.0,
+            "dropped_scores_sum": 263.82201080322267,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 17.0,
+            "dropped_scores_sum": 161.02183532714844,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "10": {
+          "network.0": {
+            "num_dropped": 38.0,
+            "dropped_scores_sum": 191.9789596557617,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 38.0,
+            "dropped_scores_sum": 310.3345489501953,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 19.0,
+            "dropped_scores_sum": 192.39007110595702,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "11": {
+          "network.0": {
+            "num_dropped": 41.0,
+            "dropped_scores_sum": 212.01842651367187,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 41.0,
+            "dropped_scores_sum": 346.5216430664062,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 21.0,
+            "dropped_scores_sum": 225.62367401123046,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "12": {
+          "network.0": {
+            "num_dropped": 45.0,
+            "dropped_scores_sum": 239.4820816040039,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 45.0,
+            "dropped_scores_sum": 396.86939392089846,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 22.0,
+            "dropped_scores_sum": 243.0571502685547,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "13": {
+          "network.0": {
+            "num_dropped": 48.0,
+            "dropped_scores_sum": 260.7471206665039,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 48.0,
+            "dropped_scores_sum": 436.1860382080078,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 24.0,
+            "dropped_scores_sum": 279.1011032104492,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "14": {
+          "network.0": {
+            "num_dropped": 52.0,
+            "dropped_scores_sum": 290.1789276123047,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 52.0,
+            "dropped_scores_sum": 490.6283325195312,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 26.0,
+            "dropped_scores_sum": 317.36687927246095,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "15": {
+          "network.0": {
+            "num_dropped": 55.0,
+            "dropped_scores_sum": 312.87790832519534,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 55.0,
+            "dropped_scores_sum": 532.8817626953125,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 28.0,
+            "dropped_scores_sum": 358.02369689941406,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "16": {
+          "network.0": {
+            "num_dropped": 59.0,
+            "dropped_scores_sum": 343.87962951660154,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 59.0,
+            "dropped_scores_sum": 591.2957092285156,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 29.0,
+            "dropped_scores_sum": 379.0321014404297,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "17": {
+          "network.0": {
+            "num_dropped": 62.0,
+            "dropped_scores_sum": 367.89666442871095,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 62.0,
+            "dropped_scores_sum": 636.8524597167968,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 31.0,
+            "dropped_scores_sum": 423.06835021972654,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "18": {
+          "network.0": {
+            "num_dropped": 66.0,
+            "dropped_scores_sum": 401.11919860839845,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 66.0,
+            "dropped_scores_sum": 700.3615173339844,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 33.0,
+            "dropped_scores_sum": 468.9907165527344,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "19": {
+          "network.0": {
+            "num_dropped": 69.0,
+            "dropped_scores_sum": 426.7611572265625,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 69.0,
+            "dropped_scores_sum": 749.7186828613281,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 34.0,
+            "dropped_scores_sum": 492.9744140625,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "20": {
+          "network.0": {
+            "num_dropped": 72.0,
+            "dropped_scores_sum": 453.0422302246094,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 72.0,
+            "dropped_scores_sum": 800.6344970703125,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 36.0,
+            "dropped_scores_sum": 542.7859649658203,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "21": {
+          "network.0": {
+            "num_dropped": 76.0,
+            "dropped_scores_sum": 489.9084411621094,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 76.0,
+            "dropped_scores_sum": 871.2028503417969,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 38.0,
+            "dropped_scores_sum": 595.7123657226563,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "22": {
+          "network.0": {
+            "num_dropped": 79.0,
+            "dropped_scores_sum": 518.7650482177735,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 79.0,
+            "dropped_scores_sum": 925.9533935546875,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 40.0,
+            "dropped_scores_sum": 652.0632690429687,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "23": {
+          "network.0": {
+            "num_dropped": 83.0,
+            "dropped_scores_sum": 558.665966796875,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 83.0,
+            "dropped_scores_sum": 1002.9570495605469,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 41.0,
+            "dropped_scores_sum": 681.4861022949219,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "24": {
+          "network.0": {
+            "num_dropped": 86.0,
+            "dropped_scores_sum": 590.3153869628907,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 86.0,
+            "dropped_scores_sum": 1064.1933654785157,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 43.0,
+            "dropped_scores_sum": 741.8354187011719,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "25": {
+          "network.0": {
+            "num_dropped": 90.0,
+            "dropped_scores_sum": 635.5245971679688,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 90.0,
+            "dropped_scores_sum": 1151.4413146972656,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 45.0,
+            "dropped_scores_sum": 806.9262451171875,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "26": {
+          "network.0": {
+            "num_dropped": 93.0,
+            "dropped_scores_sum": 671.7709899902344,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 93.0,
+            "dropped_scores_sum": 1223.328173828125,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 47.0,
+            "dropped_scores_sum": 876.9826965332031,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "27": {
+          "network.0": {
+            "num_dropped": 97.0,
+            "dropped_scores_sum": 729.050830078125,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 97.0,
+            "dropped_scores_sum": 1327.5747314453124,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 48.0,
+            "dropped_scores_sum": 914.0282653808594,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        },
+        "28": {
+          "network.0": {
+            "num_dropped": 100.0,
+            "dropped_scores_sum": 787.4913696289062,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.2": {
+            "num_dropped": 100.0,
+            "dropped_scores_sum": 1423.0088134765624,
+            "total_nodes_in_layer": 100.0
+          },
+          "network.4": {
+            "num_dropped": 50.0,
+            "dropped_scores_sum": 998.2358154296875,
+            "total_nodes_in_layer": 50.0
+          },
+          "network.6": {
+            "num_dropped": 0.0,
+            "dropped_scores_sum": 0.0,
+            "total_nodes_in_layer": 10.0
+          }
+        }
+      }
+    }
+  },
+  "pre_pruning_layer_stats": {
+    "network.0": {
+      "avg_mean_rq": 7.874914121627808,
+      "avg_std_rq": 3.408500337600708
+    },
+    "network.2": {
+      "avg_mean_rq": 14.23008852005005,
+      "avg_std_rq": 6.465345478057861
+    },
+    "network.4": {
+      "avg_mean_rq": 19.964716148376464,
+      "avg_std_rq": 10.046229839324951
+    },
+    "network.6": {
+      "avg_mean_rq": 33.86792755126953,
+      "avg_std_rq": 10.04253339767456
+    }
+  },
+  "training_history": {
+    "train_loss": [
+      0.9000442393779755,
+      0.2830577356815338,
+      0.21518946257432303,
+      0.173746551044782,
+      0.1473514315446218
+    ],
+    "train_acc": [
+      73.99783333333333,
+      91.66683333333333,
+      93.6695,
+      94.92033333333333,
+      95.64433333333334
+    ],
+    "test_loss": [
+      0.3235980879211426,
+      0.2369994485473633,
+      0.18593776504516601,
+      0.1636469867706299,
+      0.14470162506103515
+    ],
+    "test_acc": [
+      90.401,
+      92.885,
+      94.456,
+      94.97099999999999,
+      95.60400000000001
+    ]
+  }
+}
