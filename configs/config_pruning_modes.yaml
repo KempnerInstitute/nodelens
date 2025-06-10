@@ -1,0 +1,80 @@
+# Pruning Modes Configuration Sample
+
+# This config demonstrates the different pruning modes available:
+# 1. "global_joint": Concatenate all nodes and prune X% across all layers (original v1)
+# 2. "layer_wise": Prune X% from each layer separately, but all at once (v2-like)
+# 3. "layer_isolated": Prune X% from only one layer at a time (new option)
+# 4. "cascading_layer": Prune layers progressively - prune layer 1, use pruned network for layer 2, etc.
+
+experiment:
+  name: pruning_modes_comparison
+  type: alignment_stats
+
+dataset:
+  name: MNIST
+  batch_size: 200
+  test_batch_size: 200
+
+model:
+  network: MLP  
+  input_dim: 784
+  hidden_dim: [512, 256, 128, 64]
+  output_dim: 10
+  activation: ReLU
+  dropout: 0.2
+  
+alignment:
+  methods:
+    - "RQ"
+  frequency: 10
+  measure_expected: true
+  do_alignment: true
+  bins: 21
+
+training:
+  epochs: 50
+  lr: 0.001
+  optimizer: Adam
+  criterion: CrossEntropyLoss
+  device: cuda:0
+
+checkpointing:
+  use_prev: false
+  save_checkpoints: false
+  frequency: 10
+
+extra:
+  # Choose one of the pruning modes:
+  
+  # Option 1: Global Joint Pruning (Original v1) 
+  # Concatenates all nodes from all layers and prunes the lowest X% across all nodes
+  # dropout_pruning_mode: "global_joint"
+  
+  # Option 2: Layer-wise Pruning (v2-like)
+  # Prunes X% from each layer separately, but all at once
+  # dropout_pruning_mode: "layer_wise"
+  
+  # Option 3: Layer Isolation Pruning (new)
+  # Prunes X% from only one layer at a time, generating separate results per layer
+  # dropout_pruning_mode: "layer_isolated"
+  
+  # Option 4: Cascading Layer Pruning (new)
+  # Progressively prunes layers - prune layer 1, use pruned network to compute alignments for layer 2, etc.
+  dropout_pruning_mode: "cascading_layer"
+  
+  aggregate_alignment: false
+  num_drops: 9
+
+# Alternative configs you can uncomment to use:
+
+# Config for "layer_wise" mode (v2 behavior)
+# extra:
+#   dropout_pruning_mode: "layer_wise"
+#   aggregate_alignment: false 
+#   num_drops: 9
+
+# Config for "layer_isolated" mode
+# extra:
+#   dropout_pruning_mode: "layer_isolated"
+#   aggregate_alignment: false
+#   num_drops: 9 
