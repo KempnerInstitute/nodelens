@@ -22,20 +22,21 @@ src/alignment_refactor/
 ├── metrics/             # Metric implementations
 │   ├── __init__.py
 │   ├── base.py          # Base metric classes and protocols
-│   ├── alignment/       # Alignment-based metrics
+│   ├── rayleigh/        # Rayleigh Quotient-based metrics
 │   │   ├── __init__.py
 │   │   ├── rayleigh_quotient.py
-│   │   ├── similarity.py
-│   │   └── delta_alignment.py
+│   │   ├── delta_alignment.py
+│   │   └── normalized_rq.py
 │   ├── information/     # Information-theoretic metrics
 │   │   ├── __init__.py
 │   │   ├── mutual_information.py
 │   │   ├── pid.py      # Partial Information Decomposition
 │   │   └── redundancy.py
-│   └── weight/          # Weight-based metrics
+│   └── similarity/      # Similarity-based metrics
 │       ├── __init__.py
 │       ├── cosine_similarity.py
-│       └── node_redundancy.py
+│       ├── weight_similarity.py
+│       └── node_correlation.py
 ├── models/              # Model wrappers and implementations
 │   ├── __init__.py
 │   ├── base.py          # Base model wrapper
