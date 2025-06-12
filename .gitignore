@@ -3,7 +3,7 @@
 slurm-*.out
 *.pt
 *.mat
-data/
+
 # cluster jobs
 jobs/
 # VSCODE
