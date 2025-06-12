@@ -63,18 +63,18 @@ src/alignment_refactor/
 - [x] Create base classes
 - [x] Set up module structure
 
-### Phase 2: Metrics Migration (In Progress)
+### Phase 2: Metrics Migration ✅
 - [x] Create metrics base module
 - [x] Implement Rayleigh Quotient metric
-- [ ] Implement remaining alignment metrics
-- [ ] Implement information-theoretic metrics
-- [ ] Implement weight-based metrics
+- [x] Implement remaining alignment metrics (DeltaAlignment)
+- [x] Implement information-theoretic metrics (MI, Redundancy)
+- [x] Implement similarity-based metrics (Cosine, Weight similarity)
 
-### Phase 3: Model Wrappers
-- [ ] Create ModelWrapper base class
-- [ ] Implement activation tracking
-- [ ] Add dropout mask support
-- [ ] Create architecture-specific wrappers
+### Phase 3: Model Wrappers ✅
+- [x] Create ModelWrapper base class
+- [x] Implement activation tracking
+- [x] Add dropout mask support
+- [x] Create AlignmentNetwork compatibility wrapper
 
 ### Phase 4: Data Module
 - [ ] Create dataset wrapper protocol
