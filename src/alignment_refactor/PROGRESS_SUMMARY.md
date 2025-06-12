@@ -60,17 +60,20 @@ We've implemented three categories of metrics:
 
 
 ### Phase 5: Experiments
-- [ ] Create base experiment class
-- [ ] Migrate progressive dropout experiment
-- [ ] Migrate layer-isolated pruning
-- [ ] Migrate cascading pruning
-- [ ] Add new experiment types
+- ✅ `BaseExperiment`: Comprehensive base class with metrics, checkpointing, logging
+- ✅ `ExperimentConfig`: Dataclass for experiment configuration with JSON support
+- ✅ `ExperimentRunner`: Runner for sequential/parallel execution with grid search
+- ✅ `ProgressiveDropoutExperiment`: Complete implementation with trend analysis
+- ✅ Automatic result aggregation and summary reporting
 
 ### Phase 6: Analysis & Visualization
-- [ ] Create result aggregators
-- [ ] Implement plotting utilities
-- [ ] Add result reporting
-- [ ] Create interactive dashboards
+- ✅ `ResultAggregator`: Load and aggregate results from multiple experiments
+- ✅ `MetricAggregator`: Track metric evolution over time
+- ✅ `LayerAggregator`: Analyze layer-wise patterns and anomalies
+- ✅ `MetricVisualizer`: Line plots, bar charts, heatmaps, distributions
+- ✅ `LayerVisualizer`: Layer evolution and correlation plots
+- ✅ `ComparisonVisualizer`: Multi-experiment comparisons and radar charts
+- ✅ `HTMLReporter`, `MarkdownReporter`, `JSONReporter`: Multi-format reporting
 
 ### Phase 7: Utilities & Polish
 - [ ] Distributed computing utilities
@@ -80,6 +83,34 @@ We've implemented three categories of metrics:
 - [ ] Test suite
 
 ## 💡 Usage Examples
+
+### Running Experiments
+```python
+from alignment_refactor.experiments import ProgressiveDropoutExperiment, ExperimentConfig
+from alignment_refactor.experiments.runner import ExperimentRunner
+
+# Single experiment
+config = ExperimentConfig(
+    name="dropout_analysis",
+    model_name="resnet18",
+    dataset_name="cifar10",
+    metrics=["rayleigh_quotient", "mutual_information_gaussian"],
+    dropout_rates=[0.0, 0.2, 0.4, 0.6, 0.8]
+)
+experiment = ProgressiveDropoutExperiment(config)
+results = experiment.run()
+
+# Grid search with runner
+runner = ExperimentRunner(base_config=config)
+runner.add_grid_search(
+    "progressive_dropout",
+    param_grid={
+        'dropout_structure': ['random', 'magnitude'],
+        'batch_size': [64, 128, 256]
+    }
+)
+all_results = runner.run_all()
+```
 
 ### Computing Metrics
 ```python
@@ -121,6 +152,29 @@ metric = RayleighQuotient(
     force_cpu_for_large_ops=True,
     cpu_threshold=1e7
 )
+```
+
+### Analysis and Visualization
+```python
+from alignment_refactor.analysis import ResultAggregator, MetricVisualizer, HTMLReporter
+
+# Aggregate results
+aggregator = ResultAggregator()
+aggregator.load_from_directory("./results")
+df = aggregator.to_dataframe()
+
+# Visualize metrics
+visualizer = MetricVisualizer()
+fig = visualizer.plot_layer_comparison(
+    aggregator.get_metric_values("rayleigh_quotient"),
+    title="RQ Across Layers"
+)
+
+# Generate report
+reporter = HTMLReporter("Experiment Analysis")
+reporter.add_dataframe("Results", df)
+reporter.add_figure("rq_comparison.png", "Rayleigh Quotient Comparison")
+reporter.generate("report.html")
 ```
 
 ## 🔄 Migration Benefits
