@@ -1,301 +1,266 @@
-# Alignment Metrics Framework - Refactored Architecture
+# Alignment Metrics Framework - Refactored
 
-## Overview
+A comprehensive, modular framework for computing and analyzing neural network alignment metrics. This refactored version provides a clean, extensible architecture optimized for multi-GPU HPC environments.
 
-This refactored version of the alignment metrics framework provides a clean, modular, and scalable architecture for computing and analyzing alignment metrics in neural networks. The framework is designed for:
+## 🎯 Overview
 
-- **Multi-GPU/HPC Support**: Built-in support for distributed computing using PyTorch DDP
-- **Extensibility**: Easy to add new metrics, models, and analysis methods
-- **Performance**: Optimized computations with proper GPU/CPU memory management
-- **Modularity**: Clear separation of concerns with focused, single-responsibility modules
-- **Type Safety**: Full type annotations and protocol-based interfaces
+This framework provides tools for measuring how neural network representations align with their inputs and weights through various information-theoretic and geometric metrics. The refactored architecture emphasizes:
 
-## Architecture Overview
+- **Modularity**: Clear separation of concerns with protocol-based interfaces
+- **Performance**: Optimized for large-scale models with automatic memory management
+- **Extensibility**: Easy to add new metrics, models, and experiments
+- **Distributed**: Built-in support for multi-GPU training
+
+## 📁 Architecture
 
 ```
 src/alignment_refactor/
-├── core/                 # Core abstractions and base classes
-│   ├── __init__.py
-│   ├── base.py          # Base classes for metrics, models, experiments
-│   ├── protocols.py     # Protocol definitions for interfaces
-│   └── registry.py      # Central registry for metrics, models, etc.
-├── metrics/             # Metric implementations
-│   ├── __init__.py
-│   ├── base.py          # Base metric classes and protocols
-│   ├── rayleigh/        # Rayleigh Quotient-based metrics
-│   │   ├── __init__.py
-│   │   ├── rayleigh_quotient.py
-│   │   ├── delta_alignment.py
-│   │   └── normalized_rq.py
-│   ├── information/     # Information-theoretic metrics
-│   │   ├── __init__.py
-│   │   ├── mutual_information.py
-│   │   ├── pid.py      # Partial Information Decomposition
-│   │   └── redundancy.py
-│   └── similarity/      # Similarity-based metrics
-│       ├── __init__.py
-│       ├── cosine_similarity.py
-│       ├── weight_similarity.py
-│       └── node_correlation.py
-├── models/              # Model wrappers and implementations
-│   ├── __init__.py
-│   ├── base.py          # Base model wrapper
-│   ├── wrappers.py      # AlignmentNetwork wrapper
-│   ├── architectures/   # Specific architectures
-│   │   ├── __init__.py
-│   │   ├── mlp.py
-│   │   ├── cnn.py
-│   │   └── external.py  # External model integration
-│   └── layers.py        # Custom layers (e.g., dropout variants)
-├── data/                # Data loading and processing
-│   ├── __init__.py
-│   ├── base.py          # Base dataset classes
-│   ├── loaders.py       # Data loader utilities
-│   ├── datasets/        # Specific dataset implementations
-│   │   ├── __init__.py
-│   │   ├── mnist.py
-│   │   ├── cifar.py
-│   │   └── imagenet.py
-│   └── processors.py    # Data preprocessing utilities
-├── experiments/         # Experiment runners
-│   ├── __init__.py
-│   ├── base.py          # Base experiment class
-│   ├── runners/         # Specific experiment runners
-│   │   ├── __init__.py
-│   │   ├── progressive_dropout.py
-│   │   ├── layer_isolated.py
-│   │   ├── cascading_pruning.py
-│   │   └── eigenvector_analysis.py
-│   └── callbacks.py     # Experiment callbacks and hooks
-├── analysis/            # Analysis and visualization
-│   ├── __init__.py
-│   ├── aggregators.py   # Result aggregation utilities
-│   ├── visualizers/     # Visualization modules
-│   │   ├── __init__.py
-│   │   ├── alignment_plots.py
-│   │   ├── pruning_curves.py
-│   │   └── layer_analysis.py
-│   └── reporters.py     # Result reporting utilities
-├── utils/               # General utilities
-│   ├── __init__.py
-│   ├── distributed.py   # Distributed computing utilities
-│   ├── device.py        # Device management
-│   ├── logging.py       # Logging configuration
-│   ├── checkpoint.py    # Checkpointing utilities
-│   └── math.py          # Mathematical utilities
-└── configs/             # Configuration management
-    ├── __init__.py
-    ├── base.py          # Base configuration classes
-    ├── experiment.py    # Experiment configurations
-    └── templates/       # Configuration templates
-        ├── progressive_dropout.yaml
-        └── layer_analysis.yaml
+├── core/               # Core protocols, registry, and base classes
+├── metrics/            # Alignment metrics organized by computational method
+│   ├── rayleigh/      # Rayleigh quotient-based metrics
+│   ├── information/   # Information-theoretic metrics
+│   └── similarity/    # Similarity-based metrics
+├── models/            # Model wrappers and activation tracking
+├── data/              # Dataset wrappers and loaders
+├── experiments/       # Experiment runners and configurations
+├── analysis/          # Result aggregation and visualization
+└── utils/             # Distributed computing, logging, checkpointing
 ```
 
-## Key Design Principles
+## 🚀 Key Features
 
-### 1. Protocol-Based Interfaces
-All major components implement protocols (interfaces) to ensure consistency and enable easy extension:
-
-```python
-from typing import Protocol, Optional
-import torch
-
-class AlignmentMetric(Protocol):
-    """Protocol for all alignment metrics."""
-    
-    @property
-    def name(self) -> str: ...
-    
-    @property
-    def requires_inputs(self) -> bool: ...
-    
-    @property
-    def requires_weights(self) -> bool: ...
-    
-    @property
-    def requires_outputs(self) -> bool: ...
-    
-    def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor: ...
-```
-
-### 2. Distributed Computing Support
-Built-in support for multi-GPU training and metric computation:
+### 1. **Protocol-Based Design**
+All components implement well-defined protocols, making it easy to extend:
 
 ```python
-# Automatic distributed reduction in metrics
-class DistributedMetricComputer:
-    def compute_metrics(self, model, data_loader, metrics):
-        # Computes metrics in parallel across GPUs
-        # Automatically handles reduction and synchronization
+from alignment_refactor.core.protocols import AlignmentMetric
+
+class MyMetric(AlignmentMetric):
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+        # Your implementation
         pass
 ```
 
-### 3. Lazy Loading and Memory Management
-Efficient memory usage with automatic CPU offloading for large operations:
+### 2. **Registry System**
+Automatic discovery and instantiation of components:
 
 ```python
-class MemoryAwareMetric:
-    def compute(self, inputs, weights, force_cpu_for_large_ops=True):
-        if force_cpu_for_large_ops and inputs.numel() > threshold:
-            # Automatically move to CPU for large matrix operations
-            return self._compute_on_cpu(inputs, weights)
-        return self._compute_on_device(inputs, weights)
+from alignment_refactor.core.registry import register_metric, get_metric
+
+@register_metric("my_metric")
+class MyMetric(AlignmentMetric):
+    pass
+
+# Later...
+metric = get_metric("my_metric")()
 ```
 
-### 4. Composable Components
-All components are designed to be easily composed:
+### 3. **Memory-Aware Computation**
+Automatic CPU offloading for large operations:
 
 ```python
-# Example: Combining metrics with different aggregation strategies
-metric = RayleighQuotient()
-aggregator = LayerwiseAggregator(operation="mean")
-analyzer = AlignmentAnalyzer(metric=metric, aggregator=aggregator)
+metric = RayleighQuotient(
+    force_cpu_for_large_ops=True,
+    cpu_threshold=1e7  # Offload if tensor > 10M elements
+)
 ```
 
-## Migration Guide
-
-### Converting Existing Code
-
-1. **Metrics Migration**:
-   ```python
-   # Old style
-   from alignment.alignment_metrics import AlignmentMetrics
-   rq_scores = AlignmentMetrics.RQ(inputs, weights)
-   
-   # New style
-   from alignment_refactor.metrics.rayleigh import RayleighQuotient
-   metric = RayleighQuotient()
-   rq_scores = metric.compute(inputs=inputs, weights=weights)
-   ```
-
-2. **Model Wrapping**:
-   ```python
-   # Old style
-   from alignment.models import AlignmentNetwork
-   net = AlignmentNetwork(model, alignment_layers=layers)
-   
-   # New style
-   from alignment_refactor.models import ModelWrapper
-   wrapper = ModelWrapper(model, tracked_layers=layers)
-   ```
-
-3. **Experiment Running**:
-   ```python
-   # Old style
-   results = progressive_dropout(nets, dataset, alignment)
-   
-   # New style
-   from alignment_refactor.experiments.runners import ProgressiveDropoutExperiment
-   experiment = ProgressiveDropoutExperiment(config)
-   results = experiment.run(models, dataset)
-   ```
-
-## Performance Optimizations
-
-1. **Batched Metric Computation**: All metrics support batched computation for efficiency
-2. **Automatic Mixed Precision**: Support for AMP in metric computations
-3. **Smart Caching**: Activation caching to avoid redundant forward passes
-4. **Parallel Data Loading**: Optimized data pipeline with prefetching
-5. **Memory-Aware Operations**: Automatic CPU offloading for large matrices
-
-## Extensibility
-
-### Adding New Metrics
-
-1. Create a new metric class implementing the `AlignmentMetric` protocol
-2. Register it in the metric registry
-3. The metric is automatically available in all experiments
+### 4. **Distributed Support**
+Built-in distributed computing with automatic reduction:
 
 ```python
-from alignment_refactor.core.registry import register_metric
-from alignment_refactor.metrics.base import BaseMetric
-
-@register_metric("my_custom_metric")
-class MyCustomMetric(BaseMetric):
-    def compute(self, inputs, weights, **kwargs):
-        # Implementation
-        pass
+# Metrics automatically handle distributed reduction
+scores = metric.compute_distributed(
+    inputs=local_inputs,
+    weights=weights,
+    world_size=4,
+    rank=rank
+)
 ```
 
-### Adding New Experiments
-
-1. Inherit from `BaseExperiment`
-2. Implement the required methods
-3. Register the experiment type
+### 5. **Flexible Model Wrapping**
+Track activations with automatic layer discovery:
 
 ```python
-from alignment_refactor.experiments.base import BaseExperiment
-from alignment_refactor.core.registry import register_experiment
+from alignment_refactor.models import ModelWrapper
 
-@register_experiment("my_experiment")
-class MyExperiment(BaseExperiment):
-    def setup(self):
-        # Setup code
-        pass
-    
-    def run_iteration(self, iteration):
-        # Run one iteration
-        pass
+# Automatically discovers trackable layers
+wrapper = ModelWrapper(model)
+
+# Or specify layers
+wrapper = ModelWrapper(model, tracked_layers=['layer1', 'layer2'])
+
+# Get activations
+outputs, activations = wrapper.forward_with_activations(inputs)
 ```
 
-## Configuration System
+## 📊 Implemented Metrics
 
-The new configuration system uses structured configs with validation:
+### Rayleigh Quotient-Based (`metrics/rayleigh/`)
+- **RayleighQuotient**: Standard and relative RQ computation
+- **PatchWiseRayleighQuotient**: For convolutional layers
+- **DeltaAlignment**: RQ on weight changes
+- **NormalizedDeltaAlignment**: Scale-invariant version
 
-```yaml
-experiment:
-  type: progressive_dropout
-  name: "resnet18_imagenet_pruning"
-  device: "cuda"
-  use_ddp: true
-  seed: 42
+### Information-Theoretic (`metrics/information/`)
+- **MutualInformationGaussian**: MI with Gaussian approximation
+- **MutualInformationBinning**: MI using histogram binning
+- **ConditionalMutualInformation**: CMI implementation
+- **SharedInformation** (PID): Redundant information between inputs
+- **UniqueInformationX/Y** (PID): Unique information from each input
+- **SynergisticInformation** (PID): Emergent information from both inputs
+- **AverageRedundancy**: Redundancy between neurons
+- **NodeRedundancy**: Input feature redundancy
+- **LayerRedundancy**: Overall layer redundancy
 
-model:
-  architecture: "torchvision_resnet18"
-  pretrained: true
-  
-metrics:
-  - name: "rayleigh_quotient"
-    config:
-      relative: true
-      force_cpu_for_large_ops: true
-  - name: "mutual_information"
-    config:
-      method: "gaussian"
-      
-pruning:
-  mode: "layer_wise"
-  dropout_range: [0.0, 0.9]
-  steps: 40
-  exclude_final_layer: true
+### Similarity-Based (`metrics/similarity/`)
+- **WeightCosineSimilarity**: Cosine similarity between weight vectors
+- **ActivationCosineSimilarity**: Similarity between activation patterns
+- **WeightActivationAlignment**: Alignment with activation PCs
+
+## 🧪 Running Experiments
+
+### Single Experiment
+```python
+from alignment_refactor.experiments import ProgressiveDropoutExperiment, ExperimentConfig
+
+config = ExperimentConfig(
+    name="dropout_analysis",
+    model_name="resnet18",
+    dataset_name="cifar10",
+    metrics=["rayleigh_quotient", "mutual_information_gaussian", "pid_shared"],
+    dropout_rates=[0.0, 0.2, 0.4, 0.6, 0.8]
+)
+
+experiment = ProgressiveDropoutExperiment(config)
+results = experiment.run()
 ```
 
-## Testing
+### Grid Search
+```python
+from alignment_refactor.experiments.runner import ExperimentRunner
 
-The refactored codebase includes comprehensive tests:
+runner = ExperimentRunner(base_config=config)
+runner.add_grid_search(
+    "progressive_dropout",
+    param_grid={
+        'dropout_structure': ['random', 'magnitude'],
+        'batch_size': [64, 128, 256]
+    }
+)
+all_results = runner.run_all()
+```
+
+## 📈 Analysis and Visualization
+
+### Result Aggregation
+```python
+from alignment_refactor.analysis import ResultAggregator
+
+aggregator = ResultAggregator()
+aggregator.load_from_directory("./results")
+df = aggregator.to_dataframe()
+
+# Get statistics
+stats = aggregator.compute_statistics("rayleigh_quotient", "layer1")
+```
+
+### Visualization
+```python
+from alignment_refactor.analysis import MetricVisualizer, LayerVisualizer
+
+# Plot metric evolution
+visualizer = MetricVisualizer()
+fig = visualizer.plot_metric_evolution(
+    steps, values,
+    title="RQ Evolution",
+    save_path="rq_evolution.png"
+)
+
+# Layer comparison
+layer_viz = LayerVisualizer()
+fig = layer_viz.plot_layer_comparison(
+    layer_metrics,
+    title="Layer-wise Alignment"
+)
+```
+
+### Report Generation
+```python
+from alignment_refactor.analysis import HTMLReporter
+
+reporter = HTMLReporter("Experiment Analysis")
+reporter.add_dataframe("Results", df)
+reporter.add_figure("evolution.png", "Metric Evolution")
+reporter.generate("report.html")
+```
+
+## 🛠️ Utilities
+
+### Distributed Training
+```python
+from alignment_refactor.utils import setup_distributed, is_main_process
+
+# Setup
+setup_distributed(backend="nccl")
+
+# Use throughout code
+if is_main_process():
+    # Save checkpoints, log, etc.
+    pass
+```
+
+### Checkpoint Management
+```python
+from alignment_refactor.utils import CheckpointManager
+
+manager = CheckpointManager(
+    checkpoint_dir="./checkpoints",
+    max_checkpoints=5,
+    metric_name="val_loss",
+    mode="min"
+)
+
+# Save
+manager.save(model.state_dict(), step=1000, metrics={"val_loss": 0.5})
+
+# Load best
+checkpoint = manager.load_best()
+```
+
+## 🔧 Installation
 
 ```bash
-# Run all tests
-pytest tests/
+# Clone the repository
+git clone <repository-url>
+cd alignment
 
-# Run specific test module
-pytest tests/test_metrics.py
+# Install dependencies
+pip install -r requirements.txt
 
-# Run with coverage
-pytest --cov=alignment_refactor tests/
+# Optional: Install in development mode
+pip install -e .
 ```
 
-## Future Enhancements
+## 📚 Examples
 
-1. **Additional Metrics**: More information-theoretic and geometric metrics
-2. **Advanced Pruning**: Structured pruning, channel pruning support
-3. **Visualization Dashboard**: Interactive web-based visualization
-4. **AutoML Integration**: Automatic hyperparameter optimization
-5. **Model Zoo**: Pre-computed alignment metrics for popular models 
+See the `examples/` directory for complete examples:
+- `example_usage.py`: Basic metric computation
+- `experiment_example.py`: Running experiments
+- `analysis_example.py`: Analyzing results
+
+## 🤝 Contributing
+
+Contributions are welcome! The modular architecture makes it easy to add:
+- New metrics (inherit from `AlignmentMetric`)
+- New models (inherit from `BaseModelWrapper`)
+- New experiments (inherit from `BaseExperiment`)
+- New datasets (inherit from `BaseDataset`)
+
+## 📄 License
+
+[Your License Here]
+
+## 🙏 Acknowledgments
+
+This refactored version builds upon the original alignment metrics codebase, reorganizing it for better modularity, performance, and extensibility. 
