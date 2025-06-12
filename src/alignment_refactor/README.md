@@ -170,7 +170,7 @@ analyzer = AlignmentAnalyzer(metric=metric, aggregator=aggregator)
    rq_scores = AlignmentMetrics.RQ(inputs, weights)
    
    # New style
-   from alignment_refactor.metrics.alignment import RayleighQuotient
+   from alignment_refactor.metrics.rayleigh import RayleighQuotient
    metric = RayleighQuotient()
    rq_scores = metric.compute(inputs=inputs, weights=weights)
    ```
