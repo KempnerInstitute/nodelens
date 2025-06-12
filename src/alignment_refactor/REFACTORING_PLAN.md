@@ -40,9 +40,9 @@ src/alignment_refactor/
 │   ├── registry.py         # Component registration
 │   └── base.py            # Base implementations
 ├── metrics/                # Metric implementations
-│   ├── alignment/         # Alignment-based metrics
+│   ├── rayleigh/         # Rayleigh Quotient-based metrics
 │   ├── information/       # Information-theoretic metrics
-│   └── weight/           # Weight-based metrics
+│   └── similarity/       # Similarity-based metrics
 ├── models/                # Model wrappers
 │   ├── wrappers.py       # Model wrapping functionality
 │   └── architectures/    # Specific architectures

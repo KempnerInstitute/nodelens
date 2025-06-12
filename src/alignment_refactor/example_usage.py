@@ -10,7 +10,7 @@ from torchvision import models
 
 # Import from the refactored framework
 from alignment_refactor.core import get_metric, get_experiment
-from alignment_refactor.metrics import RayleighQuotient
+from alignment_refactor.metrics.rayleigh import RayleighQuotient
 from alignment_refactor.models import ModelWrapper
 from alignment_refactor.data import MNISTDataset
 from alignment_refactor.experiments.runners import ProgressiveDropoutExperiment
