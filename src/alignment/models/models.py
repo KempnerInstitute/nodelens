@@ -453,7 +453,7 @@ TRANSFORM_PARAMETERS = {
         "ImageNet": dict(flatten=False),
     },
     "alexnet": {
-        "MNIST": dict(flatten=False, resize=(256, 256), extra_transform=[gray_to_rgb,]),
+        "MNIST": dict(flatten=False, resize=(256, 256), out_channels=3),
         "CIFAR10": dict(flatten=False, resize=(256, 256)),
         "CIFAR100": dict(flatten=False, resize=(256, 256)),
         "ImageNet": dict(center_crop=224, flatten=False, resize=(256, 256)),

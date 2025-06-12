@@ -637,10 +637,37 @@ class AlignmentExperiment(Experiment):
         # 2. Create Networks & Load Dataset (Common Setup)
         self.networks = self.create_networks()
         batch_size = self.config.dataset.batch_size
+        
+        # Prepare transform parameters based on model type
+        model_name = self.config.model.model_name
+        dataset_name = self.config.dataset.dataset_name
+        from alignment.models.models import get_transform_parameters
+        
+        # Normalize external model names to their base names for transform lookup
+        normalized_model_name = model_name.lower()
+        if normalized_model_name.startswith("torchvision_"):
+            normalized_model_name = normalized_model_name.replace("torchvision_", "")
+        elif normalized_model_name.startswith("hf_"):
+            hf_name = normalized_model_name.replace("hf_", "")
+            if "bert" in hf_name:
+                normalized_model_name = "bert"
+            elif "gpt" in hf_name:
+                normalized_model_name = "gpt"
+            else:
+                normalized_model_name = hf_name.split("-")[0]
+        
+        try:
+            transform_params = get_transform_parameters(normalized_model_name, dataset_name)
+            logger.info(f"Using transform parameters for model '{normalized_model_name}' (from '{model_name}') with dataset '{dataset_name}': {transform_params}")
+        except (ValueError, KeyError) as e:
+            logger.warning(f"Could not get transform parameters for model '{normalized_model_name}': {e}. Using default (no transforms).")
+            transform_params = {}
+        
         self.dataset = load_dataset(
             self.config.dataset,
             batch_size=batch_size,
             device=self.device,
+            transform_params=transform_params,
             use_ddp=self.config.use_ddp,
             ddp_rank=self.config.ddp_rank,
             ddp_world_size=self.config.ddp_world_size,

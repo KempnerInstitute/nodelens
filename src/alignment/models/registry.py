@@ -164,17 +164,38 @@ def create_model(config: ModelConfig) -> AlignmentNetwork:
 
         if ext_p.source == "torchvision":
             try:
-                weights_arg = torchvision.models.Weights.DEFAULT if ext_p.pretrained else None
-                if not hasattr(torchvision.models, ext_p.name_or_path):
-                    weights_enum_name = f"{ext_p.name_or_path.capitalize()}_Weights"
-                    if not hasattr(torchvision.models, weights_enum_name) and not hasattr(torchvision.models, ext_p.name_or_path.lower()):
-                        # Try lowercase for model name as a fallback for get_model
-                        if not hasattr(torchvision.models, ext_p.name_or_path.lower()):
-                            raise ValueError(f"Torchvision model/weights '{ext_p.name_or_path}' not found.")
+                # Handle torchvision version compatibility
+                # Newer versions use Weights.DEFAULT, older versions use pretrained=True/False
+                try:
+                    # Try new API first (torchvision >= 0.13)
+                    if hasattr(torchvision.models, 'Weights') and hasattr(torchvision.models.Weights, 'DEFAULT'):
+                        weights_arg = torchvision.models.Weights.DEFAULT if ext_p.pretrained else None
+                        base_model_instance = torchvision.models.get_model(ext_p.name_or_path, weights=weights_arg)
+                    else:
+                        # Fall back to old API (torchvision < 0.13)
+                        model_fn = getattr(torchvision.models, ext_p.name_or_path)
+                        base_model_instance = model_fn(pretrained=ext_p.pretrained)
+                except AttributeError:
+                    # Handle case where model name doesn't exist
+                    if not hasattr(torchvision.models, ext_p.name_or_path):
+                        weights_enum_name = f"{ext_p.name_or_path.capitalize()}_Weights"
+                        if not hasattr(torchvision.models, weights_enum_name) and not hasattr(torchvision.models, ext_p.name_or_path.lower()):
+                            # Try lowercase for model name as a fallback for get_model
+                            if not hasattr(torchvision.models, ext_p.name_or_path.lower()):
+                                raise ValueError(f"Torchvision model/weights '{ext_p.name_or_path}' not found.")
+                            else:
+                                ext_p.name_or_path = ext_p.name_or_path.lower()
+                        
+                        # Retry with corrected name
+                        if hasattr(torchvision.models, 'Weights') and hasattr(torchvision.models.Weights, 'DEFAULT'):
+                            weights_arg = torchvision.models.Weights.DEFAULT if ext_p.pretrained else None
+                            base_model_instance = torchvision.models.get_model(ext_p.name_or_path, weights=weights_arg)
                         else:
-                            ext_p.name_or_path = ext_p.name_or_path.lower()
+                            model_fn = getattr(torchvision.models, ext_p.name_or_path)
+                            base_model_instance = model_fn(pretrained=ext_p.pretrained)
+                    else:
+                        raise  # Re-raise the original AttributeError
                 
-                base_model_instance = torchvision.models.get_model(ext_p.name_or_path, weights=weights_arg)
                 logger.info(f"Loaded torchvision model '{ext_p.name_or_path}' with pretrained={ext_p.pretrained}")
                 
                 classifier_attr_names = ['fc', 'classifier'] 

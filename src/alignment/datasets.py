@@ -173,11 +173,22 @@ class DataSet(ABC):
         ]
         if center_crop:
             use_transforms.append(transforms.CenterCrop(center_crop))
-        use_transforms.append(transforms.Normalize((self.dist_params["mean"]), (self.dist_params["std"])))
         if resize:
             use_transforms.append(transforms.Resize(resize, antialias=True))
         if out_channels:
             use_transforms.append(transforms.Grayscale(num_output_channels=out_channels))
+            
+        # Apply normalization with appropriate parameters based on output channels
+        if out_channels == 3:
+            # For RGB conversion (e.g., MNIST to RGB for AlexNet), use ImageNet normalization
+            norm_mean = [0.485, 0.456, 0.406]
+            norm_std = [0.229, 0.224, 0.225]
+        else:
+            # Use the dataset's original normalization parameters
+            norm_mean = self.dist_params["mean"]
+            norm_std = self.dist_params["std"]
+        use_transforms.append(transforms.Normalize(norm_mean, norm_std))
+        
         if flatten:
             use_transforms.append(transforms.Lambda(torch.flatten))
         self.transform = transforms.Compose(use_transforms)
@@ -477,9 +488,26 @@ def load_dataset(
                 else:
                     model_name = 'mlp'  # Default
                 
-                transform_params = get_transform_parameters(model_name, dataset_name)
-            except (ImportError, AttributeError) as e:
-                logger.warning(f"Could not load transform parameters: {str(e)}")
+                # Normalize external model names to their base names for transform lookup
+                # e.g., "torchvision_alexnet" -> "alexnet", "hf_bert-base-uncased" -> "bert"
+                normalized_model_name = model_name.lower()
+                if normalized_model_name.startswith("torchvision_"):
+                    normalized_model_name = normalized_model_name.replace("torchvision_", "")
+                elif normalized_model_name.startswith("hf_"):
+                    # For huggingface models, extract the base model type
+                    hf_name = normalized_model_name.replace("hf_", "")
+                    if "bert" in hf_name:
+                        normalized_model_name = "bert"
+                    elif "gpt" in hf_name:
+                        normalized_model_name = "gpt"
+                    else:
+                        # Default to a reasonable base name
+                        normalized_model_name = hf_name.split("-")[0]
+                
+                transform_params = get_transform_parameters(normalized_model_name, dataset_name)
+                logger.info(f"Using transform parameters for model '{normalized_model_name}' (from '{model_name}') with dataset '{dataset_name}': {transform_params}")
+            except (ImportError, AttributeError, ValueError) as e:
+                logger.warning(f"Could not load transform parameters for model '{model_name}': {str(e)}. Using default transform parameters.")
                 transform_params = {}
     
     # Set up loader parameters
@@ -494,11 +522,16 @@ def load_dataset(
         loader_params['num_workers'] = dataset_config.num_workers
     # pin_memory could also be configured here from dataset_config if needed
 
+    # Prepare dataset parameters based on dataset type
+    dataset_params = {'root': dataset_path}
+    if dataset_name.upper() != 'IMAGENET':  # ImageNet doesn't support download=True
+        dataset_params['download'] = True
+    
     # Load the dataset
     dataset = get_dataset(
         dataset_name=dataset_name,
         build=True,
-        dataset_parameters={'root': dataset_path, 'download': True},
+        dataset_parameters=dataset_params,
         transform_parameters=transform_params,
         loader_parameters=loader_params, # Contains batch_size, num_workers etc.
         distributed=use_ddp, 
