@@ -1,0 +1,323 @@
+"""
+Progressive dropout experiment for alignment analysis.
+
+This experiment progressively applies dropout to model layers
+and tracks how alignment metrics change.
+"""
+
+from typing import Dict, List, Optional, Any
+import torch
+import torch.nn as nn
+import numpy as np
+from pathlib import Path
+import logging
+
+from alignment_refactor.experiments.base import BaseExperiment, ExperimentConfig
+from alignment_refactor.core.registry import register_experiment
+from alignment_refactor.models.wrapper import apply_structured_dropout
+
+logger = logging.getLogger(__name__)
+
+
+@register_experiment("progressive_dropout")
+class ProgressiveDropoutExperiment(BaseExperiment):
+    """
+    Experiment that progressively applies dropout to model layers.
+    
+    This experiment:
+    1. Starts with a trained model
+    2. Progressively increases dropout rates
+    3. Tracks alignment metrics at each dropout level
+    4. Analyzes how alignment changes with dropout
+    """
+    
+    def __init__(self, config: ExperimentConfig):
+        """
+        Initialize progressive dropout experiment.
+        
+        Additional config parameters:
+            dropout_rates: List of dropout rates to test
+            dropout_structure: Type of structured dropout ('random', 'magnitude', 'gradient')
+            num_samples: Number of data samples to use for metrics
+            apply_to_layers: Specific layers to apply dropout to (None = all)
+        """
+        super().__init__(config)
+        
+        # Experiment-specific config
+        self.dropout_rates = getattr(config, 'dropout_rates', 
+                                     [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+        self.dropout_structure = getattr(config, 'dropout_structure', 'random')
+        self.num_samples = getattr(config, 'num_samples', 1000)
+        self.apply_to_layers = getattr(config, 'apply_to_layers', None)
+        
+        # Results storage
+        self.dropout_results = {
+            'dropout_rates': self.dropout_rates,
+            'metrics_by_rate': {},
+            'layer_statistics': {}
+        }
+    
+    def run(self) -> Dict[str, Any]:
+        """
+        Run the progressive dropout experiment.
+        
+        Returns:
+            Experiment results including metrics at each dropout rate
+        """
+        logger.info("Starting progressive dropout experiment")
+        
+        # Collect initial model statistics
+        self._collect_initial_statistics()
+        
+        # Get data samples for evaluation
+        eval_data = self._get_evaluation_data()
+        
+        # Test each dropout rate
+        for dropout_rate in self.dropout_rates:
+            logger.info(f"Testing dropout rate: {dropout_rate}")
+            
+            # Apply dropout to model
+            with apply_structured_dropout(
+                self.wrapped_model,
+                dropout_rate=dropout_rate,
+                structure=self.dropout_structure,
+                layers=self.apply_to_layers
+            ):
+                # Compute metrics with dropout
+                metrics = self._evaluate_with_dropout(eval_data, dropout_rate)
+                
+                # Store results
+                self.dropout_results['metrics_by_rate'][dropout_rate] = metrics
+                
+                # Log progress
+                self.log_metrics(
+                    step=int(dropout_rate * 100),  # Use dropout % as step
+                    metrics=self._flatten_metrics(metrics, dropout_rate)
+                )
+            
+            # Optional: Save checkpoint
+            if self.config.checkpoint_interval > 0:
+                self.save_checkpoint(
+                    step=int(dropout_rate * 100),
+                    metrics=metrics
+                )
+        
+        # Analyze results
+        self._analyze_dropout_effects()
+        
+        # Save final results
+        self.results.update(self.dropout_results)
+        self.save_results()
+        
+        return self.results
+    
+    def _collect_initial_statistics(self):
+        """Collect statistics about the initial model."""
+        logger.info("Collecting initial model statistics")
+        
+        weights = self.wrapped_model.get_layer_weights()
+        
+        for layer_name, weight in weights.items():
+            if weight is None:
+                continue
+            
+            # Compute weight statistics
+            stats = {
+                'shape': list(weight.shape),
+                'num_parameters': weight.numel(),
+                'mean': weight.mean().item(),
+                'std': weight.std().item(),
+                'min': weight.min().item(),
+                'max': weight.max().item(),
+                'sparsity': (weight == 0).float().mean().item()
+            }
+            
+            # Compute norms
+            stats['l1_norm'] = weight.abs().sum().item()
+            stats['l2_norm'] = weight.pow(2).sum().sqrt().item()
+            
+            self.dropout_results['layer_statistics'][layer_name] = stats
+    
+    def _get_evaluation_data(self) -> List[torch.Tensor]:
+        """Get data samples for evaluation."""
+        eval_data = []
+        total_samples = 0
+        
+        for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+            inputs = inputs.to(self.config.device)
+            eval_data.append(inputs)
+            
+            total_samples += inputs.size(0)
+            if total_samples >= self.num_samples:
+                break
+        
+        # Concatenate and trim to exact number
+        eval_data = torch.cat(eval_data, dim=0)[:self.num_samples]
+        
+        logger.info(f"Collected {eval_data.size(0)} samples for evaluation")
+        return eval_data
+    
+    def _evaluate_with_dropout(
+        self,
+        eval_data: torch.Tensor,
+        dropout_rate: float
+    ) -> Dict[str, Any]:
+        """
+        Evaluate metrics with current dropout settings.
+        
+        Args:
+            eval_data: Data to evaluate on
+            dropout_rate: Current dropout rate
+            
+        Returns:
+            Dictionary of metrics
+        """
+        # Set model to eval mode (but keep dropout active via context manager)
+        self.model.eval()
+        
+        all_metrics = {}
+        batch_size = min(self.config.batch_size, eval_data.size(0))
+        
+        # Process in batches
+        for i in range(0, eval_data.size(0), batch_size):
+            batch = eval_data[i:i + batch_size]
+            
+            # Compute metrics for batch
+            with torch.no_grad():
+                batch_metrics = self.compute_metrics(batch)
+            
+            # Accumulate metrics
+            for metric_name, layer_results in batch_metrics.items():
+                if metric_name not in all_metrics:
+                    all_metrics[metric_name] = {}
+                
+                for layer_name, value in layer_results.items():
+                    if layer_name not in all_metrics[metric_name]:
+                        all_metrics[metric_name][layer_name] = []
+                    all_metrics[metric_name][layer_name].append(value)
+        
+        # Average metrics across batches
+        averaged_metrics = {}
+        for metric_name, layer_results in all_metrics.items():
+            averaged_metrics[metric_name] = {}
+            for layer_name, values in layer_results.items():
+                averaged_metrics[metric_name][layer_name] = np.mean(values)
+        
+        # Add additional statistics
+        averaged_metrics['_statistics'] = {
+            'dropout_rate': dropout_rate,
+            'num_samples': eval_data.size(0),
+            'effective_sparsity': self._compute_effective_sparsity()
+        }
+        
+        return averaged_metrics
+    
+    def _compute_effective_sparsity(self) -> Dict[str, float]:
+        """Compute effective sparsity after dropout."""
+        sparsity = {}
+        
+        for name, module in self.model.named_modules():
+            if hasattr(module, 'weight') and module.weight is not None:
+                weight = module.weight
+                # Count zeros (including dropout-induced zeros)
+                num_zeros = (weight == 0).float().sum().item()
+                total_params = weight.numel()
+                sparsity[name] = num_zeros / total_params
+        
+        return sparsity
+    
+    def _flatten_metrics(
+        self,
+        metrics: Dict[str, Any],
+        dropout_rate: float
+    ) -> Dict[str, float]:
+        """Flatten metrics dictionary for logging."""
+        flat_metrics = {f'dropout_rate': dropout_rate}
+        
+        for metric_name, layer_results in metrics.items():
+            if metric_name.startswith('_'):
+                continue  # Skip internal metrics
+            
+            for layer_name, value in layer_results.items():
+                key = f"{metric_name}/{layer_name}"
+                flat_metrics[key] = value
+        
+        return flat_metrics
+    
+    def _analyze_dropout_effects(self):
+        """Analyze how dropout affects alignment metrics."""
+        logger.info("Analyzing dropout effects on alignment")
+        
+        analysis = {
+            'metric_trends': {},
+            'layer_sensitivity': {},
+            'critical_dropout_rates': {}
+        }
+        
+        # Analyze trends for each metric and layer
+        for metric_name in self.metrics.keys():
+            analysis['metric_trends'][metric_name] = {}
+            
+            # Get all layers that have this metric
+            all_layers = set()
+            for rate_results in self.dropout_results['metrics_by_rate'].values():
+                if metric_name in rate_results:
+                    all_layers.update(rate_results[metric_name].keys())
+            
+            for layer_name in all_layers:
+                # Collect values across dropout rates
+                rates = []
+                values = []
+                
+                for rate, results in self.dropout_results['metrics_by_rate'].items():
+                    if metric_name in results and layer_name in results[metric_name]:
+                        rates.append(rate)
+                        values.append(results[metric_name][layer_name])
+                
+                if len(values) < 2:
+                    continue
+                
+                # Compute trend statistics
+                values = np.array(values)
+                rates = np.array(rates)
+                
+                # Linear regression to find trend
+                coeffs = np.polyfit(rates, values, 1)
+                slope = coeffs[0]
+                
+                # Find critical points (large changes)
+                if len(values) > 2:
+                    diffs = np.diff(values)
+                    max_change_idx = np.argmax(np.abs(diffs))
+                    critical_rate = rates[max_change_idx + 1]
+                else:
+                    critical_rate = None
+                
+                analysis['metric_trends'][metric_name][layer_name] = {
+                    'slope': float(slope),
+                    'initial_value': float(values[0]),
+                    'final_value': float(values[-1]),
+                    'percent_change': float((values[-1] - values[0]) / (values[0] + 1e-8) * 100),
+                    'critical_dropout_rate': float(critical_rate) if critical_rate else None
+                }
+        
+        # Compute layer sensitivity (how much each layer is affected by dropout)
+        for layer_name in self.wrapped_model.tracked_layers:
+            sensitivities = []
+            
+            for metric_name in self.metrics.keys():
+                if (metric_name in analysis['metric_trends'] and 
+                    layer_name in analysis['metric_trends'][metric_name]):
+                    
+                    trend = analysis['metric_trends'][metric_name][layer_name]
+                    sensitivities.append(abs(trend['percent_change']))
+            
+            if sensitivities:
+                analysis['layer_sensitivity'][layer_name] = {
+                    'mean_sensitivity': float(np.mean(sensitivities)),
+                    'max_sensitivity': float(np.max(sensitivities)),
+                    'sensitivity_scores': sensitivities
+                }
+        
+        self.dropout_results['analysis'] = analysis
+        logger.info("Dropout analysis complete") 
