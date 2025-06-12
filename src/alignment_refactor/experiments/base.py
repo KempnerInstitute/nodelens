@@ -47,11 +47,18 @@ class ExperimentConfig:
     num_workers: int = 4
     device: str = "cuda"
     seed: int = 42
+    train_before_dropout: bool = True
+    training_epochs: int = 10
+    learning_rate: float = 0.001
+    optimizer: str = "adam"
     
     # Metrics configuration
     metrics: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
     metric_configs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     tracked_layers: Optional[List[str]] = None
+    scale_by_norm: bool = False  # Whether to scale alignment scores by weight norm
+    force_cpu_for_large_metric_ops: bool = True  # Move large operations to CPU
+    cnn_rq_aggregation_op: str = "mean"  # "mean", "max", "var", "sum" for CNN RQ
     
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
@@ -221,6 +228,15 @@ class BaseExperiment(CoreBaseExperiment):
         for metric_name in self.config.metrics:
             metric_class = get_metric(metric_name)
             metric_config = self.config.metric_configs.get(metric_name, {})
+            
+            # Add global metric options if not already specified
+            if 'scale_by_norm' not in metric_config:
+                metric_config['scale_by_norm'] = self.config.scale_by_norm
+            if 'force_cpu' not in metric_config:
+                metric_config['force_cpu'] = self.config.force_cpu_for_large_metric_ops
+            if 'aggregation_op' not in metric_config and 'cnn' in metric_name.lower():
+                metric_config['aggregation_op'] = self.config.cnn_rq_aggregation_op
+                
             self.metrics[metric_name] = metric_class(**metric_config)
         
         logger.info(f"Initialized metrics: {list(self.metrics.keys())}")
