@@ -50,6 +50,12 @@ class ProgressiveDropoutExperiment(BaseExperiment):
         self.num_samples = getattr(config, 'num_samples', 1000)
         self.apply_to_layers = getattr(config, 'apply_to_layers', None)
         
+        # Dropout configuration
+        self.dropout_mode = getattr(config, 'dropout_mode', 'scaled')
+        self.pruning_mode = getattr(config, 'pruning_mode', 'global_joint')
+        self.pruning_strategy = getattr(config, 'pruning_strategy', 'low')
+        self.exclude_classification_layer = getattr(config, 'exclude_classification_layer', True)
+        
         # Results storage
         self.dropout_results = {
             'dropout_rates': self.dropout_rates,

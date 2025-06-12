@@ -54,9 +54,9 @@ This document compares features between the original alignment codebase and the 
 | Experiment Type | Original | Refactored | Status |
 |-----------------|----------|------------|--------|
 | Progressive Dropout | ✅ | ✅ `ProgressiveDropoutExperiment` | ✅ |
-| **Layer-Isolated Pruning** | ✅ | ❌ | **TODO** |
-| **Cascading Layer Pruning** | ✅ | ❌ | **TODO** |
-| **Eigenvector Dropout** | ✅ | ❌ | **TODO** |
+| **Layer-Isolated Pruning** | ✅ | ✅ `LayerIsolatedPruningExperiment` | ✅ |
+| **Cascading Layer Pruning** | ✅ | ✅ `CascadingLayerPruningExperiment` | ✅ |
+| **Eigenvector Dropout** | ✅ | ✅ `EigenvectorDropoutExperiment` | ✅ |
 
 ### Training Features
 | Feature | Original | Refactored | Status |
