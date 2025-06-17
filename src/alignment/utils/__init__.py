@@ -2,7 +2,7 @@
 Utility functions and helpers for the alignment framework.
 """
 
-from alignment_refactor.utils.distributed import (
+from alignment.utils.distributed import (
     setup_distributed,
     cleanup_distributed,
     is_main_process,
@@ -10,17 +10,17 @@ from alignment_refactor.utils.distributed import (
     reduce_tensor,
     gather_tensor,
 )
-from alignment_refactor.utils.checkpoint import (
+from alignment.utils.checkpoint import (
     save_checkpoint,
     load_checkpoint,
     CheckpointManager,
 )
-from alignment_refactor.utils.logging import (
+from alignment.utils.logging import (
     setup_logging,
     get_logger,
     log_metrics,
 )
-from alignment_refactor.utils.config import (
+from alignment.utils.config import (
     load_config,
     save_config,
     merge_configs,

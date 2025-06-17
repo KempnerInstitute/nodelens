@@ -7,7 +7,7 @@ import torch
 import numpy as np
 from typing import Tuple
 
-from alignment_refactor.metrics import (
+from alignment.metrics import (
     RayleighQuotient,
     MutualInformationGaussian,
     PartialInformationDecomposition,

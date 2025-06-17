@@ -11,8 +11,8 @@ import numpy as np
 import logging
 from pathlib import Path
 
-from alignment_refactor.metrics.base import BaseInformationMetric
-from alignment_refactor.core.registry import register_metric
+from alignment.metrics.base import BaseInformationMetric
+from alignment.core.registry import register_metric
 
 logger = logging.getLogger(__name__)
 

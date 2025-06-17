@@ -22,8 +22,8 @@ from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 import seaborn as sns
 
-from alignment_refactor.models import ModelWrapper
-from alignment_refactor.metrics import (
+from alignment.models import ModelWrapper
+from alignment.metrics import (
     RayleighQuotient, 
     MutualInformationGaussian,
     SharedInformation

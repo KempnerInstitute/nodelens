@@ -7,8 +7,8 @@ import torch
 from torchvision import datasets, transforms
 from pathlib import Path
 
-from alignment_refactor.data.base import BaseDataset
-from alignment_refactor.core.registry import register_dataset
+from alignment.data.base import BaseDataset
+from alignment.core.registry import register_dataset
 
 
 @register_dataset("cifar10")

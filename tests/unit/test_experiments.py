@@ -8,14 +8,14 @@ import torch.nn as nn
 from pathlib import Path
 import tempfile
 
-from alignment_refactor.experiments import (
+from alignment.experiments import (
     ProgressiveDropoutExperiment,
     EigenvectorAlignment,
     LayerIsolatedPruning,
     ExperimentConfig
 )
-from alignment_refactor.models.architectures.standard_models import MLP, CNN2P2
-from alignment_refactor.metrics import RayleighQuotient
+from alignment.models.architectures.standard_models import MLP, CNN2P2
+from alignment.metrics import RayleighQuotient
 
 
 class TestExperimentConfig:

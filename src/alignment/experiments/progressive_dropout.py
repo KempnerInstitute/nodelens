@@ -12,9 +12,8 @@ import numpy as np
 from pathlib import Path
 import logging
 
-from alignment_refactor.experiments.base import BaseExperiment, ExperimentConfig
-from alignment_refactor.core.registry import register_experiment
-from alignment_refactor.models.wrapper import apply_structured_dropout
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
+from alignment.core.registry import register_experiment
 
 logger = logging.getLogger(__name__)
 
@@ -82,24 +81,32 @@ class ProgressiveDropoutExperiment(BaseExperiment):
         for dropout_rate in self.dropout_rates:
             logger.info(f"Testing dropout rate: {dropout_rate}")
             
+            # Create dropout masks for this rate
+            dropout_masks = self._create_dropout_masks(dropout_rate)
+            
             # Apply dropout to model
-            with apply_structured_dropout(
-                self.wrapped_model,
-                dropout_rate=dropout_rate,
-                structure=self.dropout_structure,
-                layers=self.apply_to_layers
-            ):
-                # Compute metrics with dropout
-                metrics = self._evaluate_with_dropout(eval_data, dropout_rate)
-                
-                # Store results
-                self.dropout_results['metrics_by_rate'][dropout_rate] = metrics
-                
-                # Log progress
-                self.log_metrics(
-                    step=int(dropout_rate * 100),  # Use dropout % as step
-                    metrics=self._flatten_metrics(metrics, dropout_rate)
+            if dropout_masks:
+                self.wrapped_model.apply_structured_dropout(
+                    dropout_masks, 
+                    mode="multiplicative", 
+                    permanent=False
                 )
+            
+            # Compute metrics with dropout
+            metrics = self._evaluate_with_dropout(eval_data, dropout_rate)
+            
+            # Store results
+            self.dropout_results['metrics_by_rate'][dropout_rate] = metrics
+            
+            # Log progress
+            self.log_metrics(
+                step=int(dropout_rate * 100),  # Use dropout % as step
+                metrics=self._flatten_metrics(metrics, dropout_rate)
+            )
+            
+            # Restore original weights
+            if dropout_masks:
+                self.wrapped_model.restore_weights()
             
             # Optional: Save checkpoint
             if self.config.checkpoint_interval > 0:
@@ -143,6 +150,57 @@ class ProgressiveDropoutExperiment(BaseExperiment):
             stats['l2_norm'] = weight.pow(2).sum().sqrt().item()
             
             self.dropout_results['layer_statistics'][layer_name] = stats
+    
+    def _create_dropout_masks(self, dropout_rate: float) -> Dict[str, torch.Tensor]:
+        """
+        Create dropout masks for specified layers.
+        
+        Args:
+            dropout_rate: Fraction of units to drop
+            
+        Returns:
+            Dictionary mapping layer names to binary masks
+        """
+        if dropout_rate == 0.0:
+            return {}
+            
+        dropout_masks = {}
+        layers_to_apply = self.apply_to_layers or self.wrapped_model.tracked_layers
+        
+        for layer_name in layers_to_apply:
+            layer_info = self.wrapped_model.get_layer_info(layer_name)
+            
+            if 'weight_shape' not in layer_info:
+                continue
+                
+            # Get number of units based on layer type
+            if layer_info['type'] == 'Linear':
+                num_units = layer_info['out_features']
+            elif layer_info['type'] in ['Conv2d', 'Conv1d']:
+                num_units = layer_info['out_channels']
+            else:
+                continue
+            
+            # Create mask based on dropout structure
+            if self.dropout_structure == 'random':
+                # Random dropout
+                mask = torch.rand(num_units) > dropout_rate
+            elif self.dropout_structure == 'magnitude':
+                # Magnitude-based dropout (keep high magnitude units)
+                weights = self.wrapped_model.get_layer_weights([layer_name])[layer_name]
+                magnitudes = weights.abs().sum(dim=tuple(range(1, weights.ndim)))
+                threshold = torch.quantile(magnitudes, dropout_rate)
+                mask = magnitudes > threshold
+            elif self.dropout_structure == 'gradient':
+                # Gradient-based dropout (requires gradients)
+                # For now, fallback to random
+                mask = torch.rand(num_units) > dropout_rate
+            else:
+                raise ValueError(f"Unknown dropout structure: {self.dropout_structure}")
+            
+            dropout_masks[layer_name] = mask.float().to(self.config.device)
+            
+        return dropout_masks
     
     def _get_evaluation_data(self) -> List[torch.Tensor]:
         """Get data samples for evaluation."""

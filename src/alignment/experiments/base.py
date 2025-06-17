@@ -15,10 +15,10 @@ import json
 import time
 from datetime import datetime
 
-from alignment_refactor.core.base import BaseExperiment as CoreBaseExperiment
-from alignment_refactor.core.registry import get_metric, get_model, get_dataset
-from alignment_refactor.models import ModelWrapper
-from alignment_refactor.data.loaders import create_distributed_loader
+from alignment.core.base import BaseExperiment as CoreBaseExperiment
+from alignment.core.registry import get_metric, get_model, get_dataset
+from alignment.models import ModelWrapper
+from alignment.data.loaders import create_distributed_loader
 
 logger = logging.getLogger(__name__)
 

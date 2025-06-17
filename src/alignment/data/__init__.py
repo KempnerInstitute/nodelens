@@ -5,8 +5,8 @@ This module provides dataset wrappers and data loading utilities
 for use with alignment analysis experiments.
 """
 
-from alignment_refactor.data.base import BaseDataset, DatasetWrapper
-from alignment_refactor.data.loaders import (
+from alignment.data.base import BaseDataset, DatasetWrapper
+from alignment.data.loaders import (
     create_data_loader,
     create_distributed_loader,
     DataLoaderConfig,
@@ -14,9 +14,9 @@ from alignment_refactor.data.loaders import (
 
 # Import dataset implementations when they're created
 try:
-    from alignment_refactor.data.datasets.mnist import MNISTDataset
-    from alignment_refactor.data.datasets.cifar import CIFAR10Dataset, CIFAR100Dataset
-    from alignment_refactor.data.datasets.imagenet import ImageNetDataset
+    from alignment.data.datasets.mnist import MNISTDataset
+    from alignment.data.datasets.cifar import CIFAR10Dataset, CIFAR100Dataset
+    from alignment.data.datasets.imagenet import ImageNetDataset
 except ImportError:
     pass  # Datasets will be implemented next
 

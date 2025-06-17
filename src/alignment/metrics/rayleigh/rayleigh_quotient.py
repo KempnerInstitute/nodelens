@@ -9,8 +9,8 @@ from typing import Optional, Any
 import torch
 import logging
 
-from alignment_refactor.core.base import BaseMetric
-from alignment_refactor.core.registry import register_metric
+from alignment.core.base import BaseMetric
+from alignment.core.registry import register_metric
 
 logger = logging.getLogger(__name__)
 
