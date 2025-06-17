@@ -18,15 +18,15 @@ import torch
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from alignment_refactor.configs import load_config, validate_config
-from alignment_refactor.experiments import (
+from alignment.configs import load_config, validate_config
+from alignment.experiments import (
     ProgressiveDropoutExperiment,
     EigenvectorAlignment,
     LayerIsolatedPruning,
     ExperimentConfig
 )
-from alignment_refactor.models.architectures.standard_models import MLP, CNN2P2
-from alignment_refactor.analysis.visualizers import MetricVisualizer
+from alignment.models.architectures.standard_models import MLP, CNN2P2
+from alignment.analysis.visualizers import MetricVisualizer
 
 
 def setup_logging(verbose=True):
