@@ -59,7 +59,7 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
     def __init__(self, config: LayerIsolatedConfig):
         """Initialize layer-isolated pruning experiment."""
         super().__init__(config)
-        self.config = config
+        # config is already handled by parent class
         self.pruning_scores = {}
         self.original_weights = {}
         

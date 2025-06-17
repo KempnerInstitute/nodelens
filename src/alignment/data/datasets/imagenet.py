@@ -75,7 +75,7 @@ class ImageNetDataset(BaseDataset):
         )
         
         # Check if data exists
-        data_dir = Path(self.data_path) / ("train" if self.train else "val")
+        data_dir = Path(self._data_path) / ("train" if self.train else "val")
         if not data_dir.exists():
             raise ValueError(
                 f"ImageNet data not found at {data_dir}. "
