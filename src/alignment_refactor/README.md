@@ -1,266 +1,179 @@
-# Alignment Metrics Framework - Refactored
+# Neural Network Alignment Framework
 
-A comprehensive, modular framework for computing and analyzing neural network alignment metrics. This refactored version provides a clean, extensible architecture optimized for multi-GPU HPC environments.
+A comprehensive framework for studying neural network alignment properties through information-theoretic metrics and pruning strategies.
 
-## 🎯 Overview
+## Features
 
-This framework provides tools for measuring how neural network representations align with their inputs and weights through various information-theoretic and geometric metrics. The refactored architecture emphasizes:
+- **Alignment Metrics**: Rayleigh Quotient (RQ), Mutual Information (MI), Partial Information Decomposition (PID), CKA, CCA
+- **Pruning Strategies**: Progressive dropout, eigenvector-based, layer-isolated, and cascading pruning
+- **Model Support**: Pre-defined architectures (MLP, CNN) and support for custom models
+- **Experiment Framework**: Reproducible experiment management with comprehensive configuration
+- **Tensorized Dropout**: Efficient structured pruning implementation
 
-- **Modularity**: Clear separation of concerns with protocol-based interfaces
-- **Performance**: Optimized for large-scale models with automatic memory management
-- **Extensibility**: Easy to add new metrics, models, and experiments
-- **Distributed**: Built-in support for multi-GPU training
-
-## 📁 Architecture
-
-```
-src/alignment_refactor/
-├── core/               # Core protocols, registry, and base classes
-├── metrics/            # Alignment metrics organized by computational method
-│   ├── rayleigh/      # Rayleigh quotient-based metrics
-│   ├── information/   # Information-theoretic metrics
-│   └── similarity/    # Similarity-based metrics
-├── models/            # Model wrappers and activation tracking
-├── data/              # Dataset wrappers and loaders
-├── experiments/       # Experiment runners and configurations
-├── analysis/          # Result aggregation and visualization
-└── utils/             # Distributed computing, logging, checkpointing
-```
-
-## 🚀 Key Features
-
-### 1. **Protocol-Based Design**
-All components implement well-defined protocols, making it easy to extend:
-
-```python
-from alignment_refactor.core.protocols import AlignmentMetric
-
-class MyMetric(AlignmentMetric):
-    def compute(self, inputs: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-        # Your implementation
-        pass
-```
-
-### 2. **Registry System**
-Automatic discovery and instantiation of components:
-
-```python
-from alignment_refactor.core.registry import register_metric, get_metric
-
-@register_metric("my_metric")
-class MyMetric(AlignmentMetric):
-    pass
-
-# Later...
-metric = get_metric("my_metric")()
-```
-
-### 3. **Memory-Aware Computation**
-Automatic CPU offloading for large operations:
-
-```python
-metric = RayleighQuotient(
-    force_cpu_for_large_ops=True,
-    cpu_threshold=1e7  # Offload if tensor > 10M elements
-)
-```
-
-### 4. **Distributed Support**
-Built-in distributed computing with automatic reduction:
-
-```python
-# Metrics automatically handle distributed reduction
-scores = metric.compute_distributed(
-    inputs=local_inputs,
-    weights=weights,
-    world_size=4,
-    rank=rank
-)
-```
-
-### 5. **Flexible Model Wrapping**
-Track activations with automatic layer discovery:
-
-```python
-from alignment_refactor.models import ModelWrapper
-
-# Automatically discovers trackable layers
-wrapper = ModelWrapper(model)
-
-# Or specify layers
-wrapper = ModelWrapper(model, tracked_layers=['layer1', 'layer2'])
-
-# Get activations
-outputs, activations = wrapper.forward_with_activations(inputs)
-```
-
-## 📊 Implemented Metrics
-
-### Rayleigh Quotient-Based (`metrics/rayleigh/`)
-- **RayleighQuotient**: Standard and relative RQ computation
-- **PatchWiseRayleighQuotient**: For convolutional layers
-- **DeltaAlignment**: RQ on weight changes
-- **NormalizedDeltaAlignment**: Scale-invariant version
-
-### Information-Theoretic (`metrics/information/`)
-- **MutualInformationGaussian**: MI with Gaussian approximation
-- **MutualInformationBinning**: MI using histogram binning
-- **ConditionalMutualInformation**: CMI implementation
-- **SharedInformation** (PID): Redundant information between inputs
-- **UniqueInformationX/Y** (PID): Unique information from each input
-- **SynergisticInformation** (PID): Emergent information from both inputs
-- **AverageRedundancy**: Redundancy between neurons
-- **NodeRedundancy**: Input feature redundancy
-- **LayerRedundancy**: Overall layer redundancy
-
-### Similarity-Based (`metrics/similarity/`)
-- **WeightCosineSimilarity**: Cosine similarity between weight vectors
-- **ActivationCosineSimilarity**: Similarity between activation patterns
-- **WeightActivationAlignment**: Alignment with activation PCs
-
-## 🧪 Running Experiments
-
-### Single Experiment
-```python
-from alignment_refactor.experiments import ProgressiveDropoutExperiment, ExperimentConfig
-
-config = ExperimentConfig(
-    name="dropout_analysis",
-    model_name="resnet18",
-    dataset_name="cifar10",
-    metrics=["rayleigh_quotient", "mutual_information_gaussian", "pid_shared"],
-    dropout_rates=[0.0, 0.2, 0.4, 0.6, 0.8]
-)
-
-experiment = ProgressiveDropoutExperiment(config)
-results = experiment.run()
-```
-
-### Grid Search
-```python
-from alignment_refactor.experiments.runner import ExperimentRunner
-
-runner = ExperimentRunner(base_config=config)
-runner.add_grid_search(
-    "progressive_dropout",
-    param_grid={
-        'dropout_structure': ['random', 'magnitude'],
-        'batch_size': [64, 128, 256]
-    }
-)
-all_results = runner.run_all()
-```
-
-## 📈 Analysis and Visualization
-
-### Result Aggregation
-```python
-from alignment_refactor.analysis import ResultAggregator
-
-aggregator = ResultAggregator()
-aggregator.load_from_directory("./results")
-df = aggregator.to_dataframe()
-
-# Get statistics
-stats = aggregator.compute_statistics("rayleigh_quotient", "layer1")
-```
-
-### Visualization
-```python
-from alignment_refactor.analysis import MetricVisualizer, LayerVisualizer
-
-# Plot metric evolution
-visualizer = MetricVisualizer()
-fig = visualizer.plot_metric_evolution(
-    steps, values,
-    title="RQ Evolution",
-    save_path="rq_evolution.png"
-)
-
-# Layer comparison
-layer_viz = LayerVisualizer()
-fig = layer_viz.plot_layer_comparison(
-    layer_metrics,
-    title="Layer-wise Alignment"
-)
-```
-
-### Report Generation
-```python
-from alignment_refactor.analysis import HTMLReporter
-
-reporter = HTMLReporter("Experiment Analysis")
-reporter.add_dataframe("Results", df)
-reporter.add_figure("evolution.png", "Metric Evolution")
-reporter.generate("report.html")
-```
-
-## 🛠️ Utilities
-
-### Distributed Training
-```python
-from alignment_refactor.utils import setup_distributed, is_main_process
-
-# Setup
-setup_distributed(backend="nccl")
-
-# Use throughout code
-if is_main_process():
-    # Save checkpoints, log, etc.
-    pass
-```
-
-### Checkpoint Management
-```python
-from alignment_refactor.utils import CheckpointManager
-
-manager = CheckpointManager(
-    checkpoint_dir="./checkpoints",
-    max_checkpoints=5,
-    metric_name="val_loss",
-    mode="min"
-)
-
-# Save
-manager.save(model.state_dict(), step=1000, metrics={"val_loss": 0.5})
-
-# Load best
-checkpoint = manager.load_best()
-```
-
-## 🔧 Installation
+## Installation
 
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd alignment
+cd alignment/src/alignment_refactor
+
+# Install the package
+pip install -e .
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Optional: Install in development mode
-pip install -e .
 ```
 
-## 📚 Examples
+## Quick Start
 
-See the `examples/` directory for complete examples:
-- `example_usage.py`: Basic metric computation
-- `experiment_example.py`: Running experiments
-- `analysis_example.py`: Analyzing results
+```python
+from alignment_refactor.models.architectures.standard_models import create_model
+from alignment_refactor.experiments.progressive_dropout import ProgressiveDropoutExperiment
+from alignment_refactor.experiments.base import ExperimentConfig
 
-## 🤝 Contributing
+# Configure experiment
+config = ExperimentConfig(
+    name="mnist_pruning",
+    model_name="mlp",
+    dataset_name="mnist",
+    metrics=["rayleigh_quotient"],
+    device="cuda"
+)
 
-Contributions are welcome! The modular architecture makes it easy to add:
-- New metrics (inherit from `AlignmentMetric`)
-- New models (inherit from `BaseModelWrapper`)
-- New experiments (inherit from `BaseExperiment`)
-- New datasets (inherit from `BaseDataset`)
+# Run experiment
+experiment = ProgressiveDropoutExperiment(config)
+results = experiment.run()
+```
 
-## 📄 License
+## Documentation
 
-[Your License Here]
+### Building Documentation
 
-## 🙏 Acknowledgments
+```bash
+# Install documentation dependencies
+pip install -r docs/requirements-docs.txt
 
-This refactored version builds upon the original alignment metrics codebase, reorganizing it for better modularity, performance, and extensibility. 
+# Build HTML documentation
+cd docs
+make html
+
+# View documentation
+open build/html/index.html
+```
+
+### Live Documentation Server
+
+```bash
+cd docs
+make livehtml
+# Navigate to http://localhost:8000
+```
+
+## Project Structure
+
+```
+alignment_refactor/
+├── core/                   # Core functionality (tensorized dropout, registry)
+├── models/                 # Model architectures and wrappers
+│   ├── architectures/      # Standard models (MLP, CNN)
+│   └── wrapper.py          # ModelWrapper for activation tracking
+├── metrics/                # Alignment and information metrics
+│   ├── rayleigh/          # Rayleigh quotient metrics
+│   ├── information/       # MI, PID metrics
+│   └── similarity/        # CKA, CCA metrics
+├── experiments/           # Experiment implementations
+│   ├── base.py           # Base experiment class
+│   ├── progressive_dropout.py
+│   ├── eigenvector.py
+│   ├── layer_isolated.py
+│   └── cascading.py
+├── data/                  # Dataset handling
+├── utils/                 # Utility functions
+├── examples/              # Example scripts
+└── docs/                  # Documentation source
+```
+
+## Examples
+
+### Basic MLP Pruning
+
+```python
+from alignment_refactor.models.architectures.standard_models import MLP
+from alignment_refactor.models import ModelWrapper
+from alignment_refactor.metrics import RayleighQuotient
+
+# Create model
+model = MLP(input_dim=784, hidden_dims=[300, 200], output_dim=10)
+
+# Wrap for tracking
+tracked_layers = ['network.0', 'network.3']
+wrapped_model = ModelWrapper(model, tracked_layers=tracked_layers)
+
+# Compute metrics
+metric = RayleighQuotient()
+# ... forward pass and metric computation
+```
+
+### Running Multiple Experiments
+
+```python
+from alignment_refactor.experiments.runner import ExperimentRunner
+
+runner = ExperimentRunner(base_config=config)
+
+# Add experiments
+for pruning_rate in [0.1, 0.3, 0.5]:
+    runner.add_experiment(
+        "progressive_dropout",
+        config_overrides={"pruning_rate": pruning_rate}
+    )
+
+results = runner.run_all()
+```
+
+## Configuration
+
+Experiments are configured using the `ExperimentConfig` dataclass:
+
+```python
+config = ExperimentConfig(
+    # Experiment identification
+    name="experiment_name",
+    description="Detailed description",
+    
+    # Model configuration
+    model_name="mlp",
+    model_config={"hidden_dims": [300, 200]},
+    
+    # Training configuration
+    batch_size=128,
+    learning_rate=0.001,
+    training_epochs=10,
+    
+    # Metrics configuration
+    metrics=["rayleigh_quotient", "mutual_information"],
+    metric_configs={
+        "rayleigh_quotient": {"scale_by_norm": False}
+    }
+)
+```
+
+## Available Metrics
+
+- **Rayleigh Quotient (RQ)**: Measures neuron alignment with input variance
+- **Mutual Information (MI)**: Quantifies information shared between layers
+- **Partial Information Decomposition (PID)**: Decomposes information into unique, redundant, and synergistic components
+- **Centered Kernel Alignment (CKA)**: Measures similarity between representations
+- **Canonical Correlation Analysis (CCA)**: Finds maximally correlated projections
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 
