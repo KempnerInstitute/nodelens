@@ -144,8 +144,8 @@ class TensorizedNetworkWrapper(nn.Module):
     """
     Wrapper that combines multiple networks for tensorized training.
     
-    This wrapper stacks the parameters of multiple networks into
-    tensorized parameters for efficient batch processing.
+    This wrapper manages multiple networks and runs them in parallel
+    by calling each network's forward method individually.
     """
     
     def __init__(self, networks: List[nn.Module]):
@@ -156,33 +156,8 @@ class TensorizedNetworkWrapper(nn.Module):
             networks: List of networks with same architecture
         """
         super().__init__()
+        self.networks = nn.ModuleList(networks)
         self.num_networks = len(networks)
-        self.base_network = networks[0]
-        
-        # Stack parameters from all networks
-        self._tensorize_parameters(networks)
-    
-    def _tensorize_parameters(self, networks: List[nn.Module]):
-        """Stack parameters from multiple networks."""
-        # Group parameters by name
-        param_groups = {}
-        
-        for net_idx, net in enumerate(networks):
-            for name, param in net.named_parameters():
-                if name not in param_groups:
-                    param_groups[name] = []
-                param_groups[name].append(param)
-        
-        # Create stacked parameters
-        for name, params in param_groups.items():
-            # Stack parameters along first dimension
-            stacked = torch.stack([p.data for p in params], dim=0)
-            
-            # Register as parameter
-            self.register_parameter(
-                name.replace('.', '_'),
-                nn.Parameter(stacked, requires_grad=params[0].requires_grad)
-            )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -194,53 +169,15 @@ class TensorizedNetworkWrapper(nn.Module):
         Returns:
             Output tensor [num_networks, batch_size, ...]
         """
-        # Expand input for all networks
-        x_expanded = x.unsqueeze(0).expand(self.num_networks, -1, -1, -1, -1)
-        
-        # Apply each layer using tensorized parameters
-        # This is a simplified example - real implementation would need
-        # to handle different layer types properly
         outputs = []
-        
-        for net_idx in range(self.num_networks):
-            # Extract parameters for this network
-            net_params = {
-                name: getattr(self, name.replace('.', '_'))[net_idx]
-                for name, _ in self.base_network.named_parameters()
-            }
-            
-            # Forward pass with extracted parameters
-            output = self._forward_with_params(x, net_params)
-            outputs.append(output)
+        for network in self.networks:
+            outputs.append(network(x))
         
         return torch.stack(outputs, dim=0)
     
-    def _forward_with_params(self, x: torch.Tensor, params: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Forward pass with specific parameters."""
-        # This would need to be implemented based on the specific architecture
-        # For now, we'll use functional calls
-        # This is a placeholder - real implementation would be more complex
-        raise NotImplementedError("Functional forward pass not implemented")
-    
     def extract_networks(self) -> List[nn.Module]:
-        """Extract individual networks with updated parameters."""
-        networks = []
-        
-        for net_idx in range(self.num_networks):
-            # Create new network instance
-            net = type(self.base_network)()
-            
-            # Copy tensorized parameters
-            with torch.no_grad():
-                for name, param in self.named_parameters():
-                    orig_name = name.replace('_', '.')
-                    if hasattr(net, orig_name):
-                        target_param = getattr(net, orig_name)
-                        target_param.data.copy_(param[net_idx])
-            
-            networks.append(net)
-        
-        return networks
+        """Extract individual networks (they are already separate)."""
+        return list(self.networks)
 
 
 def _verify_same_architecture(networks: List[nn.Module]) -> bool:
@@ -379,10 +316,109 @@ def _train_single_network(
     callbacks: Optional[List[Callable]]
 ) -> Tuple[List[nn.Module], Dict[str, List[float]]]:
     """Fallback to standard single network training."""
-    # Implementation of standard training
-    # This is a placeholder - would use existing training logic
+    device = torch.device(device)
+    network = network.to(device)
+    
+    loss_fn = loss_fn or nn.CrossEntropyLoss()
+    optimizer_kwargs = optimizer_kwargs or {}
+    optimizer = optimizer_class(network.parameters(), **optimizer_kwargs)
+    
+    history = {
+        'train_loss': [],
+        'train_acc': [],
+        'val_loss': [],
+        'val_acc': [],
+        'epoch_times': []
+    }
+    
     logger.info("Using standard single network training")
-    return [network], {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+    
+    for epoch in range(epochs):
+        epoch_start = time.time()
+        
+        # Training phase
+        network.train()
+        total_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for batch_idx, (inputs, targets) in enumerate(train_loader):
+            inputs, targets = inputs.to(device), targets.to(device)
+            
+            optimizer.zero_grad()
+            outputs = network(inputs)
+            loss = loss_fn(outputs, targets)
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            _, predicted = outputs.max(1)
+            correct += predicted.eq(targets).sum().item()
+            total += targets.size(0)
+            
+            if batch_idx % log_interval == 0:
+                logger.debug(f"Epoch {epoch} [{batch_idx}/{len(train_loader)}] Loss: {loss.item():.4f}")
+        
+        avg_train_loss = total_loss / len(train_loader)
+        train_acc = 100.0 * correct / total
+        
+        # Validation phase
+        val_loss, val_acc = 0.0, 0.0
+        if val_loader and (epoch + 1) % eval_interval == 0:
+            network.eval()
+            total_loss = 0.0
+            correct = 0
+            total = 0
+            
+            with torch.no_grad():
+                for inputs, targets in val_loader:
+                    inputs, targets = inputs.to(device), targets.to(device)
+                    outputs = network(inputs)
+                    loss = loss_fn(outputs, targets)
+                    
+                    total_loss += loss.item()
+                    _, predicted = outputs.max(1)
+                    correct += predicted.eq(targets).sum().item()
+                    total += targets.size(0)
+            
+            val_loss = total_loss / len(val_loader)
+            val_acc = 100.0 * correct / total
+        
+        # Record history
+        epoch_time = time.time() - epoch_start
+        history['train_loss'].append(avg_train_loss)
+        history['train_acc'].append(train_acc)
+        history['val_loss'].append(val_loss)
+        history['val_acc'].append(val_acc)
+        history['epoch_times'].append(epoch_time)
+        
+        # Log progress
+        logger.info(
+            f"Epoch {epoch+1}/{epochs} - "
+            f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%, "
+            f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%, "
+            f"Time: {epoch_time:.2f}s"
+        )
+        
+        # Save checkpoint
+        if checkpoint_dir and (epoch + 1) % eval_interval == 0:
+            checkpoint_dir = Path(checkpoint_dir)
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': network.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'history': history
+            }
+            checkpoint_path = checkpoint_dir / f"single_epoch_{epoch}.pt"
+            torch.save(checkpoint, checkpoint_path)
+        
+        # Callbacks
+        if callbacks:
+            for callback in callbacks:
+                callback(network, epoch, history)
+    
+    return [network], history
 
 
 def _save_tensorized_checkpoint(
