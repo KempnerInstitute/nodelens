@@ -50,9 +50,12 @@ class BaseModelWrapper(BaseModel):
         self.flatten_activations = flatten_activations
         
         # Auto-discover trackable layers if not specified
-        if self._tracked_layers is None:
+        if not self._tracked_layers:  # Check if empty list instead of None
             self._tracked_layers = self._discover_layers()
             logger.info(f"Auto-discovered {len(self._tracked_layers)} trackable layers")
+            # Re-register hooks for discovered layers
+            if self._tracked_layers:
+                self._register_hooks()
     
     def _discover_layers(self) -> List[str]:
         """

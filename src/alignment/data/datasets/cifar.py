@@ -56,7 +56,7 @@ class CIFAR10Dataset(BaseDataset):
         
         # Initialize the dataset
         self._dataset = datasets.CIFAR10(
-            root=self.data_path,
+            root=self._data_path,
             train=self.train,
             transform=self.get_transform(),
             target_transform=self.target_transform,
@@ -175,7 +175,7 @@ class CIFAR100Dataset(BaseDataset):
         
         # Initialize the dataset
         self._dataset = datasets.CIFAR100(
-            root=self.data_path,
+            root=self._data_path,
             train=self.train,
             transform=self.get_transform(),
             target_transform=self.target_transform,

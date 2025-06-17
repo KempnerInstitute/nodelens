@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 
 from alignment.core.base import BaseExperiment as CoreBaseExperiment
-from alignment.core.registry import get_metric, get_model, get_dataset
+from alignment.core.registry import get_metric, get_model, get_dataset, DATASET_REGISTRY
 from alignment.models import ModelWrapper
 from alignment.data.loaders import create_distributed_loader
 
@@ -123,10 +123,10 @@ class BaseExperiment(CoreBaseExperiment):
             config: Experiment configuration
         """
         super().__init__(config.name, config.to_dict())
-        self.config = config
+        self._experiment_config = config
         
         # Set random seed
-        self._set_seed(config.seed)
+        self._set_seed(self._experiment_config.seed)
         
         # Initialize components
         self.model = None
@@ -146,6 +146,11 @@ class BaseExperiment(CoreBaseExperiment):
         
         # Initialize components
         self._initialize_components()
+    
+    @property
+    def config(self) -> ExperimentConfig:
+        """Access the experiment configuration."""
+        return self._experiment_config
     
     def _set_seed(self, seed: int):
         """Set random seed for reproducibility."""
@@ -173,21 +178,25 @@ class BaseExperiment(CoreBaseExperiment):
     
     def _initialize_model(self):
         """Initialize model and wrapper."""
-        # Get model from registry or create directly
-        if hasattr(get_model, self.config.model_name):
-            model_class = get_model(self.config.model_name)
-            self.model = model_class(**self.config.model_config)
+        # Check if model was already provided in config
+        if hasattr(self.config, 'model') and self.config.model is not None:
+            self.model = self.config.model
         else:
-            # Try to get from torchvision
-            import torchvision.models as models
-            if hasattr(models, self.config.model_name):
-                model_fn = getattr(models, self.config.model_name)
-                self.model = model_fn(
-                    pretrained=self.config.pretrained,
-                    **self.config.model_config
-                )
+            # Get model from registry or create directly
+            if hasattr(get_model, self.config.model_name):
+                model_class = get_model(self.config.model_name)
+                self.model = model_class(**self.config.model_config)
             else:
-                raise ValueError(f"Unknown model: {self.config.model_name}")
+                # Try to get from torchvision
+                import torchvision.models as models
+                if hasattr(models, self.config.model_name):
+                    model_fn = getattr(models, self.config.model_name)
+                    self.model = model_fn(
+                        pretrained=self.config.pretrained,
+                        **self.config.model_config
+                    )
+                else:
+                    raise ValueError(f"Unknown model: {self.config.model_name}")
         
         # Move to device
         device = torch.device(self.config.device)
@@ -204,8 +213,12 @@ class BaseExperiment(CoreBaseExperiment):
     
     def _initialize_dataset(self):
         """Initialize dataset and data loader."""
-        # Get dataset from registry
-        dataset_class = get_dataset(self.config.dataset_name)
+        # Get dataset class from registry (not instance)
+        dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+        
+        # Debug logging
+        logger.info(f"Creating dataset with data_path: {self.config.data_path}")
+        logger.info(f"Dataset config: {self.config.dataset_config}")
         
         # Create dataset
         self.dataset = dataset_class(
@@ -226,8 +239,11 @@ class BaseExperiment(CoreBaseExperiment):
     
     def _initialize_metrics(self):
         """Initialize metrics."""
+        from alignment.core.registry import METRIC_REGISTRY
+        
         for metric_name in self.config.metrics:
-            metric_class = get_metric(metric_name)
+            # Get the metric class from registry
+            metric_class = METRIC_REGISTRY.get(metric_name)
             metric_config = self.config.metric_configs.get(metric_name, {})
             
             # Add global metric options if not already specified
@@ -238,6 +254,7 @@ class BaseExperiment(CoreBaseExperiment):
             if 'aggregation_op' not in metric_config and 'cnn' in metric_name.lower():
                 metric_config['aggregation_op'] = self.config.cnn_rq_aggregation_op
                 
+            # Create metric instance
             self.metrics[metric_name] = metric_class(**metric_config)
         
         logger.info(f"Initialized metrics: {list(self.metrics.keys())}")
@@ -376,6 +393,11 @@ class BaseExperiment(CoreBaseExperiment):
             json.dump(self.results, f, indent=2)
         
         logger.info(f"Saved results to {results_path}")
+    
+    def setup(self) -> None:
+        """Setup the experiment (implementation of abstract method from CoreBaseExperiment)."""
+        # Setup is already done in __init__, so this is just to satisfy the abstract method
+        pass
     
     @abstractmethod
     def run(self) -> Dict[str, Any]:

@@ -1,7 +1,7 @@
 """Information-theoretic metrics for neural network alignment analysis."""
 
 from .mutual_information import MutualInformationGaussian, MutualInformationBinning
-from .conditional import ConditionalMutualInformation
+# from .conditional import ConditionalMutualInformation  # TODO: Implement conditional MI
 from .pid import (
     PartialInformationDecomposition, 
     SharedInformation, 
@@ -14,7 +14,7 @@ from .redundancy import AverageRedundancy, NodeRedundancy, LayerRedundancy
 __all__ = [
     'MutualInformationGaussian',
     'MutualInformationBinning',
-    'ConditionalMutualInformation',
+    # 'ConditionalMutualInformation',  # TODO: Implement conditional MI
     'PartialInformationDecomposition',
     'SharedInformation',
     'UniqueInformationX',

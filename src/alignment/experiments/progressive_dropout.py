@@ -62,7 +62,7 @@ class ProgressiveDropoutExperiment(BaseExperiment):
             'layer_statistics': {}
         }
     
-    def run(self) -> Dict[str, Any]:
+    def run(self, models=None, dataset=None, **kwargs) -> Dict[str, Any]:
         """
         Run the progressive dropout experiment.
         
