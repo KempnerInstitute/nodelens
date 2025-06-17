@@ -59,6 +59,7 @@ class ExperimentConfig:
     scale_by_norm: bool = False  # Whether to scale alignment scores by weight norm
     force_cpu_for_large_metric_ops: bool = True  # Move large operations to CPU
     cnn_rq_aggregation_op: str = "mean"  # "mean", "max", "var", "sum" for CNN RQ
+    exclude_classification_layer: bool = True  # Whether to exclude classification layer from analysis
     
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
