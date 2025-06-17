@@ -46,6 +46,9 @@ def load_config(config_path: Union[str, Path]) -> ExperimentConfig:
     # Handle environment variable substitution
     config_dict = _substitute_env_vars(config_dict)
     
+    # Map nested config to flat ExperimentConfig structure
+    config_dict = _map_nested_to_flat_config(config_dict)
+    
     # Create ExperimentConfig
     try:
         config = ExperimentConfig.from_dict(config_dict)
