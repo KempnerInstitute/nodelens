@@ -11,7 +11,7 @@ import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 # Import from the new modules for re-export
-from alignment.utils.core import (
+from alignment_refac1.utils.core import (
     setup_logging,
     timer,
     debug,
@@ -22,7 +22,7 @@ from alignment.utils.core import (
     timed
 )
 
-from alignment.utils.math import (
+from alignment_refac1.utils.math import (
     orthogonalize,
     compute_correlation_matrix,
     matrix_angles,

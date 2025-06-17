@@ -4,12 +4,6 @@ This guide provides comprehensive information about configuring experiments in t
 
 ## Configuration System Overview
 
-The framework uses a dataclass-based configuration system that provides:
-- Type safety and validation
-- Default values
-- Easy serialization/deserialization
-- Hierarchical organization
-
 ## ExperimentConfig Structure
 
 The main configuration class is `ExperimentConfig`:

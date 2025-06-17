@@ -3,7 +3,7 @@
 # --------------------------------------------
 
 from torch import nn
-from alignment import utils
+from alignment_refac1 import utils
 
 REGISTRY_REQUIREMENTS = [
     "name",

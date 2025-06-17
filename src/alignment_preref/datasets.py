@@ -13,8 +13,8 @@ from torch import nn
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2 as transforms
 
-from alignment.models.base import AlignmentNetwork
-from alignment.config import ExperimentConfig
+from alignment_refac1.models.base import AlignmentNetwork
+from alignment_refac1.config import ExperimentConfig
 
 REQUIRED_PROPERTIES = ["dataset_constructor", "loss_function"]
 

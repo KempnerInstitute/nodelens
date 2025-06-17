@@ -3,7 +3,7 @@
 # --------------------------------------------
 
 import torch
-from alignment.utils import smart_pca, get_device
+from alignment_refac1.utils import smart_pca, get_device
 
 class AlignmentMetrics:
     """

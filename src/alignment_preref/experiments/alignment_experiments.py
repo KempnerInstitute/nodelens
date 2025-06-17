@@ -4,13 +4,13 @@ import torch
 import argparse
 import sys
 
-from alignment.datasets import get_dataset
-from alignment.models.registry import get_model, get_transform_parameters
-from alignment import processing
-from alignment.config import ExperimentConfig
-from alignment.experiments.experiment import Experiment
+from alignment_refac1.datasets import get_dataset
+from alignment_refac1.models.registry import get_model, get_transform_parameters
+from alignment_refac1 import processing
+from alignment_refac1.config import ExperimentConfig
+from alignment_refac1.experiments.experiment import Experiment
 from Code.alignment.src.alignment_preref import plotting_rem
-from alignment.processing import evaluate_pretrained_model
+from alignment_refac1.processing import evaluate_pretrained_model
 
 class GeneralAlignmentExperiment(Experiment):
     def get_basename(self):

@@ -5,7 +5,7 @@ import numpy as np
 from copy import deepcopy
 from tqdm import tqdm
 
-from alignment.utils import train_nets, test_nets, load_checkpoints, save_checkpoint
+from alignment_refac1.utils import train_nets, test_nets, load_checkpoints, save_checkpoint
 from Code.alignment.src.alignment_preref.alignment_metrics_rem import AlignmentMetrics
 
 @train_nets

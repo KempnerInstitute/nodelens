@@ -5,8 +5,8 @@ from typing import Optional
 
 from torchvision.models import alexnet
 
-from alignment.models import models
-from alignment.models.base import AlignmentNetwork
+from alignment_refac1.models import models
+from alignment_refac1.models.base import AlignmentNetwork
 
 MODEL_REGISTRY = {
     "MLP": models.MLP,

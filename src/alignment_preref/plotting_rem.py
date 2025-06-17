@@ -25,7 +25,7 @@ from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 
 # Import the new modules for re-export
-from alignment.utils.plotting import (
+from alignment_refac1.utils.plotting import (
     plot_dropout_results,
     plot_experiment_summary,
     plot_dropout_comparison,

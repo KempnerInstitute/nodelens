@@ -8,7 +8,7 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt
 import matplotlib as mpl
 
-from alignment.utils import compute_stats_by_type, named_transpose, transpose_list, rms
+from alignment_refac1.utils import compute_stats_by_type, named_transpose, transpose_list, rms
 
 
 def plot_train_results(exp, train_results, test_results, prms):
@@ -24,7 +24,7 @@ def plot_train_results(exp, train_results, test_results, prms):
     import numpy as np
     import matplotlib.pyplot as plt
     import matplotlib as mpl
-    from alignment.utils import compute_stats_by_type
+    from alignment_refac1.utils import compute_stats_by_type
 
     # If do_train was false, we might not have train_results["loss"] or train_results["accuracy"].
     # We'll do a check:

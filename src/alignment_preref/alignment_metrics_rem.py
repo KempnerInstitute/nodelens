@@ -21,7 +21,7 @@ warnings.warn(
 )
 
 # Import from metrics_utils instead of metrics.py to avoid circular dependencies
-from alignment.utils.metrics_utils import (
+from alignment_refac1.utils.metrics_utils import (
     AlignmentMetricBase,
     RQMetric,
     MIMetric,

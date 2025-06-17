@@ -4,9 +4,9 @@ import os
 import torch
 from tqdm import tqdm
 
-from alignment.utils import load_checkpoints, test_nets
+from alignment_refac1.utils import load_checkpoints, test_nets
 from Code.alignment.src.alignment_preref.alignment_metrics_rem import AlignmentMetrics
-from alignment.train import train, test
+from alignment_refac1.train import train, test
 
 def parse_alignment_to_tensor(alignment_list, aggregate=True, by_layer=False):
     """
@@ -746,7 +746,7 @@ def eigenvector_dropout(nets, dataset, eigenvalues, eigenvectors, **parameters):
     dataloader = dataset.test_loader if use_test else dataset.train_loader
     num_batches = 0
 
-    from alignment.utils import check_iterable
+    from alignment_refac1.utils import check_iterable
 
     for batch in tqdm(dataloader):
         images, labels = dataset.unwrap_batch(batch)
