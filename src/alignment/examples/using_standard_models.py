@@ -9,11 +9,11 @@ import torch
 from torchvision import datasets, transforms
 
 # Import standard models
-from alignment_refactor.models.architectures.standard_models import (
+from alignment.models.architectures.standard_models import (
     MLP, CNN2P2, create_model, DATASET_PARAMETERS
 )
-from alignment_refactor.models import ModelWrapper
-from alignment_refactor.metrics import RayleighQuotient
+from alignment.models import ModelWrapper
+from alignment.metrics import RayleighQuotient
 
 
 def example_mlp_mnist():

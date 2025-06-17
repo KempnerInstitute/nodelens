@@ -21,8 +21,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from alignment.configs import load_config, validate_config
 from alignment.experiments import (
     ProgressiveDropoutExperiment,
-    EigenvectorAlignment,
-    LayerIsolatedPruning,
+    EigenvectorDropoutExperiment,
+    LayerIsolatedPruningExperiment,
     ExperimentConfig
 )
 from alignment.models.architectures.standard_models import MLP, CNN2P2
@@ -66,9 +66,9 @@ def select_experiment_class(config: ExperimentConfig):
     if hasattr(config, 'dropout_fractions') and config.dropout_fractions:
         return ProgressiveDropoutExperiment
     elif hasattr(config, 'num_components'):
-        return EigenvectorAlignment
+        return EigenvectorDropoutExperiment
     elif hasattr(config, 'pruning_percentages') and config.pruning_percentages:
-        return LayerIsolatedPruning
+        return LayerIsolatedPruningExperiment
     else:
         # Default to progressive dropout
         return ProgressiveDropoutExperiment

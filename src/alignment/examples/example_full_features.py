@@ -8,7 +8,7 @@ This example shows:
 4. Configuration features
 """
 
-from alignment_refactor import (
+from alignment import (
     # Models and data
     ModelWrapper, DatasetWrapper,
     

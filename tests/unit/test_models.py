@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment_refactor.models.architectures.standard_models import (
+from alignment.models.architectures.standard_models import (
     MLP, CNN2P2, SimpleConvNet, ResNetBlock
 )
 

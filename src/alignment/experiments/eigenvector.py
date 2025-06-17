@@ -11,8 +11,8 @@ import numpy as np
 import logging
 from dataclasses import dataclass, field
 
-from alignment_refactor.experiments.base import BaseExperiment, ExperimentConfig
-from alignment_refactor.core.registry import register_experiment
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
+from alignment.core.registry import register_experiment
 
 logger = logging.getLogger(__name__)
 

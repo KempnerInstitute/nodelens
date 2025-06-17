@@ -5,7 +5,7 @@ This module provides the foundational abstractions, protocols, and registries
 used throughout the framework.
 """
 
-from alignment_refactor.core.protocols import (
+from alignment.core.protocols import (
     AlignmentMetric,
     ModelWrapper,
     DatasetWrapper,
@@ -13,7 +13,7 @@ from alignment_refactor.core.protocols import (
     MetricAggregator,
     ResultReporter,
 )
-from alignment_refactor.core.registry import (
+from alignment.core.registry import (
     Registry,
     register_metric,
     register_model,
@@ -24,7 +24,7 @@ from alignment_refactor.core.registry import (
     get_dataset,
     get_experiment,
 )
-from alignment_refactor.core.base import (
+from alignment.core.base import (
     BaseMetric,
     BaseModel,
     BaseDataset,

@@ -11,7 +11,7 @@ from typing import Dict, List
 import logging
 
 # Import all components
-from alignment_refactor import (
+from alignment import (
     ModelWrapper,
     DatasetWrapper,
     RayleighQuotient,
@@ -20,16 +20,16 @@ from alignment_refactor import (
     list_metrics
 )
 
-from alignment_refactor.experiments import ProgressiveDropoutExperiment
-from alignment_refactor.analysis import ResultAnalyzer, MetricVisualizer
+from alignment.experiments import ProgressiveDropoutExperiment
+from alignment.analysis import ResultAnalyzer, MetricVisualizer
 
 # Import from the refactored framework
-from alignment_refactor.core import get_metric, get_experiment
-from alignment_refactor.metrics.rayleigh import RayleighQuotient
-from alignment_refactor.models import ModelWrapper
-from alignment_refactor.data import MNISTDataset
-from alignment_refactor.experiments import ProgressiveDropoutExperiment
-from alignment_refactor.analysis import AlignmentPlotter
+from alignment.core import get_metric, get_experiment
+from alignment.metrics.rayleigh import RayleighQuotient
+from alignment.models import ModelWrapper
+from alignment.data import MNISTDataset
+from alignment.experiments import ProgressiveDropoutExperiment
+from alignment.analysis import AlignmentPlotter
 
 
 def example_basic_metric_computation():
@@ -173,7 +173,7 @@ def example_custom_metric():
     """Example 6: Creating a custom metric."""
     print("=== Example 6: Custom Metric ===")
     
-    from alignment_refactor.core import BaseMetric, register_metric
+    from alignment.core import BaseMetric, register_metric
     
     @register_metric("cosine_alignment")
     class CosineAlignment(BaseMetric):
@@ -216,7 +216,7 @@ def example_metric_aggregation():
     """Example 7: Computing and aggregating multiple metrics."""
     print("=== Example 7: Metric Aggregation ===")
     
-    from alignment_refactor.metrics import MetricComputer
+    from alignment.metrics import MetricComputer
     
     # Create metric computer with multiple metrics
     computer = MetricComputer(

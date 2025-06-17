@@ -5,17 +5,17 @@ This module provides tools for analyzing experiment results,
 aggregating metrics, and creating visualizations.
 """
 
-from alignment_refactor.analysis.aggregators import (
+from alignment.analysis.aggregators import (
     ResultAggregator,
     MetricAggregator,
     LayerAggregator
 )
-from alignment_refactor.analysis.visualizers import (
+from alignment.analysis.visualizers import (
     MetricVisualizer,
     LayerVisualizer,
     ComparisonVisualizer
 )
-from alignment_refactor.analysis.reporters import (
+from alignment.analysis.reporters import (
     HTMLReporter,
     MarkdownReporter,
     JSONReporter

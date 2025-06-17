@@ -15,7 +15,7 @@ import logging
 import numpy as np
 from pathlib import Path
 
-from alignment_refactor.core.base import BaseDataset as CoreBaseDataset
+from alignment.core.base import BaseDataset as CoreBaseDataset
 
 logger = logging.getLogger(__name__)
 

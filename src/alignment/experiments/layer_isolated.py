@@ -13,9 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import json
 
-from alignment_refactor.experiments.base import BaseExperiment, ExperimentConfig
-from alignment_refactor.core.registry import register_experiment
-from alignment_refactor.models import ModelWrapper
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
+from alignment.core.registry import register_experiment
+from alignment.models import ModelWrapper
 
 logger = logging.getLogger(__name__)
 

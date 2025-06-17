@@ -11,8 +11,8 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import json
 
-from alignment_refactor.experiments.base import BaseExperiment, ExperimentConfig
-from alignment_refactor.core.registry import get_experiment
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
+from alignment.core.registry import get_experiment
 
 logger = logging.getLogger(__name__)
 

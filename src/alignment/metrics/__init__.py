@@ -6,18 +6,18 @@ neural network layers and their inputs/outputs.
 """
 
 # Import all metric classes for easy access
-from alignment_refactor.metrics.base import BaseMetric, MetricComputer
-from alignment_refactor.metrics.rayleigh import *
-from alignment_refactor.metrics.information import *
-from alignment_refactor.metrics.similarity import *
+from alignment.metrics.base import BaseMetric, MetricComputer
+from alignment.metrics.rayleigh import *
+from alignment.metrics.information import *
+from alignment.metrics.similarity import *
 
 # Auto-discover and register all metrics
-from alignment_refactor.core.registry import discover_and_register
+from alignment.core.registry import discover_and_register
 
 # Discover metrics in submodules
-discover_and_register('alignment_refactor.metrics.rayleigh', 'metrics')
-discover_and_register('alignment_refactor.metrics.information', 'metrics')
-discover_and_register('alignment_refactor.metrics.similarity', 'metrics')
+discover_and_register('alignment.metrics.rayleigh', 'metrics')
+discover_and_register('alignment.metrics.information', 'metrics')
+discover_and_register('alignment.metrics.similarity', 'metrics')
 
 __all__ = [
     'BaseMetric',

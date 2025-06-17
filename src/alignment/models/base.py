@@ -11,7 +11,7 @@ import torch.nn as nn
 from collections import OrderedDict
 import logging
 
-from alignment_refactor.core.base import BaseModel
+from alignment.core.base import BaseModel
 
 logger = logging.getLogger(__name__)
 

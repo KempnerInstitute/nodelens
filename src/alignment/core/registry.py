@@ -5,7 +5,7 @@ This module provides a unified registration system for metrics, models,
 datasets, and experiments, making them easily discoverable and instantiable.
 """
 
-from typing import Dict, Type, Any, Optional, Callable, TypeVar, Union
+from typing import Dict, Type, Any, Optional, Callable, TypeVar, Union, List
 import logging
 from functools import wraps
 
@@ -220,8 +220,4 @@ def discover_and_register(module_path: str, registry_type: str = "all") -> None:
                 logger.warning(f"Failed to import {modname}: {e}")
                 
     except Exception as e:
-        logger.error(f"Failed to discover components from {module_path}: {e}")
-
-
-# Add missing import
-from typing import List 
+        logger.error(f"Failed to discover components from {module_path}: {e}") 
