@@ -12,6 +12,10 @@ results/
 # WANDB
 wandb/
 
+src/alignment_preref/
+src/alignment_v2/
+src/alignment_refac1/
+
 #notebooks/
 #notebooks/data/*
 #notebooks/.ipynb_checkpoints/*
