@@ -7,11 +7,11 @@ from .rayleigh import RayleighQuotient, RayleighQuotientAlternative
 from .information import (
     MutualInformationGaussian, 
     MutualInformationBinning,
-    AverageRedundancyGaussian,
-    PartialInformationDecompositionSI,
-    PartialInformationDecompositionUIY,
-    PartialInformationDecompositionUIZ,
-    PartialInformationDecompositionCI,
+    AverageRedundancy,
+    SharedInformation,
+    UniqueInformationX,
+    UniqueInformationY,
+    SynergisticInformation,
     ConditionalMutualInformation,
     MIProjectionVsMeanInput,
 )
@@ -33,11 +33,11 @@ METRIC_REGISTRY = {
     # Information-theoretic metrics
     'mutual_information_gaussian': MutualInformationGaussian,
     'mutual_information_binning': MutualInformationBinning,
-    'average_redundancy_gaussian': AverageRedundancyGaussian,
-    'pid_si': PartialInformationDecompositionSI,
-    'pid_uiy': PartialInformationDecompositionUIY,
-    'pid_uiz': PartialInformationDecompositionUIZ,
-    'pid_ci': PartialInformationDecompositionCI,
+    'average_redundancy': AverageRedundancy,
+    'shared_information': SharedInformation,
+    'unique_information_x': UniqueInformationX,
+    'unique_information_y': UniqueInformationY,
+    'synergistic_information': SynergisticInformation,
     'conditional_mutual_information': ConditionalMutualInformation,
     'mi_projection_vs_mean_input': MIProjectionVsMeanInput,
     
