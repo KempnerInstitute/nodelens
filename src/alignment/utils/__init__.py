@@ -13,7 +13,7 @@ from alignment.utils.distributed import (
 from alignment.utils.checkpoint import (
     save_checkpoint,
     load_checkpoint,
-    CheckpointManager,
+    save_model_for_inference,
 )
 from alignment.utils.logging import (
     setup_logging,
@@ -38,7 +38,7 @@ __all__ = [
     # Checkpoint utilities
     'save_checkpoint',
     'load_checkpoint',
-    'CheckpointManager',
+    'save_model_for_inference',
     # Logging utilities
     'setup_logging',
     'get_logger',

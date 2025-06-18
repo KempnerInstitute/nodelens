@@ -20,21 +20,32 @@ logger = logging.getLogger(__name__)
 BROJA_AVAILABLE = False
 try:
     # Try to import from the expected location
-    import sys
-    broja_path = Path(__file__).parent.parent.parent.parent / "alignment" / "external" / "BROJA_2PID.py"
-    if broja_path.exists():
-        sys.path.insert(0, str(broja_path.parent))
-        import BROJA_2PID
-        BROJA_AVAILABLE = True
-        logger.info("Successfully loaded BROJA_2PID module")
-    else:
-        logger.warning(f"BROJA_2PID not found at {broja_path}")
+    from alignment.external.BROJA_2PID import BROJA_2PID
+    BROJA_AVAILABLE = True
+    logger.info("Successfully loaded BROJA_2PID module")
 except ImportError:
-    logger.warning("BROJA_2PID module not available. PID metrics will return zeros.")
+    try:
+        # Alternative path
+        import sys
+        broja_path = Path(__file__).parent.parent.parent / "external" / "BROJA_2PID" / "BROJA_2PID.py"
+        if broja_path.exists():
+            sys.path.insert(0, str(broja_path.parent))
+            import BROJA_2PID
+            BROJA_AVAILABLE = True
+            logger.info("Successfully loaded BROJA_2PID module from alternative path")
+        else:
+            logger.warning(f"BROJA_2PID not found at {broja_path}")
+    except ImportError:
+        logger.warning("BROJA_2PID module not available. PID metrics will return zeros.")
 
 
 class BasePIDMetric(BaseInformationMetric):
     """Base class for PID-based metrics."""
+    
+    # PID metrics require inputs and outputs
+    requires_inputs = True
+    requires_weights = False
+    requires_outputs = True
     
     def __init__(
         self,
