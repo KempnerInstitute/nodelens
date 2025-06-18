@@ -267,4 +267,47 @@ def compute_metrics_parallel(
     # distributed training frameworks
     
     processor = BatchMetricProcessor()
-    return processor.process_dataset(model_wrapper, dataloader, metrics) 
+    return processor.process_dataset(model_wrapper, dataloader, metrics)
+
+
+def batch_mutual_information(
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    bins: int = 10,
+    batch_size: int = 1000,
+    method: str = "histogram"
+) -> torch.Tensor:
+    """
+    Compute mutual information for multiple variable pairs in batches.
+    
+    This function efficiently computes MI for many pairs of variables,
+    processing them in batches to manage memory usage.
+    
+    Args:
+        X: First variables (n_pairs, n_samples)
+        Y: Second variables (n_pairs, n_samples)
+        bins: Number of bins for histogram method
+        batch_size: Process this many pairs at once
+        method: MI estimation method ('histogram' or 'kraskov')
+        
+    Returns:
+        MI values for each pair
+    """
+    # Import the optimized MI function
+    from .optimized import gpu_mutual_information
+    
+    n_pairs = X.shape[0]
+    mi_values = torch.zeros(n_pairs, device=X.device)
+    
+    for i in range(0, n_pairs, batch_size):
+        end_idx = min(i + batch_size, n_pairs)
+        batch_x = X[i:end_idx]
+        batch_y = Y[i:end_idx]
+        
+        # Compute MI for each pair in batch
+        for j in range(batch_x.shape[0]):
+            mi_values[i + j] = gpu_mutual_information(
+                batch_x[j], batch_y[j], bins=bins, method=method
+            )
+    
+    return mi_values 
