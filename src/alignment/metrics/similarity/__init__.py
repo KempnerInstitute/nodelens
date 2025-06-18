@@ -1,13 +1,17 @@
-"""Similarity-based metrics for neural network alignment analysis."""
+"""
+Similarity-based alignment metrics.
+"""
 
-from .cosine_similarity import WeightCosineSimilarity, ActivationCosineSimilarity
-# from .node_correlation import NodeCorrelation  # TODO: Implement
-# from .weight_similarity import WeightDotSimilarity, WeightEuclideanDistance  # TODO: Implement
+from .cosine_similarity import WeightCosineSimilarity as CosineSimilarityFromFile, ActivationCosineSimilarity
+from .node_redundancy import NodeRedundancy
+from .weight_similarity import WeightCosineSimilarity, WeightDotSimilarity, WeightEuclideanDistance
+from .node_correlation import NodeCorrelation
 
 __all__ = [
-    'WeightCosineSimilarity',
     'ActivationCosineSimilarity',
-    # 'NodeCorrelation',  # TODO: Implement
-    # 'WeightDotSimilarity',  # TODO: Implement
-    # 'WeightEuclideanDistance',  # TODO: Implement
+    'NodeRedundancy',
+    'WeightCosineSimilarity',
+    'WeightDotSimilarity',
+    'WeightEuclideanDistance',
+    'NodeCorrelation',
 ] 
