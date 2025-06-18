@@ -5,12 +5,12 @@ Node correlation metric for measuring output correlations.
 import torch
 import logging
 from typing import Optional
-from ..base import AlignmentMetric
+from alignment.core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 
 
-class NodeCorrelation(AlignmentMetric):
+class NodeCorrelation(BaseMetric):
     """
     Compute average correlation between each neuron's output and all other neurons.
     

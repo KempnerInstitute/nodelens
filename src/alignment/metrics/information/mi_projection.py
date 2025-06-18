@@ -6,12 +6,12 @@ import torch
 import numpy as np
 import logging
 from typing import Optional
-from ..base import AlignmentMetric
+from alignment.core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 
 
-class MIProjectionVsMeanInput(AlignmentMetric):
+class MIProjectionVsMeanInput(BaseMetric):
     """
     Compute mutual information between each neuron's projection and the mean input.
     

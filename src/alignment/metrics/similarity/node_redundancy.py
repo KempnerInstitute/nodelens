@@ -5,12 +5,12 @@ Node redundancy metric for measuring input feature correlations.
 import torch
 import logging
 from typing import Optional, Dict, Any
-from ..base import AlignmentMetric
+from alignment.core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 
 
-class NodeRedundancy(AlignmentMetric):
+class NodeRedundancy(BaseMetric):
     """
     Compute redundancy between input features based on correlation of activations.
     

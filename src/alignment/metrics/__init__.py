@@ -2,7 +2,7 @@
 Alignment metrics package.
 """
 
-from .base import AlignmentMetric
+from ..core.base import BaseMetric as AlignmentMetric
 from .rayleigh import RayleighQuotient, RayleighQuotientAlternative
 from .information import (
     MutualInformationGaussian, 
