@@ -1,25 +1,56 @@
 """
-Metrics module for the alignment metrics framework.
-
-This module provides various metrics for measuring alignment between
-neural network layers and their inputs/outputs.
+Alignment metrics package.
 """
 
-# Import all metric classes for easy access
-from alignment.metrics.base import BaseMetric, MetricComputer
-from alignment.metrics.rayleigh import *
-from alignment.metrics.information import *
-from alignment.metrics.similarity import *
+from .base import AlignmentMetric
+from .rayleigh import RayleighQuotient, RayleighQuotientAlternative
+from .information import (
+    MutualInformationGaussian, 
+    MutualInformationBinning,
+    AverageRedundancyGaussian,
+    PartialInformationDecompositionSI,
+    PartialInformationDecompositionUIY,
+    PartialInformationDecompositionUIZ,
+    PartialInformationDecompositionCI,
+    ConditionalMutualInformation,
+    MIProjectionVsMeanInput,
+)
+from .similarity import (
+    ActivationCosineSimilarity,
+    NodeRedundancy,
+    WeightCosineSimilarity,
+    WeightDotSimilarity,
+    WeightEuclideanDistance,
+    NodeCorrelation,
+)
 
-# Auto-discover and register all metrics
-from alignment.core.registry import discover_and_register
-
-# Discover metrics in submodules
-discover_and_register('alignment.metrics.rayleigh', 'metrics')
-discover_and_register('alignment.metrics.information', 'metrics')
-discover_and_register('alignment.metrics.similarity', 'metrics')
+# Metric registry for easy lookup
+METRIC_REGISTRY = {
+    # Rayleigh quotient metrics
+    'rayleigh_quotient': RayleighQuotient,
+    'rayleigh_quotient_alternative': RayleighQuotientAlternative,
+    
+    # Information-theoretic metrics
+    'mutual_information_gaussian': MutualInformationGaussian,
+    'mutual_information_binning': MutualInformationBinning,
+    'average_redundancy_gaussian': AverageRedundancyGaussian,
+    'pid_si': PartialInformationDecompositionSI,
+    'pid_uiy': PartialInformationDecompositionUIY,
+    'pid_uiz': PartialInformationDecompositionUIZ,
+    'pid_ci': PartialInformationDecompositionCI,
+    'conditional_mutual_information': ConditionalMutualInformation,
+    'mi_projection_vs_mean_input': MIProjectionVsMeanInput,
+    
+    # Similarity metrics
+    'activation_cosine_similarity': ActivationCosineSimilarity,
+    'node_redundancy': NodeRedundancy,
+    'weight_cosine_similarity': WeightCosineSimilarity,
+    'weight_dot_similarity': WeightDotSimilarity,
+    'weight_euclidean_distance': WeightEuclideanDistance,
+    'node_correlation': NodeCorrelation,
+}
 
 __all__ = [
-    'BaseMetric',
-    'MetricComputer',
-] 
+    'AlignmentMetric',
+    'METRIC_REGISTRY',
+] + list(METRIC_REGISTRY.keys()) 

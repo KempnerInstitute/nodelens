@@ -1,26 +1,26 @@
-"""Information-theoretic metrics for neural network alignment analysis."""
+"""
+Information-theoretic alignment metrics.
+"""
 
 from .mutual_information import MutualInformationGaussian, MutualInformationBinning
-# from .conditional import ConditionalMutualInformation  # TODO: Implement conditional MI
+from .redundancy import AverageRedundancyGaussian
 from .pid import (
-    PartialInformationDecomposition, 
-    SharedInformation, 
-    UniqueInformationX,
-    UniqueInformationY,
-    SynergisticInformation
+    PartialInformationDecompositionSI,
+    PartialInformationDecompositionUIY,
+    PartialInformationDecompositionUIZ,
+    PartialInformationDecompositionCI
 )
-from .redundancy import AverageRedundancy, NodeRedundancy, LayerRedundancy
+from .conditional_mutual_information import ConditionalMutualInformation
+from .mi_projection import MIProjectionVsMeanInput
 
 __all__ = [
     'MutualInformationGaussian',
     'MutualInformationBinning',
-    # 'ConditionalMutualInformation',  # TODO: Implement conditional MI
-    'PartialInformationDecomposition',
-    'SharedInformation',
-    'UniqueInformationX',
-    'UniqueInformationY',
-    'SynergisticInformation',
-    'AverageRedundancy',
-    'NodeRedundancy',
-    'LayerRedundancy',
+    'AverageRedundancyGaussian',
+    'PartialInformationDecompositionSI',
+    'PartialInformationDecompositionUIY',
+    'PartialInformationDecompositionUIZ',
+    'PartialInformationDecompositionCI',
+    'ConditionalMutualInformation',
+    'MIProjectionVsMeanInput',
 ] 

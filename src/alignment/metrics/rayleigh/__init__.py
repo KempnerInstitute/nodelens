@@ -1,10 +1,11 @@
-"""Rayleigh Quotient-based metrics."""
+"""
+Rayleigh quotient based alignment metrics.
+"""
 
-from .rayleigh_quotient import RayleighQuotient, PatchWiseRayleighQuotient
-from .delta_alignment import DeltaAlignment
+from .rayleigh_quotient import RayleighQuotient
+from .rq_alternative import RayleighQuotientAlternative
 
 __all__ = [
     'RayleighQuotient',
-    'PatchWiseRayleighQuotient',
-    'DeltaAlignment',
+    'RayleighQuotientAlternative',
 ] 
