@@ -5,12 +5,12 @@ Alternative Rayleigh Quotient metric with different normalization.
 import torch
 import logging
 from typing import Optional
-from ..base import AlignmentMetric
+from alignment.core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 
 
-class RayleighQuotientAlternative(AlignmentMetric):
+class RayleighQuotientAlternative(BaseMetric):
     """
     Compute Rayleigh Quotient with alternative denominator.
     

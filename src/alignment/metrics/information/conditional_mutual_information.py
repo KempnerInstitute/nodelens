@@ -6,12 +6,12 @@ import torch
 import numpy as np
 import logging
 from typing import Optional
-from ..base import AlignmentMetric
+from alignment.core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 
 
-class ConditionalMutualInformation(AlignmentMetric):
+class ConditionalMutualInformation(BaseMetric):
     """
     Compute conditional mutual information I(Y;Z|X) where:
     - Y is the output of a neuron

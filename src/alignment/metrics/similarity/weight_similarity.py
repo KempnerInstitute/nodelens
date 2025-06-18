@@ -5,12 +5,12 @@ Weight similarity metrics for measuring relationships between neuron weight vect
 import torch
 import logging
 from typing import Optional
-from ..base import AlignmentMetric
+from alignment.core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 
 
-class WeightSimilarityBase(AlignmentMetric):
+class WeightSimilarityBase(BaseMetric):
     """Base class for weight similarity metrics."""
     
     requires_weights = True

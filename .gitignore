@@ -15,11 +15,11 @@ data/
 src/alignment_preref/
 src/alignment_v2/
 src/alignment_refactor_v1/
-
 #notebooks/
 #notebooks/data/*
 #notebooks/.ipynb_checkpoints/*
-
+checkpoints/
+logs/
 notebooks/
 # Byte-compiled / optimized / DLL files
 __pycache__/
