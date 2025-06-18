@@ -5,11 +5,19 @@ Visualization utilities for alignment metrics analysis.
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from typing import Dict, List, Optional, Tuple, Any
 import pandas as pd
 from pathlib import Path
 import logging
+
+# Try to import seaborn, but make it optional
+try:
+    import seaborn as sns
+    HAS_SEABORN = True
+except (ImportError, AttributeError):
+    HAS_SEABORN = False
+    import warnings
+    warnings.warn("Seaborn not available or incompatible version. Some visualization features may be limited.")
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +35,13 @@ class AlignmentVisualizer:
             style: Matplotlib style to use
             figsize: Default figure size
         """
-        plt.style.use(style)
+        try:
+            plt.style.use(style)
+        except:
+            plt.style.use('default')
         self.figsize = figsize
-        sns.set_palette("husl")
+        if HAS_SEABORN:
+            sns.set_palette("husl")
     
     def plot_layer_scores(
         self,
@@ -139,19 +151,39 @@ class AlignmentVisualizer:
         # Create heatmap
         fig, ax = plt.subplots(figsize=(len(metrics) * 1.5, len(layers) * 0.8))
         
-        sns.heatmap(
-            matrix,
-            xticklabels=metrics,
-            yticklabels=layers,
-            cmap='coolwarm',
-            center=0,
-            annot=True,
-            fmt='.3f',
-            cbar_kws={'label': 'Mean Score'},
-            vmin=vmin,
-            vmax=vmax,
-            ax=ax
-        )
+        if HAS_SEABORN:
+            sns.heatmap(
+                matrix,
+                xticklabels=metrics,
+                yticklabels=layers,
+                cmap='coolwarm',
+                center=0,
+                annot=True,
+                fmt='.3f',
+                cbar_kws={'label': 'Mean Score'},
+                vmin=vmin,
+                vmax=vmax,
+                ax=ax
+            )
+        else:
+            # Fallback to matplotlib heatmap
+            im = ax.imshow(matrix, cmap='coolwarm', aspect='auto', vmin=vmin, vmax=vmax)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Mean Score')
+            
+            # Set ticks
+            ax.set_xticks(range(len(metrics)))
+            ax.set_yticks(range(len(layers)))
+            ax.set_xticklabels(metrics)
+            ax.set_yticklabels(layers)
+            
+            # Add text annotations
+            for i in range(len(layers)):
+                for j in range(len(metrics)):
+                    text = ax.text(j, i, f'{matrix[i, j]:.3f}',
+                                 ha="center", va="center", color="black", fontsize=8)
         
         ax.set_title('Alignment Metrics Heatmap')
         ax.set_xlabel('Metric')
