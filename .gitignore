@@ -11,7 +11,7 @@ jobs/
 results/
 # WANDB
 wandb/
-
+data/   
 src/alignment_preref/
 src/alignment_v2/
 src/alignment_refactor_v1/
