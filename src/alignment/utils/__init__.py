@@ -74,6 +74,17 @@ try:
 except ImportError:
     _optimized_available = False
 
+# Import pruning utilities
+try:
+    from alignment.utils.pruning import (
+        PruningConfig,
+        PruningUtilities,
+        create_pruning_schedule,
+    )
+    _pruning_available = True
+except ImportError:
+    _pruning_available = False
+
 __all__ = [
     # Distributed utilities
     'setup_distributed',
@@ -131,4 +142,11 @@ if _optimized_available:
         'JITMutualInformation',
         'JITNodeCorrelation',
         'create_jit_metric',
+    ])
+
+if _pruning_available:
+    __all__.extend([
+        'PruningConfig',
+        'PruningUtilities',
+        'create_pruning_schedule',
     ]) 

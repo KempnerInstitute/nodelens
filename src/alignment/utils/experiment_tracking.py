@@ -24,15 +24,26 @@ class ExperimentTracker:
     
     def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
         """Log scalar metrics."""
-        raise NotImplementedError
+        # Base implementation: just log to console
+        if step is None:
+            step = self.step
+        logger.info(f"[Step {step}] Metrics: {metrics}")
     
     def log_histogram(self, name: str, values: Union[torch.Tensor, np.ndarray], step: Optional[int] = None):
         """Log histogram of values."""
-        raise NotImplementedError
+        # Base implementation: log summary statistics
+        if isinstance(values, torch.Tensor):
+            values = values.cpu().numpy()
+        if step is None:
+            step = self.step
+        logger.info(f"[Step {step}] {name} - mean: {np.mean(values):.4f}, std: {np.std(values):.4f}")
     
     def log_image(self, name: str, image: np.ndarray, step: Optional[int] = None):
         """Log an image."""
-        raise NotImplementedError
+        # Base implementation: log image info
+        if step is None:
+            step = self.step
+        logger.info(f"[Step {step}] Image '{name}' - shape: {image.shape}")
     
     def finish(self):
         """Finish tracking."""

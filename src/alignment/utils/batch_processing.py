@@ -248,7 +248,8 @@ def compute_metrics_parallel(
     model_wrapper,
     dataloader: DataLoader,
     metrics: Dict[str, Any],
-    num_workers: int = 4
+    num_workers: int = 4,
+    devices: Optional[List[torch.device]] = None
 ) -> Dict[str, Dict[str, torch.Tensor]]:
     """
     Compute metrics in parallel across multiple GPUs.
@@ -258,16 +259,105 @@ def compute_metrics_parallel(
         dataloader: Data loader
         metrics: Dictionary of metrics to compute
         num_workers: Number of parallel workers
+        devices: List of devices to use (defaults to all available GPUs)
         
     Returns:
         Results dictionary
     """
-    # This is a placeholder for parallel processing
-    # In practice, you would use torch.multiprocessing or
-    # distributed training frameworks
+    import torch.multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     
-    processor = BatchMetricProcessor()
-    return processor.process_dataset(model_wrapper, dataloader, metrics)
+    # Determine devices
+    if devices is None:
+        if torch.cuda.is_available():
+            devices = [torch.device(f'cuda:{i}') for i in range(min(num_workers, torch.cuda.device_count()))]
+        else:
+            devices = [torch.device('cpu')] * num_workers
+    
+    # If only one device or no GPU, use regular processing
+    if len(devices) <= 1:
+        processor = BatchMetricProcessor(device=devices[0] if devices else None)
+        return processor.process_dataset(model_wrapper, dataloader, metrics)
+    
+    # Split data across workers
+    dataset = dataloader.dataset
+    chunk_size = len(dataset) // num_workers
+    chunks = []
+    
+    for i in range(num_workers):
+        start_idx = i * chunk_size
+        end_idx = start_idx + chunk_size if i < num_workers - 1 else len(dataset)
+        subset = torch.utils.data.Subset(dataset, range(start_idx, end_idx))
+        chunks.append(subset)
+    
+    # Process chunks in parallel
+    def process_chunk(chunk_data, device_id):
+        """Process a data chunk on a specific device."""
+        device = devices[device_id % len(devices)]
+        
+        # Create dataloader for chunk
+        chunk_loader = DataLoader(
+            chunk_data,
+            batch_size=dataloader.batch_size,
+            shuffle=False,
+            num_workers=0  # Avoid nested multiprocessing
+        )
+        
+        # Create processor for this device
+        processor = BatchMetricProcessor(device=device, show_progress=False)
+        
+        # Move model to device
+        model_wrapper.to(device)
+        
+        # Process chunk
+        return processor.process_dataset(model_wrapper, chunk_loader, metrics)
+    
+    # Execute parallel processing
+    all_results = []
+    
+    try:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all chunks
+            futures = {
+                executor.submit(process_chunk, chunk, i): i 
+                for i, chunk in enumerate(chunks)
+            }
+            
+            # Collect results
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing chunks"):
+                try:
+                    result = future.result()
+                    all_results.append(result)
+                except Exception as e:
+                    logger.error(f"Error processing chunk: {e}")
+    
+    except Exception as e:
+        logger.error(f"Parallel processing failed: {e}")
+        # Fallback to sequential processing
+        processor = BatchMetricProcessor()
+        return processor.process_dataset(model_wrapper, dataloader, metrics)
+    
+    # Merge results from all workers
+    merged_results = {}
+    
+    for result in all_results:
+        for layer_name, layer_metrics in result.items():
+            if layer_name not in merged_results:
+                merged_results[layer_name] = {}
+            
+            for metric_name, scores in layer_metrics.items():
+                if metric_name not in merged_results[layer_name]:
+                    merged_results[layer_name][metric_name] = []
+                
+                merged_results[layer_name][metric_name].append(scores)
+    
+    # Concatenate scores from all workers
+    for layer_name in merged_results:
+        for metric_name in merged_results[layer_name]:
+            scores_list = merged_results[layer_name][metric_name]
+            merged_results[layer_name][metric_name] = torch.cat(scores_list, dim=0)
+    
+    return merged_results
 
 
 def batch_mutual_information(

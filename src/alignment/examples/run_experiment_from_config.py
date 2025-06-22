@@ -131,9 +131,56 @@ def run_experiment(config_path: str, overrides: dict = None):
     # Train model if requested
     if config.train_before_dropout:
         print(f"Training model for {config.training_epochs} epochs...")
-        # Note: Actual training would require dataset loading and training loop
-        # This is a placeholder
-        print("Training complete (placeholder)")
+        
+        # Create synthetic dataset for demonstration
+        # In practice, you would load your actual dataset here
+        from torch.utils.data import DataLoader, TensorDataset
+        import torch.nn as nn
+        import torch.optim as optim
+        
+        # Get model input/output dimensions
+        if hasattr(model, 'fc1'):
+            input_dim = model.fc1.in_features
+            output_dim = model.fc2.out_features if hasattr(model, 'fc2') else 10
+        else:
+            # Default dimensions
+            input_dim = config.model_config.get('input_dim', 784)
+            output_dim = config.model_config.get('output_dim', 10)
+        
+        # Create synthetic data
+        n_samples = 1000
+        X = torch.randn(n_samples, input_dim)
+        y = torch.randint(0, output_dim, (n_samples,))
+        
+        dataset = TensorDataset(X, y)
+        train_loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
+        
+        # Training setup
+        device = torch.device(config.device)
+        model = model.to(device)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
+        
+        # Training loop
+        model.train()
+        for epoch in range(config.training_epochs):
+            total_loss = 0
+            for batch_idx, (inputs, targets) in enumerate(train_loader):
+                inputs, targets = inputs.to(device), targets.to(device)
+                
+                optimizer.zero_grad()
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                optimizer.step()
+                
+                total_loss += loss.item()
+            
+            if epoch % 5 == 0:
+                avg_loss = total_loss / len(train_loader)
+                print(f"  Epoch {epoch}/{config.training_epochs}, Loss: {avg_loss:.4f}")
+        
+        print("Training complete")
     
     # Run experiment
     print("Running experiment...")
