@@ -22,7 +22,7 @@ from .utils.experiment_tracking import create_tracker
 
 # Visualization
 try:
-    from .visualization import AlignmentVisualizer
+    from .analysis.visualization import AlignmentVisualizer
 except ImportError:
     # Visualization dependencies may not be installed
     pass
