@@ -1,5 +1,5 @@
 """
-Fully tensorized training for multiple networks simultaneously.
+Multi-network training utilities for training multiple networks simultaneously.
 
 This module provides efficient training of multiple networks at once
 by batching their computations together.
