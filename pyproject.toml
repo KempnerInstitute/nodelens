@@ -69,7 +69,7 @@ Homepage = "https://github.com/KempnerInstitute/alignment"
 Repository = "https://github.com/KempnerInstitute/alignment"
 
 [tool.setuptools.dynamic]
-version = { attr = "alignment.version.VERSION" }
+version = { attr = "alignment.__version__" }
 
 
 [tool.black]

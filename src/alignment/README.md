@@ -4,175 +4,160 @@ A comprehensive framework for studying neural network alignment properties throu
 
 ## Features
 
-- **Alignment Metrics**: Rayleigh Quotient (RQ), Mutual Information (MI), Partial Information Decomposition (PID), CKA, CCA
-- **Pruning Strategies**: Progressive dropout, eigenvector-based, layer-isolated, and cascading pruning
-- **Model Support**: Pre-defined architectures (MLP, CNN) and support for custom models
-- **Experiment Framework**: Reproducible experiment management with comprehensive configuration
-- **Tensorized Dropout**: Efficient structured pruning implementation
+- **Alignment Metrics**: Rayleigh Quotient (RQ), Mutual Information (MI), Partial Information Decomposition (PID), and 30+ other metrics
+- **Metric Categories**: Information-theoretic, Similarity, Spectral, Task-specific, and Rayleigh-based metrics
+- **Model Support**: Works with any PyTorch model through ModelWrapper interface
+- **Batch Processing**: Efficient metric computation with GPU support
+- **Visualization**: Comprehensive plotting and analysis tools
+- **Experiment Tracking**: Integration with Weights & Biases and TensorBoard
+- **Pruning Utilities**: Advanced neuron importance analysis and pruning strategies
 
 ## Installation
 
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd alignment/src/alignment_refactor
+cd alignment
 
 # Install the package
 pip install -e .
 
-# Install dependencies
-pip install -r requirements.txt
+# Or install with specific extras
+pip install -e ".[dev,docs,viz]"
 ```
 
 ## Quick Start
 
 ```python
-from alignment_refactor.models.architectures.standard_models import create_model
-from alignment_refactor.experiments.progressive_dropout import ProgressiveDropoutExperiment
-from alignment_refactor.experiments.base import ExperimentConfig
+import torch
+from alignment.core import ModelWrapper
+from alignment.metrics import get_metric
 
-# Configure experiment
-config = ExperimentConfig(
-    name="mnist_pruning",
-    model_name="mlp",
-    dataset_name="mnist",
-    metrics=["rayleigh_quotient"],
-    device="cuda"
+# Create and wrap your model
+model = torch.nn.Sequential(
+    torch.nn.Linear(784, 256),
+    torch.nn.ReLU(),
+    torch.nn.Linear(256, 10)
 )
+wrapped_model = ModelWrapper(model)
 
-# Run experiment
-experiment = ProgressiveDropoutExperiment(config)
-results = experiment.run()
-```
+# Prepare data
+inputs = torch.randn(100, 784)
 
-## Documentation
+# Extract activations
+activations = wrapped_model.extract_activations(inputs)
 
-### Building Documentation
-
-```bash
-# Install documentation dependencies
-pip install -r docs/requirements-docs.txt
-
-# Build HTML documentation
-cd docs
-make html
-
-# View documentation
-open build/html/index.html
-```
-
-### Live Documentation Server
-
-```bash
-cd docs
-make livehtml
-# Navigate to http://localhost:8000
+# Compute metrics
+rq_metric = get_metric("rayleigh_quotient")()
+scores = rq_metric.compute(
+    inputs=activations['0'],  # First layer activations
+    weights=model[0].weight
+)
 ```
 
 ## Project Structure
 
 ```
-alignment_refactor/
-├── core/                   # Core functionality (tensorized dropout, registry)
-├── models/                 # Model architectures and wrappers
-│   ├── architectures/      # Standard models (MLP, CNN)
-│   └── wrapper.py          # ModelWrapper for activation tracking
-├── metrics/                # Alignment and information metrics
-│   ├── rayleigh/          # Rayleigh quotient metrics
-│   ├── information/       # MI, PID metrics
-│   └── similarity/        # CKA, CCA metrics
-├── experiments/           # Experiment implementations
-│   ├── base.py           # Base experiment class
-│   ├── progressive_dropout.py
-│   ├── eigenvector.py
-│   ├── layer_isolated.py
-│   └── cascading.py
-├── data/                  # Dataset handling
+alignment/
+├── core/                   # Core functionality
+│   ├── base.py            # Base metric class
+│   ├── model_wrapper.py   # Model wrapping utilities
+│   └── registry.py        # Metric registry system
+├── metrics/               # All metric implementations
+│   ├── information/       # MI, PID, and information metrics
+│   ├── rayleigh/         # Rayleigh quotient variants
+│   ├── similarity/       # Similarity and correlation metrics
+│   ├── spectral/         # Spectral analysis metrics
+│   └── task_specific/    # Task-specific alignment metrics
 ├── utils/                 # Utility functions
-├── examples/              # Example scripts
-└── docs/                  # Documentation source
-```
-
-## Examples
-
-### Basic MLP Pruning
-
-```python
-from alignment_refactor.models.architectures.standard_models import MLP
-from alignment_refactor.models import ModelWrapper
-from alignment_refactor.metrics import RayleighQuotient
-
-# Create model
-model = MLP(input_dim=784, hidden_dims=[300, 200], output_dim=10)
-
-# Wrap for tracking
-tracked_layers = ['network.0', 'network.3']
-wrapped_model = ModelWrapper(model, tracked_layers=tracked_layers)
-
-# Compute metrics
-metric = RayleighQuotient()
-# ... forward pass and metric computation
-```
-
-### Running Multiple Experiments
-
-```python
-from alignment_refactor.experiments.runner import ExperimentRunner
-
-runner = ExperimentRunner(base_config=config)
-
-# Add experiments
-for pruning_rate in [0.1, 0.3, 0.5]:
-    runner.add_experiment(
-        "progressive_dropout",
-        config_overrides={"pruning_rate": pruning_rate}
-    )
-
-results = runner.run_all()
-```
-
-## Configuration
-
-Experiments are configured using the `ExperimentConfig` dataclass:
-
-```python
-config = ExperimentConfig(
-    # Experiment identification
-    name="experiment_name",
-    description="Detailed description",
-    
-    # Model configuration
-    model_name="mlp",
-    model_config={"hidden_dims": [300, 200]},
-    
-    # Training configuration
-    batch_size=128,
-    learning_rate=0.001,
-    training_epochs=10,
-    
-    # Metrics configuration
-    metrics=["rayleigh_quotient", "mutual_information"],
-    metric_configs={
-        "rayleigh_quotient": {"scale_by_norm": False}
-    }
-)
+│   ├── batch_processing.py    # Batch and parallel processing
+│   ├── experiment_tracking.py # Experiment tracking
+│   ├── pruning.py            # Pruning utilities
+│   └── optimized/            # GPU-accelerated functions
+├── visualization/         # Visualization tools
+├── data/                  # Dataset utilities
+├── models/               # Model architectures
+└── examples/             # Example scripts
 ```
 
 ## Available Metrics
 
-- **Rayleigh Quotient (RQ)**: Measures neuron alignment with input variance
-- **Mutual Information (MI)**: Quantifies information shared between layers
-- **Partial Information Decomposition (PID)**: Decomposes information into unique, redundant, and synergistic components
-- **Centered Kernel Alignment (CKA)**: Measures similarity between representations
-- **Canonical Correlation Analysis (CCA)**: Finds maximally correlated projections
+The framework provides 36+ metrics across 6 categories:
+
+### Information-Theoretic Metrics
+- Mutual Information (Gaussian, Binning, Analytic)
+- Partial Information Decomposition (PID)
+- Conditional Mutual Information
+- Total Correlation
+- Interaction Information
+
+### Rayleigh Quotient Metrics
+- Standard Rayleigh Quotient
+- Alternative formulations
+- Patchwise analysis
+
+### Similarity Metrics
+- Activation/Weight Cosine Similarity
+- Node Correlation and Redundancy
+- Weight-Activation Alignment
+
+### Spectral Metrics
+- Spectral Gap and Norm Ratio
+- Eigenvalue Entropy and Alignment
+- Power Iteration Analysis
+
+### Task-Specific Metrics
+- Classification Alignment
+- Language Model Alignment
+- Vision Task Alignment
+- Reinforcement Learning Alignment
+
+## Advanced Usage
+
+### Batch Processing
+
+```python
+from alignment.utils.batch_processing import BatchMetricProcessor
+
+processor = BatchMetricProcessor(
+    metrics=['rayleigh_quotient', 'mutual_information_gaussian'],
+    batch_size=1000,
+    use_gpu=True
+)
+
+results = processor.process(model, dataloader)
+```
+
+### Visualization
+
+```python
+from alignment.visualization import AlignmentVisualizer
+
+visualizer = AlignmentVisualizer()
+visualizer.plot_metric_distributions(results)
+visualizer.create_report("alignment_report.html")
+```
+
+### Experiment Tracking
+
+```python
+from alignment.utils.experiment_tracking import create_tracker
+
+tracker = create_tracker("wandb", project="alignment-analysis")
+tracker.log_metrics(results)
+```
+
+## Examples
+
+See the `examples/` directory for comprehensive demonstrations:
+- `quick_demo.py` - Basic usage example
+- `advanced_analysis.py` - Advanced features showcase
+- `comprehensive_demo.py` - Full pipeline example
+- `pruning_demo.py` - Pruning analysis example
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+Contributions are welcome! Please see our contributing guidelines for details.
 
 ## License
 
