@@ -10,15 +10,19 @@ __version__ = "0.1.0"
 # Core functionality
 from .core.base import BaseMetric
 from .core.registry import METRIC_REGISTRY
-from .models.wrappers import ModelWrapper
+from .core.wrappers import ModelWrapper
 
 # Metrics
 from .metrics import get_metric, list_metrics
 
-# Utils
-from .utils.batch_processing import BatchMetricProcessor
-from .utils.pruning import PruningUtilities, PruningConfig
-from .utils.experiment_tracking import create_tracker
+# Data processing
+from .data.processing import BatchMetricProcessor
+
+# Pruning
+from .pruning import PruningConfig, get_pruning_strategy
+
+# Experiment tracking
+from .experiments.tracking import create_tracker
 
 # Visualization
 try:
@@ -37,10 +41,14 @@ __all__ = [
     "get_metric",
     "list_metrics",
     
-    # Utils
+    # Data processing
     "BatchMetricProcessor",
-    "PruningUtilities",
+    
+    # Pruning
     "PruningConfig",
+    "get_pruning_strategy",
+    
+    # Experiment tracking
     "create_tracker",
     
     # Visualization
