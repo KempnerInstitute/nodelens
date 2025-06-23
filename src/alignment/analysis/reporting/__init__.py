@@ -1,10 +1,10 @@
-"""Reporting utilities for alignment analysis."""
+"""
+Report generation utilities for alignment analysis.
+"""
 
-from ..reporters import (
-    HTMLReporter,
-    MarkdownReporter,
-    JSONReporter,
-)
+from .html import HTMLReporter
+from .markdown import MarkdownReporter
+from .json_reporter import JSONReporter
 
 __all__ = [
     'HTMLReporter',

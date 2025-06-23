@@ -1,34 +1,46 @@
 """
-Analysis and visualization module for the alignment framework.
+Analysis utilities for alignment experiments.
 
-This module provides tools for analyzing experiment results,
-aggregating metrics, and creating visualizations.
+This module provides tools for:
+- Aggregating experiment results
+- Generating reports
+- Visualizing metrics
 """
 
-from alignment.analysis.aggregators import (
+# Aggregation
+from .aggregation import (
     ResultAggregator,
     MetricAggregator,
-    LayerAggregator
+    LayerAggregator,
 )
-from alignment.analysis.visualization.visualizers import (
-    MetricVisualizer,
-    LayerVisualizer,
-    ComparisonVisualizer
-)
-from alignment.analysis.reporters import (
+
+# Reporting
+from .reporting import (
     HTMLReporter,
     MarkdownReporter,
-    JSONReporter
+    JSONReporter,
+)
+
+# Visualization
+from .visualization import (
+    plot_metric_evolution,
+    plot_layer_comparison,
+    plot_correlation_matrix,
+    create_interactive_dashboard,
 )
 
 __all__ = [
+    # Aggregation
     'ResultAggregator',
     'MetricAggregator',
     'LayerAggregator',
-    'MetricVisualizer',
-    'LayerVisualizer',
-    'ComparisonVisualizer',
+    # Reporting
     'HTMLReporter',
     'MarkdownReporter',
     'JSONReporter',
+    # Visualization
+    'plot_metric_evolution',
+    'plot_layer_comparison',
+    'plot_correlation_matrix',
+    'create_interactive_dashboard',
 ] 
