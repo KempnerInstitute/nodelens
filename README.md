@@ -46,6 +46,8 @@ The codebase is fully documented with comprehensive guides and API references:
 - **[User Guide](docs/source/ALIGNMENT_MODULE_GUIDE.md)**: Complete guide to using the alignment module
 - **[Metrics Reference](docs/source/METRICS_REFERENCE.md)**: Detailed mathematical descriptions of all 36 metrics
 - **[All Metrics List](docs/source/ALL_METRICS_LIST.md)**: Quick reference of available metrics
+- **[Pruning Strategies](docs/source/user_guide/pruning_strategies.md)**: Comprehensive guide to all pruning strategies
+- **[Architecture Guide](docs/source/developer_guide/architecture.md)**: Framework architecture and design principles
 
 ### Module Guides
 - **[Pruning Module](src/alignment/pruning/README.md)**: Comprehensive pruning strategies and experiments
