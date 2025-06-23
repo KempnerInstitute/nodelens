@@ -1,138 +1,91 @@
 # Installation Guide
 
-This guide provides instructions for installing and configuring the Neural Network Alignment framework.
-
 ## Requirements
 
 - Python 3.8 or higher
-- PyTorch 2.0 or higher
-- CUDA-capable GPU (optional but recommended)
+- PyTorch 1.9 or higher
+- CUDA toolkit (optional, for GPU support)
 
 ## Installation Methods
 
-### Method 1: Development Installation (Recommended)
+### From Source (Recommended for Development)
 
-For development or if you want to modify the code:
+Clone the repository and install in development mode:
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd alignment
-
-# Create a virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install in development mode
-cd src/alignment_refactor
 pip install -e .
-
-# Install additional dependencies
-pip install -r requirements.txt
 ```
 
-### Method 2: Direct Installation
+This installs the package in editable mode, allowing you to modify the code and see changes immediately.
 
-If you just want to use the framework:
+### Installing with Extras
+
+Install with additional dependencies for specific features:
 
 ```bash
-# Install directly from the repository
-pip install git+<repository-url>#subdirectory=src/alignment_refactor
+# Install with visualization support
+pip install -e ".[viz]"
+
+# Install with development tools
+pip install -e ".[dev]"
+
+# Install with documentation building tools
+pip install -e ".[docs]"
+
+# Install everything
+pip install -e ".[all]"
 ```
 
-### Method 3: Manual Installation
+### From Git Repository
 
-If you have downloaded the source code:
-
-```bash
-cd alignment/src/alignment_refactor
-pip install .
-```
-
-## Dependencies
-
-The main dependencies are:
-
-- **torch**: PyTorch deep learning framework
-- **torchvision**: Computer vision utilities
-- **numpy**: Numerical computing
-- **scipy**: Scientific computing
-- **matplotlib**: Plotting and visualization
-- **tqdm**: Progress bars
-- **pyyaml**: YAML configuration support
-- **wandb** (optional): Experiment tracking
-
-### Installing Dependencies
-
-All dependencies can be installed via:
+Install directly from the repository:
 
 ```bash
-pip install -r requirements.txt
-```
-
-Or install them manually:
-
-```bash
-pip install torch torchvision numpy scipy matplotlib tqdm pyyaml
-# Optional: pip install wandb
+pip install git+<repository-url>
 ```
 
 ## Verifying Installation
 
-To verify your installation:
+Test that the installation was successful:
 
 ```python
-import alignment_refactor
-from alignment_refactor.models import ModelWrapper
-from alignment_refactor.metrics import RayleighQuotient
+import alignment
+from alignment.core import ModelWrapper
+from alignment.metrics import METRIC_REGISTRY
 
-print("Installation successful!")
-```
-
-## GPU Support
-
-To use GPU acceleration:
-
-1. Ensure you have CUDA installed (check with `nvidia-smi`)
-2. Install PyTorch with CUDA support:
-
-```bash
-# For CUDA 11.8
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-
-# For CUDA 12.1
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# List available metrics
+print(METRIC_REGISTRY.list())
 ```
 
 ## Common Issues
 
+### CUDA/GPU Issues
+
+If you encounter CUDA-related errors:
+
+1. Ensure PyTorch is installed with CUDA support:
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+   ```
+
+2. Verify CUDA availability:
+   ```python
+   import torch
+   print(torch.cuda.is_available())
+   ```
+
 ### Import Errors
 
-If you encounter import errors:
+If you get import errors:
 
-1. Ensure you're in the correct directory
-2. Check that the package is properly installed
+1. Ensure you're in the correct environment
+2. Check that the package is installed: `pip list | grep alignment`
 3. Verify Python path includes the installation directory
-
-### CUDA Errors
-
-If you get CUDA-related errors:
-
-1. Check CUDA version compatibility with PyTorch
-2. Ensure GPU drivers are up to date
-3. Try running with `CUDA_VISIBLE_DEVICES="" python script.py` to use CPU only
-
-### Memory Issues
-
-For large models or datasets:
-
-1. Reduce batch size in configuration
-2. Use gradient accumulation
-3. Enable mixed precision training
 
 ## Next Steps
 
-After installation, proceed to:
-- [Quick Start Guide](quickstart.md) for basic usage
-- [Experiments Guide](experiments.md) for running experiments
-- [Configuration Guide](configuration.md) for customization 
+- See the [Quick Start Guide](quickstart.md) for basic usage
+- Check out [Examples](../examples/index.md) for comprehensive demos
+- Read the [API Reference](../api/index.md) for detailed documentation 

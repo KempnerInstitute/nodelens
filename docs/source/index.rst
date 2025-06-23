@@ -17,6 +17,7 @@ implementing various pruning strategies, and analyzing network behavior through 
 Key Features
 ------------
 
+* **36 Alignment Metrics**: Comprehensive suite including Rayleigh quotient, mutual information, spectral metrics, and more
 * **Modular Architecture**: Clean separation of concerns with dedicated modules for models, metrics, experiments, and utilities
 * **Advanced Metrics**: Implementation of Rayleigh Quotient (RQ), Mutual Information (MI), Partial Information Decomposition (PID), CKA, CCA, and more
 * **Pruning Strategies**: Progressive dropout, eigenvector-based pruning, layer-isolated pruning, and cascading methods
@@ -30,41 +31,49 @@ Getting Started
 .. code-block:: bash
 
    # Clone the repository
-   git clone <repository-url>
-   cd alignment/src/alignment_refactor
+   git clone https://github.com/KempnerInstitute/alignment.git
+   cd alignment
 
    # Install dependencies
-   pip install -r requirements.txt
+   pip install -e .[all]
 
 Quick Example
 -------------
 
 .. code-block:: python
 
-   from alignment_refactor.models.architectures.standard_models import create_model
-   from alignment_refactor.models import ModelWrapper
-   from alignment_refactor.metrics import RayleighQuotient
-   from alignment_refactor.experiments.progressive_dropout import ProgressiveDropoutExperiment
-   from alignment_refactor.experiments.base import ExperimentConfig
+   from alignment.core import ModelWrapper
+   from alignment.metrics import get_metric
+   import torch
 
    # Create a model
-   model = create_model('mlp', 'mnist', hidden_dims=[300, 200])
+   model = torch.nn.Sequential(
+       torch.nn.Linear(784, 256),
+       torch.nn.ReLU(),
+       torch.nn.Linear(256, 10)
+   )
    
    # Wrap it for tracking
-   wrapped_model = ModelWrapper(model, tracked_layers=['network.0', 'network.3'])
+   wrapped_model = ModelWrapper(model)
    
-   # Run an experiment
-   config = ExperimentConfig(
-       name="mnist_pruning",
-       model_name="mlp",
-       dataset_name="mnist",
-       metrics=["rayleigh_quotient"]
-   )
-   experiment = ProgressiveDropoutExperiment(config)
-   results = experiment.run()
+   # Compute alignment metrics
+   metric = get_metric("rayleigh_quotient")()
+   inputs = torch.randn(100, 784)
+   activations = wrapped_model.extract_activations(inputs)
+   scores = metric.compute(inputs=activations[0], weights=model[0].weight)
 
 Documentation Contents
 ----------------------
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Metrics Documentation
+   
+   ../ALIGNMENT_MODULE_GUIDE
+   ../METRICS_REFERENCE
+   ../METRICS_IMPLEMENTATION_DETAILS
+   ../ALL_METRICS_LIST
+   ../BUILD_DOCUMENTATION
 
 .. toctree::
    :maxdepth: 2

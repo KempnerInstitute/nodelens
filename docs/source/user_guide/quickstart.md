@@ -1,265 +1,187 @@
 # Quick Start Guide
 
-This guide provides a quick introduction to using the Neural Network Alignment framework.
+This guide will help you get started with the alignment framework.
 
-## Basic Concepts
+## Basic Usage
 
-The framework is organized around several key concepts:
-
-1. **Models**: Neural network architectures (MLP, CNN, etc.)
-2. **Metrics**: Measures of alignment and information (RQ, MI, PID, etc.)
-3. **Experiments**: Structured ways to run pruning and analysis
-4. **ModelWrapper**: Automatic activation and weight tracking
-
-## Quick Start with Config Files
-
-The easiest way to run experiments is using configuration files:
-
-### 1. Create a Config File
-
-Create a file `my_experiment.yaml`:
-
-```yaml
-name: "mnist_dropout_study"
-description: "Progressive dropout on MNIST MLP"
-
-# Model configuration
-model_name: "mlp"
-model_config:
-  input_dim: 784
-  hidden_dims: [300, 200, 100]
-  output_dim: 10
-  dropout_rate: 0.5
-
-# Dataset
-dataset_name: "mnist"
-data_path: "./data"
-batch_size: 128
-
-# Metrics to track
-metrics: ["rayleigh_quotient", "mutual_information"]
-
-# Experiment parameters
-dropout_fractions: [0.0, 0.2, 0.4, 0.6, 0.8]
-training_epochs: 10
-device: "cuda"
-```
-
-### 2. Run the Experiment
-
-```bash
-python src/alignment_refactor/examples/run_experiment_from_config.py my_experiment.yaml
-```
-
-### 3. Command-Line Overrides
-
-Override any parameter from the command line:
-
-```bash
-# Change device and batch size
-python run_experiment_from_config.py my_experiment.yaml --device cpu --batch-size 256
-
-# Skip training phase
-python run_experiment_from_config.py my_experiment.yaml --no-train
-```
-
-### 4. Use Templates
-
-Start with pre-configured templates:
-
-```bash
-# Copy a template
-cp src/alignment_refactor/configs/templates/mnist_mlp.yaml my_config.yaml
-
-# Edit and run
-python run_experiment_from_config.py my_config.yaml
-```
-
-## Your First Experiment (Programmatic Approach)
-
-### Step 1: Create a Model
+### 1. Import Required Modules
 
 ```python
-from alignment_refactor.models.architectures.standard_models import create_model
-
-# Create an MLP for MNIST
-model = create_model('mlp', 'mnist', hidden_dims=[300, 200, 100])
-
-# Or create a CNN for CIFAR-10
-model = create_model('cnn2p2', 'cifar10')
-```
-
-### Step 2: Wrap the Model for Tracking
-
-```python
-from alignment_refactor.models import ModelWrapper
-
-# Identify layers to track (Linear layers in MLP)
-tracked_layers = ['network.0', 'network.3', 'network.6']  
-wrapped_model = ModelWrapper(model, tracked_layers=tracked_layers)
-```
-
-### Step 3: Compute Metrics
-
-```python
-from alignment_refactor.metrics import RayleighQuotient
 import torch
-
-# Create dummy data
-inputs = torch.randn(32, 784)  # Batch of MNIST-like data
-
-# Forward pass with activation tracking
-outputs, activations = wrapped_model.forward_with_activations(inputs)
-
-# Compute Rayleigh Quotient
-rq_metric = RayleighQuotient()
-weights = wrapped_model.get_layer_weights()
-
-for layer_name in tracked_layers:
-    layer_input = activations[f"{layer_name}_input"].flatten(start_dim=1)
-    layer_weight = weights[layer_name]
-    
-    rq_scores = rq_metric.compute(inputs=layer_input, weights=layer_weight)
-    print(f"{layer_name}: Mean RQ = {rq_scores.mean().item():.4f}")
+import torch.nn as nn
+from alignment.core import ModelWrapper
+from alignment.metrics import get_metric, METRIC_REGISTRY
 ```
 
-### Step 4: Run a Pruning Experiment
+### 2. Create or Load a Model
 
 ```python
-from alignment_refactor.experiments.progressive_dropout import ProgressiveDropoutExperiment
-from alignment_refactor.experiments.base import ExperimentConfig
-
-# Configure the experiment
-config = ExperimentConfig(
-    name="mnist_progressive_pruning",
-    model_name="mlp",
-    dataset_name="mnist",
-    model_config={
-        "hidden_dims": [300, 200, 100],
-        "dropout_rate": 0.5
-    },
-    metrics=["rayleigh_quotient"],
-    batch_size=128,
-    device="cuda" if torch.cuda.is_available() else "cpu"
+# Create a simple model
+model = nn.Sequential(
+    nn.Linear(784, 256),
+    nn.ReLU(),
+    nn.Linear(256, 128),
+    nn.ReLU(),
+    nn.Linear(128, 10)
 )
 
-# Run the experiment
-experiment = ProgressiveDropoutExperiment(config)
-results = experiment.run()
-
-# Results contain accuracy vs pruning fraction data
-print(f"Final accuracies: {results['final_accuracies']}")
+# Or load a pre-trained model
+# model = torch.load('path/to/model.pth')
 ```
 
-## Common Use Cases
-
-### 1. Comparing Pruning Strategies
+### 3. Wrap the Model
 
 ```python
-# Run multiple experiments with different strategies
-strategies = ['magnitude', 'random', 'gradient']
-results = {}
+# Wrap the model to track activations
+wrapped_model = ModelWrapper(model)
 
-for strategy in strategies:
-    config = ExperimentConfig(
-        name=f"comparison_{strategy}",
-        pruning_strategy=strategy,
-        # ... other config options
-    )
-    exp = ProgressiveDropoutExperiment(config)
-    results[strategy] = exp.run()
+# Get layer names
+layer_names = wrapped_model.get_layer_names()
+print("Available layers:", layer_names)
 ```
 
-### 2. Analyzing Layer Importance
+### 4. Compute Metrics
 
 ```python
-from alignment_refactor.experiments.layer_isolated import LayerIsolatedPruningExperiment
+# Create sample data
+batch_size = 32
+inputs = torch.randn(batch_size, 784)
 
-config = ExperimentConfig(
-    name="layer_importance_analysis",
-    model_name="cnn2p2",
-    dataset_name="cifar10",
-    metrics=["rayleigh_quotient", "mutual_information"]
+# Extract activations
+activations = wrapped_model.extract_activations(inputs)
+
+# Compute Rayleigh Quotient for the first layer
+rq_metric = get_metric("rayleigh_quotient")()
+rq_scores = rq_metric.compute(
+    inputs=inputs,
+    weights=model[0].weight
 )
 
-experiment = LayerIsolatedPruningExperiment(config)
-results = experiment.run()
-
-# Results show impact of pruning each layer individually
-for layer, accuracy in results['layer_accuracies'].items():
-    print(f"Pruning {layer}: {accuracy}% accuracy retained")
+print(f"RQ scores shape: {rq_scores.shape}")
+print(f"Mean RQ score: {rq_scores.mean().item():.4f}")
 ```
 
-### 3. Using Multiple Metrics
+## Running a Complete Analysis
+
+Here's a complete example that analyzes multiple layers:
 
 ```python
-from alignment_refactor.metrics import (
-    RayleighQuotient, 
-    MutualInformationGaussian,
-    PartialInformationDecomposition
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+from alignment.core import ModelWrapper
+from alignment.metrics import get_metric
+from alignment.visualization import AlignmentVisualizer
+
+# Create model
+model = nn.Sequential(
+    nn.Linear(784, 512),
+    nn.ReLU(),
+    nn.Linear(512, 256),
+    nn.ReLU(),
+    nn.Linear(256, 10)
 )
 
-# Create multiple metrics
+# Create dummy dataset
+X = torch.randn(1000, 784)
+y = torch.randint(0, 10, (1000,))
+dataset = TensorDataset(X, y)
+dataloader = DataLoader(dataset, batch_size=64)
+
+# Wrap model
+wrapped_model = ModelWrapper(model)
+
+# Initialize metrics
 metrics = {
-    'rq': RayleighQuotient(),
-    'mi': MutualInformationGaussian(),
-    'pid': PartialInformationDecomposition()
+    'rayleigh_quotient': get_metric('rayleigh_quotient')(),
+    'mutual_information': get_metric('mutual_information_gaussian')()
 }
 
-# Compute all metrics
+# Collect results
 results = {}
-for name, metric in metrics.items():
-    scores = metric.compute(inputs=layer_input, weights=layer_weight)
-    results[name] = scores.mean().item()
+
+for batch_idx, (inputs, targets) in enumerate(dataloader):
+    if batch_idx >= 5:  # Process only first 5 batches for demo
+        break
+    
+    # Get activations
+    activations = wrapped_model.extract_activations(inputs)
+    
+    # Compute metrics for each linear layer
+    for i, (name, module) in enumerate(model.named_modules()):
+        if isinstance(module, nn.Linear):
+            layer_results = {}
+            
+            # Get layer inputs (previous layer's output or original input)
+            if i == 0:
+                layer_input = inputs
+            else:
+                prev_layer_name = str(i-2)  # Account for ReLU layers
+                layer_input = activations.get(prev_layer_name, inputs)
+            
+            # Compute metrics
+            for metric_name, metric in metrics.items():
+                scores = metric.compute(
+                    inputs=layer_input,
+                    weights=module.weight,
+                    outputs=activations.get(str(i))
+                )
+                
+                if name not in results:
+                    results[name] = {}
+                if metric_name not in results[name]:
+                    results[name][metric_name] = []
+                
+                results[name][metric_name].append(scores.mean().item())
+
+# Visualize results
+visualizer = AlignmentVisualizer()
+
+# Plot metric evolution
+import matplotlib.pyplot as plt
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+for i, (metric_name, ax) in enumerate(zip(metrics.keys(), axes)):
+    for layer_name in results:
+        scores = results[layer_name][metric_name]
+        ax.plot(scores, label=f'Layer {layer_name}')
+    
+    ax.set_xlabel('Batch')
+    ax.set_ylabel(metric_name.replace('_', ' ').title())
+    ax.set_title(f'{metric_name.replace("_", " ").title()} Evolution')
+    ax.legend()
+    ax.grid(True)
+
+plt.tight_layout()
+plt.show()
 ```
 
-## Working with Datasets
+## Using Configuration Files
+
+For more complex experiments, you can use configuration files:
 
 ```python
-from alignment_refactor.data import get_dataset
+from alignment.utils.batch_processing import BatchMetricProcessor
 
-# Load MNIST
-mnist = get_dataset('mnist')
-train_loader = mnist.train_loader
-test_loader = mnist.test_loader
+# Configure processor
+processor = BatchMetricProcessor(
+    metrics=['rayleigh_quotient', 'mutual_information_gaussian', 'spectral_gap'],
+    batch_size=256,
+    use_gpu=torch.cuda.is_available()
+)
 
-# Load CIFAR-10 with custom batch size
-cifar = get_dataset('cifar10', batch_size=64)
+# Process entire dataset
+all_results = processor.process(model, dataloader)
+
+# Save results
+import json
+with open('results.json', 'w') as f:
+    json.dump({k: v.tolist() for k, v in all_results.items()}, f)
 ```
-
-## Saving and Loading Results
-
-```python
-# Experiments automatically save results
-experiment = ProgressiveDropoutExperiment(config)
-results = experiment.run()
-
-# Results are saved to checkpoint_dir/experiment_name/
-# You can also save manually
-import pickle
-with open('my_results.pkl', 'wb') as f:
-    pickle.dump(results, f)
-```
-
-## Tips for Getting Started
-
-1. **Start Small**: Begin with MNIST and small models to understand the framework
-2. **Use GPU**: Set `device="cuda"` in configs for faster experiments
-3. **Monitor Progress**: Experiments show progress bars during execution
-4. **Check Logs**: Detailed logs are saved in the checkpoint directory
-5. **Visualize Results**: Use matplotlib to plot accuracy vs pruning curves
 
 ## Next Steps
 
-- Explore [different experiment types](experiments.md)
-- Learn about [configuration options](configuration.md)
-- Understand [available metrics](metrics.md)
-- Create [custom models](models.md)
-
-## Example Scripts
-
-Check the `examples/` directory for complete working examples:
-- `mnist_mlp_pruning.py`: Basic MLP pruning on MNIST
-- `simple_pruning_demo.py`: Quick demonstration
-- `interactive_pruning_tutorial.py`: Comprehensive tutorial
-- `using_standard_models.py`: Model usage examples 
+- Explore [available metrics](../api/metrics.md) for different analysis types
+- Learn about [batch processing](batch_processing.md) for large-scale analysis
+- See [visualization options](visualization.md) for creating plots and reports
+- Check out [advanced examples](../examples/index.md) for complex use cases 
