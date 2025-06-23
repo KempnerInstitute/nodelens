@@ -32,7 +32,7 @@ There's no unit test, but to check if the install was successful, run the
 following script while in the environment and in the top directory:
 
 ```
-python src/alignment/experiments/alignment_experiments.py --config configs/config_alignment_experiment.yaml
+python src/alignment/examples/run_experiment_from_config.py configs/config_alignment_experiment.yaml
 ```
 
 

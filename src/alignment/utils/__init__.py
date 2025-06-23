@@ -1,81 +1,158 @@
-"""
-Utilities for the alignment package.
+"""Alignment utility functions and tools."""
 
-This module contains various utility functions for the alignment package,
-including plotting, timing, linear algebra helpers, and other utility functions.
-"""
-
-# Import plotting functions
-from alignment.utils.plotting import (
-    plot_dropout_results,
-    plot_experiment_summary,
-    plot_dropout_comparison,
-    log_plots_to_wandb
+# Import distributed utilities
+from .distributed import (
+    setup_distributed,
+    cleanup_distributed,
+    is_distributed,
+    get_rank,
+    get_world_size,
+    all_reduce,
+    DistributedMetricComputer
 )
-
-# Import core functions to maintain backward compatibility
-from alignment.utils.core import (
+from .checkpoint import (
+    save_checkpoint,
+    load_checkpoint,
+    is_checkpoint_complete
+)
+from .logging import (
     setup_logging,
-    timer,
-    debug,
-    to_numpy,
-    to_tensor,
-    check_iterable,
-    ensure_device,
-    timed
+    get_logger,
+    set_log_level
+)
+from .config import (
+    load_config,
+    save_config,
+    validate_config,
+    merge_configs,
+    resolve_config_references,
+    ConfigManager
+)
+from .batch_processing import (
+    BatchMetricProcessor,
+    compute_metrics_parallel,
+    StreamingMetricComputer,
+    create_metric_batches,
+    aggregate_metric_results,
+    batch_mutual_information,
+    batch_rayleigh_quotient,
+    batch_weight_similarity,
+    batch_cka
+)
+from .experiment_tracking import (
+    create_tracker,
+    ExperimentTracker,
+    WandBTracker,
+    TensorBoardTracker,
+    MultiTracker,
+    DummyTracker,
+    MetricLogger,
+    ResultCache,
+    ExperimentSummary
 )
 
-# Import math utilities
-from alignment.utils.math import (
-    orthogonalize,
-    compute_correlation_matrix,
-    matrix_angles,
-    project_to_subspace
+# From optimized submodule
+from .optimized import (
+    compute_batch_mi_cuda,
+    batch_cov_cuda,
+    batch_kl_divergence_cuda,
+    batch_entropy_cuda,
+    batch_cosine_similarity_cuda,
+    batch_matrix_sqrt,
+    batch_svd,
+    batch_pca,
+    batch_correlation,
+    batch_histogram,
+    jit_histogram_binning,
+    jit_kernel_matrix,
+    jit_entropy,
+    jit_correlation
 )
 
-# Import model utilities
-from alignment.utils.model_utils import (
-    get_device,
-    set_net_mode,
-    get_maximum_strides,
-    get_unfold_params,
-    weighted_average,
-    remove_by_idx,
-    smart_pca
+# Import pruning utilities
+from .pruning import (
+    PruningUtilities,
+    PruningConfig,
+    create_pruning_schedule,
+    get_pruning_mask,
+    apply_pruning,
+    compute_pruning_statistics,
+    AdaptivePruning,
+    StructuredPruning,
+    MagnitudePruner,
+    GradientPruner,
+    HessianPruner
 )
-
-# Removed deprecated plotting functions: plot_pruning_experiments, plot_per_layer_independent
-# They were stubs printing warnings. Their functionality should be covered by other plotting utilities.
 
 __all__ = [
-    # Plotting functions
-    'plot_dropout_results',
-    'plot_experiment_summary',
-    'plot_dropout_comparison',
-    'log_plots_to_wandb',
-    
-    # Core utilities
+    # Distributed
+    'setup_distributed',
+    'cleanup_distributed',
+    'is_distributed',
+    'get_rank',
+    'get_world_size',
+    'all_reduce',
+    'DistributedMetricComputer',
+    # Checkpoint
+    'save_checkpoint',
+    'load_checkpoint',
+    'is_checkpoint_complete',
+    # Logging
     'setup_logging',
-    'timer',
-    'debug',
-    'to_numpy',
-    'to_tensor',
-    'check_iterable',
-    'ensure_device',
-    'timed',
-    
-    # Math utilities
-    'orthogonalize',
-    'compute_correlation_matrix',
-    'matrix_angles',
-    'project_to_subspace',
-    
-    # Model utilities
-    'get_device',
-    'set_net_mode',
-    'get_maximum_strides',
-    'get_unfold_params',
-    'weighted_average',
-    'remove_by_idx',
-    'smart_pca'
-]
+    'get_logger',
+    'set_log_level',
+    # Config
+    'load_config',
+    'save_config',
+    'validate_config',
+    'merge_configs',
+    'resolve_config_references',
+    'ConfigManager',
+    # Batch processing
+    'BatchMetricProcessor',
+    'compute_metrics_parallel',
+    'StreamingMetricComputer',
+    'create_metric_batches',
+    'aggregate_metric_results',
+    'batch_mutual_information',
+    'batch_rayleigh_quotient',
+    'batch_weight_similarity',
+    'batch_cka',
+    # Experiment tracking
+    'create_tracker',
+    'ExperimentTracker',
+    'WandBTracker',
+    'TensorBoardTracker',
+    'MultiTracker',
+    'DummyTracker',
+    'MetricLogger',
+    'ResultCache',
+    'ExperimentSummary',
+    # Optimized operations
+    'compute_batch_mi_cuda',
+    'batch_cov_cuda',
+    'batch_kl_divergence_cuda',
+    'batch_entropy_cuda',
+    'batch_cosine_similarity_cuda',
+    'batch_matrix_sqrt',
+    'batch_svd',
+    'batch_pca',
+    'batch_correlation',
+    'batch_histogram',
+    'jit_histogram_binning',
+    'jit_kernel_matrix',
+    'jit_entropy',
+    'jit_correlation',
+    # Pruning
+    'PruningUtilities',
+    'PruningConfig',
+    'create_pruning_schedule',
+    'get_pruning_mask',
+    'apply_pruning',
+    'compute_pruning_statistics',
+    'AdaptivePruning',
+    'StructuredPruning',
+    'MagnitudePruner',
+    'GradientPruner',
+    'HessianPruner'
+] 
