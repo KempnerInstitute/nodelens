@@ -1,0 +1,8 @@
+# Documentation requirements
+sphinx>=4.5.0
+sphinx-rtd-theme>=1.0.0
+sphinx-copybutton>=0.5.0
+sphinx-autobuild>=2021.3.14
+myst-parser>=0.18.0
+nbsphinx>=0.8.0
+pandoc>=2.0 

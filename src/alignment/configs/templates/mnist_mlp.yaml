@@ -1,0 +1,55 @@
+# Configuration template for MLP experiments on MNIST
+name: mnist_mlp_experiment
+description: Progressive dropout experiment with MLP on MNIST
+
+# Model configuration
+model_name: mlp
+model_config:
+  input_dim: 784
+  hidden_dims: [300, 200, 100]
+  output_dim: 10
+  dropout_rate: 0.5
+  activation: relu
+
+# Dataset configuration
+dataset_name: mnist
+dataset_config:
+  data_path: ${DATA_PATH:./data}
+  normalize: true
+
+# Training configuration
+batch_size: 128
+num_workers: 4
+device: ${DEVICE:cuda}
+seed: 42
+train_before_dropout: true
+training_epochs: 10
+learning_rate: 0.001
+optimizer: adam
+
+# Metrics configuration
+metrics:
+  - rayleigh_quotient
+  - mutual_information
+metric_configs:
+  rayleigh_quotient:
+    scale_by_norm: false
+    aggregation_op: mean
+  mutual_information:
+    estimation_method: gaussian
+
+# Experiment-specific configuration
+dropout_fractions: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+pruning_strategy: magnitude
+tracked_layers: ["network.0", "network.3", "network.6"]
+
+# Checkpointing and logging
+checkpoint_dir: ${CHECKPOINT_DIR:./checkpoints}
+checkpoint_interval: 1000
+save_best: true
+log_dir: ${LOG_DIR:./logs}
+log_interval: 100
+
+# Optional: Weights & Biases
+wandb_project: null
+wandb_entity: null 
