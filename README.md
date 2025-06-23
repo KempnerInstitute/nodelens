@@ -43,13 +43,13 @@ python src/alignment/examples/run_experiment_from_config.py configs/config_align
 The codebase is fully documented with comprehensive guides and API references:
 
 ### Core Documentation
-- **[User Guide](docs/ALIGNMENT_MODULE_GUIDE.md)**: Complete guide to using the alignment module
-- **[Metrics Reference](docs/METRICS_REFERENCE.md)**: Detailed mathematical descriptions of all 36 metrics
-- **[All Metrics List](docs/ALL_METRICS_LIST.md)**: Quick reference of available metrics
+- **[User Guide](docs/source/ALIGNMENT_MODULE_GUIDE.md)**: Complete guide to using the alignment module
+- **[Metrics Reference](docs/source/METRICS_REFERENCE.md)**: Detailed mathematical descriptions of all 36 metrics
+- **[All Metrics List](docs/source/ALL_METRICS_LIST.md)**: Quick reference of available metrics
 
 ### Additional Resources
-- **[Gaussian MI Documentation](GAUSSIAN_MI_SUMMARY.md)**: Details on the Gaussian mutual information metric with Edgeworth expansions
-- **[Task-Specific Metrics](TASK_SPECIFIC_REORG_SUMMARY.md)**: Documentation for domain-specific alignment metrics
+- **[Gaussian MI Documentation](archive/refactoring_docs/GAUSSIAN_MI_SUMMARY.md)**: Details on the Gaussian mutual information metric with Edgeworth expansions
+- **[Task-Specific Metrics](archive/refactoring_docs/TASK_SPECIFIC_REORG_SUMMARY.md)**: Documentation for domain-specific alignment metrics
 - **[API Reference](docs/source/api/)**: Comprehensive API documentation
 
 ### Quick Start Example
@@ -83,7 +83,7 @@ The framework provides 36 metrics across 6 categories:
 5. **Task-Specific** (8 metrics): Classification, language modeling, vision, RL
 6. **Higher-Order** (4 metrics): Multi-way information interactions
 
-See [METRICS_REFERENCE.md](docs/METRICS_REFERENCE.md) for detailed descriptions.
+See [METRICS_REFERENCE.md](docs/source/METRICS_REFERENCE.md) for detailed descriptions.
 
 ## Codebase Structure
 
