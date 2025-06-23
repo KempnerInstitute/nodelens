@@ -1,10 +1,10 @@
-"""Aggregation utilities for alignment analysis."""
+"""
+Aggregation utilities for experiment analysis.
+"""
 
-from ..aggregators import (
-    ResultAggregator,
-    MetricAggregator,
-    LayerAggregator,
-)
+from .results import ResultAggregator
+from .metrics import MetricAggregator
+from .layers import LayerAggregator
 
 __all__ = [
     'ResultAggregator',

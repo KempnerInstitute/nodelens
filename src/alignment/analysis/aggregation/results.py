@@ -2,13 +2,12 @@
 Result aggregation utilities for analyzing experiment outputs.
 """
 
-from typing import Dict, List, Optional, Any, Union, Tuple, Callable
+from typing import Dict, List, Optional, Any, Union, Tuple
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import json
 import logging
-from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -216,5 +215,4 @@ class ResultAggregator:
             
             data.append(row)
         
-        return pd.DataFrame(data)
-
+        return pd.DataFrame(data) 
