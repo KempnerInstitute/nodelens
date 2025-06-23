@@ -3,33 +3,22 @@ Pruning module for the alignment framework.
 
 This module provides:
 - Various pruning strategies (magnitude, gradient, random, etc.)
-- Structured pruning utilities
 - Pruning experiments for analysis
 """
 
 from typing import Optional, Union, Type
 import logging
 
-from .base import BasePruningStrategy
+from .base import BasePruningStrategy, IterativePruningStrategy
 from .strategies import (
     MagnitudePruning,
+    IterativeMagnitudePruning,
+    GlobalMagnitudePruning,
     GradientPruning,
-    RandomPruning,
     FisherPruning,
-    L1Pruning,
-    L2Pruning,
-    TaylorPruning,
-    HessianPruning,
-    ActivationPruning,
-    ConnectionSensitivityPruning
-)
-from .structured import (
-    StructuredPruningStrategy,
-    ChannelPruning,
-    FilterPruning,
-    BlockPruning,
-    PatternPruning,
-    NMPruning
+    MomentumPruning,
+    RandomPruning,
+    BernoulliPruning,
 )
 from .experiments import (
     ProgressiveDropoutExperiment,
@@ -42,24 +31,19 @@ logger = logging.getLogger(__name__)
 
 # Registry of available pruning strategies
 PRUNING_STRATEGIES = {
-    # Unstructured strategies
+    # Magnitude-based strategies
     'magnitude': MagnitudePruning,
-    'gradient': GradientPruning,
-    'random': RandomPruning,
-    'fisher': FisherPruning,
-    'l1': L1Pruning,
-    'l2': L2Pruning,
-    'taylor': TaylorPruning,
-    'hessian': HessianPruning,
-    'activation': ActivationPruning,
-    'connection_sensitivity': ConnectionSensitivityPruning,
+    'iterative_magnitude': IterativeMagnitudePruning,
+    'global_magnitude': GlobalMagnitudePruning,
     
-    # Structured strategies
-    'channel': ChannelPruning,
-    'filter': FilterPruning,
-    'block': BlockPruning,
-    'pattern': PatternPruning,
-    'nm': NMPruning,
+    # Gradient-based strategies
+    'gradient': GradientPruning,
+    'fisher': FisherPruning,
+    'momentum': MomentumPruning,
+    
+    # Random strategies
+    'random': RandomPruning,
+    'bernoulli': BernoulliPruning,
 }
 
 
@@ -97,28 +81,23 @@ def list_pruning_strategies() -> list:
 
 
 __all__ = [
-    # Base class
+    # Base classes
     'BasePruningStrategy',
+    'IterativePruningStrategy',
     
-    # Unstructured strategies
+    # Magnitude strategies
     'MagnitudePruning',
-    'GradientPruning',
-    'RandomPruning',
-    'FisherPruning',
-    'L1Pruning',
-    'L2Pruning',
-    'TaylorPruning',
-    'HessianPruning',
-    'ActivationPruning',
-    'ConnectionSensitivityPruning',
+    'IterativeMagnitudePruning',
+    'GlobalMagnitudePruning',
     
-    # Structured strategies
-    'StructuredPruningStrategy',
-    'ChannelPruning',
-    'FilterPruning',
-    'BlockPruning',
-    'PatternPruning',
-    'NMPruning',
+    # Gradient strategies
+    'GradientPruning',
+    'FisherPruning',
+    'MomentumPruning',
+    
+    # Random strategies
+    'RandomPruning',
+    'BernoulliPruning',
     
     # Experiments
     'ProgressiveDropoutExperiment',
