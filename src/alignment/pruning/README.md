@@ -186,24 +186,57 @@ config = PruningConfig(
 )
 ```
 
-## Integration with Experiments
+## Pruning Experiments
 
-The pruning module integrates with the experiments framework:
+The pruning module includes several experiments for analyzing how pruning affects model alignment:
+
+### Progressive Pruning Experiment
+Progressively increases pruning rates and tracks alignment metrics.
 
 ```python
-from alignment.experiments import CascadingExperiment
-from alignment.pruning import get_pruning_strategy
+from alignment.pruning.experiments import ProgressiveDropoutExperiment
+from alignment.experiments import ExperimentConfig
 
-# Use pruning in experiments
-strategy = get_pruning_strategy('magnitude')
-experiment = CascadingExperiment(
-    model=model,
-    metrics=['rayleigh_quotient', 'mutual_information_gaussian'],
-    pruning_strategy=strategy,
-    pruning_ratios=[0.3, 0.5, 0.7, 0.9]
+
+config = ExperimentConfig(
+    name="progressive_pruning",
+    dropout_rates=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
+    dropout_structure='magnitude',  # or 'random', 'gradient'
+    metrics=['rayleigh_quotient', 'mutual_information_gaussian']
 )
 
-results = experiment.run(dataloader)
+experiment = ProgressiveDropoutExperiment(config)
+results = experiment.run()
+```
+
+### Cascading Layer Pruning
+Analyzes the cascading effects of pruning layers sequentially.
+
+```python
+from alignment.pruning.experiments import CascadingLayerPruningExperiment
+
+experiment = CascadingLayerPruningExperiment(config)
+results = experiment.run()
+```
+
+### Layer-wise Pruning Analysis
+Studies the impact of pruning individual layers in isolation.
+
+```python
+from alignment.pruning.experiments import LayerIsolatedPruningExperiment
+
+experiment = LayerIsolatedPruningExperiment(config)
+results = experiment.run()
+```
+
+### Eigenvector-based Pruning
+Uses eigenvector analysis to guide pruning decisions.
+
+```python
+from alignment.pruning.experiments import EigenvectorDropoutExperiment
+
+experiment = EigenvectorDropoutExperiment(config)
+results = experiment.run()
 ```
 
 ## Custom Pruning Strategies
@@ -310,9 +343,16 @@ pruning/
 │   ├── magnitude.py     # Magnitude-based strategies
 │   ├── gradient.py      # Gradient-based strategies
 │   └── random.py        # Random strategies
-├── structured/          # Structured pruning (future)
-├── utilities.py         # Helper functions (future)
-├── schedules.py         # Pruning schedules (future)
+├── structured/          # Structured pruning implementations
+│   ├── channel.py       # Channel pruning
+│   ├── filter.py        # Filter pruning
+│   └── ...             # Other structured methods
+├── experiments/         # Pruning experiments
+│   ├── __init__.py
+│   ├── progressive.py   # Progressive pruning analysis
+│   ├── cascading_layer.py # Cascading layer-wise pruning
+│   ├── layer_wise.py    # Layer-wise pruning analysis
+│   └── eigenvector_based.py # Eigenvector-based pruning
 └── README.md           # This file
 ```
 
