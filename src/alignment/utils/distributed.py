@@ -13,6 +13,25 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 
+def is_distributed() -> bool:
+    """Check if distributed training is initialized."""
+    return dist.is_initialized()
+
+
+def get_rank() -> int:
+    """Get current process rank."""
+    if not dist.is_initialized():
+        return 0
+    return dist.get_rank()
+
+
+def get_world_size() -> int:
+    """Get total number of processes."""
+    if not dist.is_initialized():
+        return 1
+    return dist.get_world_size()
+
+
 def setup_distributed(
     backend: str = "nccl",
     init_method: Optional[str] = None,
