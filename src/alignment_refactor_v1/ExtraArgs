@@ -1,0 +1,6 @@
+@dataclass
+class ExtraArgs:
+    """Arguments for various experiments."""
+    aggregate_alignment: bool = False
+    num_drops: int = 9
+    dropout_pruning_mode: str = "global"  # "global", "per_layer_combined", or "per_layer_independent" 
