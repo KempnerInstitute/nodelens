@@ -4,10 +4,12 @@ import torch
 import torch.nn as nn
 from typing import Optional, Dict, Any, Tuple
 import numpy as np
-from ..base import AlignmentMetric
+from ...core.base import BaseMetric
+from ...core.registry import register_metric
 
 
-class SpectralGapMetric(AlignmentMetric):
+@register_metric("spectral_gap")
+class SpectralGapMetric(BaseMetric):
     """
     Measures the spectral gap of weight matrices.
     
@@ -16,9 +18,7 @@ class SpectralGapMetric(AlignmentMetric):
     indicates a more dominant principal component.
     """
     
-    requires_inputs = False
-    requires_weights = True
-    requires_outputs = False
+    name = "spectral_gap"
     
     def __init__(self, normalize: bool = True):
         """
@@ -31,7 +31,8 @@ class SpectralGapMetric(AlignmentMetric):
     def compute(self, 
                 inputs: Optional[torch.Tensor] = None,
                 weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None) -> float:
+                outputs: Optional[torch.Tensor] = None,
+                **kwargs) -> torch.Tensor:
         """Compute spectral gap of weight matrix."""
         if weights is None:
             raise ValueError("Weights required for spectral gap metric")
@@ -51,7 +52,7 @@ class SpectralGapMetric(AlignmentMetric):
             U, S, V = torch.svd(weights)
             
             if S.numel() < 2:
-                return 0.0
+                return torch.zeros(weights.size(0), device=weights.device)
             
             # Spectral gap is difference between top 2 singular values
             gap = (S[0] - S[1]).item()
@@ -59,14 +60,16 @@ class SpectralGapMetric(AlignmentMetric):
             if self.normalize and S[0] > 1e-8:
                 gap = gap / S[0].item()
             
-            return float(gap)
+            # Return as tensor with one value per neuron (repeated)
+            return torch.full((weights.size(0),), gap, device=weights.device)
             
         except Exception as e:
-            # Return 0 if SVD fails
-            return 0.0
+            # Return zeros if SVD fails
+            return torch.zeros(weights.size(0), device=weights.device)
 
 
-class EigenvalueAlignmentMetric(AlignmentMetric):
+@register_metric("eigenvalue_alignment")
+class EigenvalueAlignmentMetric(BaseMetric):
     """
     Measures alignment between eigenvalue distributions of two weight matrices.
     
@@ -74,9 +77,7 @@ class EigenvalueAlignmentMetric(AlignmentMetric):
     of spectral similarity.
     """
     
-    requires_inputs = False
-    requires_weights = True
-    requires_outputs = False
+    name = "eigenvalue_alignment"
     
     def __init__(self, p: float = 2.0, top_k: Optional[int] = None):
         """
@@ -114,14 +115,15 @@ class EigenvalueAlignmentMetric(AlignmentMetric):
     def compute(self,
                 inputs: Optional[torch.Tensor] = None,
                 weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None) -> float:
+                outputs: Optional[torch.Tensor] = None,
+                **kwargs) -> torch.Tensor:
         """Compute eigenvalue alignment."""
         if weights is None:
             raise ValueError("Weights required for eigenvalue alignment")
         
         if self._reference_eigenvalues is None:
             # If no reference, return 0 (perfect alignment with self)
-            return 0.0
+            return torch.zeros(weights.size(0), device=weights.device)
         
         current_eigenvalues = self._compute_eigenvalues(weights)
         
@@ -144,10 +146,12 @@ class EigenvalueAlignmentMetric(AlignmentMetric):
         # Wasserstein distance
         distance = torch.norm(ref_padded - curr_padded, p=self.p).item()
         
-        return float(distance)
+        # Return as tensor with one value per neuron (repeated)
+        return torch.full((weights.size(0),), distance, device=weights.device)
 
 
-class SpectralClusteringAlignment(AlignmentMetric):
+@register_metric("spectral_clustering")
+class SpectralClusteringAlignment(BaseMetric):
     """
     Measures how well weight matrix eigenspaces align with data clustering.
     
@@ -155,9 +159,7 @@ class SpectralClusteringAlignment(AlignmentMetric):
     weight matrix and the cluster structure in the output space.
     """
     
-    requires_inputs = False
-    requires_weights = True
-    requires_outputs = True
+    name = "spectral_clustering"
     
     def __init__(self, n_components: int = 5, n_clusters: int = 10):
         """
@@ -172,7 +174,8 @@ class SpectralClusteringAlignment(AlignmentMetric):
     def compute(self,
                 inputs: Optional[torch.Tensor] = None,
                 weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None) -> float:
+                outputs: Optional[torch.Tensor] = None,
+                **kwargs) -> torch.Tensor:
         """Compute spectral clustering alignment."""
         if weights is None or outputs is None:
             raise ValueError("Both weights and outputs required")
@@ -193,7 +196,7 @@ class SpectralClusteringAlignment(AlignmentMetric):
             # Project outputs using eigenvectors
             if outputs.size(-1) != top_components.size(0):
                 # Dimension mismatch - return low alignment
-                return 0.0
+                return torch.zeros(weights.size(0), device=weights.device)
             
             projected = outputs @ top_components
             
@@ -207,13 +210,15 @@ class SpectralClusteringAlignment(AlignmentMetric):
             else:
                 alignment = 0.0
             
-            return float(alignment)
+            # Return as tensor with one value per neuron (repeated)
+            return torch.full((weights.size(0),), alignment, device=weights.device)
             
         except Exception as e:
-            return 0.0
+            return torch.zeros(weights.size(0), device=weights.device)
 
 
-class PowerIterationAlignment(AlignmentMetric):
+@register_metric("power_iteration")
+class PowerIterationAlignment(BaseMetric):
     """
     Measures alignment using power iteration convergence properties.
     
@@ -221,9 +226,7 @@ class PowerIterationAlignment(AlignmentMetric):
     eigenvector, which indicates the spectral structure of the weight matrix.
     """
     
-    requires_inputs = False
-    requires_weights = True
-    requires_outputs = False
+    name = "power_iteration"
     
     def __init__(self, max_iterations: int = 100, tolerance: float = 1e-6):
         """
@@ -238,7 +241,8 @@ class PowerIterationAlignment(AlignmentMetric):
     def compute(self,
                 inputs: Optional[torch.Tensor] = None,
                 weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None) -> float:
+                outputs: Optional[torch.Tensor] = None,
+                **kwargs) -> torch.Tensor:
         """Compute power iteration convergence rate."""
         if weights is None:
             raise ValueError("Weights required for power iteration alignment")
@@ -274,4 +278,5 @@ class PowerIterationAlignment(AlignmentMetric):
             
             prev_v = v.clone()
         
-        return float(convergence_rate) 
+        # Return as tensor with one value per neuron (repeated)
+        return torch.full((n,), convergence_rate, device=weights.device) 

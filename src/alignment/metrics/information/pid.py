@@ -11,8 +11,8 @@ import numpy as np
 import logging
 from pathlib import Path
 
-from alignment.metrics.base import BaseInformationMetric
-from alignment.core.registry import register_metric
+from ...core.base import BaseMetric
+from ...core.registry import register_metric
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ except ImportError:
         logger.warning("BROJA_2PID module not available. PID metrics will return zeros.")
 
 
-class BasePIDMetric(BaseInformationMetric):
+class BasePIDMetric(BaseMetric):
     """Base class for PID-based metrics."""
     
     # PID metrics require inputs and outputs

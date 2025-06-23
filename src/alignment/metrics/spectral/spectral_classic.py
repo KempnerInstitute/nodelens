@@ -1,12 +1,13 @@
 """
-Spectral alignment metrics based on eigenvalue analysis.
+Classic spectral alignment metrics based on eigenvalue analysis.
+These metrics were originally in metrics/spectral.py
 """
 
 import torch
 import torch.linalg as LA
 from typing import Optional, Tuple, Dict, Any
-from ..core.registry import register_metric
-from ..core.metrics import BaseMetric
+from ...core.registry import register_metric
+from ...core.base import BaseMetric
 
 
 @register_metric("spectral_alignment")
