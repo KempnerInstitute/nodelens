@@ -1,133 +1,176 @@
 # Training Module
 
-This module provides training strategies and utilities for the alignment framework.
+This module provides training strategies and utilities for neural networks in the alignment framework.
 
 ## Overview
 
-The training module contains specialized training loops and strategies for different types of experiments and model architectures. Currently, it includes tensorized training for efficient computation.
+The training module contains various training strategies:
+- **Base Training** (`base.py`): Standard training with comprehensive features
+- **Multi-Network Training** (`multi_network.py`): Train multiple networks simultaneously
 
 ## Available Training Strategies
 
-### Tensorized Training
+### 1. Base Training
 
-The `tensorized.py` module provides optimized training using tensor operations for improved efficiency:
+The `base.py` module provides a flexible trainer with many features:
 
 ```python
-from alignment.training.tensorized import TensorizedTrainer
+from alignment.training import BaseTrainer, TrainingConfig
 
-trainer = TensorizedTrainer(
-    model=model,
-    optimizer=optimizer,
-    use_mixed_precision=True
+# Configure training
+config = TrainingConfig(
+    epochs=100,
+    learning_rate=0.001,
+    optimizer="adam",
+    scheduler="cosine",
+    early_stopping_patience=10,
+    gradient_clip_val=1.0,
+    device="cuda"
 )
 
-# Train with tensorized operations
-trainer.fit(train_loader, val_loader, epochs=10)
+# Create trainer
+trainer = BaseTrainer(model, config, loss_fn=nn.CrossEntropyLoss())
+
+# Train
+history = trainer.train(train_loader, val_loader)
 ```
 
-## Future Enhancements
+### 2. Multi-Network Training
 
-This module is designed to be expanded with additional training strategies:
+The `multi_network.py` module provides efficient simultaneous training of multiple networks:
 
-### Planned Additions
+```python
+from alignment.training import train_networks_fully_tensorized
 
-1. **Standard Training** (`standard.py`)
-   - Basic training loops with customizable callbacks
-   - Support for various loss functions and optimizers
+# Train multiple networks at once
+networks = [create_model() for _ in range(5)]
+trained_networks, history = train_networks_fully_tensorized(
+    networks=networks,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    epochs=10,
+    device="cuda"
+)
+```
 
-2. **Adversarial Training** (`adversarial.py`)
-   - Training with adversarial examples
-   - Robustness evaluation
+## Features
 
-3. **Meta Learning** (`meta.py`)
-   - Few-shot learning support
-   - Model-agnostic meta-learning (MAML)
+### Base Trainer Features
+- Multiple optimizers (Adam, SGD, AdamW)
+- Learning rate schedulers (Cosine, Plateau, Step)
+- Early stopping
+- Gradient clipping
+- Checkpoint saving
+- Custom callbacks
+- Metric tracking
 
-4. **Continual Learning** (`continual.py`)
-   - Elastic weight consolidation (EWC)
-   - Progressive neural networks
-
-5. **Multi-Task Training** (`multitask.py`)
-   - Shared representations
-   - Task-specific heads
+### Multi-Network Training Features
+- Efficient parallel training
+- Shared data loading
+- Synchronized updates
+- Automatic architecture verification
 
 ## Integration with Alignment Metrics
 
-The training module is designed to work seamlessly with alignment metrics:
+The training module integrates seamlessly with alignment metrics:
 
 ```python
-from alignment.training.tensorized import TensorizedTrainer
+from alignment.training import BaseTrainer, TrainingConfig
 from alignment.metrics import get_metric
 
-# Configure trainer with alignment tracking
-trainer = TensorizedTrainer(
-    model=model,
-    optimizer=optimizer,
-    metrics=[
-        get_metric("rayleigh_quotient"),
-        get_metric("mutual_information_gaussian")
-    ],
-    track_alignment=True
+# Define metric function
+def alignment_metrics(outputs, targets):
+    metric = get_metric("rayleigh_quotient")()
+    score = metric.compute(outputs)
+    return {"rayleigh": score}
+
+# Train with metrics
+trainer = BaseTrainer(model, config)
+history = trainer.train(
+    train_loader, 
+    val_loader,
+    metric_fn=alignment_metrics
 )
+```
 
-# Training automatically tracks alignment metrics
-history = trainer.fit(train_loader, val_loader)
+## Custom Training Loops
 
-# Access alignment scores
-print(history.alignment_scores)
+You can extend the base trainer for custom behavior:
+
+```python
+from alignment.training import BaseTrainer
+
+class AlignmentTrainer(BaseTrainer):
+    def _train_epoch(self, train_loader, metric_fn=None):
+        # Custom training logic
+        # Can access self.model, self.optimizer, etc.
+        pass
 ```
 
 ## Best Practices
 
-1. **Use appropriate batch sizes** for tensorized operations
-2. **Enable mixed precision** for faster training on compatible GPUs
-3. **Monitor alignment metrics** during training
-4. **Save checkpoints regularly** using the infrastructure module
+1. **Use TrainingConfig** for consistent configuration
+2. **Enable gradient clipping** for stability
+3. **Use early stopping** to prevent overfitting
+4. **Save checkpoints regularly**
+5. **Monitor multiple metrics** during training
 
 ## Examples
 
-### Basic Tensorized Training
+### Advanced Configuration
 
 ```python
-from alignment.training.tensorized import TensorizedTrainer
-from alignment.infrastructure import CheckpointManager
+from alignment.training import BaseTrainer, TrainingConfig
 
-# Setup
-trainer = TensorizedTrainer(model, optimizer)
-ckpt_manager = CheckpointManager("checkpoints/")
+config = TrainingConfig(
+    epochs=200,
+    learning_rate=0.01,
+    optimizer="sgd",
+    optimizer_kwargs={"momentum": 0.9, "weight_decay": 1e-4},
+    scheduler="step",
+    scheduler_kwargs={"step_size": 50, "gamma": 0.1},
+    early_stopping_patience=20,
+    gradient_clip_val=5.0,
+    checkpoint_dir="checkpoints/experiment1"
+)
 
-# Training loop
-for epoch in range(epochs):
-    metrics = trainer.train_epoch(train_loader)
-    val_metrics = trainer.validate(val_loader)
-    
-    # Save checkpoint
-    ckpt_manager.save(
-        model=model,
-        optimizer=optimizer,
-        epoch=epoch,
-        metrics={**metrics, **val_metrics}
-    )
+trainer = BaseTrainer(model, config)
 ```
 
-### Custom Training Loop
+### Multi-Network with Callbacks
 
 ```python
-from alignment.training.tensorized import TensorizedOperations
+def log_callback(trainer, epoch):
+    print(f"Epoch {epoch}: LR = {trainer.optimizer.param_groups[0]['lr']}")
 
-# Use tensorized operations in custom loop
-ops = TensorizedOperations()
-
-for batch in dataloader:
-    # Efficient tensorized forward pass
-    outputs = ops.forward(model, batch)
-    
-    # Tensorized loss computation
-    loss = ops.compute_loss(outputs, targets)
-    
-    # Efficient backward pass
-    ops.backward(loss)
+networks = [create_model() for _ in range(3)]
+trained_networks, history = train_networks_fully_tensorized(
+    networks=networks,
+    train_loader=train_loader,
+    epochs=50,
+    callbacks=[log_callback]
+)
 ```
+
+## Future Enhancements
+
+Planned additions to the training module:
+
+1. **Distributed Training** (`distributed.py`)
+   - Multi-GPU support
+   - Multi-node training
+
+2. **Adversarial Training** (`adversarial.py`)
+   - Adversarial example generation
+   - Robustness training
+
+3. **Meta Learning** (`meta.py`)
+   - MAML implementation
+   - Few-shot learning
+
+4. **Continual Learning** (`continual.py`)
+   - EWC and similar methods
+   - Task incremental learning
 
 ## Contributing
 
