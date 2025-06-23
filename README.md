@@ -1,83 +1,132 @@
 # Network Alignment Analysis
 
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://github.com/KempnerInstitute/alignment/)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://kempnerinstitute.github.io/alignment/)
 
-This repository is for a project to understand the structure of neural
-networks with a method called "alignment". It contains modules which make
-doing alignment-related experiments easy and the scripts that run the 
-experiments. The repo is equipped to train pytorch models with DDP on an HPC
-cluster. You'll find a few brief instructions about how to use the repository
-here in the README, but for more information please feel free to reach out!
+This repository provides a comprehensive framework for analyzing neural network representations using alignment metrics. It includes 36 different metrics spanning information theory, spectral analysis, similarity measures, and task-specific alignment. The framework supports distributed training, batch processing, and advanced visualization capabilities.
+
+## Key Features
+
+- **36 Alignment Metrics**: Comprehensive suite including Rayleigh quotient, mutual information, spectral metrics, and more
+- **Flexible Architecture**: Easy to extend with custom metrics and experiments
+- **Performance Optimized**: GPU acceleration, parallel processing, and batch computation
+- **Experiment Framework**: Structured approach to running and tracking experiments
+- **Visualization Tools**: Built-in plotting and analysis capabilities
 
 ## Setup
-The code requires a basic ML python environment. Setup can be done with a
-standard python environment manager like conda (or mamba!). To get started,
-clone the repository from GitHub, then navigate to the cloned folder. 
 
-```
+The code requires a basic ML python environment. Setup can be done with a standard python environment manager like conda (or mamba). To get started, clone the repository from GitHub, then navigate to the cloned folder.
+
+```bash
 mamba env create -f environment.yml
 mamba activate networkAlignmentAnalysis
 ```
 
 ## Installation
 
-After creating and activating the environment, you can install the package.
+After creating and activating the environment, you can install the package:
 
-```
+```bash
 pip install -e .[all]
 ```
 
-There's no unit test, but to check if the install was successful, run the 
-following script while in the environment and in the top directory:
+To verify the installation:
 
-```
+```bash
 python src/alignment/examples/run_experiment_from_config.py configs/config_alignment_experiment.yaml
 ```
 
+## Documentation
 
-## Documentatio
+📚 **[View Full Documentation](https://kempnerinstitute.github.io/alignment/)**
 
 The codebase is fully documented with comprehensive guides and API references:
 
-- [Main Documentation](documentation.md): Overview of the entire codebase
-- [Metrics System](metrics/README.md): Documentation for the metrics system
-- [Experiment Framework](experiment/README.md): Guide to running experiments
-- [Performance Optimizations](performance/README.md): Tensorized training and multi-strategy dropout
-- [API Reference](api/README.md): Comprehensive API reference
+### Core Documentation
+- **[User Guide](docs/ALIGNMENT_MODULE_GUIDE.md)**: Complete guide to using the alignment module
+- **[Metrics Reference](docs/METRICS_REFERENCE.md)**: Detailed mathematical descriptions of all 36 metrics
+- **[All Metrics List](docs/ALL_METRICS_LIST.md)**: Quick reference of available metrics
 
-### Online Documentation
+### Additional Resources
+- **[Gaussian MI Documentation](GAUSSIAN_MI_SUMMARY.md)**: Details on the Gaussian mutual information metric with Edgeworth expansions
+- **[Task-Specific Metrics](TASK_SPECIFIC_REORG_SUMMARY.md)**: Documentation for domain-specific alignment metrics
+- **[API Reference](docs/source/api/)**: Comprehensive API documentation
 
-For a more user-friendly documentation experience, visit our [GitHub Pages site](https://github.com/KempnerInstitute/alignment/).
+### Quick Start Example
 
-### Guides and Tutorials
+```python
+import torch
+from alignment.core import ModelWrapper
+from alignment.metrics import get_metric
 
-- [Usage Guide](usage.md): How to use the codebase
-- [Pruning Modes](pruning_modes.md): Documentation for different pruning strategies
-- [Configuration Reference](configuration.md): Detailed configuration options
+# Wrap your model
+model = torch.nn.Sequential(
+    torch.nn.Linear(784, 256),
+    torch.nn.ReLU(),
+    torch.nn.Linear(256, 10)
+)
+wrapped_model = ModelWrapper(model)
+
+# Compute alignment metrics
+metric = get_metric("rayleigh_quotient")()
+scores = metric.compute(inputs=inputs, weights=model[0].weight)
+```
+
+## Available Metrics
+
+The framework provides 36 metrics across 6 categories:
+
+1. **Rayleigh Quotient** (3 metrics): Variance capture analysis
+2. **Information-Theoretic** (14 metrics): Mutual information, redundancy, PID
+3. **Similarity** (7 metrics): Cosine similarity, correlation, alignment
+4. **Spectral** (8 metrics): Eigenvalue analysis, spectral gaps
+5. **Task-Specific** (8 metrics): Classification, language modeling, vision, RL
+6. **Higher-Order** (4 metrics): Multi-way information interactions
+
+See [METRICS_REFERENCE.md](docs/METRICS_REFERENCE.md) for detailed descriptions.
 
 ## Codebase Structure
 
-The codebase is organized into the following directories:
-
-- `src/alignment/`: Core source code implementing alignment metrics and algorithms
-- `tests/`: Unit and integration tests
-- `scripts/`: Utility scripts for running experiments and analysis
-- `benchmarks/`: Performance evaluation scripts (just for tests)
-- `configs/`: Configuration files for experiments
-- `results/`: Output directory for experiment results
-- `doc/`: Documentation
+```
+alignment/
+├── src/alignment/       # Core source code
+│   ├── core/           # Base classes and registry
+│   ├── metrics/        # All metric implementations
+│   ├── models/         # Model wrappers and architectures
+│   ├── experiments/    # Experiment framework
+│   ├── utils/          # Utilities (batch processing, visualization)
+│   └── examples/       # Example scripts
+├── tests/              # Unit and integration tests
+├── configs/            # Configuration files
+├── docs/               # Documentation
+└── results/            # Output directory
+```
 
 ## Contributing
-Feel free to contribute to this project by opening issues or submitting pull
-requests. It's already a collaborative project, so more minds are great if you
-have ideas or anything to contribute!
+
+We welcome contributions! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Update documentation
+5. Submit a pull request
+
+## Citation
+
+If you use this framework in your research, please cite:
+
+```bibtex
+@software{alignment_framework,
+  title = {Neural Network Alignment Analysis Framework},
+  author = {Kempner Institute},
+  year = {2024},
+  url = {https://github.com/KempnerInstitute/alignment}
+}
+```
 
 ## License
-This project is licensed under the MIT License. If you use anything from this
-repository for more than learning about code and/or pytorch, please cite us. 
-There's no paper associated with the code at the moment, but you can cite our
-GitHub repository URL or email us for any updates about this issue.
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 
 
