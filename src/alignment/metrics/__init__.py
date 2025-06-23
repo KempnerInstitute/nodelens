@@ -8,11 +8,32 @@ from ..core.registry import METRIC_REGISTRY
 from . import rayleigh
 from . import information
 from . import similarity
-
-# Import all metric modules to trigger registration via decorators
 from . import spectral
-from . import information
 from . import task_specific
 
-# For convenience, expose the registry
-__all__ = ['METRIC_REGISTRY'] 
+
+def get_metric(name: str):
+    """
+    Get a metric class by name.
+    
+    Args:
+        name: Name of the metric
+        
+    Returns:
+        Metric class (not instance)
+    """
+    return METRIC_REGISTRY.get(name)
+
+
+def list_metrics():
+    """
+    List all available metrics.
+    
+    Returns:
+        List of metric names
+    """
+    return METRIC_REGISTRY.list()
+
+
+# For convenience, expose the registry and functions
+__all__ = ['METRIC_REGISTRY', 'get_metric', 'list_metrics'] 
