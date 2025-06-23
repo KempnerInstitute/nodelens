@@ -6,7 +6,7 @@ functionality needed for alignment analysis to standard PyTorch models.
 """
 
 from alignment.models.base import BaseModelWrapper
-from alignment.models.wrappers import (
+from alignment.core.wrappers import (
     ModelWrapper,
     AlignmentNetwork,
     ActivationTracker,

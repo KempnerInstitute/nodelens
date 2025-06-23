@@ -37,7 +37,7 @@ from .wrappers import (
 __all__ = [
     # Protocols
     "AlignmentMetric",
-    "ModelWrapper",
+    "ModelWrapperProtocol",
     "DatasetWrapper",
     "Experiment",
     "MetricAggregator",
@@ -57,4 +57,6 @@ __all__ = [
     "BaseModel",
     "BaseDataset",
     "BaseExperiment",
+    # Implementations
+    "ModelWrapper",
 ] 
