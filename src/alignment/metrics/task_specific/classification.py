@@ -19,6 +19,9 @@ class ClassificationAlignment(BaseMetric):
     """
     
     name = "classification_alignment"
+    requires_inputs = True
+    requires_weights = True
+    requires_outputs = False
     
     def __init__(
         self,
@@ -84,16 +87,24 @@ class ClassificationAlignment(BaseMetric):
         if self.alignment_type == "boundary_distance":
             # Measure how neuron activations change near decision boundaries
             probabilities = F.softmax(logits / self.temperature, dim=1)
-            entropy = -(probabilities * probabilities.log()).sum(dim=1)
+            # Add small epsilon to avoid log(0)
+            entropy = -(probabilities * (probabilities + 1e-8).log()).sum(dim=1)
             
             # High entropy indicates proximity to decision boundary
             # Compute correlation between neuron activation and boundary proximity
             for i in range(n_neurons):
-                correlation = torch.corrcoef(
-                    torch.stack([outputs[:, i], entropy])
-                )[0, 1]
-                # Higher correlation means neuron activates near boundaries
-                alignment_scores[i] = correlation.abs()
+                # Check if there's enough variance for correlation
+                if outputs[:, i].std() > 1e-8 and entropy.std() > 1e-8:
+                    correlation = torch.corrcoef(
+                        torch.stack([outputs[:, i], entropy])
+                    )[0, 1]
+                    # Handle NaN values
+                    if torch.isnan(correlation):
+                        alignment_scores[i] = 0.0
+                    else:
+                        alignment_scores[i] = correlation.abs()
+                else:
+                    alignment_scores[i] = 0.0
         
         elif self.alignment_type == "class_separation":
             # Measure how well neurons separate different classes

@@ -9,8 +9,8 @@ from typing import Optional, Any, Dict
 import torch
 import logging
 
-from alignment.core.base import BaseMetric
-from alignment.core.registry import register_metric
+from ...core.base import BaseMetric
+from ...core.registry import register_metric
 from .rayleigh_quotient import RayleighQuotient
 
 logger = logging.getLogger(__name__)

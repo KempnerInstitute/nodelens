@@ -19,6 +19,9 @@ class LanguageModelAlignment(BaseMetric):
     """
     
     name = "language_model_alignment"
+    requires_inputs = True
+    requires_weights = True
+    requires_outputs = False
     
     def __init__(
         self,

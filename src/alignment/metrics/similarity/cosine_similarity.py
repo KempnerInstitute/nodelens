@@ -10,8 +10,8 @@ import torch
 import torch.nn.functional as F
 import logging
 
-from alignment.core.base import BaseMetric
-from alignment.core.registry import register_metric
+from ...core.base import BaseMetric
+from ...core.registry import register_metric
 
 logger = logging.getLogger(__name__)
 

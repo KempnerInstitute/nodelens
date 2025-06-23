@@ -19,6 +19,9 @@ class ReinforcementLearningAlignment(BaseMetric):
     """
     
     name = "reinforcement_learning_alignment"
+    requires_inputs = True
+    requires_weights = True
+    requires_outputs = False
     
     def __init__(
         self,

@@ -1,8 +1,8 @@
 """
-Partial Information Decomposition (PID) metrics.
+Partial Information Decomposition (PID) metric using the BROJA 2PID algorithm.
 
-This module implements PID-based metrics using the BROJA method for
-computing shared, unique, and synergistic information between variables.
+This metric decomposes the information that a pair of input features provides
+about the output into unique, redundant, and synergistic components.
 """
 
 from typing import Optional, Dict, Any, Tuple
@@ -16,27 +16,19 @@ from ...core.registry import register_metric
 
 logger = logging.getLogger(__name__)
 
-# Try to import BROJA module
-BROJA_AVAILABLE = False
+# Try to import the BROJA 2PID module
 try:
-    # Try to import from the expected location
-    from alignment.external.BROJA_2PID import BROJA_2PID
-    BROJA_AVAILABLE = True
-    logger.info("Successfully loaded BROJA_2PID module")
+    import sys
+    import os
+    # Add the external module to path if needed
+    from ...external.BROJA_2PID import BROJA_2PID
+    HAS_BROJA = True
 except ImportError:
-    try:
-        # Alternative path
-        import sys
-        broja_path = Path(__file__).parent.parent.parent / "external" / "BROJA_2PID" / "BROJA_2PID.py"
-        if broja_path.exists():
-            sys.path.insert(0, str(broja_path.parent))
-            import BROJA_2PID
-            BROJA_AVAILABLE = True
-            logger.info("Successfully loaded BROJA_2PID module from alternative path")
-        else:
-            logger.warning(f"BROJA_2PID not found at {broja_path}")
-    except ImportError:
-        logger.warning("BROJA_2PID module not available. PID metrics will return zeros.")
+    HAS_BROJA = False
+    logger.warning(
+        "BROJA_2PID module not found. PID metric will use a simplified approximation. "
+        "For accurate PID computation, please ensure the BROJA_2PID module is available."
+    )
 
 
 class BasePIDMetric(BaseMetric):
@@ -85,7 +77,7 @@ class BasePIDMetric(BaseMetric):
         Returns:
             Probability distribution dictionary or None if error
         """
-        if not BROJA_AVAILABLE:
+        if not HAS_BROJA:
             return None
         
         try:
@@ -168,7 +160,7 @@ class SharedInformation(BasePIDMetric):
         Returns:
             Shared information scores [output_features]
         """
-        if not BROJA_AVAILABLE:
+        if not HAS_BROJA:
             logger.warning("BROJA not available, returning zeros")
             return torch.zeros(outputs.shape[1], device=outputs.device)
         
@@ -231,7 +223,7 @@ class UniqueInformationX(BasePIDMetric):
         **kwargs
     ) -> torch.Tensor:
         """Compute unique information from first input variable."""
-        if not BROJA_AVAILABLE:
+        if not HAS_BROJA:
             logger.warning("BROJA not available, returning zeros")
             return torch.zeros(outputs.shape[1], device=outputs.device)
         
@@ -290,7 +282,7 @@ class UniqueInformationY(BasePIDMetric):
         **kwargs
     ) -> torch.Tensor:
         """Compute unique information from second input variable."""
-        if not BROJA_AVAILABLE:
+        if not HAS_BROJA:
             logger.warning("BROJA not available, returning zeros")
             return torch.zeros(outputs.shape[1], device=outputs.device)
         
@@ -349,7 +341,7 @@ class SynergisticInformation(BasePIDMetric):
         **kwargs
     ) -> torch.Tensor:
         """Compute synergistic information."""
-        if not BROJA_AVAILABLE:
+        if not HAS_BROJA:
             logger.warning("BROJA not available, returning zeros")
             return torch.zeros(outputs.shape[1], device=outputs.device)
         

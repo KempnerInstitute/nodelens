@@ -5,7 +5,7 @@ Node correlation metric for measuring output correlations.
 import torch
 import logging
 from typing import Optional
-from alignment.core.base import BaseMetric
+from ...core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 

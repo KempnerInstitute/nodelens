@@ -1,152 +1,158 @@
-"""
-Utility functions and helpers for the alignment framework.
-"""
+"""Alignment utility functions and tools."""
 
-from alignment.utils.distributed import (
+# Import distributed utilities
+from .distributed import (
     setup_distributed,
     cleanup_distributed,
-    is_main_process,
-    barrier,
-    reduce_tensor,
-    gather_tensor,
-    DistributedMetricComputer,
+    is_distributed,
+    get_rank,
+    get_world_size,
+    all_reduce,
+    DistributedMetricComputer
 )
-from alignment.utils.checkpoint import (
+from .checkpoint import (
     save_checkpoint,
     load_checkpoint,
-    save_model_for_inference,
+    is_checkpoint_complete
 )
-from alignment.utils.logging import (
+from .logging import (
     setup_logging,
     get_logger,
-    log_metrics,
+    set_log_level
 )
-from alignment.utils.config import (
+from .config import (
     load_config,
     save_config,
+    validate_config,
     merge_configs,
-    Config,
+    resolve_config_references,
+    ConfigManager
+)
+from .batch_processing import (
+    BatchMetricProcessor,
+    compute_metrics_parallel,
+    StreamingMetricComputer,
+    create_metric_batches,
+    aggregate_metric_results,
+    batch_mutual_information,
+    batch_rayleigh_quotient,
+    batch_weight_similarity,
+    batch_cka
+)
+from .experiment_tracking import (
+    create_tracker,
+    ExperimentTracker,
+    WandBTracker,
+    TensorBoardTracker,
+    MultiTracker,
+    DummyTracker,
+    MetricLogger,
+    ResultCache,
+    ExperimentSummary
 )
 
-# Import batch processing utilities
-try:
-    from alignment.utils.batch_processing import (
-        BatchMetricProcessor,
-        StreamingMetricComputer,
-        compute_metrics_parallel,
-        batch_mutual_information,
-    )
-    _batch_processing_available = True
-except ImportError:
-    _batch_processing_available = False
-
-# Import experiment tracking utilities
-try:
-    from alignment.utils.experiment_tracking import (
-        ExperimentTracker,
-        WandBTracker,
-        TensorBoardTracker,
-        MultiTracker,
-        DummyTracker,
-        create_tracker,
-    )
-    _tracking_available = True
-except ImportError:
-    _tracking_available = False
-
-# Import optimized implementations
-try:
-    from alignment.utils.optimized import (
-        # GPU functions
-        gpu_histogram1d,
-        gpu_histogram2d,
-        gpu_mutual_information,
-        gpu_entropy,
-        gpu_conditional_entropy,
-        GPUAcceleratedMetrics,
-        # JIT functions
-        JITRayleighQuotient,
-        JITMutualInformation,
-        JITNodeCorrelation,
-        create_jit_metric,
-    )
-    _optimized_available = True
-except ImportError:
-    _optimized_available = False
+# From optimized submodule
+from .optimized import (
+    compute_batch_mi_cuda,
+    batch_cov_cuda,
+    batch_kl_divergence_cuda,
+    batch_entropy_cuda,
+    batch_cosine_similarity_cuda,
+    batch_matrix_sqrt,
+    batch_svd,
+    batch_pca,
+    batch_correlation,
+    batch_histogram,
+    jit_histogram_binning,
+    jit_kernel_matrix,
+    jit_entropy,
+    jit_correlation
+)
 
 # Import pruning utilities
-try:
-    from alignment.utils.pruning import (
-        PruningConfig,
-        PruningUtilities,
-        create_pruning_schedule,
-    )
-    _pruning_available = True
-except ImportError:
-    _pruning_available = False
+from .pruning import (
+    PruningUtilities,
+    PruningConfig,
+    create_pruning_schedule,
+    get_pruning_mask,
+    apply_pruning,
+    compute_pruning_statistics,
+    AdaptivePruning,
+    StructuredPruning,
+    MagnitudePruner,
+    GradientPruner,
+    HessianPruner
+)
 
 __all__ = [
-    # Distributed utilities
+    # Distributed
     'setup_distributed',
     'cleanup_distributed',
-    'is_main_process',
-    'barrier',
-    'reduce_tensor',
-    'gather_tensor',
+    'is_distributed',
+    'get_rank',
+    'get_world_size',
+    'all_reduce',
     'DistributedMetricComputer',
-    # Checkpoint utilities
+    # Checkpoint
     'save_checkpoint',
     'load_checkpoint',
-    'save_model_for_inference',
-    # Logging utilities
+    'is_checkpoint_complete',
+    # Logging
     'setup_logging',
     'get_logger',
-    'log_metrics',
-    # Config utilities
+    'set_log_level',
+    # Config
     'load_config',
     'save_config',
+    'validate_config',
     'merge_configs',
-    'Config',
-]
-
-# Add new utilities if available
-if _batch_processing_available:
-    __all__.extend([
-        'BatchMetricProcessor',
-        'StreamingMetricComputer',
-        'compute_metrics_parallel',
-        'batch_mutual_information',
-    ])
-
-if _tracking_available:
-    __all__.extend([
-        'ExperimentTracker',
-        'WandBTracker',
-        'TensorBoardTracker',
-        'MultiTracker',
-        'DummyTracker',
-        'create_tracker',
-    ])
-
-if _optimized_available:
-    __all__.extend([
-        # GPU functions
-        'gpu_histogram1d',
-        'gpu_histogram2d',
-        'gpu_mutual_information',
-        'gpu_entropy',
-        'gpu_conditional_entropy',
-        'GPUAcceleratedMetrics',
-        # JIT functions
-        'JITRayleighQuotient',
-        'JITMutualInformation',
-        'JITNodeCorrelation',
-        'create_jit_metric',
-    ])
-
-if _pruning_available:
-    __all__.extend([
-        'PruningConfig',
-        'PruningUtilities',
-        'create_pruning_schedule',
-    ]) 
+    'resolve_config_references',
+    'ConfigManager',
+    # Batch processing
+    'BatchMetricProcessor',
+    'compute_metrics_parallel',
+    'StreamingMetricComputer',
+    'create_metric_batches',
+    'aggregate_metric_results',
+    'batch_mutual_information',
+    'batch_rayleigh_quotient',
+    'batch_weight_similarity',
+    'batch_cka',
+    # Experiment tracking
+    'create_tracker',
+    'ExperimentTracker',
+    'WandBTracker',
+    'TensorBoardTracker',
+    'MultiTracker',
+    'DummyTracker',
+    'MetricLogger',
+    'ResultCache',
+    'ExperimentSummary',
+    # Optimized operations
+    'compute_batch_mi_cuda',
+    'batch_cov_cuda',
+    'batch_kl_divergence_cuda',
+    'batch_entropy_cuda',
+    'batch_cosine_similarity_cuda',
+    'batch_matrix_sqrt',
+    'batch_svd',
+    'batch_pca',
+    'batch_correlation',
+    'batch_histogram',
+    'jit_histogram_binning',
+    'jit_kernel_matrix',
+    'jit_entropy',
+    'jit_correlation',
+    # Pruning
+    'PruningUtilities',
+    'PruningConfig',
+    'create_pruning_schedule',
+    'get_pruning_mask',
+    'apply_pruning',
+    'compute_pruning_statistics',
+    'AdaptivePruning',
+    'StructuredPruning',
+    'MagnitudePruner',
+    'GradientPruner',
+    'HessianPruner'
+] 

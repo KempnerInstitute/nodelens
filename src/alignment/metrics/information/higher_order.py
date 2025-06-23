@@ -9,8 +9,7 @@ import torch.nn as nn
 from typing import Optional, Dict, Any, List, Tuple
 import numpy as np
 from ...core.registry import register_metric
-from ...core.metrics import BaseMetric
-from .mutual_information import estimate_mutual_information
+from ...core.base import BaseMetric
 
 
 @register_metric("total_correlation")
@@ -151,15 +150,15 @@ class InteractionInformation(BaseMetric):
             Y = outputs[:, j]
             Z = outputs[:, k]
             
-            # Compute pairwise mutual information
-            MI_XY = estimate_mutual_information_binning(
-                X.unsqueeze(1), Y.unsqueeze(1), bins=self.bins
+            # Compute pairwise mutual information using histogram method
+            MI_XY = self._estimate_mi_binning(
+                X.unsqueeze(1), Y.unsqueeze(1)
             )
-            MI_XZ = estimate_mutual_information_binning(
-                X.unsqueeze(1), Z.unsqueeze(1), bins=self.bins
+            MI_XZ = self._estimate_mi_binning(
+                X.unsqueeze(1), Z.unsqueeze(1)
             )
-            MI_YZ = estimate_mutual_information_binning(
-                Y.unsqueeze(1), Z.unsqueeze(1), bins=self.bins
+            MI_YZ = self._estimate_mi_binning(
+                Y.unsqueeze(1), Z.unsqueeze(1)
             )
             
             # Compute conditional mutual information I(X;Y|Z)
@@ -179,6 +178,29 @@ class InteractionInformation(BaseMetric):
         interaction_scores = interaction_scores / n_triplets
         
         return interaction_scores
+    
+    def _estimate_mi_binning(self, x: torch.Tensor, y: torch.Tensor) -> float:
+        """Estimate mutual information using binning method."""
+        x_np = x.detach().cpu().numpy()
+        y_np = y.detach().cpu().numpy()
+        
+        # Create 2D histogram
+        hist, _, _ = np.histogram2d(x_np.flatten(), y_np.flatten(), bins=self.bins)
+        hist = hist + 1e-10  # Avoid log(0)
+        
+        # Normalize to get probabilities
+        pxy = hist / hist.sum()
+        px = pxy.sum(axis=1)
+        py = pxy.sum(axis=0)
+        
+        # Compute MI
+        mi = 0.0
+        for i in range(len(px)):
+            for j in range(len(py)):
+                if pxy[i, j] > 0:
+                    mi += pxy[i, j] * np.log(pxy[i, j] / (px[i] * py[j]))
+        
+        return mi
 
 
 @register_metric("connected_information")  

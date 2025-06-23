@@ -5,7 +5,7 @@ Alternative Rayleigh Quotient metric with different normalization.
 import torch
 import logging
 from typing import Optional
-from alignment.core.base import BaseMetric
+from ...core.base import BaseMetric
 
 logger = logging.getLogger(__name__)
 

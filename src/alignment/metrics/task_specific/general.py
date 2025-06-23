@@ -19,6 +19,9 @@ class TaskAlignment(BaseMetric):
     """
     
     name = "task_alignment"
+    requires_inputs = True
+    requires_weights = True
+    requires_outputs = False
     
     def __init__(
         self,
@@ -133,6 +136,9 @@ class ClassSelectivity(BaseMetric):
     """
     
     name = "class_selectivity"
+    requires_inputs = True
+    requires_weights = True
+    requires_outputs = False
     
     def __init__(
         self,
@@ -208,7 +214,11 @@ class ClassSelectivity(BaseMetric):
                 if class_mask.sum() > 0:
                     class_activations = neuron_outputs[class_mask]
                     class_means.append(class_activations.mean())
-                    class_vars.append(class_activations.var())
+                    # Only compute variance if we have more than one sample
+                    if class_mask.sum() > 1:
+                        class_vars.append(class_activations.var())
+                    else:
+                        class_vars.append(torch.tensor(0.0, device=outputs.device))
             
             class_means = torch.stack(class_means)
             class_vars = torch.stack(class_vars)
@@ -250,6 +260,9 @@ class FeatureImportance(BaseMetric):
     """
     
     name = "feature_importance"
+    requires_inputs = True
+    requires_weights = True
+    requires_outputs = False
     
     def __init__(
         self,
@@ -354,6 +367,9 @@ class RepresentationQuality(BaseMetric):
     """
     
     name = "representation_quality"
+    requires_inputs = True
+    requires_weights = True
+    requires_outputs = False
     
     def __init__(
         self,

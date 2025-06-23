@@ -1,17 +1,15 @@
 """
-Mutual Information metrics for neural network alignment analysis.
-
-These metrics measure the information shared between layer inputs/outputs
-or between neurons.
+Mutual Information metrics for measuring dependencies between neural representations.
 """
 
-from typing import Optional, Any
 import torch
+import torch.nn.functional as F
+from typing import Optional, Dict, Any, Tuple
 import numpy as np
 import logging
-
-from alignment.core.base import BaseMetric
-from alignment.core.registry import register_metric
+import warnings
+from ...core.base import BaseMetric
+from ...core.registry import register_metric
 
 logger = logging.getLogger(__name__)
 

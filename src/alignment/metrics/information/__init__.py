@@ -15,6 +15,7 @@ from .pid import (
 )
 from .conditional_mutual_information import ConditionalMutualInformation
 from .mi_projection import MIProjectionVsMeanInput
+from .gaussian_mi import GaussianMIAnalytic
 
 # Import higher-order metrics if available
 try:
@@ -32,6 +33,7 @@ __all__ = [
     # Mutual Information
     'MutualInformationGaussian',
     'MutualInformationBinning',
+    'GaussianMIAnalytic',
     # Redundancy
     'AverageRedundancy',
     # PID
