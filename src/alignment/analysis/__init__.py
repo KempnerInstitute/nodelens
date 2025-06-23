@@ -10,7 +10,7 @@ from alignment.analysis.aggregators import (
     MetricAggregator,
     LayerAggregator
 )
-from alignment.analysis.visualizers import (
+from alignment.analysis.visualization.visualizers import (
     MetricVisualizer,
     LayerVisualizer,
     ComparisonVisualizer
