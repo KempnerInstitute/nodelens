@@ -1,8 +1,7 @@
-"""Reporting utilities for generating analysis reports."""
+"""HTML report generation utilities."""
 
-from typing import Dict, List, Optional, Any, Union
+from typing import List, Tuple, Union
 from pathlib import Path
-import json
 import pandas as pd
 from datetime import datetime
 import logging
@@ -11,24 +10,34 @@ logger = logging.getLogger(__name__)
 
 
 class HTMLReporter:
-    """Generates HTML reports."""
+    """Generates HTML reports for alignment analysis results."""
     
     def __init__(self, title: str = "Alignment Analysis Report"):
+        """
+        Initialize HTML reporter.
+        
+        Args:
+            title: Report title
+        """
         self.title = title
         self.sections = []
         self.figures = []
     
     def add_section(self, name: str, content: str):
+        """Add a section to the report."""
         self.sections.append((name, content))
     
     def add_figure(self, figure_path: str, caption: str = ""):
+        """Add a figure to the report."""
         self.figures.append((figure_path, caption))
     
     def add_dataframe(self, name: str, df: pd.DataFrame):
+        """Add a DataFrame as an HTML table."""
         html = df.to_html(classes='metric-table', index=False)
         self.add_section(name, html)
     
     def generate(self, output_path: Union[str, Path]):
+        """Generate the HTML report."""
         html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -67,58 +76,4 @@ class HTMLReporter:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(html)
         
-        logger.info(f"Generated HTML report: {output_path}")
-
-
-class MarkdownReporter:
-    """Generates Markdown reports."""
-    
-    def __init__(self, title: str = "Alignment Analysis Report"):
-        self.title = title
-        self.sections = []
-    
-    def add_section(self, name: str, content: str):
-        self.sections.append((name, content))
-    
-    def add_table(self, name: str, df: pd.DataFrame):
-        content = df.to_markdown(index=False)
-        self.add_section(name, content)
-    
-    def generate(self, output_path: Union[str, Path]):
-        content = f"# {self.title}\n\n"
-        content += f"*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n"
-        
-        for name, section_content in self.sections:
-            content += f"## {name}\n\n{section_content}\n\n"
-        
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(content)
-        
-        logger.info(f"Generated Markdown report: {output_path}")
-
-
-class JSONReporter:
-    """Generates JSON reports."""
-    
-    def __init__(self, title: str = "Alignment Analysis Report"):
-        self.title = title
-        self.data = {
-            "title": title,
-            "timestamp": datetime.now().isoformat(),
-            "sections": {}
-        }
-    
-    def add_section(self, name: str, data: Any):
-        if isinstance(data, pd.DataFrame):
-            data = data.to_dict('records')
-        self.data["sections"][name] = data
-    
-    def generate(self, output_path: Union[str, Path]):
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_path, 'w') as f:
-            json.dump(self.data, f, indent=2, default=str)
-        
-        logger.info(f"Generated JSON report: {output_path}")
+        logger.info(f"Generated HTML report: {output_path}") 
