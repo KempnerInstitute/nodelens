@@ -5,8 +5,10 @@ Distributed computing utilities for multi-GPU training.
 import os
 import torch
 import torch.distributed as dist
-from typing import Optional, List, Union, Dict, Any
+from typing import Optional, List, Union, Dict, Any, Callable, Tuple
 import logging
+from torch.nn.parallel import DistributedDataParallel as DDP
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -197,143 +199,315 @@ class DistributedMetricComputer:
     building on the basic distributed utilities.
     """
     
-    def __init__(
-        self,
-        world_size: Optional[int] = None,
-        rank: Optional[int] = None,
-        backend: str = 'nccl'
-    ):
+    def __init__(self, backend: str = 'nccl'):
         """
-        Initialize distributed metric computer.
+        Initialize distributed computing.
+        
+        Args:
+            backend: Distributed backend ('nccl' for GPU, 'gloo' for CPU)
+        """
+        self.backend = backend
+        self.initialized = False
+        self.rank = 0
+        self.world_size = 1
+    
+    def setup(self, rank: Optional[int] = None, world_size: Optional[int] = None):
+        """
+        Setup distributed computing environment.
+        
+        Args:
+            rank: Process rank (auto-detected if None)
+            world_size: Total number of processes (auto-detected if None)
+        """
+        if self.initialized:
+            return
+        
+        # Auto-detect from environment
+        if rank is None:
+            rank = int(os.environ.get('RANK', 0))
+        if world_size is None:
+            world_size = int(os.environ.get('WORLD_SIZE', 1))
+        
+        self.rank = rank
+        self.world_size = world_size
+        
+        if world_size > 1:
+            # Initialize process group
+            dist.init_process_group(
+                backend=self.backend,
+                rank=rank,
+                world_size=world_size
+            )
+            self.initialized = True
+    
+    def cleanup(self):
+        """Cleanup distributed environment."""
+        if self.initialized and dist.is_initialized():
+            dist.destroy_process_group()
+            self.initialized = False
+    
+    @contextmanager
+    def distributed_context(self):
+        """Context manager for distributed operations."""
+        try:
+            yield
+        finally:
+            if self.initialized:
+                dist.barrier()
+    
+    def all_gather_metrics(self, local_metric: torch.Tensor) -> List[torch.Tensor]:
+        """
+        Gather metrics from all processes.
+        
+        Args:
+            local_metric: Local metric value
+            
+        Returns:
+            List of metrics from all processes
+        """
+        if not self.initialized or self.world_size == 1:
+            return [local_metric]
+        
+        # Ensure tensor is on correct device
+        if not local_metric.is_cuda and self.backend == 'nccl':
+            local_metric = local_metric.cuda()
+        
+        # Gather from all processes
+        gathered = [torch.zeros_like(local_metric) for _ in range(self.world_size)]
+        dist.all_gather(gathered, local_metric)
+        
+        return gathered
+    
+    def reduce_metrics(self, 
+                      local_metric: torch.Tensor,
+                      reduction: str = 'mean') -> torch.Tensor:
+        """
+        Reduce metrics across all processes.
+        
+        Args:
+            local_metric: Local metric value
+            reduction: Reduction operation ('mean', 'sum', 'max', 'min')
+            
+        Returns:
+            Reduced metric
+        """
+        if not self.initialized or self.world_size == 1:
+            return local_metric
+        
+        # Clone to avoid modifying original
+        metric = local_metric.clone()
+        
+        if not metric.is_cuda and self.backend == 'nccl':
+            metric = metric.cuda()
+        
+        # Reduce across processes
+        if reduction == 'sum':
+            dist.all_reduce(metric, op=dist.ReduceOp.SUM)
+        elif reduction == 'mean':
+            dist.all_reduce(metric, op=dist.ReduceOp.SUM)
+            metric = metric / self.world_size
+        elif reduction == 'max':
+            dist.all_reduce(metric, op=dist.ReduceOp.MAX)
+        elif reduction == 'min':
+            dist.all_reduce(metric, op=dist.ReduceOp.MIN)
+        else:
+            raise ValueError(f"Unknown reduction: {reduction}")
+        
+        return metric
+    
+    def distributed_metric_computation(self,
+                                     metric_fn: Callable,
+                                     data_loader: torch.utils.data.DataLoader,
+                                     **metric_kwargs) -> Dict[str, float]:
+        """
+        Compute metrics in distributed fashion.
+        
+        Args:
+            metric_fn: Metric computation function
+            data_loader: Distributed data loader
+            **metric_kwargs: Additional arguments for metric function
+            
+        Returns:
+            Dictionary of computed metrics
+        """
+        local_results = []
+        
+        with self.distributed_context():
+            for batch in data_loader:
+                # Compute metric on local batch
+                result = metric_fn(batch, **metric_kwargs)
+                local_results.append(result)
+        
+        # Aggregate local results
+        if local_results:
+            local_metric = torch.tensor(
+                sum(local_results) / len(local_results),
+                device='cuda' if self.backend == 'nccl' else 'cpu'
+            )
+        else:
+            local_metric = torch.tensor(0.0)
+        
+        # Reduce across all processes
+        global_metric = self.reduce_metrics(local_metric, reduction='mean')
+        
+        return {'metric': global_metric.item()}
+
+
+class DistributedModelWrapper:
+    """Wrapper for distributed model evaluation."""
+    
+    def __init__(self, model: torch.nn.Module, device_ids: Optional[List[int]] = None):
+        """
+        Initialize distributed model wrapper.
+        
+        Args:
+            model: Model to wrap
+            device_ids: GPU device IDs to use
+        """
+        self.model = model
+        self.device_ids = device_ids
+        self.ddp_model = None
+    
+    def setup_ddp(self, rank: int):
+        """Setup DistributedDataParallel."""
+        if self.device_ids:
+            device = self.device_ids[rank % len(self.device_ids)]
+        else:
+            device = rank
+        
+        torch.cuda.set_device(device)
+        self.model = self.model.cuda(device)
+        
+        self.ddp_model = DDP(
+            self.model,
+            device_ids=[device],
+            output_device=device
+        )
+    
+    def get_model(self) -> torch.nn.Module:
+        """Get the wrapped model."""
+        return self.ddp_model if self.ddp_model is not None else self.model
+
+
+def distributed_metric_aggregation(
+    metric_computer: Any,
+    data_partitions: List[Tuple[torch.Tensor, ...]],
+    metric_name: str,
+    **compute_kwargs
+) -> float:
+    """
+    Aggregate metric computation across data partitions.
+    
+    Args:
+        metric_computer: Metric computation object
+        data_partitions: List of data partitions (inputs, weights, outputs)
+        metric_name: Name of metric to compute
+        **compute_kwargs: Additional arguments for compute
+        
+    Returns:
+        Aggregated metric value
+    """
+    dist_computer = DistributedMetricComputer()
+    dist_computer.setup()
+    
+    try:
+        # Compute local metrics
+        local_scores = []
+        for partition in data_partitions:
+            inputs, weights, outputs = partition
+            score = metric_computer.compute(
+                inputs=inputs,
+                weights=weights,
+                outputs=outputs,
+                **compute_kwargs
+            )
+            local_scores.append(score)
+        
+        # Average local scores
+        if local_scores:
+            local_avg = sum(local_scores) / len(local_scores)
+            local_tensor = torch.tensor(local_avg, dtype=torch.float32)
+        else:
+            local_tensor = torch.tensor(0.0, dtype=torch.float32)
+        
+        # Reduce across processes
+        global_avg = dist_computer.reduce_metrics(local_tensor, reduction='mean')
+        
+        return global_avg.item()
+        
+    finally:
+        dist_computer.cleanup()
+
+
+class DistributedBatchProcessor:
+    """Process batches in distributed fashion with automatic load balancing."""
+    
+    def __init__(self, 
+                 world_size: int,
+                 rank: int,
+                 device: Optional[torch.device] = None):
+        """
+        Initialize distributed batch processor.
         
         Args:
             world_size: Total number of processes
-            rank: Rank of current process
-            backend: Backend to use ('nccl', 'gloo', 'mpi')
+            rank: Current process rank
+            device: Device to use (auto-detected if None)
         """
-        self.backend = backend
-        
-        if world_size is not None and rank is not None:
-            # Manual initialization
-            self.world_size = world_size
-            self.rank = rank
-        else:
-            # Try to get from environment or current state
-            if dist.is_initialized():
-                self.world_size = dist.get_world_size()
-                self.rank = dist.get_rank()
-            else:
-                # Single process mode
-                self.world_size = 1
-                self.rank = 0
-                logger.info("Running in single process mode")
+        self.world_size = world_size
+        self.rank = rank
+        self.device = device or torch.device(f'cuda:{rank}')
     
-    def compute_metrics_distributed(
-        self,
-        model_wrapper,
-        dataloader: torch.utils.data.DataLoader,
-        metrics: Dict[str, Any],
-        gather_results: bool = True
-    ) -> Dict[str, Dict[str, torch.Tensor]]:
+    def split_batch(self, batch: torch.Tensor) -> torch.Tensor:
         """
-        Compute metrics in a distributed manner.
+        Split batch across processes.
         
         Args:
-            model_wrapper: Wrapped model
-            dataloader: DataLoader (should use DistributedSampler)
-            metrics: Dictionary of metrics to compute
-            gather_results: Whether to gather results across all ranks
+            batch: Input batch
             
         Returns:
-            Results dictionary
+            Local portion of batch
         """
-        device = torch.device(f'cuda:{self.rank}' if torch.cuda.is_available() else 'cpu')
-        model_wrapper.model.to(device)
+        batch_size = batch.size(0)
+        chunk_size = (batch_size + self.world_size - 1) // self.world_size
         
-        # Local computation
-        local_results = {}
-        local_counts = {}
+        start_idx = self.rank * chunk_size
+        end_idx = min(start_idx + chunk_size, batch_size)
         
-        for batch_idx, (inputs, _) in enumerate(dataloader):
-            inputs = inputs.to(device)
-            
-            # Get activations and weights
-            outputs, activations = model_wrapper.forward_with_activations(inputs)
-            weights = model_wrapper.get_layer_weights()
-            
-            # Process each layer
-            for layer_name in model_wrapper.tracked_layers:
-                if layer_name not in local_results:
-                    local_results[layer_name] = {}
-                    local_counts[layer_name] = {}
-                
-                layer_inputs = activations.get(f"{layer_name}_input")
-                layer_weights = weights.get(layer_name)
-                layer_outputs = activations.get(f"{layer_name}_output", outputs)
-                
-                # Compute metrics
-                for metric_name, metric in metrics.items():
-                    scores = metric.compute(
-                        inputs=layer_inputs,
-                        weights=layer_weights,
-                        outputs=layer_outputs
-                    )
-                    
-                    # Accumulate results
-                    if metric_name not in local_results[layer_name]:
-                        local_results[layer_name][metric_name] = scores
-                        local_counts[layer_name][metric_name] = 1
-                    else:
-                        local_results[layer_name][metric_name] += scores
-                        local_counts[layer_name][metric_name] += 1
-        
-        # Average local results
-        for layer_name in local_results:
-            for metric_name in local_results[layer_name]:
-                count = local_counts[layer_name][metric_name]
-                local_results[layer_name][metric_name] /= count
-        
-        # Gather results if requested
-        if gather_results and self.world_size > 1:
-            return self._gather_results(local_results)
+        if start_idx < batch_size:
+            return batch[start_idx:end_idx].to(self.device)
         else:
-            return local_results
+            # Return empty tensor if this rank has no data
+            return torch.empty(0, *batch.shape[1:], device=self.device)
     
-    def _gather_results(
-        self,
-        local_results: Dict[str, Dict[str, torch.Tensor]]
-    ) -> Dict[str, Dict[str, torch.Tensor]]:
+    def gather_results(self, local_result: torch.Tensor) -> torch.Tensor:
         """
-        Gather results from all ranks.
+        Gather results from all processes.
         
         Args:
-            local_results: Local results from this rank
+            local_result: Local computation result
             
         Returns:
-            Aggregated results
+            Concatenated results from all processes
         """
-        global_results = {}
+        # Get sizes from all processes
+        local_size = torch.tensor(local_result.size(0), device=self.device)
+        sizes = [torch.zeros_like(local_size) for _ in range(self.world_size)]
+        dist.all_gather(sizes, local_size)
         
-        for layer_name, layer_metrics in local_results.items():
-            global_results[layer_name] = {}
-            
-            for metric_name, scores in layer_metrics.items():
-                # Gather tensors from all ranks
-                gathered = gather_tensor(scores, dst=0)
-                
-                if gathered is not None:  # We're on rank 0
-                    # Average the gathered results
-                    global_results[layer_name][metric_name] = torch.stack(gathered).mean(dim=0)
-                else:
-                    # For non-rank-0 processes, we can optionally broadcast the result
-                    global_results[layer_name][metric_name] = scores
+        # Gather tensors with variable sizes
+        max_size = max(s.item() for s in sizes)
+        padded_result = torch.zeros(max_size, *local_result.shape[1:], device=self.device)
+        if local_result.size(0) > 0:
+            padded_result[:local_result.size(0)] = local_result
         
-        # Optionally broadcast results to all ranks
-        if self.rank == 0:
-            for layer_name in global_results:
-                for metric_name in global_results[layer_name]:
-                    global_results[layer_name][metric_name] = broadcast(
-                        global_results[layer_name][metric_name], src=0
-                    )
+        gathered = [torch.zeros_like(padded_result) for _ in range(self.world_size)]
+        dist.all_gather(gathered, padded_result)
         
-        return global_results 
+        # Concatenate non-padded portions
+        results = []
+        for i, size in enumerate(sizes):
+            if size > 0:
+                results.append(gathered[i][:size])
+        
+        return torch.cat(results, dim=0) if results else torch.empty(0, *local_result.shape[1:]) 

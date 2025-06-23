@@ -55,8 +55,8 @@ def test_metric_computer():
         
         # Create metrics
         metrics = {
-            'rayleigh_quotient': METRIC_REGISTRY['rayleigh_quotient'](),
-            'mutual_information': METRIC_REGISTRY['mutual_information']()
+            'rayleigh_quotient': METRIC_REGISTRY.get_metric('rayleigh_quotient'),
+            'mutual_information': METRIC_REGISTRY.get_metric('mutual_information')
         }
         
         # Create computer

@@ -1,122 +1,94 @@
 """
 Higher-order information decomposition metrics.
+
+These metrics capture complex multivariate dependencies beyond pairwise relationships.
 """
 
 import torch
+import torch.nn as nn
+from typing import Optional, Dict, Any, List, Tuple
 import numpy as np
-from typing import Optional, List, Tuple, Dict
 from ...core.registry import register_metric
 from ...core.metrics import BaseMetric
-from .mutual_information import estimate_mutual_information_binning
+from .mutual_information import estimate_mutual_information
 
 
 @register_metric("total_correlation")
 class TotalCorrelation(BaseMetric):
     """
-    Compute total correlation (multi-information) among a set of neurons.
+    Measures total correlation (multi-information) among variables.
     
-    Total correlation measures the amount of information shared among all neurons,
-    beyond pairwise dependencies.
+    Total correlation quantifies the amount of dependency among a set of
+    random variables. It's the KL divergence between the joint distribution
+    and the product of marginal distributions.
+    
+    TC(X1, ..., Xn) = sum(H(Xi)) - H(X1, ..., Xn)
     """
     
     name = "total_correlation"
     
-    def __init__(self, method: str = "gaussian", bins: int = 10):
+    def __init__(self, n_bins: int = 30, normalize: bool = True):
         """
-        Initialize total correlation metric.
-        
         Args:
-            method: Estimation method ('gaussian' or 'binning')
-            bins: Number of bins for discretization (if using binning)
+            n_bins: Number of bins for discretization
+            normalize: Whether to normalize by number of variables
         """
         super().__init__()
-        self.method = method
-        self.bins = bins
+        self.n_bins = n_bins
+        self.normalize = normalize
     
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
-        """
-        Compute total correlation for groups of neurons.
+    def _estimate_entropy(self, data: torch.Tensor) -> float:
+        """Estimate entropy using histogram method."""
+        # Discretize continuous data
+        data_np = data.detach().cpu().numpy()
         
-        Args:
-            inputs: Input activations
-            weights: Weight matrix
-            outputs: Output activations
-            
-        Returns:
-            Total correlation scores
-        """
+        if data.dim() == 1:
+            # Single variable entropy
+            hist, _ = np.histogram(data_np, bins=self.n_bins)
+            hist = hist + 1e-10  # Add small constant to avoid log(0)
+            hist = hist / hist.sum()
+            return -np.sum(hist * np.log(hist))
+        else:
+            # Joint entropy for multiple variables
+            # Use multi-dimensional histogram
+            ranges = [(data_np[:, i].min(), data_np[:, i].max()) 
+                      for i in range(data_np.shape[1])]
+            hist, _ = np.histogramdd(data_np, bins=self.n_bins, range=ranges)
+            hist = hist.flatten() + 1e-10
+            hist = hist / hist.sum()
+            return -np.sum(hist * np.log(hist))
+    
+    def compute(self,
+                inputs: Optional[torch.Tensor] = None,
+                weights: Optional[torch.Tensor] = None,
+                outputs: Optional[torch.Tensor] = None) -> float:
+        """Compute total correlation."""
         if outputs is None:
-            outputs = inputs @ weights.T
+            raise ValueError("Outputs required for total correlation")
         
-        batch_size, n_neurons = outputs.shape
+        if outputs.dim() == 1:
+            outputs = outputs.unsqueeze(1)
         
-        if self.method == "gaussian":
-            # Assume Gaussian distribution
-            # Center the outputs
-            outputs_centered = outputs - outputs.mean(dim=0, keepdim=True)
-            
-            # Compute covariance matrix
-            cov_matrix = (outputs_centered.T @ outputs_centered) / (batch_size - 1)
-            
-            # Add small diagonal for stability
-            cov_matrix = cov_matrix + 1e-8 * torch.eye(n_neurons, device=outputs.device)
-            
-            # Compute determinant of full covariance matrix
-            det_full = torch.linalg.det(cov_matrix)
-            
-            # Compute product of individual variances
-            variances = torch.diag(cov_matrix)
-            log_prod_vars = torch.log(variances).sum()
-            
-            # Total correlation = 0.5 * log(prod(variances)) - 0.5 * log(det(cov))
-            tc = 0.5 * (log_prod_vars - torch.log(det_full))
-            
-            # Return as per-neuron score (distributed evenly)
-            return torch.full((n_neurons,), tc.item() / n_neurons, device=outputs.device)
+        n_vars = outputs.size(1)
+        if n_vars < 2:
+            return 0.0  # No correlation for single variable
         
-        else:  # binning method
-            # Discretize outputs
-            outputs_np = outputs.cpu().numpy()
-            
-            # Compute individual entropies
-            individual_entropies = []
-            for i in range(n_neurons):
-                hist, _ = np.histogram(outputs_np[:, i], bins=self.bins)
-                hist = hist + 1e-8  # Add small constant
-                hist = hist / hist.sum()
-                entropy = -np.sum(hist * np.log(hist))
-                individual_entropies.append(entropy)
-            
-            # Compute joint entropy
-            # For computational efficiency, we'll use a subset of neurons
-            max_neurons_joint = min(5, n_neurons)  # Limit to 5 neurons for joint entropy
-            
-            if n_neurons > max_neurons_joint:
-                # Sample neurons randomly
-                idx = torch.randperm(n_neurons)[:max_neurons_joint]
-                outputs_subset = outputs[:, idx]
-            else:
-                outputs_subset = outputs
-            
-            # Compute joint histogram
-            outputs_subset_np = outputs_subset.cpu().numpy()
-            hist_joint, _ = np.histogramdd(outputs_subset_np, bins=self.bins)
-            hist_joint = hist_joint.flatten() + 1e-8
-            hist_joint = hist_joint / hist_joint.sum()
-            joint_entropy = -np.sum(hist_joint * np.log(hist_joint))
-            
-            # Total correlation approximation
-            sum_individual = sum(individual_entropies[:outputs_subset.shape[1]])
-            tc = sum_individual - joint_entropy
-            
-            # Return as tensor
-            return torch.full((n_neurons,), tc / n_neurons, device=outputs.device)
+        # Compute marginal entropies
+        marginal_entropies = []
+        for i in range(n_vars):
+            H_i = self._estimate_entropy(outputs[:, i])
+            marginal_entropies.append(H_i)
+        
+        # Compute joint entropy
+        joint_entropy = self._estimate_entropy(outputs)
+        
+        # Total correlation
+        tc = sum(marginal_entropies) - joint_entropy
+        
+        if self.normalize:
+            tc = tc / n_vars
+        
+        return float(tc)
 
 
 @register_metric("interaction_information")
@@ -212,70 +184,81 @@ class InteractionInformation(BaseMetric):
 @register_metric("connected_information")  
 class ConnectedInformation(BaseMetric):
     """
-    Compute connected information (Amari, 2001) which decomposes mutual information
-    into hierarchical terms.
+    Measures connected information (interaction information of order n).
+    
+    This captures pure n-way interactions that cannot be reduced to lower-order
+    interactions, useful for understanding complex dependencies in neural networks.
     """
     
     name = "connected_information"
     
-    def __init__(self, max_order: int = 3, method: str = "gaussian"):
+    def __init__(self, n_bins: int = 20, max_order: int = 4):
         """
-        Initialize connected information metric.
-        
         Args:
-            max_order: Maximum order of interactions to consider
-            method: Estimation method ('gaussian' or 'binning')
+            n_bins: Number of bins for discretization
+            max_order: Maximum order of interactions to compute
         """
         super().__init__()
+        self.n_bins = n_bins
         self.max_order = max_order
-        self.method = method
+        self._entropy_est = TotalCorrelation(n_bins=n_bins)
     
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
-        """
-        Compute connected information scores.
+    def _compute_interaction_info(self, data: torch.Tensor, indices: List[int]) -> float:
+        """Compute interaction information for a subset of variables."""
+        if len(indices) < 2:
+            return 0.0
         
-        Args:
-            inputs: Input activations
-            weights: Weight matrix
-            outputs: Output activations
-            
-        Returns:
-            Connected information scores
-        """
+        # Use inclusion-exclusion principle
+        total = 0.0
+        n = len(indices)
+        
+        # Generate all non-empty subsets
+        from itertools import combinations
+        
+        for k in range(1, n + 1):
+            sign = (-1) ** (n - k)
+            for subset in combinations(indices, k):
+                subset_data = data[:, list(subset)]
+                if len(subset) == 1:
+                    entropy = self._entropy_est._estimate_entropy(subset_data.squeeze(1))
+                else:
+                    entropy = self._entropy_est._estimate_entropy(subset_data)
+                total += sign * entropy
+        
+        return total
+    
+    def compute(self,
+                inputs: Optional[torch.Tensor] = None,
+                weights: Optional[torch.Tensor] = None,
+                outputs: Optional[torch.Tensor] = None) -> float:
+        """Compute connected information up to max_order."""
         if outputs is None:
-            outputs = inputs @ weights.T
+            raise ValueError("Outputs required for connected information")
         
-        n_neurons = outputs.shape[1]
+        if outputs.dim() == 1:
+            outputs = outputs.unsqueeze(1)
         
-        if self.method == "gaussian":
-            # For Gaussian case, use cumulants
-            # Center the outputs
-            outputs_centered = outputs - outputs.mean(dim=0, keepdim=True)
-            
-            # Compute covariance (2nd order cumulant)
-            cov_matrix = (outputs_centered.T @ outputs_centered) / (outputs.shape[0] - 1)
-            
-            # For higher orders, we'd need to compute higher cumulants
-            # For now, we'll use the Frobenius norm of covariance as a proxy
-            connected_info = cov_matrix.norm(p='fro')
-            
-            # Distribute score across neurons
-            scores = torch.full((n_neurons,), connected_info.item() / n_neurons, 
-                              device=outputs.device)
+        n_vars = outputs.size(1)
+        if n_vars < 2:
+            return 0.0
         
-        else:
-            # For non-Gaussian, this is computationally intensive
-            # We'll use a simplified approximation based on total correlation
-            tc_metric = TotalCorrelation(method="binning")
-            scores = tc_metric.compute(inputs, weights, outputs)
+        # Compute interaction information for different orders
+        total_connected = 0.0
         
-        return scores
+        from itertools import combinations
+        for order in range(2, min(n_vars + 1, self.max_order + 1)):
+            for var_subset in combinations(range(n_vars), order):
+                interaction = self._compute_interaction_info(outputs, list(var_subset))
+                total_connected += abs(interaction)  # Use absolute value
+        
+        # Normalize by number of possible interactions
+        n_interactions = sum(1 for order in range(2, min(n_vars + 1, self.max_order + 1))
+                           for _ in combinations(range(n_vars), order))
+        
+        if n_interactions > 0:
+            total_connected /= n_interactions
+        
+        return float(total_connected)
 
 
 @register_metric("synergistic_information")
