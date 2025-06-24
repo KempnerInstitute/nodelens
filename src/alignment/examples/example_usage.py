@@ -16,22 +16,9 @@ from alignment.metrics.rayleigh import RayleighQuotient
 from alignment.metrics.similarity import weight_cosine_similarity
 from alignment.metrics import MetricComputer, MutualInformationGaussian
 from alignment.models import ModelWrapper
-from alignment.data import MNISTDataset
+from alignment.data import MNISTDataset, DatasetWrapper
 from alignment.experiments import ProgressiveDropoutExperiment
 from alignment.analysis import AlignmentPlotter, ResultAnalyzer, MetricVisualizer
-
-# Import all components
-from alignment import (
-    ModelWrapper,
-    DatasetWrapper,
-    RayleighQuotient,
-    MutualInformationGaussian,
-    discover_metrics,
-    list_metrics
-)
-
-from alignment.experiments import ProgressiveDropoutExperiment
-from alignment.analysis import ResultAnalyzer, MetricVisualizer
 
 
 def example_basic_metric_computation():
