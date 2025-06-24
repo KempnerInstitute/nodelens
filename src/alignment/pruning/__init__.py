@@ -57,12 +57,6 @@ from .strategies import (
     TensorizedPruning,
     AsyncParallelPruning,
 )
-from .experiments import (
-    ProgressiveDropoutExperiment,
-    CascadingLayerPruningExperiment,
-    LayerIsolatedPruningExperiment,
-    EigenvectorDropoutExperiment,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -146,12 +140,6 @@ __all__ = [
     'ParallelModePruning',
     'TensorizedPruning',
     'AsyncParallelPruning',
-    
-    # Experiments
-    'ProgressiveDropoutExperiment',
-    'CascadingLayerPruningExperiment',
-    'LayerIsolatedPruningExperiment',
-    'EigenvectorDropoutExperiment',
     
     # Functions
     'get_pruning_strategy',
