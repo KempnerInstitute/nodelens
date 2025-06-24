@@ -59,21 +59,18 @@ PruningConfig
       
    .. attribute:: structured
       :type: bool
-      :default: False
       
-      Use structured pruning (channels/filters)
+      Use structured pruning (channels/filters) (default: False)
       
    .. attribute:: global_pruning
       :type: bool
-      :default: False
       
-      Apply global magnitude threshold
+      Apply global magnitude threshold (default: False)
       
    .. attribute:: iterative
       :type: bool
-      :default: False
       
-      Use iterative pruning with recovery
+      Use iterative pruning with recovery (default: False)
 
 Magnitude-based Pruning
 -----------------------
@@ -383,32 +380,6 @@ Create custom pruning strategies by inheriting from `BasePruningStrategy`:
            
            return masks
 
-Pruning Utilities
------------------
-
-.. automodule:: alignment.pruning.utils
-   :members:
-   :undoc-members:
-
-Sparsity Calculation
-~~~~~~~~~~~~~~~~~~~~
-
-.. autofunction:: alignment.pruning.utils.calculate_sparsity
-.. autofunction:: alignment.pruning.utils.get_model_sparsity
-
-Mask Operations
-~~~~~~~~~~~~~~~
-
-.. autofunction:: alignment.pruning.utils.apply_mask
-.. autofunction:: alignment.pruning.utils.combine_masks
-.. autofunction:: alignment.pruning.utils.invert_mask
-
-Pruning Analysis
-~~~~~~~~~~~~~~~~
-
-.. autofunction:: alignment.pruning.utils.analyze_pruning_distribution
-.. autofunction:: alignment.pruning.utils.visualize_pruning_masks
-
 Best Practices
 --------------
 
@@ -436,6 +407,5 @@ Best Practices
 See Also
 --------
 
-- :doc:`/user_guide/pruning` - User guide for pruning
-- :doc:`/examples/pruning_experiments` - Pruning examples
+- :doc:`/user_guide/pruning_strategies` - User guide for pruning strategies
 - :doc:`/api/experiments` - Using pruning in experiments 
