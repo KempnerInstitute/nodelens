@@ -6,11 +6,18 @@ from typing import Dict, List, Optional, Any, Union, Tuple, Callable
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 import pandas as pd
 import logging
+import torch
+
+# Try to import seaborn, but make it optional
+try:
+    import seaborn as sns
+    HAS_SEABORN = True
+except (ImportError, AttributeError):
+    HAS_SEABORN = False
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +43,13 @@ class MetricVisualizer:
         """
         plt.style.use(style)
         self.figsize = figsize
-        self.colors = sns.color_palette("husl", 10)
+        # Use seaborn colors if available, otherwise use matplotlib defaults
+        if HAS_SEABORN:
+            self.colors = sns.color_palette("husl", 10)
+        else:
+            # Use matplotlib's tab10 colormap as fallback
+            import matplotlib.cm as cm
+            self.colors = [cm.tab10(i) for i in range(10)]
     
     def plot_metric_evolution(
         self,
