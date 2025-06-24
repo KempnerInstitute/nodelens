@@ -26,7 +26,7 @@ RQ(w) = (w^T C w) / (w^T w)
 ### Usage
 
 ```python
-from alignment_refactor.metrics import RayleighQuotient
+from alignment.metrics import RayleighQuotient
 
 # Create metric instance
 rq_metric = RayleighQuotient(
@@ -60,7 +60,7 @@ Mutual Information quantifies the amount of information shared between inputs an
 ### Usage
 
 ```python
-from alignment_refactor.metrics import MutualInformationGaussian
+from alignment.metrics import MutualInformationGaussian
 
 # Create metric instance
 mi_metric = MutualInformationGaussian(
@@ -89,7 +89,7 @@ PID decomposes the information that multiple inputs provide about an output into
 ### Usage
 
 ```python
-from alignment_refactor.metrics import PartialInformationDecomposition
+from alignment.metrics import PartialInformationDecomposition
 
 # Create metric instance
 pid_metric = PartialInformationDecomposition(
@@ -123,7 +123,7 @@ CKA measures the similarity between representations in different layers or netwo
 ### Usage
 
 ```python
-from alignment_refactor.metrics import CKA
+from alignment.metrics import CKA
 
 # Create metric instance
 cka_metric = CKA(
@@ -151,7 +151,7 @@ CCA finds linear transformations that maximize correlation between two sets of v
 ### Usage
 
 ```python
-from alignment_refactor.metrics import CCA
+from alignment.metrics import CCA
 
 # Create metric instance
 cca_metric = CCA(
@@ -173,7 +173,7 @@ Extension of RQ for comparing two covariance structures.
 ### Usage
 
 ```python
-from alignment_refactor.metrics import GeneralizedRayleighQuotient
+from alignment.metrics import GeneralizedRayleighQuotient
 
 grq_metric = GeneralizedRayleighQuotient()
 
@@ -192,7 +192,7 @@ Measures information shared between different neurons or layers.
 ### Usage
 
 ```python
-from alignment_refactor.metrics import SharedInformation
+from alignment.metrics import SharedInformation
 
 shared_info = SharedInformation(
     method="correlation"  # Method for measuring sharing
@@ -209,7 +209,7 @@ scores = shared_info.compute(
 ### Batch Computation
 
 ```python
-from alignment_refactor.metrics import MetricCollection
+from alignment.metrics import MetricCollection
 
 # Create collection of metrics
 metrics = MetricCollection([
@@ -273,7 +273,7 @@ scores = metric.compute(inputs, weights)
 ### Creating a Custom Metric
 
 ```python
-from alignment_refactor.metrics.base import BaseMetric
+from alignment.metrics.base import BaseMetric
 
 class MyCustomMetric(BaseMetric):
     def __init__(self, parameter=1.0):
@@ -289,7 +289,7 @@ class MyCustomMetric(BaseMetric):
 ### Registering Custom Metrics
 
 ```python
-from alignment_refactor.core.registry import register_metric
+from alignment.core.registry import register_metric
 
 @register_metric("my_metric")
 class MyMetric(BaseMetric):
