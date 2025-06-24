@@ -253,7 +253,7 @@ if __name__ == "__main__":
             print(f"Error in {example_func.__name__}: {e}\n")
     
     print("=== Examples Complete ===")
-    print("This demonstrates the key features of the refactored framework:")
+    print("This demonstrates the key features of the framework:")
     print("1. Clean, modular API")
     print("2. Registry-based component discovery")
     print("3. Built-in distributed computing support")
