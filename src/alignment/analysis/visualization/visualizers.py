@@ -177,16 +177,40 @@ class MetricVisualizer:
         """
         fig, ax = plt.subplots(figsize=(12, 8))
         
-        sns.heatmap(
-            data,
-            ax=ax,
-            cmap=cmap,
-            center=0,
-            annot=annotate,
-            fmt=fmt,
-            cbar_kws={'label': 'Value'},
-            linewidths=0.5
-        )
+        if HAS_SEABORN:
+            sns.heatmap(
+                data,
+                ax=ax,
+                cmap=cmap,
+                center=0,
+                annot=annotate,
+                fmt=fmt,
+                cbar_kws={'label': 'Value'},
+                linewidths=0.5
+            )
+        else:
+            # Fallback to matplotlib imshow
+            im = ax.imshow(data.values, cmap=cmap, aspect='auto')
+            
+            # Set ticks
+            ax.set_xticks(np.arange(len(data.columns)))
+            ax.set_yticks(np.arange(len(data.index)))
+            ax.set_xticklabels(data.columns)
+            ax.set_yticklabels(data.index)
+            
+            # Rotate the tick labels
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Value', rotation=270, labelpad=15)
+            
+            # Add annotations if requested
+            if annotate:
+                for i in range(len(data.index)):
+                    for j in range(len(data.columns)):
+                        text = ax.text(j, i, format(data.iloc[i, j], fmt),
+                                     ha="center", va="center", color="black")
         
         ax.set_title(title, fontsize=14, fontweight='bold')
         plt.tight_layout()
@@ -313,20 +337,47 @@ class LayerVisualizer:
         
         mask = np.triu(np.ones_like(correlation_matrix), k=1)
         
-        sns.heatmap(
-            correlation_matrix,
-            mask=mask,
-            ax=ax,
-            cmap='RdBu_r',
-            center=0,
-            vmin=-1,
-            vmax=1,
-            annot=True,
-            fmt='.2f',
-            square=True,
-            linewidths=0.5,
-            cbar_kws={'label': 'Correlation'}
-        )
+        if HAS_SEABORN:
+            sns.heatmap(
+                correlation_matrix,
+                mask=mask,
+                ax=ax,
+                cmap='RdBu_r',
+                center=0,
+                vmin=-1,
+                vmax=1,
+                annot=True,
+                fmt='.2f',
+                square=True,
+                linewidths=0.5,
+                cbar_kws={'label': 'Correlation'}
+            )
+        else:
+            # Fallback to matplotlib
+            # Apply mask
+            masked_data = np.ma.masked_where(mask, correlation_matrix.values)
+            
+            im = ax.imshow(masked_data, cmap='RdBu_r', vmin=-1, vmax=1, aspect='equal')
+            
+            # Set ticks
+            ax.set_xticks(np.arange(len(correlation_matrix.columns)))
+            ax.set_yticks(np.arange(len(correlation_matrix.index)))
+            ax.set_xticklabels(correlation_matrix.columns)
+            ax.set_yticklabels(correlation_matrix.index)
+            
+            # Rotate the tick labels
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Correlation', rotation=270, labelpad=15)
+            
+            # Add annotations
+            for i in range(len(correlation_matrix.index)):
+                for j in range(len(correlation_matrix.columns)):
+                    if not mask[i, j]:
+                        text = ax.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
+                                     ha="center", va="center", color="black")
         
         ax.set_title(title, fontsize=14, fontweight='bold')
         plt.tight_layout()
