@@ -54,6 +54,7 @@ all = [
 docs = [
     "sphinx",
     "sphinx-rtd-theme",
+    "sphinx-autodoc-typehints",
     "sphinxcontrib-napoleon",
     "myst-parser",
     "nbsphinx",
