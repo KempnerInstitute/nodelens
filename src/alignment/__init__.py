@@ -10,7 +10,7 @@ __version__ = "0.1.0"
 # Core functionality
 from .core.base import BaseMetric
 from .core.registry import METRIC_REGISTRY
-from .core.wrappers import ModelWrapper
+from .models import ModelWrapper
 
 # Metrics
 from .metrics import get_metric, list_metrics
