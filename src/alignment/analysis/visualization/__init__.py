@@ -9,6 +9,9 @@ from .alignment_plots import (
     AlignmentVisualizer,
     plot_quick_summary,
 )
+from .pruning_plots import (
+    PruningVisualizer,
+)
 
 __all__ = [
     'MetricVisualizer',
@@ -16,4 +19,5 @@ __all__ = [
     'ComparisonVisualizer',
     'AlignmentVisualizer',
     'plot_quick_summary',
+    'PruningVisualizer',
 ] 
