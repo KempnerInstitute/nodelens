@@ -8,10 +8,11 @@ slurm-*.out
 jobs/
 # VSCODE
 .vscode/
-results/
+
 # WANDB
 wandb/
 data/   
+results/
 # Old refactored versions (no longer needed)
 # src/alignment_preref/
 # src/alignment_v2/
