@@ -3,6 +3,35 @@ Pruning Visualization Demo
 
 This script demonstrates the visualization capabilities of the pruning framework,
 including performance plots, comparison grids, and multi-seed analysis.
+
+Usage:
+    python pruning_visualization_demo.py
+    
+No configuration needed - this script runs with simulated data and a real model.
+
+This demo showcases:
+    - Performance comparison plots (accuracy and loss curves)
+    - Comprehensive 6-panel comparison grids
+    - Multi-seed statistical analysis with confidence intervals
+    - Real pruning demonstration on an actual neural network
+    - Analysis of pruning behavior for different modes (low/high/random)
+
+Requirements:
+    - PyTorch
+    - alignment package installed
+    - matplotlib (for visualizations)
+    - numpy
+
+Output:
+    Results are saved to: results/pruning_visualization/
+    - performance_comparison.png: Accuracy and loss curves vs sparsity
+    - comparison_grid.png: 6-panel comprehensive analysis grid
+    - multi_seed_accuracy.png: Statistical analysis across multiple seeds
+    
+    Console output includes:
+    - Real pruning statistics showing actual behavior
+    - Key insights about different pruning strategies
+    - Summary of generated visualizations
 """
 
 import torch
