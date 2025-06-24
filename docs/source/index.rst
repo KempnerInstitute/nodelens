@@ -135,3 +135,90 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search` 
+
+Alignment Framework Documentation
+=================================
+
+A comprehensive framework for neural network alignment analysis, providing tools for computing alignment metrics, running experiments, and analyzing results.
+
+.. toctree::
+   :maxdepth: 2
+   :caption: User Guide:
+
+   user_guide/getting_started
+   user_guide/metrics
+   user_guide/pruning
+   user_guide/experiments
+   user_guide/visualization
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference:
+
+   api/metrics
+   api/models
+   api/pruning
+   api/experiments
+   api/analysis
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Examples:
+
+   examples/basic_usage
+   examples/pruning_demo
+   examples/experiment_workflow
+   examples/custom_metrics
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Developer Guide:
+
+   developer_guide/contributing
+   developer_guide/architecture
+   developer_guide/adding_metrics
+   developer_guide/testing
+
+Features
+--------
+
+* **Comprehensive Metrics**: Rayleigh quotient, mutual information, spectral analysis, and more
+* **Advanced Pruning**: Multiple strategies with low/high/random modes and parallel execution
+* **Experiment Framework**: Structured experiments with automatic tracking and analysis
+* **Visualization Tools**: Publication-ready plots and interactive dashboards
+* **GPU Optimization**: Efficient computation with automatic memory management
+* **Extensible Design**: Easy to add custom metrics and experiments
+
+Quick Start
+-----------
+
+Install the package:
+
+.. code-block:: bash
+
+   pip install -e .
+
+Basic usage:
+
+.. code-block:: python
+
+   from alignment import ModelWrapper, get_metric
+   from alignment.pruning import get_pruning_strategy
+   
+   # Wrap your model
+   wrapped_model = ModelWrapper(model)
+   
+   # Compute metrics
+   metric = get_metric('rayleigh_quotient')
+   scores = metric.compute(inputs=data, weights=model.weight)
+   
+   # Apply pruning
+   strategy = get_pruning_strategy('magnitude')
+   mask = strategy.prune(model.layer, amount=0.5)
+
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search` 
