@@ -96,27 +96,40 @@ def demonstrate_real_pruning():
     
     results = {}
     for mode in ['low', 'high', 'random']:
+        # Clone the layer to test each mode independently
+        test_layer = nn.Linear(layer.in_features, layer.out_features)
+        test_layer.weight.data = layer.weight.data.clone()
+        
         config = PruningConfig(amount=sparsity, pruning_mode=mode)
-        strategy = get_pruning_strategy('magnitude', config=config)
+        if mode == 'random':
+            strategy = get_pruning_strategy('random', config=config)
+        else:
+            strategy = get_pruning_strategy('magnitude', config=config)
         
-        # Apply pruning
-        mask = strategy.prune(layer)
+        # Get importance scores and create mask
+        importance_scores = strategy.compute_importance_scores(test_layer)
+        mask = strategy.create_pruning_mask(importance_scores)
         
-        # Analyze results
-        weights = layer.weight.data.flatten()
-        kept = weights[mask.flatten().bool()]
-        pruned = weights[~mask.flatten().bool()]
+        # Analyze results BEFORE applying the mask
+        weights = test_layer.weight.data.flatten()
+        mask_flat = mask.flatten()
+        kept = weights[mask_flat.bool()]
+        pruned = weights[~mask_flat.bool()]
         
         results[mode] = {
             'sparsity': (mask == 0).float().mean().item(),
-            'kept_mean': kept.abs().mean().item(),
-            'pruned_mean': pruned.abs().mean().item()
+            'kept_mean': kept.abs().mean().item() if kept.numel() > 0 else 0,
+            'pruned_mean': pruned.abs().mean().item() if pruned.numel() > 0 else 0,
+            'kept_count': kept.numel(),
+            'pruned_count': pruned.numel()
         }
         
         print(f"{mode.capitalize()} mode:")
         print(f"  Actual sparsity: {results[mode]['sparsity']:.2%}")
-        print(f"  Avg magnitude kept: {results[mode]['kept_mean']:.4f}")
-        print(f"  Avg magnitude pruned: {results[mode]['pruned_mean']:.4f}")
+        print(f"  Kept {results[mode]['kept_count']} weights, pruned {results[mode]['pruned_count']}")
+        if results[mode]['kept_count'] > 0 and results[mode]['pruned_count'] > 0:
+            print(f"  Avg magnitude kept: {results[mode]['kept_mean']:.4f}")
+            print(f"  Avg magnitude pruned: {results[mode]['pruned_mean']:.4f}")
     
     return results
 
@@ -188,9 +201,17 @@ def main():
     print("  - Low mode (prune small): Best performance retention")
     print("  - High mode (prune large): Rapid performance degradation")
     print("  - Random mode: Intermediate performance")
-    print(f"\nReal pruning confirmed theory:")
-    print(f"  - Low mode kept weights {real_results['low']['kept_mean']/real_results['low']['pruned_mean']:.1f}x larger than pruned")
-    print(f"  - High mode kept weights {real_results['high']['kept_mean']/real_results['high']['pruned_mean']:.1f}x smaller than pruned")
+    
+    print(f"\nReal pruning results:")
+    for mode in ['low', 'high', 'random']:
+        result = real_results[mode]
+        print(f"  - {mode.capitalize()} mode:")
+        print(f"      Sparsity: {result['sparsity']:.2%}")
+        if result['sparsity'] < 1.0:  # If not all weights were pruned
+            print(f"      Kept {result['kept_count']} weights, pruned {result['pruned_count']}")
+            if result['kept_count'] > 0 and result['pruned_count'] > 0:
+                print(f"      Avg magnitude kept: {result['kept_mean']:.4f}")
+                print(f"      Avg magnitude pruned: {result['pruned_mean']:.4f}")
 
 
 if __name__ == "__main__":

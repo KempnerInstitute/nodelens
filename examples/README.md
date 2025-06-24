@@ -41,32 +41,17 @@ Demonstrates all pruning capabilities:
 
 **Run:** `python pruning_strategies_demo.py`
 
-### 4. `direct_pruning_viz_demo.py` - Visualization Demo
-Shows visualization capabilities without running full experiments:
+### 4. `pruning_visualization_demo.py` - Visualization Demo
+Shows visualization capabilities with both simulated and real pruning:
 - Performance comparison plots
 - Confidence intervals
 - Multi-seed statistical analysis
 - Comprehensive comparison grids
+- Real pruning demonstration with statistics
 
-**Run:** `python direct_pruning_viz_demo.py`
+**Run:** `python pruning_visualization_demo.py`
 
-**Output:** Plots saved to `results/direct_viz_demo/`
-
-### 5. `pruning_parallel_demo.py` - Parallel Pruning
-Demonstrates parallel pruning features:
-- Apply multiple pruning modes simultaneously
-- Compare mask overlaps
-- Efficiency analysis
-
-**Run:** `python pruning_parallel_demo.py`
-
-### 6. `simple_pruning_visualization_demo.py` - Simple Visualization
-A simplified version showing:
-- Basic pruning visualization
-- Strategy comparison
-- Different pruning modes
-
-**Run:** `python simple_pruning_visualization_demo.py`
+**Output:** Plots saved to `results/pruning_visualization/`
 
 ## Getting Started
 
@@ -92,7 +77,7 @@ A simplified version showing:
 
 ## Example Outputs
 
-### Alignment Metrics
+### Alignment Metrics (from quick_demo.py)
 ```
 Layer 0:
   RQ scores: mean=0.0013, std=0.0003
@@ -103,7 +88,7 @@ Layer 2:
   Weight similarity: mean=-0.0001
 ```
 
-### Pruning Results
+### Pruning Results (from standard_alignment_experiment.py)
 ```
 Magnitude pruning:
   50% sparsity: 97.26% accuracy (drop: 0.39%)
@@ -112,6 +97,13 @@ Magnitude pruning:
 Random pruning:
   50% sparsity: 79.88% accuracy (drop: 17.77%)
   90% sparsity: 14.85% accuracy (drop: 82.80%)
+```
+
+### Real Pruning Analysis (from pruning_visualization_demo.py)
+```
+Low mode: Kept weights 3.0x larger than pruned (0.0569 vs 0.0191)
+High mode: Kept weights 3.0x smaller than pruned (0.0191 vs 0.0569)
+Random mode: Balanced distribution (0.0380 for both)
 ```
 
 ## Key Concepts Demonstrated
@@ -131,6 +123,12 @@ Each example can be customized by modifying:
 - Metrics to compute
 - Pruning strategies and sparsity levels
 - Visualization styles
+
+## Example Structure
+
+- **Quick demos** (`quick_demo.py`): Simple, focused demonstrations
+- **Complete experiments** (`standard_alignment_experiment.py`): Full workflows with all components
+- **Feature demos** (`pruning_strategies_demo.py`, `pruning_visualization_demo.py`): Deep dives into specific features
 
 ## Troubleshooting
 
