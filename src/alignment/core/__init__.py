@@ -30,9 +30,6 @@ from .base import (
     BaseDataset,
     BaseExperiment,
 )
-from .wrappers import (
-    ModelWrapper,
-)
 
 __all__ = [
     # Protocols
@@ -57,6 +54,4 @@ __all__ = [
     "BaseModel",
     "BaseDataset",
     "BaseExperiment",
-    # Implementations
-    "ModelWrapper",
 ] 

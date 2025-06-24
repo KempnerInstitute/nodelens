@@ -21,7 +21,7 @@ from ..training.multi_network import train_networks_fully_tensorized
 from ..pruning import get_pruning_strategy, PruningConfig
 from ..metrics import get_metric
 from ..analysis.visualization.pruning_plots import PruningVisualizer
-from ..core import ModelWrapper
+from ..models import ModelWrapper
 
 logger = logging.getLogger(__name__)
 
