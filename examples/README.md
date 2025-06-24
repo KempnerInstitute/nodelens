@@ -1,6 +1,144 @@
 # Alignment Framework Examples
 
-This folder contains working examples demonstrating various features of the alignment framework.
+This directory contains example scripts demonstrating various features of the alignment framework.
+
+## Examples Overview
+
+### 1. `quick_demo.py` (107 lines)
+A minimal example showing the basic workflow:
+- Load a pre-trained model
+- Compute alignment metrics
+- Apply pruning
+- Visualize results
+
+**Usage:**
+```bash
+python quick_demo.py
+```
+
+### 2. `standard_alignment_experiment.py` (321 lines)
+A complete workflow demonstrating:
+- Training a model from scratch
+- Computing multiple alignment metrics
+- Applying pruning at different sparsity levels
+- Generating comprehensive visualizations
+
+**Usage:**
+```bash
+python standard_alignment_experiment.py
+```
+
+### 3. `pruning_strategies_demo.py` (388 lines)
+Comprehensive demonstration of all pruning features:
+- Multiple pruning strategies (magnitude, gradient, random)
+- Different pruning modes (low, high, random)
+- Parallel pruning execution
+- Performance comparison
+
+**Usage:**
+```bash
+python pruning_strategies_demo.py
+```
+
+### 4. `pruning_visualization_demo.py` (218 lines)
+Advanced visualization capabilities:
+- Weight distribution plots
+- Sparsity patterns
+- Layer-wise analysis
+- Interactive visualizations
+
+**Usage:**
+```bash
+python pruning_visualization_demo.py
+```
+
+### 5. `comprehensive_alignment_experiment.py` (NEW - 450+ lines)
+The most complete example demonstrating ALL framework features:
+- Fully configurable via YAML
+- All 36+ alignment metrics
+- Multiple model architectures
+- Various datasets
+- Advanced training options
+- Comprehensive analysis and reporting
+
+**Usage:**
+```bash
+# Run with comprehensive config (all options documented)
+python comprehensive_alignment_experiment.py --config ../configs/comprehensive_alignment_config.yaml
+
+# Run quick test
+python comprehensive_alignment_experiment.py --config ../configs/quick_test_config.yaml
+
+# Override parameters from command line
+python comprehensive_alignment_experiment.py --config ../configs/quick_test_config.yaml \
+    --model_name resnet50 --dataset_name cifar10 --training_config.epochs 10
+
+# Run without training (just compute metrics)
+python comprehensive_alignment_experiment.py --config ../configs/quick_test_config.yaml \
+    --train_model false --compute_initial_metrics true
+```
+
+## Configuration Files
+
+The `configs/` directory contains example configuration files:
+
+- `comprehensive_alignment_config.yaml`: Complete configuration with ALL possible options documented
+- `quick_test_config.yaml`: Simplified config for quick testing
+- Other configs: Various experiment configurations
+
+## Key Features Demonstrated
+
+1. **Model Support**: MLP, ResNet, VGG, AlexNet, DenseNet, EfficientNet, MobileNet
+2. **Datasets**: MNIST, Fashion-MNIST, CIFAR-10/100, ImageNet, SVHN
+3. **Metrics**: 36+ metrics including:
+   - Rayleigh quotient variants
+   - Information-theoretic metrics (MI, redundancy, PID)
+   - Similarity metrics
+   - Spectral metrics
+   - Task-specific metrics
+4. **Pruning**: Multiple strategies with various modes and configurations
+5. **Training**: Optimizers, schedulers, mixed precision, distributed training
+6. **Analysis**: Automatic visualizations, HTML reports, interactive dashboards
+
+## Output Structure
+
+Running examples creates the following structure:
+```
+logs/
+├── experiment_name/
+│   ├── experiment_name_TIMESTAMP.log
+│   ├── results.json
+│   ├── report.html
+│   └── visualizations/
+│       ├── metric_comparison.png
+│       ├── pruning_impact.png
+│       ├── layer_metrics/
+│       └── dashboard.html
+checkpoints/
+├── experiment_name_step_N.pt
+results/
+├── experiment_name/
+│   └── various_outputs.json
+```
+
+## Tips
+
+1. Start with `quick_demo.py` to understand the basic workflow
+2. Use `standard_alignment_experiment.py` as a template for your experiments
+3. Explore `pruning_strategies_demo.py` for advanced pruning techniques
+4. Use `comprehensive_alignment_experiment.py` with custom configs for research
+
+## Requirements
+
+All examples require:
+- PyTorch >= 2.0
+- CUDA-capable GPU (recommended)
+- Dependencies from `pyproject.toml`
+
+Install with:
+```bash
+pip install -e .[all]
+```
 
 ## Available Examples
 
