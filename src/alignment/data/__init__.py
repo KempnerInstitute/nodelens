@@ -11,6 +11,7 @@ from alignment.data.loaders import (
     create_distributed_loader,
     DataLoaderConfig,
 )
+from alignment.data.datasets import get_dataset
 
 # Import dataset implementations when they're created
 try:
@@ -26,6 +27,7 @@ __all__ = [
     'create_data_loader',
     'create_distributed_loader',
     'DataLoaderConfig',
+    'get_dataset',
     'MNISTDataset',
     'CIFAR10Dataset',
     'CIFAR100Dataset',
