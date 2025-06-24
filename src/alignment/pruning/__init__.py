@@ -9,7 +9,7 @@ This module provides:
 from typing import Optional, Union, Type
 import logging
 
-from .base import BasePruningStrategy, IterativePruningStrategy
+from .base import BasePruningStrategy, IterativePruningStrategy, PruningConfig
 from .strategies import (
     MagnitudePruning,
     IterativeMagnitudePruning,
@@ -84,6 +84,7 @@ __all__ = [
     # Base classes
     'BasePruningStrategy',
     'IterativePruningStrategy',
+    'PruningConfig',
     
     # Magnitude strategies
     'MagnitudePruning',
