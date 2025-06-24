@@ -525,6 +525,5 @@ Best Practices
 See Also
 --------
 
-- :doc:`/api/experiments` - Experiment configuration details
-- :doc:`/examples/configuration_examples` - Configuration examples
-- :doc:`/user_guide/experiments` - Running experiments guide 
+- :doc:`/api/experiments` - Experiment API documentation
+- :doc:`experiments` - Experiments user guide 

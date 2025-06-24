@@ -482,5 +482,4 @@ See Also
 --------
 
 - :doc:`/user_guide/metrics` - User guide for metrics
-- :doc:`/examples/custom_metrics` - Creating custom metrics
 - :doc:`/api/experiments` - Using metrics in experiments 

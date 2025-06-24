@@ -431,114 +431,97 @@ Training Configuration
 
 .. attribute:: train_before_dropout
    :type: bool
-   :default: True
-   
-   Whether to train the model before applying dropout
-   
+
+   Whether to train the model before applying dropout (default: True)
+
 .. attribute:: training_epochs
    :type: int
-   :default: 100
-   
-   Number of epochs to train
-   
+
+   Number of epochs to train (default: 100)
+
 .. attribute:: learning_rate
    :type: float
-   :default: 0.1
-   
-   Initial learning rate
-   
+
+   Initial learning rate (default: 0.1)
+
 .. attribute:: optimizer
    :type: str
-   :default: "sgd"
-   
-   Optimizer to use: "sgd", "adam", "adamw"
-   
+
+   Optimizer to use: "sgd", "adam", "adamw" (default: "sgd")
+
 .. attribute:: lr_schedule
    :type: str
-   :default: "cosine"
-   
-   Learning rate schedule: "cosine", "step", "exponential", "none"
+
+   Learning rate schedule: "cosine", "step", "exponential", "none" (default: "cosine")
 
 Metric Computation Options
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. attribute:: metric_configs
    :type: Dict[str, Dict]
-   :default: {}
-   
-   Per-metric configuration options
-   
+
+   Per-metric configuration options (default: {})
+
 .. attribute:: scale_by_norm
    :type: bool
-   :default: False
-   
-   Whether to scale metrics by weight norm
-   
+
+   Whether to scale metrics by weight norm (default: False)
+
 .. attribute:: force_cpu_for_large_metric_ops
    :type: bool
-   :default: False
-   
-   Move large operations to CPU to save GPU memory
-   
+
+   Move large operations to CPU to save GPU memory (default: False)
+
 .. attribute:: metric_batch_size
    :type: int
-   :default: 1000
-   
-   Batch size for metric computation
+
+   Batch size for metric computation (default: 1000)
 
 Logging and Checkpointing
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. attribute:: checkpoint_dir
    :type: str
-   :default: "./checkpoints"
-   
-   Directory for saving checkpoints
-   
+
+   Directory for saving checkpoints (default: "./checkpoints")
+
 .. attribute:: checkpoint_interval
    :type: int
-   :default: 1000
-   
-   Steps between checkpoints
-   
+
+   Steps between checkpoints (default: 1000)
+
 .. attribute:: save_best
    :type: bool
-   :default: True
-   
-   Save best model based on validation accuracy
-   
+
+   Save best model based on validation accuracy (default: True)
+
 .. attribute:: wandb_project
    :type: Optional[str]
-   :default: None
-   
-   Weights & Biases project name
-   
+
+   Weights & Biases project name (default: None)
+
 .. attribute:: tensorboard_dir
    :type: Optional[str]
-   :default: None
-   
-   TensorBoard logging directory
+
+   TensorBoard logging directory (default: None)
 
 Distributed Training
 ~~~~~~~~~~~~~~~~~~~~
 
 .. attribute:: distributed
    :type: bool
-   :default: False
-   
-   Enable distributed training
-   
+
+   Enable distributed training (default: False)
+
 .. attribute:: world_size
    :type: int
-   :default: 1
-   
-   Number of distributed processes
-   
+
+   Number of distributed processes (default: 1)
+
 .. attribute:: backend
    :type: str
-   :default: "nccl"
-   
-   Distributed backend: "nccl", "gloo"
+
+   Distributed backend: "nccl", "gloo" (default: "nccl")
 
 Result Analysis
 ---------------
@@ -574,5 +557,5 @@ See Also
 --------
 
 - :doc:`/user_guide/experiments` - User guide for experiments
-- :doc:`/examples/pruning_experiments` - Example notebooks
-- :doc:`/api/metrics` - Available metrics documentation 
+- :doc:`/api/metrics` - Available metrics documentation
+- :doc:`/api/pruning` - Pruning strategies documentation 
