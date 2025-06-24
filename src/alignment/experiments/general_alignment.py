@@ -18,8 +18,7 @@ import yaml
 from dataclasses import dataclass, field
 
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
-from alignment.core.registry import register_experiment
-from alignment.data import get_dataset
+from alignment.core.registry import register_experiment, DATASET_REGISTRY
 from alignment.training import BaseTrainer, TrainingConfig
 from alignment.pruning import get_pruning_strategy
 from alignment.metrics import get_metric
@@ -88,10 +87,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
     def __init__(self, config: GeneralAlignmentConfig):
         """Initialize the general alignment experiment."""
         super().__init__(config)
-        self.config: GeneralAlignmentConfig = config
         
-        # Results storage
-        self.results = {
+        # Results storage is already initialized in parent class, but we extend it
+        self.results.update({
             "initial_metrics": {},
             "pruning_results": {},
             "final_metrics": {},
@@ -101,7 +99,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 "val_loss": [],
                 "val_acc": []
             }
-        }
+        })
     
     def run(self) -> Dict[str, Any]:
         """Run the complete experiment pipeline."""
@@ -150,7 +148,14 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _setup_dataset(self):
         """Setup dataset loaders."""
-        dataset_class = get_dataset(self.config.dataset_name)
+        # Import the dataset registry
+        from alignment.core.registry import DATASET_REGISTRY
+        
+        # Get dataset class from registry
+        dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+        if dataset_class is None:
+            available = list(DATASET_REGISTRY._registry.keys())
+            raise ValueError(f"Unknown dataset: {self.config.dataset_name}. Available: {available}")
         
         # Create train dataset
         train_dataset = dataset_class(

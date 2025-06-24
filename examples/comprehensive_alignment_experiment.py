@@ -64,6 +64,15 @@ import torch
 import torch.nn as nn
 from datetime import datetime
 import matplotlib.pyplot as plt
+import os
+import sys
+
+# Add the src directory to Python path if running from examples
+current_dir = Path(__file__).parent
+project_root = current_dir.parent
+src_dir = project_root / "src"
+if src_dir.exists():
+    sys.path.insert(0, str(src_dir))
 
 # Import alignment framework components
 from alignment.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
@@ -231,7 +240,7 @@ def create_experiment_config(config_dict: Dict[str, Any]) -> GeneralAlignmentCon
         # Model
         model_name=config_dict['model_name'],
         model_config=config_dict.get('model_config', {}),
-        pretrained=config_dict.get('model_config', {}).get('pretrained', False),
+        pretrained=config_dict.get('pretrained', False),  # Only use top-level pretrained if exists
         
         # Dataset
         dataset_name=config_dict['dataset_name'],

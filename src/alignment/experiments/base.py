@@ -191,10 +191,11 @@ class BaseExperiment(CoreBaseExperiment):
                 import torchvision.models as models
                 if hasattr(models, self.config.model_name):
                     model_fn = getattr(models, self.config.model_name)
-                    self.model = model_fn(
-                        pretrained=self.config.pretrained,
-                        **self.config.model_config
-                    )
+                    # Prepare model kwargs, avoiding duplicate 'pretrained'
+                    model_kwargs = self.config.model_config.copy()
+                    if 'pretrained' not in model_kwargs:
+                        model_kwargs['pretrained'] = self.config.pretrained
+                    self.model = model_fn(**model_kwargs)
                 else:
                     raise ValueError(f"Unknown model: {self.config.model_name}")
         
@@ -220,11 +221,13 @@ class BaseExperiment(CoreBaseExperiment):
         logger.info(f"Creating dataset with data_path: {self.config.data_path}")
         logger.info(f"Dataset config: {self.config.dataset_config}")
         
+        # Prepare dataset kwargs, avoiding duplicate 'data_path'
+        dataset_kwargs = self.config.dataset_config.copy()
+        if self.config.data_path is not None and 'data_path' not in dataset_kwargs:
+            dataset_kwargs['data_path'] = self.config.data_path
+        
         # Create dataset
-        self.dataset = dataset_class(
-            data_path=self.config.data_path,
-            **self.config.dataset_config
-        )
+        self.dataset = dataset_class(**dataset_kwargs)
         
         # Create data loader
         self.data_loader = create_distributed_loader(
