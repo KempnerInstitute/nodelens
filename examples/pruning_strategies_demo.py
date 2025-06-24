@@ -5,6 +5,34 @@ This demonstrates:
 1. Basic pruning with different modes
 2. Parallel pruning strategies
 3. Performance comparison
+
+Usage:
+    python pruning_strategies_demo.py
+    
+No configuration needed - this script runs standalone demonstrations.
+
+This comprehensive demo showcases:
+    - Basic pruning modes (low/high/random)
+    - Parallel execution of multiple pruning strategies
+    - Tensorized pruning for GPU efficiency
+    - Gradient-based pruning
+    - Performance comparisons and speedup analysis
+    - Memory efficiency analysis
+    - Overlap analysis between different pruning modes
+
+Requirements:
+    - PyTorch
+    - CUDA (optional, for GPU acceleration demos)
+    - alignment package installed
+    - numpy
+
+Output:
+    Console output showing:
+    - Pruning results for each strategy
+    - Performance metrics and timing comparisons
+    - Memory usage analysis
+    - Statistical analysis of pruning patterns
+    - Key takeaways and insights
 """
 
 import torch

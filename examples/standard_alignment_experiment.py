@@ -9,6 +9,32 @@ This script demonstrates a complete workflow:
 5. Compare results
 
 This serves as a template for alignment analysis experiments.
+
+Usage:
+    python standard_alignment_experiment.py
+    
+No configuration needed - this script runs with default settings.
+The script will:
+    - Download MNIST dataset automatically (if not present)
+    - Train a simple MLP model for 5 epochs
+    - Compute alignment metrics (Rayleigh Quotient, Weight Similarity)
+    - Test pruning at various sparsity levels (10%, 30%, 50%, 70%, 90%)
+    - Compare magnitude vs random pruning strategies
+    - Generate comprehensive visualizations
+
+Requirements:
+    - PyTorch with CUDA (optional, will use CPU if not available)
+    - torchvision
+    - alignment package installed
+    - matplotlib for visualizations
+
+Output:
+    Results are saved to: results/standard_experiment/
+    - training_history.json: Training metrics
+    - alignment_metrics.json: Layer-wise alignment scores
+    - pruning_results.json: Pruning experiment results
+    - pruning_performance.png: Performance comparison plot
+    - comparison_grid.png: Comprehensive analysis grid
 """
 
 import torch

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Comprehensive Alignment Experiment Script
 
@@ -22,6 +23,35 @@ Usage:
     # Run without training (just compute metrics):
     python comprehensive_alignment_experiment.py --config configs/comprehensive_alignment_config.yaml \
         --train_model false --compute_initial_metrics true
+
+Configuration:
+    This script requires a YAML configuration file. Two configs are provided:
+    - configs/comprehensive_alignment_config.yaml: Full config with ALL options documented
+    - configs/quick_test_config.yaml: Minimal config for quick testing
+    
+    Any parameter in the config can be overridden from the command line.
+
+Requirements:
+    - PyTorch with CUDA support (optional, will use CPU if not available)
+    - torchvision (for models and datasets)
+    - alignment package installed
+    - matplotlib (for visualizations)
+    - pyyaml (for config loading)
+
+Output:
+    Results are saved to: logs/<experiment_name>/
+    ├── <experiment_name>_<timestamp>.log    # Detailed execution log
+    ├── results.json                         # Complete experiment results
+    ├── report.html                          # Comprehensive HTML report
+    └── visualizations/                      # Generated plots
+        ├── summary.png                      # Quick summary visualization
+        ├── <metric>_comparison.png          # Per-metric comparisons
+        ├── sparsity_by_layer.png           # Pruning visualization
+        └── alignment_heatmap.png           # Comprehensive metric heatmap
+
+Example Configurations:
+    See configs/comprehensive_alignment_config.yaml for all available options.
+    Each option is documented with its purpose and available values.
 """
 
 import argparse

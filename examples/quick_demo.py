@@ -1,21 +1,25 @@
 """
 Quick demo of the alignment module functionality.
 
-How to run:
------------
-python quick_demo.py
+This script provides a minimal example showing the basic workflow of the alignment framework.
+It demonstrates model wrapping, metric computation, and basic pruning on a simple MLP.
 
-This will:
-- Create a simple 3-layer neural network
-- Wrap it to track activations
-- Compute Rayleigh quotient metrics for each layer
-- Compute weight cosine similarity
-- Apply magnitude-based pruning at 50% sparsity to the first layer
-- Verify the pruned model still works
+Usage:
+    python quick_demo.py
+    
+No configuration needed - this script runs with default settings and creates its own model.
 
-Expected runtime: <1 minute
-Output: Console output showing metrics and pruning results
-No external data required (uses random dummy data)
+Requirements:
+    - PyTorch
+    - alignment package installed
+    
+Output:
+    - Console output showing:
+        * Model structure
+        * Tracked layers
+        * Activation shapes
+        * Alignment metrics (Rayleigh Quotient, Weight Cosine Similarity)
+        * Pruning results
 """
 
 import torch
