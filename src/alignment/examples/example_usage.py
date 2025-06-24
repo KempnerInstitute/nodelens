@@ -1,7 +1,7 @@
 """
-Example usage of the refactored alignment metrics framework.
+Example usage of the alignment metrics framework.
 
-This script demonstrates the key features and improvements in the new architecture.
+This script demonstrates the key features and improvements in the architecture.
 """
 
 import torch
@@ -10,26 +10,15 @@ from torchvision import models
 from typing import Dict, List
 import logging
 
-# Import all components
-from alignment import (
-    ModelWrapper,
-    DatasetWrapper,
-    RayleighQuotient,
-    MutualInformationGaussian,
-    discover_metrics,
-    list_metrics
-)
-
-from alignment.experiments import ProgressiveDropoutExperiment
-from alignment.analysis import ResultAnalyzer, MetricVisualizer
-
-# Import from the refactored framework
-from alignment.core import get_metric, get_experiment
+# Import from the alignment framework
+from alignment.core import get_metric, get_experiment, BaseMetric, register_metric
 from alignment.metrics.rayleigh import RayleighQuotient
+from alignment.metrics.similarity import weight_cosine_similarity
+from alignment.metrics import MetricComputer, MutualInformationGaussian
 from alignment.models import ModelWrapper
-from alignment.data import MNISTDataset
+from alignment.data import MNISTDataset, DatasetWrapper
 from alignment.experiments import ProgressiveDropoutExperiment
-from alignment.analysis import AlignmentPlotter
+from alignment.analysis import AlignmentPlotter, ResultAnalyzer, MetricVisualizer
 
 
 def example_basic_metric_computation():
@@ -173,8 +162,6 @@ def example_custom_metric():
     """Example 6: Creating a custom metric."""
     print("=== Example 6: Custom Metric ===")
     
-    from alignment.core import BaseMetric, register_metric
-    
     @register_metric("cosine_alignment")
     class CosineAlignment(BaseMetric):
         """Custom metric measuring cosine similarity between weights and input PCs."""
@@ -215,8 +202,6 @@ def example_custom_metric():
 def example_metric_aggregation():
     """Example 7: Computing and aggregating multiple metrics."""
     print("=== Example 7: Metric Aggregation ===")
-    
-    from alignment.metrics import MetricComputer
     
     # Create metric computer with multiple metrics
     computer = MetricComputer(
@@ -268,7 +253,7 @@ if __name__ == "__main__":
             print(f"Error in {example_func.__name__}: {e}\n")
     
     print("=== Examples Complete ===")
-    print("This demonstrates the key features of the refactored framework:")
+    print("This demonstrates the key features of the framework:")
     print("1. Clean, modular API")
     print("2. Registry-based component discovery")
     print("3. Built-in distributed computing support")

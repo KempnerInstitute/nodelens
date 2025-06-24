@@ -1,12 +1,13 @@
 """
-Training utilities for the alignment framework.
-
-This module provides various training methods including
-standard and fully tensorized training.
+Training utilities for neural networks.
 """
 
-from .tensorized import train_networks_fully_tensorized
+from .base import BaseTrainer, TrainingConfig
+from .multi_network import train_networks_fully_tensorized, TensorizedNetworkWrapper
 
 __all__ = [
+    'BaseTrainer',
+    'TrainingConfig',
     'train_networks_fully_tensorized',
+    'TensorizedNetworkWrapper',
 ] 

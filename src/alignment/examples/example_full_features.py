@@ -1,5 +1,5 @@
 """
-Comprehensive example demonstrating all features of the refactored alignment framework.
+Comprehensive example demonstrating all features of the alignment framework.
 
 This example shows:
 1. All experiment types
@@ -355,7 +355,7 @@ if __name__ == "__main__":
     example_comprehensive_config()
     
     print("\n=== All Features Demonstrated ===")
-    print("The refactored framework includes:")
+    print("The framework includes:")
     print("  - All original metrics + PID metrics")
     print("  - All experiment types")
     print("  - Fully tensorized training")

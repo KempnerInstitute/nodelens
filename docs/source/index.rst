@@ -67,52 +67,67 @@ Documentation Contents
 
 .. toctree::
    :maxdepth: 2
-   :caption: Metrics Documentation
+   :caption: Getting Started
    
-   ../ALIGNMENT_MODULE_GUIDE
-   ../METRICS_REFERENCE
-   ../METRICS_IMPLEMENTATION_DETAILS
-   ../ALL_METRICS_LIST
-   ../BUILD_DOCUMENTATION
+   user_guide/installation
+   user_guide/quickstart
+   examples/basic_usage
 
 .. toctree::
    :maxdepth: 2
    :caption: User Guide
    
-   user_guide/installation
-   user_guide/quickstart
    user_guide/experiments
    user_guide/configuration
    user_guide/metrics
-   user_guide/models
+   user_guide/pruning_strategies
 
 .. toctree::
    :maxdepth: 2
    :caption: API Reference
    
+   api/index
    api/core
    api/models
    api/metrics
    api/experiments
+   api/pruning
    api/data
+   api/training
+   api/analysis
    api/utils
+   api/external
 
 .. toctree::
    :maxdepth: 2
    :caption: Examples & Tutorials
    
+   examples/index
    examples/basic_usage
-   examples/pruning_experiments
-   examples/custom_metrics
-   examples/advanced_experiments
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Reference Documentation
+   
+   ALIGNMENT_MODULE_GUIDE
+   METRICS_REFERENCE
+   METRICS_IMPLEMENTATION_DETAILS
+   ALL_METRICS_LIST
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Developer Guide
+   
+   developer_guide/architecture
+   developer_guide/internal/index
+   contributing
+   changelog
 
 .. toctree::
    :maxdepth: 1
    :caption: Additional Resources
    
-   migration_guide
-   contributing
-   changelog
+   BUILD_DOCUMENTATION
 
 Indices and tables
 ==================
