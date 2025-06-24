@@ -1,9 +1,43 @@
 """
 Pruning module for the alignment framework.
 
-This module provides:
-- Various pruning strategies (magnitude, gradient, random, etc.)
-- Pruning experiments for analysis
+This module provides comprehensive pruning capabilities:
+
+Strategies:
+- Magnitude-based: MagnitudePruning, IterativeMagnitudePruning, GlobalMagnitudePruning
+- Gradient-based: GradientPruning, FisherPruning, MomentumPruning  
+- Random: RandomPruning, LayerwiseRandomPruning, BernoulliPruning
+- Parallel: ParallelModePruning, TensorizedPruning, AsyncParallelPruning
+
+Pruning Modes:
+- 'low': Prune weights with lowest importance scores (default)
+- 'high': Prune weights with highest importance scores
+- 'random': Prune weights randomly
+
+Example:
+    Basic pruning::
+    
+        from alignment.pruning import get_pruning_strategy, PruningConfig
+        
+        # Prune low-magnitude weights
+        strategy = get_pruning_strategy('magnitude')
+        mask = strategy.prune(layer, amount=0.5)
+        
+        # Prune high-magnitude weights
+        config = PruningConfig(amount=0.5, pruning_mode='high')
+        strategy = get_pruning_strategy('magnitude', config=config)
+        
+    Parallel pruning::
+    
+        from alignment.pruning.strategies import ParallelModePruning
+        
+        # Apply multiple modes simultaneously
+        strategy = ParallelModePruning(modes=['low', 'high', 'random'])
+        result = strategy.prune_parallel(layer, amount=0.5)
+        
+        # Access individual masks
+        low_mask = result.masks['low']
+        high_mask = result.masks['high']
 """
 
 from typing import Optional, Union, Type
@@ -19,6 +53,9 @@ from .strategies import (
     MomentumPruning,
     RandomPruning,
     BernoulliPruning,
+    ParallelModePruning,
+    TensorizedPruning,
+    AsyncParallelPruning,
 )
 from .experiments import (
     ProgressiveDropoutExperiment,
@@ -44,6 +81,11 @@ PRUNING_STRATEGIES = {
     # Random strategies
     'random': RandomPruning,
     'bernoulli': BernoulliPruning,
+    
+    # Parallel strategies
+    'parallel_mode': ParallelModePruning,
+    'tensorized': TensorizedPruning,
+    'async_parallel': AsyncParallelPruning,
 }
 
 
@@ -99,6 +141,11 @@ __all__ = [
     # Random strategies
     'RandomPruning',
     'BernoulliPruning',
+    
+    # Parallel strategies
+    'ParallelModePruning',
+    'TensorizedPruning',
+    'AsyncParallelPruning',
     
     # Experiments
     'ProgressiveDropoutExperiment',

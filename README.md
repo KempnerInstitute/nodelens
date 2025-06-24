@@ -8,6 +8,7 @@ This repository provides a comprehensive framework for analyzing neural network 
 ## Key Features
 
 - **36 Alignment Metrics**: Comprehensive suite including Rayleigh quotient, mutual information, spectral metrics, and more
+- **Advanced Pruning**: Multiple pruning strategies with parallel execution and high/low/random modes
 - **Flexible Architecture**: Easy to extend with custom metrics and experiments
 - **Performance Optimized**: GPU acceleration, parallel processing, and batch computation
 - **Experiment Framework**: Structured approach to running and tracking experiments
