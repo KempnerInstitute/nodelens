@@ -4,7 +4,8 @@
 
 ```python
 import torch
-from alignment import ModelWrapper, get_metric
+from alignment.core import ModelWrapper
+from alignment.metrics import get_metric
 
 # Create a model
 model = torch.nn.Sequential(
