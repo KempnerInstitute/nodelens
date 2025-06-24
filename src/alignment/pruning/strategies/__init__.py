@@ -1,4 +1,4 @@
-"""Pruning strategies submodule."""
+"""Pruning strategies."""
 
 from .magnitude import (
     MagnitudePruning,
@@ -18,6 +18,13 @@ from .random import (
     BernoulliPruning
 )
 
+from .parallel import (
+    ParallelModePruning,
+    TensorizedPruning,
+    AsyncParallelPruning,
+    ParallelPruningResult
+)
+
 __all__ = [
     'MagnitudePruning',
     'IterativeMagnitudePruning',
@@ -28,4 +35,8 @@ __all__ = [
     'RandomPruning',
     'LayerwiseRandomPruning',
     'BernoulliPruning',
+    'ParallelModePruning',
+    'TensorizedPruning',
+    'AsyncParallelPruning',
+    'ParallelPruningResult',
 ] 

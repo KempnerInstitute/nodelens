@@ -23,10 +23,11 @@ from .reporting import (
 
 # Visualization
 from .visualization import (
-    plot_metric_evolution,
-    plot_layer_comparison,
-    plot_correlation_matrix,
-    create_interactive_dashboard,
+    MetricVisualizer,
+    LayerVisualizer,
+    ComparisonVisualizer,
+    AlignmentVisualizer,
+    PruningVisualizer,
 )
 
 __all__ = [
@@ -39,8 +40,9 @@ __all__ = [
     'MarkdownReporter',
     'JSONReporter',
     # Visualization
-    'plot_metric_evolution',
-    'plot_layer_comparison',
-    'plot_correlation_matrix',
-    'create_interactive_dashboard',
+    'MetricVisualizer',
+    'LayerVisualizer',
+    'ComparisonVisualizer',
+    'AlignmentVisualizer',
+    'PruningVisualizer',
 ] 

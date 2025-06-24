@@ -11,19 +11,19 @@ Neural Network Alignment Framework
    :target: https://pytorch.org/
    :alt: PyTorch Version
 
-This framework provides a comprehensive suite of tools for studying neural network alignment properties, 
+A comprehensive framework for studying neural network alignment properties, 
 implementing various pruning strategies, and analyzing network behavior through information-theoretic metrics.
 
 Key Features
 ------------
 
-* **36 Alignment Metrics**: Comprehensive suite including Rayleigh quotient, mutual information, spectral metrics, and more
+* **36+ Alignment Metrics**: Comprehensive suite including Rayleigh quotient, mutual information, spectral metrics, and more
 * **Modular Architecture**: Clean separation of concerns with dedicated modules for models, metrics, experiments, and utilities
-* **Advanced Metrics**: Implementation of Rayleigh Quotient (RQ), Mutual Information (MI), Partial Information Decomposition (PID), CKA, CCA, and more
-* **Pruning Strategies**: Progressive dropout, eigenvector-based pruning, layer-isolated pruning, and cascading methods
-* **Tensorized Dropout**: Efficient structured pruning implementation
-* **Model Wrapper**: Automatic activation tracking and layer weight extraction
-* **Experiment Framework**: Reproducible experiment management with configuration support
+* **Advanced Pruning**: Multiple strategies with low/high/random modes, parallel execution, and tensorized operations
+* **Comprehensive Experiments**: Fully configurable experiment system supporting all models, datasets, and metrics
+* **Automatic Analysis**: Built-in visualization, reporting, and statistical analysis tools
+* **GPU Optimized**: Efficient implementations with automatic memory management
+* **Extensible Design**: Easy to add custom metrics, models, and experiments
 
 Getting Started
 ---------------
@@ -42,18 +42,15 @@ Quick Example
 
 .. code-block:: python
 
-   from alignment.core import ModelWrapper
-   from alignment.metrics import get_metric
+   from alignment import ModelWrapper, get_metric
    import torch
 
-   # Create a model
+   # Create and wrap a model
    model = torch.nn.Sequential(
        torch.nn.Linear(784, 256),
        torch.nn.ReLU(),
        torch.nn.Linear(256, 10)
    )
-   
-   # Wrap it for tracking
    wrapped_model = ModelWrapper(model)
    
    # Compute alignment metrics
@@ -61,6 +58,40 @@ Quick Example
    inputs = torch.randn(100, 784)
    activations = wrapped_model.extract_activations(inputs)
    scores = metric.compute(inputs=activations[0], weights=model[0].weight)
+
+Running Experiments
+-------------------
+
+The framework provides multiple ways to run experiments:
+
+**Quick Demo** - Basic introduction:
+
+.. code-block:: bash
+
+   python examples/quick_demo.py
+
+**Standard Experiment** - Complete workflow:
+
+.. code-block:: bash
+
+   python examples/standard_alignment_experiment.py
+
+**Comprehensive Experiment** - Full framework capabilities:
+
+.. code-block:: bash
+
+   # With full configuration
+   python examples/comprehensive_alignment_experiment.py \
+       --config configs/comprehensive_alignment_config.yaml
+
+   # Quick test
+   python examples/comprehensive_alignment_experiment.py \
+       --config configs/quick_test_config.yaml
+
+   # Override parameters
+   python examples/comprehensive_alignment_experiment.py \
+       --config configs/quick_test_config.yaml \
+       --model_name resnet50 --dataset_name cifar10
 
 Documentation Contents
 ----------------------
@@ -71,6 +102,7 @@ Documentation Contents
    
    user_guide/installation
    user_guide/quickstart
+   user_guide/getting_started
    examples/basic_usage
 
 .. toctree::
@@ -95,8 +127,7 @@ Documentation Contents
    api/data
    api/training
    api/analysis
-   api/utils
-   api/external
+   api/infrastructure
 
 .. toctree::
    :maxdepth: 2
@@ -104,6 +135,9 @@ Documentation Contents
    
    examples/index
    examples/basic_usage
+   examples/comprehensive_experiment
+   examples/pruning_demo
+   examples/visualization_guide
 
 .. toctree::
    :maxdepth: 2
@@ -128,6 +162,37 @@ Documentation Contents
    :caption: Additional Resources
    
    BUILD_DOCUMENTATION
+
+Module Overview
+===============
+
+The framework is organized into several key modules:
+
+Core Modules
+------------
+
+* **core**: Foundational abstractions, protocols, and registry system
+* **models**: Model wrappers and architectures
+* **metrics**: 36+ alignment metrics organized by type
+* **pruning**: Comprehensive pruning strategies and experiments
+* **experiments**: Experiment framework and runners
+* **data**: Dataset handling and processing
+* **training**: Training utilities and callbacks
+
+Supporting Modules
+------------------
+
+* **infrastructure**: Runtime support (distributed computing, storage, configuration)
+* **analysis**: Post-experiment analysis, aggregation, reporting, and visualization
+
+Examples Available
+------------------
+
+1. **quick_demo.py**: Minimal example showing basic workflow
+2. **standard_alignment_experiment.py**: Complete experiment template
+3. **pruning_strategies_demo.py**: All pruning features demonstration
+4. **pruning_visualization_demo.py**: Visualization capabilities
+5. **comprehensive_alignment_experiment.py**: Full framework demonstration with YAML configuration
 
 Indices and tables
 ==================
