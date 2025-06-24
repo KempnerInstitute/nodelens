@@ -13,8 +13,8 @@ from collections import OrderedDict
 import logging
 import copy
 
-from alignment.models.base import BaseModelWrapper
-from alignment.core.registry import register_model
+from .base import BaseModelWrapper
+from ..core.registry import register_model
 
 logger = logging.getLogger(__name__)
 

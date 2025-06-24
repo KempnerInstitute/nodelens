@@ -5,8 +5,8 @@ This module provides wrappers that add activation tracking and other
 functionality needed for alignment analysis to standard PyTorch models.
 """
 
-from alignment.models.base import BaseModelWrapper
-from alignment.core.wrappers import (
+from .base import BaseModelWrapper
+from .wrappers import (
     ModelWrapper,
     AlignmentNetwork,
     ActivationTracker,
