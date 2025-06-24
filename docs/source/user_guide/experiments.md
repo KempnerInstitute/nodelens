@@ -1,40 +1,45 @@
 # Experiments Guide
 
-This guide provides detailed information about the experiment types available in the Neural Network Alignment framework.
+This guide covers how to run and configure experiments in the alignment framework.
 
 ## Overview
 
-The framework includes several experiment types designed to study different aspects of neural network pruning and alignment:
+The framework provides several built-in experiments for studying neural network pruning and alignment:
 
-1. **Progressive Dropout**: Gradually increases pruning percentage
-2. **Eigenvector-based Pruning**: Uses eigenvector analysis for pruning decisions
-3. **Layer-Isolated Pruning**: Analyzes the impact of pruning individual layers
-4. **Cascading Layer Pruning**: Sequential pruning across layers
+- **Progressive Dropout**: Gradually increases dropout during training
+- **Eigenvector-based Pruning**: Prunes based on eigenvector analysis
+- **Layer-wise Pruning**: Isolates pruning effects to specific layers
+- **Cascading Pruning**: Sequentially prunes layers
 
-## Progressive Dropout Experiments
+## Progressive Dropout Experiment
 
-Progressive dropout experiments gradually increase the pruning percentage to study the relationship between network sparsity and performance.
+Progressive dropout gradually increases the dropout rate during training, allowing the network to adapt to increasing sparsity.
 
 ### Basic Usage
 
 ```python
-from alignment_refactor.experiments.progressive_dropout import ProgressiveDropoutExperiment
-from alignment_refactor.experiments.base import ExperimentConfig
+from alignment.experiments.progressive_dropout import ProgressiveDropoutExperiment
+from alignment.experiments.base import ExperimentConfig
 
+# Configure experiment
 config = ExperimentConfig(
-    name="progressive_pruning_experiment",
-    model_name="mlp",
-    dataset_name="mnist",
-    model_config={
-        "hidden_dims": [300, 200, 100],
-        "dropout_rate": 0.5
-    },
-    metrics=["rayleigh_quotient"],
-    dropout_fractions=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    experiment_name="progressive_dropout_test",
+    model_name="resnet18",
+    dataset="cifar10",
+    
+    # Progressive dropout specific
+    initial_dropout=0.0,
+    final_dropout=0.9,
+    warmup_epochs=10,
+    increase_epochs=40,
+    
+    # Training parameters
+    epochs=100,
     batch_size=128,
-    device="cuda"
+    learning_rate=0.1
 )
 
+# Create and run experiment
 experiment = ProgressiveDropoutExperiment(config)
 results = experiment.run()
 ```
@@ -66,21 +71,26 @@ The experiment supports multiple pruning strategies:
 - **random**: Random pruning (baseline)
 - **metric-based**: Use alignment metrics (RQ, MI) for pruning
 
-## Eigenvector-based Pruning
+## Eigenvector-based Dropout
 
-This experiment type uses eigenvector analysis of the weight covariance matrix to identify important neurons.
+This experiment uses eigenvector analysis to determine which neurons to drop based on their alignment with principal components.
 
-### Basic Usage
+### Configuration
 
 ```python
-from alignment_refactor.experiments.eigenvector import EigenvectorDropoutExperiment
+from alignment.experiments.eigenvector import EigenvectorDropoutExperiment
 
 config = ExperimentConfig(
-    name="eigenvector_pruning",
-    model_name="cnn2p2",
-    dataset_name="cifar10",
-    num_components=50,  # Number of eigenvectors to consider
-    variance_threshold=0.95  # Cumulative variance explained
+    experiment_name="eigenvector_pruning",
+    
+    # Eigenvector specific
+    drop_percentage=0.5,
+    eigenvector_threshold=0.1,
+    use_magnitude_weighting=True,
+    
+    # Metrics to track
+    metrics=["rayleigh_quotient", "mutual_information"],
+    save_frequency=10
 )
 
 experiment = EigenvectorDropoutExperiment(config)
@@ -89,25 +99,30 @@ results = experiment.run()
 
 ### Key Parameters
 
-- `num_components`: Number of principal components to retain
-- `variance_threshold`: Minimum cumulative variance to preserve
-- `layer_wise`: Whether to apply eigenvector analysis per layer
+- `drop_percentage`: Percentage of neurons to drop
+- `eigenvector_threshold`: Threshold for eigenvector analysis
+- `use_magnitude_weighting`: Whether to use magnitude weighting
 
-## Layer-Isolated Pruning
+## Layer-isolated Pruning
 
-This experiment analyzes the sensitivity of individual layers to pruning.
+This experiment applies pruning to specific layers while keeping others intact, useful for studying layer-specific effects.
 
-### Basic Usage
+### Usage
 
 ```python
-from alignment_refactor.experiments.layer_isolated import LayerIsolatedPruningExperiment
+from alignment.experiments.layer_isolated import LayerIsolatedPruningExperiment
 
 config = ExperimentConfig(
-    name="layer_sensitivity_analysis",
-    model_name="mlp",
-    dataset_name="mnist",
-    pruning_percentages=[0.1, 0.3, 0.5, 0.7, 0.9],
-    metrics=["rayleigh_quotient", "mutual_information"]
+    experiment_name="layer_isolation_study",
+    
+    # Layer isolation settings
+    target_layers=["layer1.0.conv1", "layer2.0.conv1"],
+    pruning_rates=[0.3, 0.5, 0.7],
+    isolation_mode="sequential",  # or "parallel"
+    
+    # Pruning strategy
+    pruning_method="magnitude",
+    fine_tune_epochs=10
 )
 
 experiment = LayerIsolatedPruningExperiment(config)
@@ -128,19 +143,24 @@ for layer_name, layer_data in layer_results.items():
 
 ## Cascading Layer Pruning
 
-This experiment applies pruning in a cascading manner, propagating effects through the network.
+Cascading pruning sequentially prunes layers, studying how pruning propagates through the network.
 
-### Basic Usage
+### Configuration
 
 ```python
-from alignment_refactor.experiments.cascading import CascadingLayerPruningExperiment
+from alignment.experiments.cascading import CascadingLayerPruningExperiment
 
 config = ExperimentConfig(
-    name="cascading_pruning",
-    model_name="cnn2p2",
-    dataset_name="cifar10",
-    cascade_threshold=0.1,  # Pruning threshold per layer
-    propagation_mode="forward"  # or "backward"
+    experiment_name="cascading_pruning",
+    
+    # Cascading specific
+    layer_order=["conv1", "conv2", "fc1"],  # Order of pruning
+    cascade_threshold=0.01,  # Min activation threshold
+    pruning_per_layer=0.3,
+    
+    # Analysis options
+    track_information_flow=True,
+    save_intermediate_models=True
 )
 
 experiment = CascadingLayerPruningExperiment(config)
@@ -149,41 +169,45 @@ results = experiment.run()
 
 ## Running Multiple Experiments
 
-The framework provides an `ExperimentRunner` for managing multiple experiments:
+### Using ExperimentRunner
 
 ```python
-from alignment_refactor.experiments.runner import ExperimentRunner
-from alignment_refactor.experiments.base import ExperimentConfig
+from alignment.experiments.runner import ExperimentRunner
+from alignment.experiments.base import ExperimentConfig
 
-# Base configuration
-base_config = ExperimentConfig(
-    model_name="mlp",
-    dataset_name="mnist",
-    batch_size=128,
-    device="cuda"
-)
-
-runner = ExperimentRunner(base_config=base_config)
-
-# Add experiments with different parameters
-for dropout_rate in [0.1, 0.3, 0.5]:
-    runner.add_experiment(
-        "progressive_dropout",
-        config_overrides={"dropout_rate": dropout_rate},
-        name_suffix=f"dropout_{dropout_rate}"
+# Define multiple configurations
+configs = [
+    ExperimentConfig(
+        experiment_name="exp1",
+        experiment_type="progressive_dropout",
+        initial_dropout=0.0,
+        final_dropout=0.5
+    ),
+    ExperimentConfig(
+        experiment_name="exp2", 
+        experiment_type="eigenvector",
+        drop_percentage=0.3
     )
+]
 
 # Run all experiments
-results = runner.run_all()
+runner = ExperimentRunner(
+    configs=configs,
+    parallel=True,  # Run in parallel
+    num_workers=4
+)
+
+all_results = runner.run_all()
 ```
 
 ## Configuration Options
 
 ### Essential Parameters
 
-- `name`: Experiment identifier
+- `experiment_name`: Experiment identifier
+- `experiment_type`: Type of experiment
 - `model_name`: Model architecture to use
-- `dataset_name`: Dataset for evaluation
+- `dataset`: Dataset for evaluation
 - `device`: Computing device (cuda/cpu)
 - `seed`: Random seed for reproducibility
 
