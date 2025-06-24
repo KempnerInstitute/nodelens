@@ -49,12 +49,12 @@ import torch
 import torch.distributed as dist
 from pathlib import Path
 
-# Import from refactored codebase
-from alignment_refactor import ModelWrapper, DatasetWrapper
-from alignment_refactor.experiments import ProgressiveDropoutExperiment
-from alignment_refactor.experiments.base import ExperimentConfig
-from alignment_refactor.utils.distributed import setup_distributed, cleanup_distributed
-from alignment_refactor.utils.logging import setup_logging
+# Import from alignment codebase
+from alignment import ModelWrapper, DatasetWrapper
+from alignment.experiments import ProgressiveDropoutExperiment
+from alignment.experiments.base import ExperimentConfig
+from alignment.infrastructure.computing.distributed import setup_distributed, cleanup_distributed
+from alignment.infrastructure.storage.logging import setup_logging
 
 def main():
     # Setup distributed environment

@@ -1,0 +1,72 @@
+# General Alignment Experiment Configuration
+# This example shows how to train a model on MNIST, compute alignment metrics,
+# and apply pruning based on the results
+
+name: "mnist_alignment_analysis"
+description: "Complete alignment analysis pipeline with MNIST"
+
+# Model configuration
+model_name: "mlp"
+model_config:
+  input_dim: 784
+  hidden_dims: [512, 256]
+  output_dim: 10
+  activation: "relu"
+  dropout_rate: 0.2
+
+# Dataset configuration
+dataset_name: "mnist"
+dataset_config:
+  data_path: "./data"
+  download: true
+  normalize: true
+
+# Training configuration
+training_config:
+  epochs: 20
+  learning_rate: 0.001
+  batch_size: 64
+  optimizer: "adam"
+  scheduler: "cosine"
+  gradient_clip_val: 1.0
+
+# Alignment metrics to compute
+alignment_metrics:
+  - "rayleigh_quotient"
+  - "mutual_information_gaussian"
+  - "weight_cosine_similarity"
+  - "activation_cosine_similarity"
+
+# Compute metrics on specific layers (null means all layers)
+compute_metrics_on: null
+
+# Pruning configuration
+pruning_strategy: "magnitude"
+pruning_config:
+  amount: 0.5
+  structured: false
+
+# Optional: Use metric to guide pruning
+pruning_based_on_metric: null  # or "rayleigh_quotient"
+
+# Experiment flow control
+train_model: true
+compute_initial_metrics: true
+apply_pruning: true
+fine_tune_after_pruning: true
+fine_tune_epochs: 10
+
+# Analysis and tracking
+track_performance: true
+save_checkpoints: true
+save_metrics_history: true
+
+# Hardware configuration
+device: "cuda"
+num_workers: 4
+
+# Logging configuration
+log_dir: "./results/general_alignment"
+checkpoint_dir: "./checkpoints/general_alignment"
+save_interval: 5
+log_interval: 100 

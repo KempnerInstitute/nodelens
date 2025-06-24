@@ -7,7 +7,7 @@ used throughout the framework.
 
 from .protocols import (
     AlignmentMetric,
-    ModelWrapper,
+    ModelWrapper as ModelWrapperProtocol,
     DatasetWrapper,
     Experiment,
     MetricAggregator,
@@ -30,11 +30,14 @@ from .base import (
     BaseDataset,
     BaseExperiment,
 )
+from .wrappers import (
+    ModelWrapper,
+)
 
 __all__ = [
     # Protocols
     "AlignmentMetric",
-    "ModelWrapper",
+    "ModelWrapperProtocol",
     "DatasetWrapper",
     "Experiment",
     "MetricAggregator",
@@ -54,4 +57,6 @@ __all__ = [
     "BaseModel",
     "BaseDataset",
     "BaseExperiment",
+    # Implementations
+    "ModelWrapper",
 ] 

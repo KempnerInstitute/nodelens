@@ -12,9 +12,10 @@ results/
 # WANDB
 wandb/
 data/   
-src/alignment_preref/
-src/alignment_v2/
-src/alignment_refactor_v1/
+# Old refactored versions (no longer needed)
+# src/alignment_preref/
+# src/alignment_v2/
+# src/alignment_refactor_v1/
 #notebooks/
 #notebooks/data/*
 #notebooks/.ipynb_checkpoints/*
