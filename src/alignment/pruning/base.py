@@ -21,6 +21,7 @@ class PruningConfig:
     global_pruning: bool = False  # Whether to prune globally across layers
     iterations: int = 1  # Number of pruning iterations
     fine_tune_epochs: int = 0  # Epochs of fine-tuning between iterations
+    pruning_mode: str = 'low'  # 'low' to prune low values, 'high' to prune high values
 
 
 class BasePruningStrategy(ABC):
@@ -66,7 +67,8 @@ class BasePruningStrategy(ABC):
         importance_scores: torch.Tensor,
         amount: Optional[float] = None,
         structured: Optional[bool] = None,
-        dim: Optional[int] = None
+        dim: Optional[int] = None,
+        pruning_mode: Optional[str] = None
     ) -> torch.Tensor:
         """
         Create a pruning mask based on importance scores.
@@ -76,12 +78,14 @@ class BasePruningStrategy(ABC):
             amount: Fraction to prune (overrides config if provided)
             structured: Whether to do structured pruning (overrides config)
             dim: Dimension for structured pruning
+            pruning_mode: 'low' to prune low values, 'high' to prune high values
             
         Returns:
             Binary mask tensor (1 = keep, 0 = prune)
         """
         amount = amount if amount is not None else self.config.amount
         structured = structured if structured is not None else self.config.structured
+        pruning_mode = pruning_mode if pruning_mode is not None else self.config.pruning_mode
         
         if structured and dim is not None:
             # Aggregate importance scores along non-pruned dimensions
@@ -98,10 +102,12 @@ class BasePruningStrategy(ABC):
             if k == 0:
                 return torch.ones_like(importance_scores)
             
-            threshold = aggregated_scores.flatten().kthvalue(k).values
-            
-            # Create mask
-            mask = aggregated_scores > threshold
+            if pruning_mode == 'low':
+                threshold = aggregated_scores.flatten().kthvalue(k).values
+                mask = aggregated_scores > threshold
+            else:  # pruning_mode == 'high'
+                threshold = aggregated_scores.flatten().kthvalue(aggregated_scores.numel() - k).values
+                mask = aggregated_scores < threshold
             
             # Expand mask to original shape
             shape = [1] * importance_scores.ndim
@@ -115,8 +121,12 @@ class BasePruningStrategy(ABC):
             if k == 0:
                 return torch.ones_like(importance_scores)
             
-            threshold = importance_flat.kthvalue(k).values
-            mask = importance_scores > threshold
+            if pruning_mode == 'low':
+                threshold = importance_flat.kthvalue(k).values
+                mask = importance_scores > threshold
+            else:  # pruning_mode == 'high'
+                threshold = importance_flat.kthvalue(importance_flat.numel() - k).values
+                mask = importance_scores < threshold
         
         return mask.float()
     
