@@ -193,7 +193,7 @@ checkpointing:
   
 wandb:
   use_wandb: true
-  wandb_project: "neural_alignment_refactored"
+  wandb_project: "neural_alignment"
   wandb_entity: "your_wandb_entity" # <<< IMPORTANT: Update with your W&B entity or remove line for default
 
 extra:
