@@ -80,10 +80,7 @@ Documentation Contents
    user_guide/experiments
    user_guide/configuration
    user_guide/metrics
-   user_guide/models
    user_guide/pruning_strategies
-   user_guide/batch_processing
-   user_guide/visualization
 
 .. toctree::
    :maxdepth: 2
@@ -107,9 +104,6 @@ Documentation Contents
    
    examples/index
    examples/basic_usage
-   examples/pruning_experiments
-   examples/custom_metrics
-   examples/advanced_experiments
 
 .. toctree::
    :maxdepth: 2

@@ -10,23 +10,6 @@ Getting Started
    :maxdepth: 1
    
    basic_usage
-   
-Experiments
------------
-
-.. toctree::
-   :maxdepth: 1
-   
-   pruning_experiments
-   advanced_experiments
-   
-Customization
--------------
-
-.. toctree::
-   :maxdepth: 1
-   
-   custom_metrics
 
 Overview
 --------
@@ -34,13 +17,13 @@ Overview
 **Basic Usage**
    Simple examples to get you started with computing metrics and running basic experiments.
 
-**Pruning Experiments**
-   Detailed examples of different pruning strategies and how to analyze their effects.
-
-**Advanced Experiments**
-   Complex experiment setups including multi-metric analysis, custom configurations, and distributed computing.
-
-**Custom Metrics**
-   How to create and register your own custom metrics for specialized analyses.
+**More Examples Coming Soon**
+   We're working on additional examples for:
+   
+   - Pruning experiments with different strategies
+   - Advanced experiment configurations
+   - Creating custom metrics
+   - Multi-metric analysis
+   - Distributed computing examples
 
 All examples include complete, runnable code that you can adapt for your own use cases. 
