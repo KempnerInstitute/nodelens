@@ -33,15 +33,16 @@ from typing import Dict, Any, Optional
 import torch
 import torch.nn as nn
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 # Import alignment framework components
 from alignment.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
 from alignment.analysis import ResultAggregator, HTMLReporter
 from alignment.analysis.visualization import (
-    plot_metric_comparison,
-    plot_pruning_impact,
-    plot_layer_metrics,
-    create_dashboard
+    MetricVisualizer,
+    PruningVisualizer,
+    AlignmentVisualizer,
+    plot_quick_summary
 )
 
 
@@ -261,52 +262,74 @@ def generate_visualizations(results: Dict[str, Any], config: Dict[str, Any]) -> 
     output_dir = Path(config.get('log_dir', './logs')) / config['name'] / 'visualizations'
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Plot options
-    plot_config = {
-        'format': config.get('plot_format', 'png'),
-        'dpi': config.get('plot_dpi', 300),
-        'save_path': output_dir
-    }
-    
     try:
-        # 1. Metric comparison (initial vs final)
-        if 'initial_metrics' in results and 'final_metrics' in results:
-            plot_metric_comparison(
-                results['initial_metrics'],
-                results['final_metrics'],
-                title=f"{config['name']} - Metric Changes",
-                **plot_config
-            )
-        
-        # 2. Pruning impact visualization
-        if 'pruning_results' in results:
-            plot_pruning_impact(
-                results['pruning_results'],
-                results.get('performance_history', {}),
-                title=f"{config['name']} - Pruning Impact",
-                **plot_config
-            )
-        
-        # 3. Layer-wise metric analysis
+        # 1. Quick summary plot
         if 'initial_metrics' in results:
-            for metric_name in config.get('alignment_metrics', []):
-                if metric_name in results['initial_metrics']:
-                    plot_layer_metrics(
-                        results['initial_metrics'][metric_name],
-                        metric_name=metric_name,
-                        title=f"{config['name']} - {metric_name} by Layer",
-                        **plot_config
-                    )
-        
-        # 4. Create interactive dashboard
-        if config.get('generate_plots', True):
-            dashboard_path = output_dir / 'dashboard.html'
-            create_dashboard(
+            summary_path = output_dir / 'summary.png'
+            plot_quick_summary(
                 results,
-                config,
-                output_path=dashboard_path
+                save_path=str(summary_path),
+                title=f"{config['name']} - Summary"
             )
-            logger.info(f"Interactive dashboard saved to {dashboard_path}")
+            logger.info(f"Summary plot saved to {summary_path}")
+        
+        # 2. Metric visualizations
+        if 'initial_metrics' in results or 'final_metrics' in results:
+            metric_viz = MetricVisualizer()
+            
+            # Plot each metric
+            for metric_name in config.get('alignment_metrics', []):
+                if 'initial_metrics' in results and metric_name in results['initial_metrics']:
+                    fig = metric_viz.plot_layer_comparison(
+                        results['initial_metrics'][metric_name],
+                        results.get('final_metrics', {}).get(metric_name, {}),
+                        metric_name=metric_name,
+                        title=f"{metric_name} - Initial vs Final"
+                    )
+                    if fig:
+                        fig.savefig(
+                            output_dir / f"{metric_name}_comparison.png",
+                            dpi=config.get('plot_dpi', 300),
+                            bbox_inches='tight'
+                        )
+                        plt.close(fig)
+        
+        # 3. Pruning visualization
+        if 'pruning_results' in results and 'sparsity' in results['pruning_results']:
+            pruning_viz = PruningVisualizer()
+            
+            # Create sparsity visualization
+            sparsity_data = results['pruning_results']['sparsity']
+            fig = pruning_viz.plot_sparsity_by_layer(
+                sparsity_data,
+                title="Sparsity by Layer"
+            )
+            if fig:
+                fig.savefig(
+                    output_dir / "sparsity_by_layer.png",
+                    dpi=config.get('plot_dpi', 300),
+                    bbox_inches='tight'
+                )
+                plt.close(fig)
+        
+        # 4. Alignment visualization
+        if 'initial_metrics' in results:
+            align_viz = AlignmentVisualizer()
+            
+            # Create comprehensive alignment plot
+            fig = align_viz.plot_metric_heatmap(
+                results['initial_metrics'],
+                title="Alignment Metrics Heatmap"
+            )
+            if fig:
+                fig.savefig(
+                    output_dir / "alignment_heatmap.png",
+                    dpi=config.get('plot_dpi', 300),
+                    bbox_inches='tight'
+                )
+                plt.close(fig)
+            
+        logger.info(f"Visualizations saved to {output_dir}")
             
     except Exception as e:
         logger.error(f"Error generating visualizations: {e}")
