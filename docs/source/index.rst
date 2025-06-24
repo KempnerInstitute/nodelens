@@ -96,7 +96,10 @@ Documentation Contents
    api/experiments
    api/pruning
    api/data
+   api/training
+   api/analysis
    api/utils
+   api/external
 
 .. toctree::
    :maxdepth: 2
