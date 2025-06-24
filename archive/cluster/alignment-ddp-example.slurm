@@ -49,7 +49,7 @@ import torch
 import torch.distributed as dist
 from pathlib import Path
 
-# Import from refactored codebase
+# Import from alignment codebase
 from alignment import ModelWrapper, DatasetWrapper
 from alignment.experiments import ProgressiveDropoutExperiment
 from alignment.experiments.base import ExperimentConfig
