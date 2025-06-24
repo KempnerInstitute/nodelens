@@ -13,7 +13,13 @@ import pandas as pd
 from pathlib import Path
 import logging
 from matplotlib.gridspec import GridSpec
-import seaborn as sns
+
+# Try to import seaborn, but make it optional
+try:
+    import seaborn as sns
+    HAS_SEABORN = True
+except (ImportError, AttributeError):
+    HAS_SEABORN = False
 
 logger = logging.getLogger(__name__)
 

@@ -273,10 +273,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _apply_pruning(self, data_loader) -> Dict[str, torch.Tensor]:
         """Apply pruning strategy to the model."""
-        # Get pruning strategy
+        # Get pruning strategy - extract amount separately
+        pruning_config = self.config.pruning_config.copy()
+        pruning_amount = pruning_config.pop("amount", 0.5)
+        
         strategy = get_pruning_strategy(
             self.config.pruning_strategy,
-            **self.config.pruning_config
+            **pruning_config
         )
         
         # If using metric-based pruning, compute importance scores
@@ -308,7 +311,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 # Apply pruning
                 mask = strategy.compute_mask(
                     module,
-                    self.config.pruning_config.get("amount", 0.5),
+                    pruning_amount,
                     importance_scores=importance_scores.get(layer_name) if importance_scores else None
                 )
                 
