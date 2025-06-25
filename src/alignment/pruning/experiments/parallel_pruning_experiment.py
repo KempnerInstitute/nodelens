@@ -17,11 +17,11 @@ import multiprocessing as mp
 from dataclasses import dataclass
 import json
 
-from ..training.multi_network import train_networks_fully_tensorized
-from ..pruning import get_pruning_strategy, PruningConfig
-from ..metrics import get_metric
-from ..analysis.visualization.pruning_plots import PruningVisualizer
-from ..models import ModelWrapper
+from alignment.training.multi_network import train_networks_fully_tensorized
+from alignment.pruning import get_pruning_strategy, PruningConfig
+from alignment.metrics import get_metric
+from alignment.analysis.visualization.pruning_plots import PruningVisualizer
+from alignment.models import ModelWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +436,7 @@ class ParallelPruningExperiment:
     def _get_data_loaders(self):
         """Get data loaders for the specified dataset."""
         # This is a placeholder - implement based on your data module
-        from ..data.datasets import get_dataset
+        from alignment.data.datasets import get_dataset
         return get_dataset(
             self.config.dataset_name,
             batch_size=self.config.batch_size
