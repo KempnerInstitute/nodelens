@@ -274,6 +274,13 @@ class BaseExperiment(CoreBaseExperiment):
         # Remove DataLoader parameters that don't belong in dataset initialization
         dataset_kwargs.pop('batch_size', None)
         dataset_kwargs.pop('num_workers', None)
+        # Remove other parameters that torchvision datasets don't accept
+        dataset_kwargs.pop('augmentation', None)
+        dataset_kwargs.pop('train_split', None)
+        dataset_kwargs.pop('val_split', None)
+        dataset_kwargs.pop('augmentation_config', None)
+        dataset_kwargs.pop('normalize', None)
+        dataset_kwargs.pop('download', None)  # Will be handled separately
         if self.config.data_path is not None and 'data_path' not in dataset_kwargs:
             dataset_kwargs['data_path'] = self.config.data_path
         
