@@ -634,7 +634,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         
         # Pruning experiments - now enhanced with before/after comparisons
         if self.pruning_results and "strategies" in self.pruning_results:
-            from alignment.metrics.visualization.pruning_plots import PruningVisualizer
+            from alignment.analysis.visualization.pruning_plots import PruningVisualizer
+            import matplotlib.pyplot as plt
             
             for strategy_name, strategy_results in self.pruning_results["strategies"].items():
                 if not strategy_results.get("pruning_amounts"):

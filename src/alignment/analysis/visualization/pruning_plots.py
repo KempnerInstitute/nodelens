@@ -488,62 +488,98 @@ class PruningVisualizer:
     
     def plot_weight_distribution_comparison(
         self,
-        weights_before: Dict[str, torch.Tensor],
-        weights_after: Dict[str, torch.Tensor],
-        strategies: List[str],
+        weights_before: Dict[str, Dict[str, Any]],
+        weights_after: Dict[str, Dict[str, Any]],
+        sparsity: float,
+        title: str = "Weight Distribution Comparison",
         save_path: Optional[str] = None
     ) -> plt.Figure:
         """
-        Compare weight distributions before and after pruning.
+        Compare weight distributions before and after fine-tuning.
         
         Args:
-            weights_before: Original weights per layer
-            weights_after: Pruned weights per layer/strategy
-            strategies: List of pruning strategies used
+            weights_before: Weight statistics before fine-tuning
+            weights_after: Weight statistics after fine-tuning
+            sparsity: Sparsity level
+            title: Plot title
             save_path: Path to save the plot
             
         Returns:
             Matplotlib figure
         """
-        num_strategies = len(strategies)
+        # Select up to 4 layers to visualize
+        layers = list(weights_before.keys())[:4]
+        num_layers = len(layers)
+        
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
         axes = axes.flatten()
         
-        for idx, strategy in enumerate(strategies[:4]):  # Max 4 subplots
+        for idx, layer_name in enumerate(layers):
             ax = axes[idx]
             
-            # Get weights for first layer (or combine all layers)
-            layer_key = list(weights_before.keys())[0]
-            original = weights_before[layer_key].flatten().cpu().numpy()
+            before_stats = weights_before.get(layer_name, {})
+            after_stats = weights_after.get(layer_name, {})
             
-            # Get pruned weights
-            pruned_key = f"{layer_key}_{strategy}" if f"{layer_key}_{strategy}" in weights_after else layer_key
-            if pruned_key in weights_after:
-                pruned = weights_after[pruned_key].flatten().cpu().numpy()
-            else:
-                # Simulate pruning effect
-                mask = np.random.rand(len(original)) > 0.5
-                pruned = original[mask]
+            # Create box plot data
+            percentiles_before = before_stats.get('percentiles', {})
+            percentiles_after = after_stats.get('percentiles', {})
             
-            # Plot histograms
-            bins = np.linspace(original.min(), original.max(), 50)
-            ax.hist(original, bins=bins, alpha=0.5, label='Original', 
-                    color='gray', density=True)
-            ax.hist(pruned, bins=bins, alpha=0.7, label=f'After {strategy}',
-                    color=self.strategy_colors.get(strategy, '#333333'), density=True)
-            
-            ax.set_title(f'{strategy.replace("_", " ").title()} Pruning', fontsize=12)
-            ax.set_xlabel('Weight Value')
-            ax.set_ylabel('Density')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
+            if percentiles_before and percentiles_after:
+                # Box plot positions
+                positions = [1, 2]
+                
+                # Create box plot data format
+                bp_data = [
+                    [percentiles_before.get('1', 0),
+                     percentiles_before.get('25', 0),
+                     percentiles_before.get('50', 0),
+                     percentiles_before.get('75', 0),
+                     percentiles_before.get('99', 0)],
+                    [percentiles_after.get('1', 0),
+                     percentiles_after.get('25', 0),
+                     percentiles_after.get('50', 0),
+                     percentiles_after.get('75', 0),
+                     percentiles_after.get('99', 0)]
+                ]
+                
+                # Create custom box plot
+                bp = ax.boxplot(bp_data, positions=positions, widths=0.6,
+                               patch_artist=True, showfliers=False)
+                
+                # Color the boxes
+                colors = ['#FF6B6B', '#4ECDC4']
+                for patch, color in zip(bp['boxes'], colors):
+                    patch.set_facecolor(color)
+                    patch.set_alpha(0.7)
+                
+                # Add mean lines
+                means = [before_stats.get('mean', 0), after_stats.get('mean', 0)]
+                ax.scatter(positions, means, color='black', marker='D', s=50, zorder=3)
+                
+                # Labels
+                ax.set_xticks(positions)
+                ax.set_xticklabels(['Before\nFine-tuning', 'After\nFine-tuning'])
+                ax.set_ylabel('Weight Value')
+                ax.set_title(f'{layer_name}\n(Sparsity: {before_stats.get("sparsity", 0):.1%})')
+                ax.grid(True, alpha=0.3, axis='y')
+                
+                # Add std info
+                ax.text(0.02, 0.98, f'σ_before = {before_stats.get("std", 0):.3f}\n'
+                                   f'σ_after = {after_stats.get("std", 0):.3f}',
+                       transform=ax.transAxes, va='top', ha='left',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                       fontsize=9)
         
-        fig.suptitle('Weight Distribution Before/After Pruning', fontsize=14, fontweight='bold')
+        # Hide unused subplots
+        for idx in range(num_layers, 4):
+            axes[idx].axis('off')
+        
+        fig.suptitle(f'{title}\nSparsity: {sparsity:.0%}', fontsize=16, fontweight='bold')
         plt.tight_layout()
         
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            logger.info(f"Saved weight distribution plot to {save_path}")
+            logger.info(f"Saved weight distribution comparison to {save_path}")
         
         return fig
     
@@ -833,5 +869,71 @@ class PruningVisualizer:
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Saved enhanced accuracy plot to {save_path}")
+        
+        return fig
+    
+    def plot_accuracy_vs_sparsity_comparison(
+        self,
+        sparsities: List[float],
+        accuracies_before: List[float],
+        accuracies_after: List[float],
+        title: str = "Pruning: Before vs After Fine-tuning",
+        save_path: Optional[str] = None
+    ) -> plt.Figure:
+        """
+        Compare accuracy before and after fine-tuning across sparsity levels.
+        
+        Args:
+            sparsities: List of sparsity levels
+            accuracies_before: Accuracies before fine-tuning
+            accuracies_after: Accuracies after fine-tuning
+            title: Plot title
+            save_path: Path to save the plot
+            
+        Returns:
+            Matplotlib figure
+        """
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # Plot 1: Before vs After
+        ax1.plot(sparsities, accuracies_before, 'o-', label='Before Fine-tuning',
+                color='#FF6B6B', linewidth=2.5, markersize=8)
+        ax1.plot(sparsities, accuracies_after, 'o-', label='After Fine-tuning',
+                color='#4ECDC4', linewidth=2.5, markersize=8)
+        
+        ax1.set_xlabel('Sparsity Level', fontsize=12)
+        ax1.set_ylabel('Accuracy (%)', fontsize=12)
+        ax1.set_title('Accuracy vs Sparsity', fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+        ax1.set_xlim(0, 1)
+        ax1.set_ylim(0, 105)
+        
+        # Plot 2: Improvement
+        improvements = [after - before for before, after in zip(accuracies_before, accuracies_after)]
+        bars = ax2.bar(range(len(sparsities)), improvements, 
+                       tick_label=[f"{s:.0%}" for s in sparsities],
+                       color=['#4ECDC4' if imp >= 0 else '#FF6B6B' for imp in improvements],
+                       alpha=0.8)
+        
+        # Add value labels on bars
+        for bar, imp in zip(bars, improvements):
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{imp:+.1f}%', ha='center', va='bottom' if height >= 0 else 'top',
+                    fontsize=10, fontweight='bold')
+        
+        ax2.set_xlabel('Sparsity Level', fontsize=12)
+        ax2.set_ylabel('Accuracy Improvement (%)', fontsize=12)
+        ax2.set_title('Fine-tuning Improvement', fontsize=14, fontweight='bold')
+        ax2.grid(True, alpha=0.3, axis='y')
+        ax2.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        
+        fig.suptitle(title, fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            logger.info(f"Saved comparison plot to {save_path}")
         
         return fig 
