@@ -563,6 +563,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         # Cascading alignment needs special handling
                         from alignment.pruning.strategies import CascadingAlignmentPruning
                         
+                        # TODO: Extend cascading to other algorithms (magnitude, gradient, etc)
+                        # For now, cascading only works with alignment-based pruning
+                        
                         # Create a function to get current layer inputs
                         def get_layer_inputs_fn():
                             # Capture current inputs with hooks
