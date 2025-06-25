@@ -253,10 +253,14 @@ class CascadingLayerPruningExperiment(BaseExperiment):
             # Apply mask
             if hasattr(layer, 'weight'):
                 layer.weight.data = self.original_weights[layer_name].clone()
-                if len(layer.weight.shape) == 2:  # Linear
+                if len(layer.weight.shape) == 2:  # Linear layer
+                    # Mask output neurons (rows)
                     layer.weight.data[~mask] = 0
-                elif len(layer.weight.shape) == 4:  # Conv
-                    layer.weight.data[~mask] = 0
+                elif len(layer.weight.shape) == 4:  # Conv layer
+                    # Mask output channels
+                    # Expand mask to match weight dimensions
+                    expanded_mask = mask.view(-1, 1, 1, 1).expand_as(layer.weight)
+                    layer.weight.data[~expanded_mask] = 0
                 
                 if hasattr(layer, 'bias') and layer.bias is not None:
                     layer.bias.data = self.original_weights[layer_name + "_bias"].clone()
