@@ -2,6 +2,8 @@
 
 This unified system provides a single entry point for all neural network alignment experiments. It replaces the previous fragmented approach with a comprehensive, configuration-driven system.
 
+**Note**: The main experiment runner `run_experiment.py` is kept in the root directory as the primary entry point to the alignment framework. All configuration files are in `configs/`, examples in `examples/`, and the core library code in `src/alignment/`.
+
 ## Overview
 
 The unified experiment system can handle:
@@ -184,7 +186,7 @@ The following configs are deprecated and replaced by the unified system:
 
 ### Old Scripts
 Replace usage of:
-- `examples/unified_experiment.py` → `run_unified_experiment.py`
+- `examples/unified_experiment.py` → `run_experiment.py`
 - Multiple experiment scripts → Single unified runner
 
 ### Key Differences
@@ -226,7 +228,7 @@ To add new features:
 1. **New Dataset**: Add to `alignment/data/datasets/`
 2. **New Model**: Add to `alignment/models/architectures/`
 3. **New Metric**: Add to `alignment/metrics/`
-4. **New Experiment Type**: Extend `run_unified_experiment.py`
+4. **New Experiment Type**: Extend `run_experiment.py`
 
 ## Citation
 
