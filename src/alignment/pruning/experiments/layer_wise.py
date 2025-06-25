@@ -169,7 +169,16 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
         }
         
         for layer_name, scores in layer_scores.items():
-            num_neurons = len(scores)
+            # Handle scalar scores (0-d tensor)
+            if scores.dim() == 0:
+                logger.warning(f"Scores for layer {layer_name} is a scalar, creating single-neuron mask")
+                for strategy in masks:
+                    masks[strategy][layer_name] = torch.ones(1, dtype=torch.bool)
+                continue
+            
+            # Get number of neurons and ensure scores is 1D
+            scores = scores.flatten()
+            num_neurons = scores.numel()
             num_drop = int(num_neurons * dropout_rate)
             
             if num_drop == 0:
