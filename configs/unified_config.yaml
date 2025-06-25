@@ -205,7 +205,7 @@ pruning:
   # - "global": Pool scores from all layers and prune globally
   # - "cascading": Prune layers sequentially, recomputing scores after each (alignment only)
   
-  # For cascading scope
+  # For cascading scope (currently only works with alignment algorithm)
   cascading_direction: "forward"  # Options: "forward", "backward"
   
   # Sparsity levels to test

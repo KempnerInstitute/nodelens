@@ -26,47 +26,63 @@ pip install -e .[all]
 
 ## Quick Start
 
-### Basic Example
+### 1. Learning the Framework
 
-```python
-from alignment import ModelWrapper, get_metric
-import torch
-
-# Create and wrap a model
-model = torch.nn.Sequential(
-    torch.nn.Linear(784, 256),
-    torch.nn.ReLU(),
-    torch.nn.Linear(256, 10)
-)
-wrapped_model = ModelWrapper(model)
-
-# Compute alignment metric
-metric = get_metric("rayleigh_quotient")()
-inputs = torch.randn(100, 784)
-outputs, activations = wrapped_model.forward_with_activations(inputs)
-scores = metric.compute(inputs=activations["0_input"], weights=model[0].weight)
-```
-
-### Running Examples
+Start with the examples to understand how things work:
 
 ```bash
-# Quick introduction (1 minute)
+# Basic demonstration
 python examples/quick_demo.py
 
-# Complete workflow with training and analysis (5-10 minutes)
+# Complete workflow example  
 python examples/standard_alignment_experiment.py
 
-# Comprehensive experiment with full configuration
-python examples/comprehensive_alignment_experiment.py --config configs/quick_test_config.yaml
+# Advanced pruning features
+python examples/pruning_strategies_demo.py
 ```
+
+### 2. Running Experiments
+
+For actual research, use the unified experiment runner:
+
+```bash
+# Run with the default configuration
+python run_experiment.py --config configs/unified_config.yaml
+
+# Run with a minimal test configuration
+python run_experiment.py --config configs/examples/quick_test.yaml
+```
+
+The examples are self-contained demos for learning, while `run_experiment.py` is the production tool for research.
 
 ## Available Examples
 
-1. **`quick_demo.py`** - Minimal introduction to the framework
-2. **`standard_alignment_experiment.py`** - Complete experiment workflow
-3. **`pruning_strategies_demo.py`** - Advanced pruning features
-4. **`pruning_visualization_demo.py`** - Visualization capabilities
-5. **`comprehensive_alignment_experiment.py`** - Full framework demo with YAML configuration
+1. **Quick Demo** (`examples/quick_demo.py`)
+   - Basic alignment metric computation
+   - Simple pruning demonstration
+   - ~5 minute runtime
+
+2. **Standard Experiment** (`examples/standard_alignment_experiment.py`)
+   - Complete workflow from training to analysis
+   - Multiple pruning strategies comparison
+   - Comprehensive visualizations
+   - ~10 minute runtime
+
+3. **Pruning Strategies Demo** (`examples/pruning_strategies_demo.py`)
+   - All available pruning algorithms
+   - Performance comparisons
+   - Advanced features demonstration
+
+4. **Visualization Demo** (`examples/pruning_visualization_demo.py`)
+   - Advanced plotting capabilities
+   - Interactive visualizations
+   - Custom analysis tools
+
+5. **Production Experiments** (`run_experiment.py`)
+   - Fully configurable via YAML
+   - Supports all models, datasets, and metrics
+   - Experiment types: standard, cascading, layer-isolated
+   - Example: `python run_experiment.py --config configs/unified_config.yaml`
 
 ## Comprehensive Experiments
 

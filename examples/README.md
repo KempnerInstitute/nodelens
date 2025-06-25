@@ -52,72 +52,25 @@ Advanced visualization capabilities:
 python pruning_visualization_demo.py
 ```
 
-### 5. `unified_experiment.py` (700+ lines)
-The main experiment script that can run any configuration specified in the master config file:
+## Running Production Experiments
+
+For actual research experiments, use the main runner in the root directory:
+
+```bash
+# From the repository root
+python run_experiment.py --config configs/unified_config.yaml
+```
+
+The examples in this directory are for learning and demonstration. The production runner (`run_experiment.py`) supports:
 - Fully configurable via YAML
-- Supports all model architectures
+- All model architectures
 - All alignment metrics
 - Multiple pruning strategies
-- **NEW: Specialized pruning experiments (cascading, layer-isolated)**
+- Specialized pruning experiments (cascading, layer-isolated)
 - Advanced training options
 - Comprehensive analysis and reporting
 
-**Usage:**
-```bash
-# Standard pruning experiment
-python unified_experiment.py --config ../configs/master_config.yaml
-
-# Cascading layer pruning experiment
-python unified_experiment.py --config ../configs/example_specialized_pruning.yaml \
-    --pruning_experiment cascading_layer \
-    --dropout_rates 0.1 0.3 0.5 0.7 0.9 \
-    --cascade_direction forward \
-    --recompute_scores true
-
-# Layer-isolated pruning experiment  
-python unified_experiment.py --config ../configs/example_specialized_pruning.yaml \
-    --pruning_experiment layer_isolated \
-    --dropout_rates 0.1 0.3 0.5 0.7 0.9
-
-# Override parameters from command line
-python unified_experiment.py --config ../configs/simple_test.yaml \
-    --model_name resnet50 --dataset_name cifar10 --training_config.epochs 10
-
-# Run without training (just compute metrics)
-python unified_experiment.py --config ../configs/simple_test.yaml \
-    --train_model false --apply_pruning false
-```
-
-#### Specialized Pruning Experiments
-
-The unified experiment now supports three types of pruning experiments:
-
-1. **Standard Pruning** (`--pruning_experiment standard`):
-   - Uses traditional pruning strategies (magnitude, gradient, random, etc.)
-   - Prunes to a single target sparsity level
-   - Suitable for basic pruning experiments
-
-2. **Cascading Layer Pruning** (`--pruning_experiment cascading_layer`):
-   - Prunes layers progressively (forward or backward)
-   - Earlier pruning decisions affect later layers
-   - Can recompute alignment scores after each layer
-   - Evaluates multiple dropout rates with low/high/random modes
-
-3. **Layer-Isolated Pruning** (`--pruning_experiment layer_isolated`):
-   - Prunes each layer independently based on its own scores
-   - No interaction between layers during pruning
-   - Evaluates multiple dropout rates with low/high/random modes
-
-Example command for cascading pruning:
-```bash
-python unified_experiment.py \
-    --config ../configs/example_specialized_pruning.yaml \
-    --pruning_experiment cascading_layer \
-    --dropout_rates 0.0 0.2 0.4 0.6 0.8 \
-    --cascade_direction forward \
-    --recompute_scores true \
-    --name cascading_resnet_cifar10
-```
+See `README_UNIFIED.md` in the root directory for complete documentation of the unified experiment system.
 
 ## Configuration Files
 
@@ -175,8 +128,8 @@ results/
 1. Start with `quick_demo.py` to understand the basic workflow
 2. Use `standard_alignment_experiment.py` as a template for custom experiments
 3. Explore `pruning_strategies_demo.py` for advanced pruning techniques
-4. Use `unified_experiment.py` with custom configs for research
-5. Try specialized pruning experiments for advanced analysis
+4. For production research, use `run_experiment.py` with custom configs (see root directory)
+5. Check `README_UNIFIED.md` for comprehensive documentation
 
 ## Requirements
 
@@ -212,10 +165,9 @@ pip install -e .[all]
    python standard_alignment_experiment.py
    ```
 
-5. **Run a specialized pruning experiment:**
+5. **For production experiments (from repository root):**
    ```bash
-   python unified_experiment.py --config ../configs/example_specialized_pruning.yaml \
-       --pruning_experiment cascading_layer --dropout_rates 0.1 0.5 0.9
+   python run_experiment.py --config configs/unified_config.yaml
    ```
 
 ## Example Outputs
@@ -240,20 +192,6 @@ Magnitude pruning:
 Random pruning:
   50% sparsity: 79.88% accuracy (drop: 17.77%)
   90% sparsity: 14.85% accuracy (drop: 82.80%)
-```
-
-### Specialized Pruning Results (from unified_experiment.py)
-```
-Cascading Layer Pruning - Performance Summary:
-  low mode: Best=95.2%, Worst=72.1%
-  high mode: Best=94.8%, Worst=45.3%
-  random mode: Best=94.5%, Worst=58.7%
-
-Layer-wise active neurons (at 50% dropout):
-  conv1: 32/64 active
-  layer1.0.conv1: 28/64 active
-  layer1.0.conv2: 30/64 active
-  ...
 ```
 
 ## Key Concepts Demonstrated
