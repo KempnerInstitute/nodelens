@@ -266,6 +266,9 @@ class BaseExperiment(CoreBaseExperiment):
         dataset_kwargs = self.config.dataset_config.copy()
         # Remove 'name' from kwargs if it exists to avoid conflict
         dataset_kwargs.pop('name', None)
+        # Remove DataLoader parameters that don't belong in dataset initialization
+        dataset_kwargs.pop('batch_size', None)
+        dataset_kwargs.pop('num_workers', None)
         if self.config.data_path is not None and 'data_path' not in dataset_kwargs:
             dataset_kwargs['data_path'] = self.config.data_path
         
