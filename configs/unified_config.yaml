@@ -162,31 +162,35 @@ alignment:
 # VI. Pruning Configuration
 # -----------------------------------------------------------------------------
 pruning:
-  # Pruning strategy
-  strategy: ["magnitude", "random"]  # Test multiple strategies
+  # Pruning algorithms to test
+  algorithms: ["magnitude", "random"]  # Options: "magnitude", "gradient", "fisher", "random"
+  
+  # Selection mode: which weights to prune based on importance scores
+  selection_mode: "low"   # Options: "low" (prune lowest values), "high" (prune highest values), "random"
   
   # Pruning scope  
   scope: "global"         # Options: "global", "layer", "channel", "filter"
   
-  # Pruning schedule
-  amount: [0.1, 0.3, 0.5, 0.7, 0.9]  # Test multiple sparsity levels
+  # Sparsity levels to test
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]  # Fraction of weights to prune
+  
+  # Iterative pruning settings
   iterative: false       # Whether to prune iteratively
   iterations: 1          # Number of pruning iterations
   schedule: "polynomial" # Schedule: "constant", "linear", "exponential", "polynomial"
   
   # Fine-tuning after pruning
-  fine_tune: true
+  fine_tune_after_pruning: true
   fine_tune_epochs: 10
-  fine_tune_lr: 0.0001
+  fine_tune_learning_rate: 0.0001
   
   # Progressive dropout settings (for alignment experiments)
   dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]  # Dropout rates to evaluate
   dropout_mode: "scaled"     # "scaled" or "zero"
   
-  # Multi-strategy analysis
-  strategies: ["high", "low", "random"]  # Which importance scores to prune
-  pruning_modes: ["high", "low", "random"]  # Alternative naming
-  num_trials: 3             # Random trials for "random" strategy
+  # Multiple selection modes analysis (for comparison experiments)
+  selection_modes_to_compare: ["high", "low", "random"]  # Compare different selection modes
+  num_random_trials: 3       # Number of trials for "random" selection mode
   
   # Structured pruning options
   structured: false         # Enable structured pruning

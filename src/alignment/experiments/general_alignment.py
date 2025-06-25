@@ -54,6 +54,7 @@ class GeneralAlignmentConfig(ExperimentConfig):
     pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7, 0.9])
     fine_tune_after_pruning: bool = True
     fine_tune_epochs: int = 10
+    pruning_selection_mode: str = "low"  # Which weights to prune: "low", "high", "random"
     
     # Eigenfeature analysis
     do_eigenfeature_analysis: bool = True
@@ -423,10 +424,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 self.model.load_state_dict(original_state)
                 
                 # Create pruning strategy with config
+                # Get selection mode from config (default to 'low' for magnitude pruning)
+                selection_mode = self.config.__dict__.get('pruning_selection_mode', 'low')
+                
                 pruning_config = PruningConfig(
                     amount=amount,
                     global_pruning=True,
-                    pruning_mode='low'  # Prune low magnitude weights
+                    pruning_mode=selection_mode  # Which weights to prune based on importance
                 )
                 
                 # Currently only support magnitude pruning
