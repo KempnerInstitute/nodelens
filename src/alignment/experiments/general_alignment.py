@@ -486,10 +486,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
             
             results["strategies"][strategy_name] = strategy_results
         
-        # Remove pruning masks before restoring original state
+        # Final cleanup: remove any remaining pruning masks
         for name, module in self.model.named_modules():
             if hasattr(module, 'weight_mask'):
-                strategy.remove_pruning(module)
+                delattr(module, 'weight_mask')
+            if hasattr(module, '_pruning_hook'):
+                module._pruning_hook.remove()
+                delattr(module, '_pruning_hook')
         
         # Restore original model
         self.model.load_state_dict(original_state)
