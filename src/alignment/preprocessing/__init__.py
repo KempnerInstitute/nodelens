@@ -8,14 +8,18 @@ the alignment framework.
 
 from .layer_preprocessing import (
     LayerPreprocessor,
+    LinearPreprocessor,
     CNNPreprocessor,
+    AttentionPreprocessor,
     preprocess_layer_activations,
     get_preprocessor,
 )
 
 __all__ = [
     'LayerPreprocessor',
+    'LinearPreprocessor',
     'CNNPreprocessor',
+    'AttentionPreprocessor',
     'preprocess_layer_activations',
     'get_preprocessor',
 ] 
