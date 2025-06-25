@@ -289,17 +289,44 @@ def generate_comprehensive_report(
         # Create sparsity visualization
         if 'sparsity' in results['pruning_results']:
             sparsity_data = results['pruning_results']['sparsity']
-            fig = pruning_viz.plot_layer_wise_pruning(
-                sparsity_by_layer=sparsity_data,
-                title="Layer-wise Sparsity Distribution"
+            
+            # Convert sparsity data to the format expected by plot_layer_wise_pruning
+            # The method expects: layer_sparsities: Dict[str, Dict[str, float]]
+            # and model_accuracy: Dict[str, float]
+            
+            # For now, create a simple visualization showing layer sparsities
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            # Filter out 'overall' key and plot only layer sparsities
+            layer_names = [k for k in sparsity_data.keys() if k != 'overall']
+            layer_values = [sparsity_data[k] for k in layer_names]
+            
+            bars = ax.bar(range(len(layer_names)), layer_values, color='steelblue', alpha=0.7)
+            ax.set_xticks(range(len(layer_names)))
+            ax.set_xticklabels(layer_names, rotation=45, ha='right')
+            ax.set_ylabel('Sparsity Level')
+            ax.set_xlabel('Layer')
+            ax.set_title('Layer-wise Sparsity Distribution')
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            # Add value labels on bars
+            for bar, val in zip(bars, layer_values):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                       f'{val:.2%}', ha='center', va='bottom', fontsize=9)
+            
+            # Add overall sparsity as a horizontal line
+            if 'overall' in sparsity_data:
+                ax.axhline(y=sparsity_data['overall'], color='red', linestyle='--',
+                          label=f"Overall: {sparsity_data['overall']:.2%}")
+                ax.legend()
+            
+            plt.tight_layout()
+            fig.savefig(
+                viz_dir / "sparsity_distribution.png",
+                dpi=config.get('analysis_config', {}).get('plot_dpi', 300),
+                bbox_inches='tight'
             )
-            if fig:
-                fig.savefig(
-                    viz_dir / "sparsity_distribution.png",
-                    dpi=config.get('analysis_config', {}).get('plot_dpi', 300),
-                    bbox_inches='tight'
-                )
-                plt.close(fig)
+            plt.close(fig)
     
     # 3. Generate HTML report
     if config.get('analysis_config', {}).get('generate_html_report', True):
