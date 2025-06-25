@@ -209,7 +209,7 @@ class BaseExperiment(CoreBaseExperiment):
                     if 'num_classes' in model_kwargs and 'output_dim' not in model_kwargs:
                         model_kwargs['output_dim'] = model_kwargs.pop('num_classes')
                     # Remove parameters that MLP doesn't accept
-                    for param in ['pretrained', 'num_layers', 'dropout', 'norm_type']:
+                    for param in ['pretrained', 'num_layers', 'dropout', 'norm_type', 'use_batchnorm']:
                         model_kwargs.pop(param, None)
                     # Set default input_dim for MNIST if using MNIST dataset
                     if self.config.dataset_name.lower() == 'mnist' and 'input_dim' not in model_kwargs:
