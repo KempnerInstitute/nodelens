@@ -416,11 +416,17 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 self.model.load_state_dict(original_state)
                 
                 # Create pruning strategy
-                strategy = create_pruning_strategy(
-                    strategy_name,
-                    amount=amount,
-                    scope="global"  # Use global pruning by default
-                )
+                if strategy_name == "magnitude":
+                    strategy = MagnitudePruning(amount=amount, scope="global")
+                elif strategy_name == "gradient":
+                    strategy = GradientPruning(amount=amount, scope="global")
+                elif strategy_name == "fisher":
+                    strategy = FisherPruning(amount=amount, scope="global")
+                elif strategy_name == "random":
+                    strategy = RandomPruning(amount=amount, scope="global")
+                else:
+                    logger.warning(f"Unknown pruning strategy: {strategy_name}, skipping")
+                    continue
                 
                 # Create mask manager
                 mask_manager = MaskManager(self.model)
