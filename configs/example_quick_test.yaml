@@ -18,7 +18,6 @@ model_config:
 dataset_name: mnist
 dataset_config:
   data_path: ./data
-  num_workers: 4
 
 # Training - minimal epochs
 training_config:
@@ -48,4 +47,7 @@ analysis_config:
 # Workflow
 train_model: true
 compute_initial_metrics: true
-fine_tune_after_pruning: false 
+fine_tune_after_pruning: false
+
+# DataLoader parameters (separate from dataset)
+num_workers: 4 
