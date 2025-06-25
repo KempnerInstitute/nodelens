@@ -384,7 +384,7 @@ def create_dataset_class(dataset_type):
     
     # Set proper class name
     SpecificDataset.__name__ = f"{dataset_type.upper()}Dataset"
-    SpecificDataset.__qualname__ = f"{dataset_type.upper()}Dataset"
+    SpecificDataset.__qualname__ = f"{dataset_type.upper()}Dataset" 
     return SpecificDataset
 
 # Create and register all dataset types

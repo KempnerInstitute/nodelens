@@ -1,42 +1,54 @@
-"""Pruning strategies."""
+"""
+Pruning strategies for the alignment framework.
+"""
 
 from .magnitude import (
     MagnitudePruning,
     IterativeMagnitudePruning,
-    GlobalMagnitudePruning
+    GlobalMagnitudePruning,
 )
-
 from .gradient import (
     GradientPruning,
     FisherPruning,
-    MomentumPruning
+    MomentumPruning,
 )
-
 from .random import (
     RandomPruning,
     LayerwiseRandomPruning,
-    BernoulliPruning
+    BernoulliPruning,
 )
-
 from .parallel import (
     ParallelModePruning,
     TensorizedPruning,
     AsyncParallelPruning,
-    ParallelPruningResult
+)
+from .alignment_based import (
+    AlignmentPruning,
+    HybridPruning,
 )
 
 __all__ = [
+    # Magnitude
     'MagnitudePruning',
     'IterativeMagnitudePruning',
     'GlobalMagnitudePruning',
+    
+    # Gradient
     'GradientPruning',
     'FisherPruning',
     'MomentumPruning',
+    
+    # Random
     'RandomPruning',
     'LayerwiseRandomPruning',
     'BernoulliPruning',
+    
+    # Parallel
     'ParallelModePruning',
     'TensorizedPruning',
     'AsyncParallelPruning',
-    'ParallelPruningResult',
+    
+    # Alignment-based
+    'AlignmentPruning',
+    'HybridPruning',
 ] 

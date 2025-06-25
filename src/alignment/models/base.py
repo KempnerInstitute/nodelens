@@ -154,7 +154,7 @@ class BaseModelWrapper(BaseModel):
         for name, activation in activations.items():
             if mode == "flatten" and activation.ndim > 2:
                 # Simple flattening to [batch_size, features]
-                processed[name] = activation.reshape(activation.shape[0], -1)
+                    processed[name] = activation.reshape(activation.shape[0], -1)
             else:
                 processed[name] = activation
         
