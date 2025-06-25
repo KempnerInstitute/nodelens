@@ -129,108 +129,33 @@ class BaseModelWrapper(BaseModel):
         
         return weights
     
-    def _get_unfold_params(self, layer: nn.Module) -> Dict[str, Any]:
-        """Get unfold parameters from a convolutional layer."""
-        if isinstance(layer, (nn.Conv2d, nn.Conv1d)):
-            return {
-                'dilation': layer.dilation,
-                'padding': layer.padding,
-                'stride': layer.stride
-            }
-        return {}
-    
     def preprocess_activations(
         self,
         activations: Dict[str, torch.Tensor],
-        mode: Optional[str] = None,
-        layer_modules: Optional[Dict[str, nn.Module]] = None
+        mode: str = "flatten"
     ) -> Dict[str, torch.Tensor]:
         """
-        Preprocess activations for metric computation based on CNN mode.
+        Basic activation preprocessing.
+        
+        For advanced preprocessing (CNN modes, attention, etc.),
+        use the preprocessing module: alignment.preprocessing.preprocess_layer_activations
         
         Args:
             activations: Raw activations from hooks
-            mode: Override preprocessing mode (uses self.cnn_mode if None)
-            layer_modules: Optional dict of layer modules for unfold params
+            mode: Preprocessing mode ("flatten" or "none")
             
         Returns:
             Preprocessed activations
         """
-        mode = mode or self.cnn_mode
-        processed = {}
-        
-        # Get layer modules if not provided
-        if layer_modules is None:
-            layer_modules = dict(self._model.named_modules())
-        
-        for name, activation in activations.items():
-            # Handle input activations (name ends with _input)
-            is_input = name.endswith("_input")
-            layer_name = name.replace("_input", "") if is_input else name
-            module = layer_modules.get(layer_name)
+        if mode == "none":
+            return activations
             
-            # For conv layers with spatial dimensions
-            if activation.ndim == 4 and isinstance(module, nn.Conv2d):
-                if mode == "unfold" or self.cnn_mode == "unfold":
-                    # Unfold spatial dimensions
-                    b, c, h, w = activation.shape
-                    
-                    # For inputs, we unfold based on the layer's kernel params
-                    if is_input:
-                        unfold_params = self._get_unfold_params(module)
-                        unfolded = torch.nn.functional.unfold(
-                            activation,
-                            kernel_size=module.kernel_size,
-                            **unfold_params
-                        )
-                        # Flatten: [b, features*kernel_size, num_patches] -> [b*num_patches, features]
-                        unfolded = unfolded.transpose(1, 2).contiguous()
-                        processed[name] = unfolded.view(-1, unfolded.size(2))
-                    else:
-                        # For outputs, just flatten spatial dims
-                        processed[name] = activation.reshape(b, c, -1).permute(0, 2, 1).reshape(-1, c)
-                        
-                elif mode == "patchwise" or self.cnn_mode == "patchwise":
-                    # Keep patches separate: [b, c, h, w] -> [b, features, patches]
-                    if is_input:
-                        unfold_params = self._get_unfold_params(module)
-                        unfolded = torch.nn.functional.unfold(
-                            activation,
-                            kernel_size=module.kernel_size,
-                            **unfold_params
-                        )
-                        processed[name] = unfolded  # [b, features, patches]
-                    else:
-                        b, c, h, w = activation.shape
-                        processed[name] = activation.reshape(b, c, h * w)
-                        
-                elif mode == "batch_patch_combined" or self.cnn_mode == "batch_patch_combined":
-                    # Combine batch and patch dimensions
-                    if is_input:
-                        unfold_params = self._get_unfold_params(module)
-                        unfolded = torch.nn.functional.unfold(
-                            activation,
-                            kernel_size=module.kernel_size,
-                            **unfold_params
-                        )
-                        # [b, features, patches] -> [b*patches, features]
-                        unfolded = unfolded.transpose(1, 2).contiguous()
-                        processed[name] = unfolded.view(-1, unfolded.size(2))
-                    else:
-                        b, c, h, w = activation.shape
-                        processed[name] = activation.permute(0, 2, 3, 1).reshape(-1, c)
-                        
-                elif mode == "flatten" or self.flatten_activations:
-                    # Simple flattening
-                    processed[name] = activation.reshape(activation.shape[0], -1)
-                else:
-                    processed[name] = activation
-                    
-            elif activation.ndim > 2 and (mode == "flatten" or self.flatten_activations):
-                # Flatten non-conv activations if requested
+        processed = {}
+        for name, activation in activations.items():
+            if mode == "flatten" and activation.ndim > 2:
+                # Simple flattening to [batch_size, features]
                 processed[name] = activation.reshape(activation.shape[0], -1)
             else:
-                # Keep as is for 2D activations or when not flattening
                 processed[name] = activation
         
         return processed
