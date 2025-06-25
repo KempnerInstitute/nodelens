@@ -1,0 +1,49 @@
+# Quick Test Configuration
+# Minimal configuration for fast testing and debugging
+
+name: quick_test
+description: "Quick test configuration for debugging"
+seed: 42
+
+# Model - using a small model
+model_name: mlp
+model_config:
+  num_classes: 10
+  hidden_dims: [256, 128]
+  dropout: 0.1
+
+# Dataset - using MNIST for speed
+dataset_name: mnist
+dataset_config:
+  data_path: ./data
+  num_workers: 4
+
+# Training - minimal epochs
+training_config:
+  epochs: 5
+  batch_size: 256
+  learning_rate: 0.01
+  optimizer: adam
+  device: cuda
+  log_interval: 100
+
+# Metrics - just one metric
+alignment_metrics:
+  - rayleigh_quotient
+
+# Pruning - simple magnitude pruning
+apply_pruning: true
+pruning_strategy: magnitude
+pruning_config:
+  amount: 0.5
+  pruning_mode: low
+
+# Analysis - minimal
+analysis_config:
+  generate_plots: true
+  generate_html_report: true
+
+# Workflow
+train_model: true
+compute_initial_metrics: true
+fine_tune_after_pruning: false 
