@@ -265,15 +265,29 @@ class GeneralAlignmentExperiment(BaseExperiment):
         weights = self.wrapped_model.get_layer_weights()
         
         # Preprocess activations based on CNN mode
-        preprocessed_inputs = {}
+        from alignment.preprocessing import preprocess_layer_activations
+        layer_modules = dict(self.wrapped_model._model.named_modules())
+        
+        # Collect inputs for preprocessing
+        inputs_to_process = {}
         for layer_name in self.wrapped_model.tracked_layers:
             layer_input = activations.get(f"{layer_name}_input")
             if layer_input is not None:
-                preprocessed = self.wrapped_model.preprocess_activations(
-                    {f"{layer_name}_input": layer_input},
-                    mode=self.config.cnn_mode
-                )
-                preprocessed_inputs[layer_name] = preprocessed[f"{layer_name}_input"]
+                inputs_to_process[f"{layer_name}_input"] = layer_input
+        
+        # Preprocess all inputs
+        preprocessed = preprocess_layer_activations(
+            inputs_to_process,
+            layer_modules,
+            mode=self.config.cnn_mode
+        )
+        
+        # Extract preprocessed inputs
+        preprocessed_inputs = {}
+        for layer_name in self.wrapped_model.tracked_layers:
+            key = f"{layer_name}_input"
+            if key in preprocessed:
+                preprocessed_inputs[layer_name] = preprocessed[key]
         
         # Compute each metric
         for method in self.config.alignment_methods:
