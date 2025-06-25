@@ -1,0 +1,53 @@
+# Layer-Isolated Pruning Analysis
+# This configuration analyzes each layer independently
+
+experiment_name: "layer_isolated_analysis"
+experiment_type: "layer_isolated_pruning"
+device: "cuda"
+seed: 42
+
+# Dataset
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 128
+
+# Model
+model:
+  name: "cnn"
+  output_dim: 10
+  cnn_config:
+    in_channels: 3
+    conv_channels: [32, 64, 128]
+    kernel_sizes: [3, 3, 3]
+    fc_dims: [256, 128]
+
+# Training
+training:
+  epochs: 15
+  optimizer: "adam"
+  learning_rate: 0.001
+
+# Metrics
+alignment:
+  metrics:
+    - "rayleigh_quotient"
+
+# Pruning
+pruning:
+  strategies: ["high", "low", "random"]
+  dropout_min: 0.0
+  dropout_max: 0.9
+  dropout_steps: 10
+
+# Experiment specific
+experiment_specific:
+  restore_between_layers: true
+  layer_analysis_mode: "sequential"
+
+# Visualization
+visualization:
+  generate_plots: true
+  plot_types:
+    - "layer_importance"
+    - "dropout_accuracy" 
