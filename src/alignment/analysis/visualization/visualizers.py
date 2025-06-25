@@ -33,7 +33,7 @@ class MetricVisualizer:
     - Distribution plots
     """
     
-    def __init__(self, style: str = "seaborn", figsize: Tuple[int, int] = (10, 6)):
+    def __init__(self, style: str = "seaborn-v0_8", figsize: Tuple[int, int] = (10, 6)):
         """
         Initialize the visualizer.
         
@@ -41,7 +41,14 @@ class MetricVisualizer:
             style: Matplotlib style to use
             figsize: Default figure size
         """
-        plt.style.use(style)
+        try:
+            plt.style.use(style)
+        except:
+            # Fallback to default if style not available
+            try:
+                plt.style.use('seaborn-v0_8-darkgrid')
+            except:
+                plt.style.use('default')
         self.figsize = figsize
         # Use seaborn colors if available, otherwise use matplotlib defaults
         if HAS_SEABORN:

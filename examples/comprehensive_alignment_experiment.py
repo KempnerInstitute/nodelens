@@ -302,15 +302,24 @@ def generate_visualizations(results: Dict[str, Any], config: Dict[str, Any]) -> 
     output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        # 1. Quick summary plot
-        if 'initial_metrics' in results:
-            summary_path = output_dir / 'summary.png'
-            plot_quick_summary(
-                results,
-                save_path=str(summary_path),
-                title=f"{config['name']} - Summary"
-            )
-            logger.info(f"Summary plot saved to {summary_path}")
+        # 1. Quick summary plot - skip if no metrics available
+        if 'initial_metrics' in results and results['initial_metrics']:
+            # Get the first metric's data for the summary plot
+            first_metric_name = list(results['initial_metrics'].keys())[0]
+            if first_metric_name in results['initial_metrics']:
+                summary_path = output_dir / 'summary.png'
+                # Convert to the expected format: layer_name -> scores
+                layer_scores = {}
+                for layer_name, score in results['initial_metrics'][first_metric_name].items():
+                    # Create a tensor-like array for consistency
+                    layer_scores[layer_name] = torch.tensor([score])
+                
+                plot_quick_summary(
+                    layer_scores,
+                    save_path=str(summary_path),
+                    title=f"{config['name']} - {first_metric_name} Summary"
+                )
+                logger.info(f"Summary plot saved to {summary_path}")
         
         # 2. Metric visualizations
         if 'initial_metrics' in results or 'final_metrics' in results:
@@ -386,12 +395,12 @@ def generate_report(results: Dict[str, Any], config: Dict[str, Any]) -> None:
     # Create report
     reporter = HTMLReporter(f"{config['name']} - Alignment Analysis Report")
     
-    # Add configuration section
-    reporter.add_section("Experiment Configuration")
-    reporter.add_code_block(yaml.dump(config, default_flow_style=False), language='yaml')
+    # Add configuration section with content
+    config_content = f"<pre>{yaml.dump(config, default_flow_style=False)}</pre>"
+    reporter.add_section("Experiment Configuration", config_content)
     
     # Add results summary
-    reporter.add_section("Results Summary")
+    summary_content = "<h3>Performance Summary</h3>"
     
     # Performance metrics
     if 'performance_history' in results:
@@ -400,21 +409,22 @@ def generate_report(results: Dict[str, Any], config: Dict[str, Any]) -> None:
             initial_acc = max(perf['val_acc'][:config['training_config']['epochs']]) if perf['val_acc'] else 0
             final_acc = max(perf['val_acc'][-config.get('fine_tune_epochs', 10):]) if len(perf['val_acc']) > config['training_config']['epochs'] else initial_acc
             
-            reporter.add_text(f"Initial Accuracy: {initial_acc:.2%}")
-            reporter.add_text(f"Final Accuracy: {final_acc:.2%}")
-            reporter.add_text(f"Accuracy Drop: {(initial_acc - final_acc):.2%}")
+            summary_content += f"<p>Initial Accuracy: {initial_acc:.2%}</p>"
+            summary_content += f"<p>Final Accuracy: {final_acc:.2%}</p>"
+            summary_content += f"<p>Accuracy Drop: {(initial_acc - final_acc):.2%}</p>"
     
     # Sparsity achieved
     if 'pruning_results' in results and 'sparsity' in results['pruning_results']:
         sparsity = results['pruning_results']['sparsity']
-        reporter.add_text(f"Overall Sparsity: {sparsity.get('overall', 0):.2%}")
+        summary_content += f"<p>Overall Sparsity: {sparsity.get('overall', 0):.2%}</p>"
+    
+    reporter.add_section("Results Summary", summary_content)
     
     # Add detailed metrics
-    reporter.add_section("Alignment Metrics Analysis")
-    
+    metrics_content = ""
     if 'analysis' in results and 'metric_changes' in results['analysis']:
         for metric_name, changes in results['analysis']['metric_changes'].items():
-            reporter.add_subsection(metric_name)
+            metrics_content += f"<h3>{metric_name}</h3>"
             
             # Create summary table
             table_data = []
@@ -426,11 +436,22 @@ def generate_report(results: Dict[str, Any], config: Dict[str, Any]) -> None:
                 })
             
             if table_data:
-                reporter.add_dataframe(table_data)
+                import pandas as pd
+                df = pd.DataFrame(table_data)
+                metrics_content += df.to_html(classes='metric-table', index=False)
+    
+    if metrics_content:
+        reporter.add_section("Alignment Metrics Analysis", metrics_content)
     
     # Add raw results
-    reporter.add_section("Raw Results")
-    reporter.add_code_block(json.dumps(results, indent=2, default=str), language='json')
+    results_content = f"<pre>{json.dumps(results, indent=2, default=str)}</pre>"
+    reporter.add_section("Raw Results", results_content)
+    
+    # Add visualizations if they exist
+    viz_dir = output_dir / 'visualizations'
+    if viz_dir.exists():
+        for img_file in viz_dir.glob('*.png'):
+            reporter.add_figure(str(img_file), caption=img_file.stem.replace('_', ' ').title())
     
     # Generate report
     report_path = output_dir / 'report.html'
@@ -486,8 +507,9 @@ def main():
         if config.get('generate_plots', True):
             generate_visualizations(results, config)
         
-        # Generate report
-        generate_report(results, config)
+        # Generate report (optional)
+        if config.get('generate_html_report', True):
+            generate_report(results, config)
         
         # Print summary
         logger.info("=" * 80)

@@ -15,6 +15,7 @@ dependencies:
   - scipy
   - scikit-learn
   - matplotlib
+  - seaborn
   - tqdm
   - ipykernel
   - natsort
