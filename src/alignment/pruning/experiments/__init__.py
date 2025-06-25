@@ -9,10 +9,13 @@ from .progressive import ProgressiveDropoutExperiment
 from .cascading_layer import CascadingLayerPruningExperiment
 from .layer_wise import LayerIsolatedPruningExperiment
 from .eigenvector_based import EigenvectorDropoutExperiment
+from .parallel_pruning_experiment import ParallelPruningExperiment, ParallelExperimentConfig
 
 __all__ = [
     'ProgressiveDropoutExperiment',
     'CascadingLayerPruningExperiment',
     'LayerIsolatedPruningExperiment',
     'EigenvectorDropoutExperiment',
+    'ParallelPruningExperiment',
+    'ParallelExperimentConfig',
 ] 
