@@ -145,7 +145,7 @@ class CascadingLayerPruningExperiment(BaseExperiment):
                 continue
             
             # Preprocess activations based on CNN mode
-            from alignment.preprocessing import preprocess_layer_activations
+            from alignment.data.processing import preprocess_layer_activations
             layer_modules = dict(self.wrapped_model._model.named_modules())
             preprocessed = preprocess_layer_activations(
                 {f"{layer_name}_input": layer_inputs},
