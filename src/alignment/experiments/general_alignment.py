@@ -478,6 +478,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
             
             results["strategies"][strategy_name] = strategy_results
         
+        # Remove pruning masks before restoring original state
+        for name, module in self.model.named_modules():
+            if hasattr(module, 'weight_mask'):
+                strategy.remove_pruning(module)
+        
         # Restore original model
         self.model.load_state_dict(original_state)
         
