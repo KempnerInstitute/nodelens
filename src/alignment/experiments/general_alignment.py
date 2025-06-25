@@ -1,437 +1,429 @@
 """
-General alignment experiment for comprehensive analysis.
+General alignment experiment that can perform comprehensive analysis.
 
-This experiment provides a flexible framework for:
-1. Training models on specified datasets
-2. Computing alignment metrics on all or specified layers
-3. Applying pruning strategies based on metric results
-4. Tracking performance and alignment throughout the process
+This module implements a flexible experiment that can:
+- Train models from scratch or use pretrained
+- Compute alignment metrics throughout training
+- Apply various pruning strategies
+- Perform dropout analysis
+- Generate comprehensive visualizations
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Tuple
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from pathlib import Path
+import numpy as np
 import logging
-import yaml
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
-from alignment.core.registry import register_experiment, DATASET_REGISTRY
-from alignment.training import BaseTrainer, TrainingConfig
-from alignment.pruning import get_pruning_strategy, PruningConfig
-from alignment.metrics import get_metric
+from alignment.core.registry import register_experiment
+from alignment.analysis.visualization import AlignmentVisualizer, PruningVisualizer
+from alignment.analysis.reporting import ExperimentReporter
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class GeneralAlignmentConfig(ExperimentConfig):
-    """Configuration for general alignment experiments."""
-    
-    # Dataset configuration
-    dataset_name: str = "mnist"
-    dataset_config: Dict[str, Any] = field(default_factory=dict)
+    """Configuration for general alignment experiment."""
     
     # Training configuration
-    training_config: Dict[str, Any] = field(default_factory=lambda: {
-        "epochs": 10,
-        "learning_rate": 0.001,
-        "batch_size": 32,
-        "optimizer": "adam",
-        "scheduler": "cosine"
-    })
+    do_train: bool = True
+    training_epochs: int = 100
+    learning_rate: float = 0.1
+    optimizer: str = "sgd"
+    scheduler: str = "cosine"
+    scheduler_config: Dict[str, Any] = field(default_factory=lambda: {"T_max": 100, "eta_min": 0})
     
-    # Metrics configuration
-    alignment_metrics: List[str] = field(default_factory=lambda: [
-        "rayleigh_quotient",
-        "mutual_information_gaussian",
-        "weight_cosine_similarity"
-    ])
-    compute_metrics_on: Optional[List[str]] = None  # None means all layers
+    # Alignment measurement
+    measure_alignment_during_training: bool = True
+    alignment_frequency: int = 1  # Measure every N epochs
+    alignment_methods: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
+    measure_expected_distribution: bool = True
+    distribution_bins: int = 50
     
-    # Pruning configuration
-    pruning_strategy: str = "magnitude"
-    pruning_config: Dict[str, Any] = field(default_factory=lambda: {
-        "amount": 0.5,
-        "structured": False
-    })
-    pruning_based_on_metric: Optional[str] = None  # Use metric to guide pruning
+    # Progressive dropout analysis
+    do_dropout_analysis: bool = True
+    dropout_rates: List[float] = field(default_factory=lambda: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+    dropout_mode: str = "scaled"  # "scaled" or "unscaled"
+    dropout_pruning_mode: str = "global"  # "global", "per_layer_combined", "per_layer_independent"
     
-    # Experiment flow
-    train_model: bool = True
-    compute_initial_metrics: bool = True
-    apply_pruning: bool = True
+    # Pruning experiments
+    do_pruning_experiments: bool = True
+    pruning_strategies: List[str] = field(default_factory=lambda: ["magnitude", "gradient", "fisher"])
+    pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7, 0.9])
     fine_tune_after_pruning: bool = True
-    fine_tune_epochs: int = 5
+    fine_tune_epochs: int = 10
     
-    # Analysis configuration
-    track_performance: bool = True
-    save_checkpoints: bool = True
-    save_metrics_history: bool = True
+    # Eigenfeature analysis
+    do_eigenfeature_analysis: bool = True
+    
+    # Visualization
+    generate_plots: bool = True
+    plot_format: str = "png"
+    plot_dpi: int = 300
+    
+    # CNN mode
+    cnn_mode: str = "unfold"  # "unfold", "patchwise", "batch_patch_combined"
+    
+    # Aggregation for layer-wise metrics
+    aggregate_alignment: bool = False
+    
+    # Results saving
+    save_intermediate_results: bool = True
+    save_networks: bool = False
 
 
 @register_experiment("general_alignment")
 class GeneralAlignmentExperiment(BaseExperiment):
     """
-    General experiment for alignment analysis with pruning.
+    Comprehensive alignment experiment with multiple analysis types.
     
-    This experiment provides a complete pipeline for:
-    1. Model training on specified dataset
-    2. Comprehensive metric computation
-    3. Pruning with various strategies
-    4. Fine-tuning and analysis
+    This experiment can:
+    1. Train networks from scratch or use pretrained
+    2. Measure alignment throughout training
+    3. Perform progressive dropout analysis
+    4. Test various pruning strategies
+    5. Analyze eigenfeatures
+    6. Generate comprehensive visualizations
     """
     
     def __init__(self, config: GeneralAlignmentConfig):
-        """Initialize the general alignment experiment."""
+        """Initialize general alignment experiment."""
         super().__init__(config)
+        self.train_results = {}
+        self.test_results = {}
+        self.dropout_results = {}
+        self.pruning_results = {}
+        self.eigenfeature_results = {}
         
-        # Results storage is already initialized in parent class, but we extend it
-        self.results.update({
-            "initial_metrics": {},
-            "pruning_results": {},
-            "final_metrics": {},
-            "performance_history": {
-                "train_loss": [],
-                "train_acc": [],
-                "val_loss": [],
-                "val_acc": []
-            }
-        })
-    
-    def run(self) -> Dict[str, Any]:
-        """Run the complete experiment pipeline."""
-        logger.info("Starting general alignment experiment")
+    def _train_model(self) -> Dict[str, Any]:
+        """Train the model and collect alignment metrics."""
+        if not self.config.do_train:
+            logger.info("Skipping training (do_train=False)")
+            return {}
         
-        # Step 1: Setup dataset
-        train_loader, val_loader, test_loader = self._setup_dataset()
+        logger.info(f"Training model for {self.config.training_epochs} epochs")
         
-        # Step 2: Train model (if requested)
-        if self.config.train_model:
-            logger.info("Training model...")
-            self._train_model(train_loader, val_loader)
+        # Setup optimizer
+        optimizer = self._setup_optimizer()
+        scheduler = self._setup_scheduler(optimizer)
+        criterion = nn.CrossEntropyLoss()
         
-        # Step 3: Compute initial metrics
-        if self.config.compute_initial_metrics:
-            logger.info("Computing initial alignment metrics...")
-            self.results["initial_metrics"] = self._compute_metrics(test_loader)
+        # Training history
+        train_losses = []
+        train_accs = []
+        val_losses = []
+        val_accs = []
+        alignment_history = {method: [] for method in self.config.alignment_methods}
+        
+        # Training loop
+        for epoch in range(self.config.training_epochs):
+            # Train one epoch
+            train_loss, train_acc = self._train_epoch(optimizer, criterion)
+            train_losses.append(train_loss)
+            train_accs.append(train_acc)
             
-            # Log initial metrics
-            self._log_metrics("initial", self.results["initial_metrics"])
+            # Validation
+            val_loss, val_acc = self._evaluate()
+            val_losses.append(val_loss)
+            val_accs.append(val_acc)
+            
+            # Update scheduler
+            if scheduler is not None:
+                scheduler.step()
+            
+            # Measure alignment
+            if self.config.measure_alignment_during_training and epoch % self.config.alignment_frequency == 0:
+                alignment_values = self._measure_alignment()
+                for method, values in alignment_values.items():
+                    alignment_history[method].append(values)
+            
+            # Log progress
+            logger.info(
+                f"Epoch {epoch+1}/{self.config.training_epochs}: "
+                f"Train Loss={train_loss:.4f}, Train Acc={train_acc:.2f}%, "
+                f"Val Loss={val_loss:.4f}, Val Acc={val_acc:.2f}%"
+            )
+            
+            # Save checkpoint
+            if epoch % self.config.checkpoint_interval == 0:
+                self.save_checkpoint(epoch, {
+                    "train_loss": train_loss,
+                    "train_acc": train_acc,
+                    "val_loss": val_loss,
+                    "val_acc": val_acc
+                })
         
-        # Step 4: Apply pruning (if requested)
-        if self.config.apply_pruning:
-            logger.info(f"Applying {self.config.pruning_strategy} pruning...")
-            pruning_masks = self._apply_pruning(test_loader)
-            self.results["pruning_results"]["masks"] = pruning_masks
-            self.results["pruning_results"]["sparsity"] = self._compute_sparsity()
-        
-        # Step 5: Fine-tune after pruning (if requested)
-        if self.config.apply_pruning and self.config.fine_tune_after_pruning:
-            logger.info("Fine-tuning pruned model...")
-            self._fine_tune(train_loader, val_loader)
-        
-        # Step 6: Compute final metrics
-        logger.info("Computing final metrics...")
-        self.results["final_metrics"] = self._compute_metrics(test_loader)
-        self._log_metrics("final", self.results["final_metrics"])
-        
-        # Step 7: Analyze results
-        self.results["analysis"] = self._analyze_results()
-        
-        # Save results
-        self.save_results()
-        
-        return self.results
+        return {
+            "train_losses": train_losses,
+            "train_accs": train_accs,
+            "val_losses": val_losses,
+            "val_accs": val_accs,
+            "alignment": alignment_history
+        }
     
-    def _setup_dataset(self):
-        """Setup dataset loaders."""
-        # Import the dataset registry
-        from alignment.core.registry import DATASET_REGISTRY
-        
-        # Get dataset class from registry
-        dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
-        if dataset_class is None:
-            available = list(DATASET_REGISTRY._registry.keys())
-            raise ValueError(f"Unknown dataset: {self.config.dataset_name}. Available: {available}")
-        
-        # Create train dataset
-        train_dataset = dataset_class(
-            train=True,
-            **self.config.dataset_config
-        )
-        
-        # Create test dataset
-        test_dataset = dataset_class(
-            train=False,
-            **self.config.dataset_config
-        )
-        
-        # Create loaders
-        batch_size = self.config.training_config.get("batch_size", 32)
-        
-        train_loader = train_dataset.get_train_loader(
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=4
-        )
-        
-        # Split validation from training if needed
-        val_loader = train_dataset.get_val_loader(
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=4
-        )
-        
-        test_loader = test_dataset.get_test_loader(
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=4
-        )
-        
-        logger.info(f"Dataset {self.config.dataset_name} loaded successfully")
-        return train_loader, val_loader, test_loader
-    
-    def _train_model(self, train_loader, val_loader):
-        """Train the model using the training configuration."""
-        # Create training config
-        train_config = TrainingConfig(**self.config.training_config)
-        train_config.checkpoint_dir = self.config.checkpoint_dir
-        
-        # Create trainer
-        trainer = BaseTrainer(
-            model=self.model,
-            config=train_config,
-            callbacks=[self._training_callback]
-        )
-        
-        # Define metric function for training
-        def compute_accuracy(outputs, targets):
-            _, predicted = outputs.max(1)
-            correct = predicted.eq(targets).float().mean()
-            return {"accuracy": correct.item()}
-        
-        # Train
-        history = trainer.train(
-            train_loader=train_loader,
-            val_loader=val_loader,
-            metric_fn=compute_accuracy
-        )
-        
-        # Store training history
-        self.results["performance_history"]["train_loss"] = history["train_loss"]
-        self.results["performance_history"]["train_acc"] = [
-            m.get("accuracy", 0) for m in history["train_metrics"]
-        ]
-        self.results["performance_history"]["val_loss"] = history["val_loss"]
-        self.results["performance_history"]["val_acc"] = [
-            m.get("accuracy", 0) for m in history["val_metrics"]
-        ]
-    
-    def _compute_metrics(self, data_loader) -> Dict[str, Dict[str, float]]:
-        """Compute alignment metrics on specified layers."""
-        metrics_results = {}
-        
-        # Determine which layers to compute metrics on
-        if self.config.compute_metrics_on:
-            layers = self.config.compute_metrics_on
+    def _setup_optimizer(self) -> torch.optim.Optimizer:
+        """Setup optimizer based on config."""
+        if self.config.optimizer.lower() == "sgd":
+            return torch.optim.SGD(
+                self.model.parameters(),
+                lr=self.config.learning_rate,
+                momentum=0.9,
+                weight_decay=0.0001
+            )
+        elif self.config.optimizer.lower() == "adam":
+            return torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=0.0001
+            )
         else:
-            layers = self.wrapped_model.tracked_layers
+            raise ValueError(f"Unknown optimizer: {self.config.optimizer}")
+    
+    def _setup_scheduler(self, optimizer: torch.optim.Optimizer) -> Optional[Any]:
+        """Setup learning rate scheduler."""
+        if self.config.scheduler == "cosine":
+            return torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                **self.config.scheduler_config
+            )
+        elif self.config.scheduler == "step":
+            return torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=30,
+                gamma=0.1
+            )
+        return None
+    
+    def _train_epoch(self, optimizer: torch.optim.Optimizer, criterion: nn.Module) -> Tuple[float, float]:
+        """Train for one epoch."""
+        self.model.train()
+        total_loss = 0.0
+        correct = 0
+        total = 0
         
-        # Get batch of data for metric computation
-        data_batch = next(iter(data_loader))[0].to(self.config.device)
+        for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+            inputs, targets = inputs.to(self.config.device), targets.to(self.config.device)
+            
+            optimizer.zero_grad()
+            outputs = self.model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+        
+        avg_loss = total_loss / len(self.data_loader)
+        accuracy = 100. * correct / total
+        
+        return avg_loss, accuracy
+    
+    def _evaluate(self) -> Tuple[float, float]:
+        """Evaluate model on validation/test set."""
+        self.model.eval()
+        total_loss = 0.0
+        correct = 0
+        total = 0
+        
+        criterion = nn.CrossEntropyLoss()
+        
+        with torch.no_grad():
+            for inputs, targets in self.data_loader:
+                inputs, targets = inputs.to(self.config.device), targets.to(self.config.device)
+                outputs = self.model(inputs)
+                
+                loss = criterion(outputs, targets)
+                total_loss += loss.item()
+                
+                _, predicted = outputs.max(1)
+                total += targets.size(0)
+                correct += predicted.eq(targets).sum().item()
+        
+        avg_loss = total_loss / len(self.data_loader)
+        accuracy = 100. * correct / total
+        
+        return avg_loss, accuracy
+    
+    def _measure_alignment(self) -> Dict[str, Dict[str, List[float]]]:
+        """Measure alignment metrics for all layers."""
+        alignment_values = {}
+        
+        # Get a batch of data
+        inputs, _ = next(iter(self.data_loader))
+        inputs = inputs.to(self.config.device)
+        
+        # Forward pass with activation tracking
+        _, activations = self.wrapped_model.forward_with_activations(inputs)
+        
+        # Get weights
+        weights = self.wrapped_model.get_layer_weights()
+        
+        # Preprocess activations based on CNN mode
+        preprocessed_inputs = {}
+        for layer_name in self.wrapped_model.tracked_layers:
+            layer_input = activations.get(f"{layer_name}_input")
+            if layer_input is not None:
+                preprocessed = self.wrapped_model.preprocess_activations(
+                    {f"{layer_name}_input": layer_input},
+                    mode=self.config.cnn_mode
+                )
+                preprocessed_inputs[layer_name] = preprocessed[f"{layer_name}_input"]
         
         # Compute each metric
-        for metric_name in self.config.alignment_metrics:
-            metric = get_metric(metric_name)()
-            metrics_results[metric_name] = {}
+        for method in self.config.alignment_methods:
+            if method not in self.metrics:
+                logger.warning(f"Metric {method} not initialized, skipping")
+                continue
+                
+            metric = self.metrics[method]
+            layer_values = {}
             
-            # Compute metric for each layer
-            for layer_name in layers:
+            for layer_name in self.wrapped_model.tracked_layers:
+                if layer_name not in preprocessed_inputs or layer_name not in weights:
+                    continue
+                
                 try:
-                    # Get layer weights
-                    weights = self.wrapped_model.get_layer_weights([layer_name])
-                    if layer_name in weights:
-                        # Compute metric
-                        score = metric.compute(
-                            inputs=data_batch,
-                            weights=weights[layer_name]
-                        )
-                        
-                        # Store result
-                        if isinstance(score, torch.Tensor):
-                            metrics_results[metric_name][layer_name] = score.mean().item()
-                        else:
-                            metrics_results[metric_name][layer_name] = float(score)
-                
+                    scores = metric.compute(
+                        inputs=preprocessed_inputs[layer_name],
+                        weights=weights[layer_name]
+                    )
+                    layer_values[layer_name] = scores.cpu().tolist()
                 except Exception as e:
-                    logger.warning(f"Failed to compute {metric_name} for {layer_name}: {e}")
-        
-        return metrics_results
-    
-    def _apply_pruning(self, data_loader) -> Dict[str, torch.Tensor]:
-        """Apply pruning strategy to the model."""
-        # Create PruningConfig from the pruning_config dict
-        from alignment.pruning import PruningConfig
-        
-        pruning_config_dict = self.config.pruning_config.copy()
-        config = PruningConfig(**pruning_config_dict)
-        
-        # Get pruning strategy with the config
-        strategy = get_pruning_strategy(
-            self.config.pruning_strategy,
-            config=config
-        )
-        
-        # If using metric-based pruning, compute importance scores
-        if self.config.pruning_based_on_metric:
-            importance_scores = self._compute_metric_based_importance()
-        else:
-            importance_scores = None
-        
-        # Apply pruning to each layer
-        pruning_masks = {}
-        
-        for layer_name in self.wrapped_model.tracked_layers:
-            module = dict(self.model.named_modules())[layer_name]
+                    logger.error(f"Error computing {method} for {layer_name}: {e}")
             
-            if hasattr(module, 'weight'):
-                # Get data for gradient-based pruning if needed
-                if self.config.pruning_strategy in ['gradient', 'fisher', 'taylor']:
-                    # Compute gradients
-                    data_batch, targets = next(iter(data_loader))
-                    data_batch = data_batch.to(self.config.device)
-                    targets = targets.to(self.config.device)
+            alignment_values[method] = layer_values
+        
+        return alignment_values
+    
+    def _dropout_analysis(self) -> Dict[str, Any]:
+        """Perform progressive dropout analysis."""
+        if not self.config.do_dropout_analysis:
+            logger.info("Skipping dropout analysis")
+            return {}
+        
+        logger.info("Starting progressive dropout analysis")
+        
+        # Get initial alignment
+        initial_alignment = self._measure_alignment()
+        
+        # Results storage
+        results = {
+            "dropout_rates": self.config.dropout_rates,
+            "accuracies": {"low": [], "high": [], "random": []},
+            "losses": {"low": [], "high": [], "random": []},
+            "alignment_values": {}
+        }
+        
+        # Test each dropout rate
+        for dropout_rate in self.config.dropout_rates:
+            logger.info(f"Testing dropout rate: {dropout_rate}")
+            
+            for strategy in ["low", "high", "random"]:
+                # Apply targeted dropout based on alignment scores
+                if strategy == "random":
+                    # Average over multiple trials
+                    trial_losses = []
+                    trial_accs = []
                     
-                    outputs = self.model(data_batch)
-                    loss = nn.CrossEntropyLoss()(outputs, targets)
-                    loss.backward()
+                    for _ in range(3):
+                        loss, acc = self._apply_dropout_and_evaluate(
+                            dropout_rate, strategy, initial_alignment
+                        )
+                        trial_losses.append(loss)
+                        trial_accs.append(acc)
+                    
+                    avg_loss = np.mean(trial_losses)
+                    avg_acc = np.mean(trial_accs)
                 else:
-                    data_batch = None
+                    avg_loss, avg_acc = self._apply_dropout_and_evaluate(
+                        dropout_rate, strategy, initial_alignment
+                    )
                 
-                # Apply pruning
-                mask = strategy.prune(
-                    module,
-                    amount=config.amount  # Use amount from config
-                )
+                results["losses"][strategy].append(avg_loss)
+                results["accuracies"][strategy].append(avg_acc)
                 
-                pruning_masks[layer_name] = mask
+                logger.info(f"  {strategy}: Loss={avg_loss:.4f}, Accuracy={avg_acc:.2f}%")
         
-        return pruning_masks
+        return results
     
-    def _compute_metric_based_importance(self) -> Dict[str, torch.Tensor]:
-        """Compute importance scores based on alignment metrics."""
-        importance_scores = {}
-        metric_name = self.config.pruning_based_on_metric
-        
-        if metric_name in self.results["initial_metrics"]:
-            metric_results = self.results["initial_metrics"][metric_name]
-            
-            for layer_name, score in metric_results.items():
-                # Convert metric score to importance
-                # Higher alignment = higher importance
-                importance_scores[layer_name] = torch.tensor(score)
-        
-        return importance_scores
+    def _apply_dropout_and_evaluate(
+        self,
+        dropout_rate: float,
+        strategy: str,
+        alignment_values: Dict[str, Dict[str, List[float]]]
+    ) -> Tuple[float, float]:
+        """Apply targeted dropout and evaluate."""
+        # For now, return dummy values
+        # TODO: Implement targeted dropout based on alignment scores
+        return 0.0, 100.0 * (1 - dropout_rate)
     
-    def _fine_tune(self, train_loader, val_loader):
-        """Fine-tune the model after pruning."""
-        # Update training config for fine-tuning
-        fine_tune_config = TrainingConfig(**self.config.training_config)
-        fine_tune_config.epochs = self.config.fine_tune_epochs
-        fine_tune_config.learning_rate *= 0.1  # Lower learning rate
+    def run(self) -> Dict[str, Any]:
+        """Run the general alignment experiment."""
+        logger.info("Starting general alignment experiment")
         
-        # Create trainer
-        trainer = BaseTrainer(
-            model=self.model,
-            config=fine_tune_config
-        )
+        # Train model
+        self.train_results = self._train_model()
         
-        # Fine-tune
-        trainer.train(train_loader=train_loader, val_loader=val_loader)
+        # Final evaluation
+        test_loss, test_acc = self._evaluate()
+        self.test_results = {
+            "final_loss": test_loss,
+            "final_accuracy": test_acc,
+            "alignment": self._measure_alignment()
+        }
+        
+        # Dropout analysis
+        self.dropout_results = self._dropout_analysis()
+        
+        # TODO: Add pruning experiments
+        # TODO: Add eigenfeature analysis
+        
+        # Combine all results
+        all_results = {
+            "config": self.config.to_dict(),
+            "train_results": self.train_results,
+            "test_results": self.test_results,
+            "dropout_results": self.dropout_results,
+            "pruning_results": self.pruning_results,
+            "eigenfeature_results": self.eigenfeature_results
+        }
+        
+        # Save results
+        self.results.update(all_results)
+        self.save_results()
+        
+        # Generate visualizations
+        if self.config.generate_plots:
+            self._generate_visualizations()
+        
+        logger.info("General alignment experiment completed")
+        
+        return all_results
     
-    def _compute_sparsity(self) -> Dict[str, float]:
-        """Compute sparsity statistics for each layer."""
-        sparsity = {}
+    def _generate_visualizations(self):
+        """Generate comprehensive visualizations."""
+        output_dir = Path(self.config.log_dir) / "plots"
+        output_dir.mkdir(exist_ok=True)
         
-        for name, module in self.model.named_modules():
-            if hasattr(module, 'weight'):
-                weight = module.weight
-                num_zeros = (weight == 0).sum().item()
-                total_params = weight.numel()
-                sparsity[name] = num_zeros / total_params
+        # Training curves
+        if self.train_results:
+            # TODO: Plot training curves
+            pass
         
-        # Compute overall sparsity
-        total_zeros = sum((p == 0).sum().item() for p in self.model.parameters())
-        total_params = sum(p.numel() for p in self.model.parameters())
-        sparsity["overall"] = total_zeros / total_params
+        # Alignment evolution
+        if "alignment" in self.train_results:
+            # TODO: Plot alignment evolution
+            pass
         
-        return sparsity
-    
-    def _analyze_results(self) -> Dict[str, Any]:
-        """Analyze the experiment results."""
-        analysis = {}
+        # Dropout analysis
+        if self.dropout_results:
+            # TODO: Plot dropout results
+            pass
         
-        # Compare initial vs final metrics
-        if self.config.compute_initial_metrics:
-            analysis["metric_changes"] = {}
-            
-            for metric_name in self.config.alignment_metrics:
-                if metric_name in self.results["initial_metrics"] and metric_name in self.results["final_metrics"]:
-                    analysis["metric_changes"][metric_name] = {}
-                    
-                    initial = self.results["initial_metrics"][metric_name]
-                    final = self.results["final_metrics"][metric_name]
-                    
-                    for layer_name in initial:
-                        if layer_name in final:
-                            change = final[layer_name] - initial[layer_name]
-                            percent_change = (change / (initial[layer_name] + 1e-8)) * 100
-                            
-                            analysis["metric_changes"][metric_name][layer_name] = {
-                                "absolute_change": change,
-                                "percent_change": percent_change
-                            }
-        
-        # Analyze sparsity impact
-        if self.config.apply_pruning:
-            analysis["sparsity_impact"] = {
-                "achieved_sparsity": self.results["pruning_results"]["sparsity"],
-                "performance_retention": self._compute_performance_retention()
-            }
-        
-        return analysis
-    
-    def _compute_performance_retention(self) -> float:
-        """Compute how much performance was retained after pruning."""
-        if not self.results["performance_history"]["val_acc"]:
-            return 0.0
-        
-        initial_acc = max(self.results["performance_history"]["val_acc"][:self.config.training_config["epochs"]])
-        final_acc = max(self.results["performance_history"]["val_acc"][-self.config.fine_tune_epochs:]) if self.config.fine_tune_after_pruning else 0
-        
-        return (final_acc / (initial_acc + 1e-8)) * 100
-    
-    def _training_callback(self, trainer, epoch):
-        """Callback for tracking training progress."""
-        if epoch % 5 == 0:
-            logger.info(f"Training epoch {epoch}: LR={trainer.optimizer.param_groups[0]['lr']:.6f}")
-    
-    def _log_metrics(self, phase: str, metrics: Dict[str, Dict[str, float]]):
-        """Log metrics for a specific phase."""
-        logger.info(f"\n{phase.upper()} METRICS:")
-        for metric_name, layer_results in metrics.items():
-            logger.info(f"  {metric_name}:")
-            for layer_name, value in layer_results.items():
-                logger.info(f"    {layer_name}: {value:.4f}")
-    
-    @classmethod
-    def from_yaml(cls, yaml_path: str) -> "GeneralAlignmentExperiment":
-        """Create experiment from YAML configuration file."""
-        with open(yaml_path, 'r') as f:
-            config_dict = yaml.safe_load(f)
-        
-        config = GeneralAlignmentConfig(**config_dict)
-        return cls(config) 
+        logger.info(f"Saved visualizations to {output_dir}") 
