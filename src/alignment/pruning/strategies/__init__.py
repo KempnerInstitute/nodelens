@@ -27,6 +27,7 @@ from .alignment_based import (
     HybridPruning,
     GlobalAlignmentPruning,
 )
+from .cascading import CascadingAlignmentPruning
 
 __all__ = [
     # Magnitude
@@ -53,4 +54,5 @@ __all__ = [
     'AlignmentPruning',
     'HybridPruning',
     'GlobalAlignmentPruning',
+    'CascadingAlignmentPruning',
 ] 
