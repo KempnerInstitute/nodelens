@@ -384,13 +384,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         logger.info("Starting pruning experiments")
         
         # Import pruning utilities
-        from alignment.pruning.strategies import (
-            MagnitudePruning,
-            GradientPruning,
-            FisherPruning,
-            RandomPruning
-        )
-        from alignment.pruning.mask_manager import MaskManager
+        from alignment.pruning.strategies import MagnitudePruning
+        from alignment.pruning.base import PruningConfig
         
         results = {
             "strategies": {},
@@ -406,7 +401,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 "pruning_amounts": [],
                 "accuracies": [],
                 "losses": [],
-                "layer_sparsities": []
+                "sparsities": []
             }
             
             for amount in self.config.pruning_amounts:
@@ -415,34 +410,42 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 # Reset model to original state
                 self.model.load_state_dict(original_state)
                 
-                # Create pruning strategy
+                # Create pruning strategy with config
+                pruning_config = PruningConfig(
+                    amount=amount,
+                    global_pruning=True,
+                    pruning_mode='low'  # Prune low magnitude weights
+                )
+                
+                # Currently only support magnitude pruning
                 if strategy_name == "magnitude":
-                    strategy = MagnitudePruning(amount=amount, scope="global")
-                elif strategy_name == "gradient":
-                    strategy = GradientPruning(amount=amount, scope="global")
-                elif strategy_name == "fisher":
-                    strategy = FisherPruning(amount=amount, scope="global")
-                elif strategy_name == "random":
-                    strategy = RandomPruning(amount=amount, scope="global")
+                    strategy = MagnitudePruning(config=pruning_config)
                 else:
-                    logger.warning(f"Unknown pruning strategy: {strategy_name}, skipping")
+                    logger.warning(f"Only magnitude pruning is currently supported, skipping {strategy_name}")
                     continue
                 
-                # Create mask manager
-                mask_manager = MaskManager(self.model)
+                # Apply pruning to each layer
+                layer_sparsities = {}
+                for name, module in self.model.named_modules():
+                    if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
+                        # Prune this layer
+                        strategy.prune(module)
+                        # Get sparsity
+                        sparsity = strategy.get_sparsity(module)
+                        layer_sparsities[name] = sparsity
                 
-                # Compute importance scores
-                scores = strategy.compute_scores(self.model, self.data_loader)
+                # Calculate overall sparsity
+                total_params = 0
+                zero_params = 0
+                for module in self.model.modules():
+                    if hasattr(module, 'weight'):
+                        total_params += module.weight.numel()
+                        zero_params += (module.weight == 0).sum().item()
                 
-                # Apply pruning
-                masks = strategy.compute_masks(scores)
-                mask_manager.apply_masks(masks)
+                overall_sparsity = zero_params / total_params if total_params > 0 else 0
                 
                 # Evaluate pruned model
                 test_loss, test_acc = self._evaluate()
-                
-                # Compute layer-wise sparsity
-                sparsities = mask_manager.get_sparsity_by_layer()
                 
                 # Fine-tune if configured
                 if self.config.fine_tune_after_pruning:
@@ -459,9 +462,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             optimizer,
                             nn.CrossEntropyLoss()
                         )
-                        
-                        # Ensure masks remain applied during fine-tuning
-                        mask_manager.apply_masks(masks)
                     
                     # Re-evaluate after fine-tuning
                     test_loss, test_acc = self._evaluate()
@@ -471,10 +471,10 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 strategy_results["pruning_amounts"].append(amount)
                 strategy_results["accuracies"].append(test_acc)
                 strategy_results["losses"].append(test_loss)
-                strategy_results["layer_sparsities"].append(sparsities)
+                strategy_results["sparsities"].append(overall_sparsity)
                 
                 logger.info(f"    Results: Loss={test_loss:.4f}, Accuracy={test_acc:.2f}%, "
-                          f"Overall sparsity={mask_manager.get_overall_sparsity():.2%}")
+                          f"Overall sparsity={overall_sparsity:.2%}")
             
             results["strategies"][strategy_name] = strategy_results
         
