@@ -484,7 +484,7 @@ class PruningVisualizer:
             table[(0, i)].set_facecolor('#4CAF50')
             table[(0, i)].set_text_props(weight='bold', color='white')
         
-        ax.set_title('Accuracy at Key Sparsity Levels', pad=20)
+        ax.set_title('Accuracy at Key Sparsity Levels', pad=20) 
     
     def plot_weight_distribution_comparison(
         self,

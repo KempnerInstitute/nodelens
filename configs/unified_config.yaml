@@ -163,7 +163,8 @@ alignment:
 # -----------------------------------------------------------------------------
 pruning:
   # Pruning algorithms to test
-  algorithms: ["magnitude", "random"]  # Options: "magnitude", "gradient", "fisher", "random"
+  algorithms: ["magnitude"]  # Options: "magnitude", "gradient", "fisher", "alignment", "hybrid"
+  # Note: For random pruning, use selection_mode: "random" instead of algorithms: ["random"]
   
   # Selection mode: which weights to prune based on importance scores
   selection_mode: ["low", "high", "random"]   # Options: "low" (prune lowest values), "high" (prune highest values), "random"

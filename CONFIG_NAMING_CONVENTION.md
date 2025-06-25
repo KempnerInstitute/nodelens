@@ -13,14 +13,16 @@ The actual pruning method used to compute importance scores.
 
 **Options:**
 - `"magnitude"` - Prune based on weight magnitude
-- `"gradient"` - Prune based on gradient magnitude
+- `"gradient"` - Prune based on gradient magnitude  
 - `"fisher"` - Prune based on Fisher information
-- `"random"` - Random pruning (baseline)
+- `"alignment"` or `"rayleigh_quotient"` - Prune based on neuron-input alignment
+- `"hybrid"` - Combine magnitude and alignment scores
+- `"random"` - Random importance scores (Note: Consider using `selection_mode: "random"` instead)
 
 **Config:**
 ```yaml
 pruning:
-  algorithms: ["magnitude", "random"]  # Can test multiple algorithms
+  algorithms: ["magnitude", "alignment"]  # Can test multiple algorithms
 ```
 
 ### 2. **Selection Mode** (`selection_mode`)
