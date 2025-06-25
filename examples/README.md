@@ -52,22 +52,32 @@ Advanced visualization capabilities:
 python pruning_visualization_demo.py
 ```
 
-### 5. `unified_experiment.py` (471 lines)
+### 5. `unified_experiment.py` (700+ lines)
 The main experiment script that can run any configuration specified in the master config file:
 - Fully configurable via YAML
 - Supports all model architectures
 - All alignment metrics
 - Multiple pruning strategies
+- **NEW: Specialized pruning experiments (cascading, layer-isolated)**
 - Advanced training options
 - Comprehensive analysis and reporting
 
 **Usage:**
 ```bash
-# Run with master config (all options documented)
+# Standard pruning experiment
 python unified_experiment.py --config ../configs/master_config.yaml
 
-# Run quick test
-python unified_experiment.py --config ../configs/simple_test.yaml
+# Cascading layer pruning experiment
+python unified_experiment.py --config ../configs/example_specialized_pruning.yaml \
+    --pruning_experiment cascading_layer \
+    --dropout_rates 0.1 0.3 0.5 0.7 0.9 \
+    --cascade_direction forward \
+    --recompute_scores true
+
+# Layer-isolated pruning experiment  
+python unified_experiment.py --config ../configs/example_specialized_pruning.yaml \
+    --pruning_experiment layer_isolated \
+    --dropout_rates 0.1 0.3 0.5 0.7 0.9
 
 # Override parameters from command line
 python unified_experiment.py --config ../configs/simple_test.yaml \
@@ -78,16 +88,35 @@ python unified_experiment.py --config ../configs/simple_test.yaml \
     --train_model false --apply_pruning false
 ```
 
-### 6. `parallel_experiment_demo.py` (180 lines)
-Demonstrates parallel experiment capabilities:
-- Training multiple networks with different seeds
-- Statistical analysis across multiple runs
-- Parallel metric computation
-- Variance analysis
+#### Specialized Pruning Experiments
 
-**Usage:**
+The unified experiment now supports three types of pruning experiments:
+
+1. **Standard Pruning** (`--pruning_experiment standard`):
+   - Uses traditional pruning strategies (magnitude, gradient, random, etc.)
+   - Prunes to a single target sparsity level
+   - Suitable for basic pruning experiments
+
+2. **Cascading Layer Pruning** (`--pruning_experiment cascading_layer`):
+   - Prunes layers progressively (forward or backward)
+   - Earlier pruning decisions affect later layers
+   - Can recompute alignment scores after each layer
+   - Evaluates multiple dropout rates with low/high/random modes
+
+3. **Layer-Isolated Pruning** (`--pruning_experiment layer_isolated`):
+   - Prunes each layer independently based on its own scores
+   - No interaction between layers during pruning
+   - Evaluates multiple dropout rates with low/high/random modes
+
+Example command for cascading pruning:
 ```bash
-python parallel_experiment_demo.py
+python unified_experiment.py \
+    --config ../configs/example_specialized_pruning.yaml \
+    --pruning_experiment cascading_layer \
+    --dropout_rates 0.0 0.2 0.4 0.6 0.8 \
+    --cascade_direction forward \
+    --recompute_scores true \
+    --name cascading_resnet_cifar10
 ```
 
 ## Configuration Files
@@ -97,6 +126,7 @@ The `configs/` directory contains example configuration files:
 - `master_config.yaml`: Complete configuration with ALL possible options documented
 - `simple_test.yaml`: Simplified config for quick testing
 - `quick_test_config.yaml`: Minimal configuration for demos
+- `example_specialized_pruning.yaml`: Example config for specialized pruning experiments
 - Other configs: Various experiment configurations
 
 ## Key Features Demonstrated
@@ -109,7 +139,11 @@ The `configs/` directory contains example configuration files:
    - Similarity metrics
    - Spectral metrics
    - Task-specific metrics
-4. **Pruning**: Multiple strategies with various modes and configurations
+4. **Pruning**: 
+   - Multiple strategies (magnitude, gradient, fisher, random, etc.)
+   - Specialized experiments (cascading, layer-isolated)
+   - Various modes (low, high, random)
+   - Configurable sparsity levels
 5. **Training**: Optimizers, schedulers, mixed precision, distributed training
 6. **Analysis**: Automatic visualizations, HTML reports, interactive dashboards
 
@@ -125,8 +159,10 @@ logs/
 │   └── visualizations/
 │       ├── metric_comparison.png
 │       ├── pruning_impact.png
-│       ├── layer_metrics/
-│       └── dashboard.html
+│       ├── performance_comparison.png  # For specialized pruning
+│       ├── layer_scores_distribution.png
+│       ├── cascading_effect.png  # For cascading experiments
+│       └── summary_statistics.json
 checkpoints/
 ├── experiment_name_step_N.pt
 results/
@@ -140,7 +176,7 @@ results/
 2. Use `standard_alignment_experiment.py` as a template for custom experiments
 3. Explore `pruning_strategies_demo.py` for advanced pruning techniques
 4. Use `unified_experiment.py` with custom configs for research
-5. Run `parallel_experiment_demo.py` for statistical analysis across seeds
+5. Try specialized pruning experiments for advanced analysis
 
 ## Requirements
 
@@ -176,6 +212,12 @@ pip install -e .[all]
    python standard_alignment_experiment.py
    ```
 
+5. **Run a specialized pruning experiment:**
+   ```bash
+   python unified_experiment.py --config ../configs/example_specialized_pruning.yaml \
+       --pruning_experiment cascading_layer --dropout_rates 0.1 0.5 0.9
+   ```
+
 ## Example Outputs
 
 ### Alignment Metrics (from quick_demo.py)
@@ -200,12 +242,18 @@ Random pruning:
   90% sparsity: 14.85% accuracy (drop: 82.80%)
 ```
 
-### Parallel Experiment Results (from parallel_experiment_demo.py)
+### Specialized Pruning Results (from unified_experiment.py)
 ```
-Training 3 networks with different seeds...
-Magnitude low mode (50% sparsity): 96.2% ± 0.8%
-Random low mode (50% sparsity): 78.4% ± 2.1%
-Statistical significance: p < 0.001
+Cascading Layer Pruning - Performance Summary:
+  low mode: Best=95.2%, Worst=72.1%
+  high mode: Best=94.8%, Worst=45.3%
+  random mode: Best=94.5%, Worst=58.7%
+
+Layer-wise active neurons (at 50% dropout):
+  conv1: 32/64 active
+  layer1.0.conv1: 28/64 active
+  layer1.0.conv2: 30/64 active
+  ...
 ```
 
 ## Key Concepts Demonstrated
@@ -213,10 +261,11 @@ Statistical significance: p < 0.001
 1. **Model Wrapping**: Track activations and weights automatically
 2. **Metric Computation**: Rayleigh quotient, mutual information, weight similarity
 3. **Pruning Strategies**: Magnitude, gradient, random with different modes
-4. **Parallel Execution**: Compute multiple pruning variations efficiently
-5. **Visualization**: Publication-ready plots and analysis grids
-6. **Statistical Analysis**: Multi-seed experiments with confidence intervals
-7. **Complete Workflow**: From training to analysis in one script
+4. **Specialized Pruning**: Cascading and layer-isolated pruning experiments
+5. **Parallel Execution**: Compute multiple pruning variations efficiently
+6. **Visualization**: Publication-ready plots and analysis grids
+7. **Statistical Analysis**: Multi-seed experiments with confidence intervals
+8. **Complete Workflow**: From training to analysis in one script
 
 ## Customization
 
@@ -225,6 +274,7 @@ Each example can be customized by modifying:
 - Dataset (MNIST, CIFAR, etc.)
 - Metrics to compute
 - Pruning strategies and sparsity levels
+- Pruning experiment types (standard, cascading, layer-isolated)
 - Visualization styles
 
 ## Example Structure
@@ -232,7 +282,6 @@ Each example can be customized by modifying:
 - **Quick demos** (`quick_demo.py`): Simple, focused demonstrations
 - **Complete experiments** (`standard_alignment_experiment.py`, `unified_experiment.py`): Full workflows
 - **Feature demos** (`pruning_strategies_demo.py`, `pruning_visualization_demo.py`): Deep dives into specific features
-- **Statistical analysis** (`parallel_experiment_demo.py`): Multi-seed experiments
 
 ## Troubleshooting
 
@@ -250,8 +299,9 @@ For GPU/CUDA errors:
 After running these examples:
 1. Modify `standard_alignment_experiment.py` for your own experiments
 2. Create custom YAML configs for `unified_experiment.py`
-3. Explore the API documentation for advanced features
-4. Create custom metrics and pruning strategies
-5. Use the experiment framework for systematic studies
+3. Experiment with different pruning experiment types
+4. Explore the API documentation for advanced features
+5. Create custom metrics and pruning strategies
+6. Use the experiment framework for systematic studies
 
 For more information, see the main documentation at `docs/`. 
