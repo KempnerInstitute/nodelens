@@ -183,14 +183,32 @@ def load_and_merge_config(args) -> Dict[str, Any]:
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     
-    # Add pruning experiment specific parameters
-    config['pruning_experiment'] = args.pruning_experiment
-    config['dropout_rates'] = args.dropout_rates
-    config['cascade_direction'] = args.cascade_direction
-    config['recompute_scores'] = args.recompute_scores
-    config['pruning_modes'] = args.pruning_modes
+    # Get pruning experiment parameters from config file first
+    # These can be overridden by command line arguments
+    if 'pruning_experiment' not in config:
+        config['pruning_experiment'] = 'standard'
+    if 'dropout_rates' not in config:
+        config['dropout_rates'] = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+    if 'cascade_direction' not in config:
+        config['cascade_direction'] = 'forward'
+    if 'recompute_scores' not in config:
+        config['recompute_scores'] = True
+    if 'pruning_modes' not in config:
+        config['pruning_modes'] = ['low', 'high', 'random']
     
-    # Apply command line overrides
+    # Override with command line arguments if provided
+    if args.pruning_experiment != 'standard':  # Only override if not default
+        config['pruning_experiment'] = args.pruning_experiment
+    if args.dropout_rates != [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]:  # Only override if not default
+        config['dropout_rates'] = args.dropout_rates
+    if args.cascade_direction != 'forward':  # Only override if not default
+        config['cascade_direction'] = args.cascade_direction
+    if args.recompute_scores is not True:  # Only override if not default
+        config['recompute_scores'] = args.recompute_scores
+    if args.pruning_modes != ['low', 'high', 'random']:  # Only override if not default
+        config['pruning_modes'] = args.pruning_modes
+    
+    # Apply other command line overrides
     overrides = vars(args)
     for key, value in overrides.items():
         if value is not None and key not in ['config', 'pruning_experiment', 'dropout_rates', 
