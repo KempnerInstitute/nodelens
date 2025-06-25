@@ -166,7 +166,7 @@ pruning:
   algorithms: ["magnitude", "random"]  # Options: "magnitude", "gradient", "fisher", "random"
   
   # Selection mode: which weights to prune based on importance scores
-  selection_mode: "low"   # Options: "low" (prune lowest values), "high" (prune highest values), "random"
+  selection_mode: ["low", "high", "random"]   # Options: "low" (prune lowest values), "high" (prune highest values), "random"
   
   # Pruning scope  
   scope: "global"         # Options: "global", "layer", "channel", "filter"
@@ -188,8 +188,7 @@ pruning:
   dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]  # Dropout rates to evaluate
   dropout_mode: "scaled"     # "scaled" or "zero"
   
-  # Multiple selection modes analysis (for comparison experiments)
-  selection_modes_to_compare: ["high", "low", "random"]  # Compare different selection modes
+  # Random selection trials
   num_random_trials: 3       # Number of trials for "random" selection mode
   
   # Structured pruning options

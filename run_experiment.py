@@ -110,7 +110,10 @@ def create_experiment_config(unified_config):
             
             config.fine_tune_after_pruning = pruning.get('fine_tune_after_pruning', pruning.get('fine_tune', True))
             config.fine_tune_epochs = pruning.get('fine_tune_epochs', 5)
-            config.pruning_selection_mode = pruning.get('selection_mode', 'low')  # Which weights to prune
+            
+            # Selection mode can be single value or list
+            selection_mode = pruning.get('selection_mode', 'low')
+            config.pruning_selection_mode = selection_mode  # Keep as-is, the experiment will handle list vs single
     else:
         # Create base ExperimentConfig for other experiment types
         config = ExperimentConfig(**base_params)
@@ -134,9 +137,9 @@ def create_experiment_config(unified_config):
     config.dropout_rates = pruning_config.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
     
     # Handle selection modes (which importance values to prune)
-    config.pruning_modes = pruning_config.get('selection_modes_to_compare', 
-                                              pruning_config.get('strategies', 
-                                              pruning_config.get('pruning_modes', ['high', 'low', 'random'])))
+    # Support both single value and list
+    selection_mode = pruning_config.get('selection_mode', 'low')
+    config.pruning_modes = selection_mode if isinstance(selection_mode, list) else [selection_mode]
     
     config.cascade_direction = unified_config.get('experiment_specific', {}).get('cascade_direction', 'forward')
     config.recompute_scores = True

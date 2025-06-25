@@ -396,133 +396,145 @@ class GeneralAlignmentExperiment(BaseExperiment):
         # Save original model state
         original_state = self.model.state_dict()
         
+        # Get selection modes to test (convert single value to list for consistency)
+        selection_modes = self.config.pruning_selection_mode
+        if not isinstance(selection_modes, list):
+            selection_modes = [selection_modes]
+        
         for strategy_name in self.config.pruning_strategies:
             logger.info(f"Testing pruning strategy: {strategy_name}")
-            strategy_results = {
-                "pruning_amounts": [],
-                "accuracies_before_finetune": [],
-                "losses_before_finetune": [],
-                "accuracies_after_finetune": [],
-                "losses_after_finetune": [],
-                "sparsities": [],
-                "weight_distributions_before": [],
-                "weight_distributions_after": []
-            }
             
-            for amount in self.config.pruning_amounts:
-                logger.info(f"  Pruning amount: {amount * 100:.0f}%")
-                
-                # Remove any existing pruning masks before resetting
-                for name, module in self.model.named_modules():
-                    if hasattr(module, 'weight_mask'):
-                        delattr(module, 'weight_mask')
-                    if hasattr(module, '_pruning_hook'):
-                        module._pruning_hook.remove()
-                        delattr(module, '_pruning_hook')
-                
-                # Reset model to original state
-                self.model.load_state_dict(original_state)
-                
-                # Create pruning strategy with config
-                # Get selection mode from config (default to 'low' for magnitude pruning)
-                selection_mode = self.config.__dict__.get('pruning_selection_mode', 'low')
-                
-                pruning_config = PruningConfig(
-                    amount=amount,
-                    global_pruning=True,
-                    pruning_mode=selection_mode  # Which weights to prune based on importance
-                )
-                
-                # Currently only support magnitude pruning
-                if strategy_name == "magnitude":
-                    strategy = MagnitudePruning(config=pruning_config)
+            # If we have multiple selection modes, test each one
+            for selection_mode in selection_modes:
+                # Create a key that includes selection mode if testing multiple
+                if len(selection_modes) > 1:
+                    result_key = f"{strategy_name}_{selection_mode}"
+                    logger.info(f"  Selection mode: {selection_mode}")
                 else:
-                    logger.warning(f"Only magnitude pruning is currently supported, skipping {strategy_name}")
-                    continue
+                    result_key = strategy_name
                 
-                # Apply pruning to each layer
-                layer_sparsities = {}
-                for name, module in self.model.named_modules():
-                    if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
-                        # Prune this layer
-                        strategy.prune(module)
-                        # Get sparsity
-                        sparsity = strategy.get_sparsity(module)
-                        layer_sparsities[name] = sparsity
+                strategy_results = {
+                    "pruning_amounts": [],
+                    "accuracies_before_finetune": [],
+                    "losses_before_finetune": [],
+                    "accuracies_after_finetune": [],
+                    "losses_after_finetune": [],
+                    "sparsities": [],
+                    "weight_distributions_before": [],
+                    "weight_distributions_after": []
+                }
                 
-                # Calculate overall sparsity
-                total_params = 0
-                zero_params = 0
-                for module in self.model.modules():
-                    if hasattr(module, 'weight'):
-                        total_params += module.weight.numel()
-                        zero_params += (module.weight == 0).sum().item()
-                
-                overall_sparsity = zero_params / total_params if total_params > 0 else 0
-                
-                # Evaluate pruned model BEFORE fine-tuning
-                test_loss_before, test_acc_before = self._evaluate()
-                logger.info(f"    Before fine-tuning: Loss={test_loss_before:.4f}, Accuracy={test_acc_before:.2f}%")
-                
-                # Capture weight distribution before fine-tuning
-                weight_dist_before = self._get_weight_distribution()
-                
-                # Store before fine-tuning results
-                strategy_results["pruning_amounts"].append(amount)
-                strategy_results["accuracies_before_finetune"].append(test_acc_before)
-                strategy_results["losses_before_finetune"].append(test_loss_before)
-                strategy_results["sparsities"].append(overall_sparsity)
-                strategy_results["weight_distributions_before"].append(weight_dist_before)
-                
-                # Fine-tune if configured
-                test_loss_after = test_loss_before
-                test_acc_after = test_acc_before
-                
-                if self.config.fine_tune_after_pruning:
-                    logger.info(f"    Fine-tuning for {self.config.fine_tune_epochs} epochs")
+                for amount in self.config.pruning_amounts:
+                    logger.info(f"    Pruning amount: {amount * 100:.0f}%")
                     
-                    # Setup optimizer for fine-tuning
-                    optimizer = torch.optim.Adam(
-                        self.model.parameters(),
-                        lr=self.config.learning_rate * 0.1  # Lower learning rate
+                    # Remove any existing pruning masks before resetting
+                    for name, module in self.model.named_modules():
+                        if hasattr(module, 'weight_mask'):
+                            delattr(module, 'weight_mask')
+                        if hasattr(module, '_pruning_hook'):
+                            module._pruning_hook.remove()
+                            delattr(module, '_pruning_hook')
+                    
+                    # Reset model to original state
+                    self.model.load_state_dict(original_state)
+                    
+                    # Create pruning strategy with config
+                    pruning_config = PruningConfig(
+                        amount=amount,
+                        global_pruning=True,
+                        pruning_mode=selection_mode  # Use current selection mode
                     )
                     
-                    # Track fine-tuning progress
-                    finetune_losses = []
-                    finetune_accs = []
+                    # Currently only support magnitude pruning
+                    if strategy_name == "magnitude":
+                        strategy = MagnitudePruning(config=pruning_config)
+                    else:
+                        logger.warning(f"Only magnitude pruning is currently supported, skipping {strategy_name}")
+                        continue
                     
-                    for epoch in range(self.config.fine_tune_epochs):
-                        train_loss, train_acc = self._train_epoch(
-                            optimizer,
-                            nn.CrossEntropyLoss()
-                        )
-                        finetune_losses.append(train_loss)
-                        finetune_accs.append(train_acc)
+                    # Apply pruning to each layer
+                    layer_sparsities = {}
+                    for name, module in self.model.named_modules():
+                        if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
+                            # Prune this layer
+                            strategy.prune(module)
+                            # Get sparsity
+                            sparsity = strategy.get_sparsity(module)
+                            layer_sparsities[name] = sparsity
+                    
+                    # Calculate overall sparsity
+                    total_params = 0
+                    zero_params = 0
+                    for module in self.model.modules():
+                        if hasattr(module, 'weight'):
+                            total_params += module.weight.numel()
+                            zero_params += (module.weight == 0).sum().item()
+                    
+                    overall_sparsity = zero_params / total_params if total_params > 0 else 0
+                    
+                    # Evaluate pruned model BEFORE fine-tuning
+                    test_loss_before, test_acc_before = self._evaluate()
+                    logger.info(f"      Before fine-tuning: Loss={test_loss_before:.4f}, Accuracy={test_acc_before:.2f}%")
+                    
+                    # Capture weight distribution before fine-tuning
+                    weight_dist_before = self._get_weight_distribution()
+                    
+                    # Store before fine-tuning results
+                    strategy_results["pruning_amounts"].append(amount)
+                    strategy_results["accuracies_before_finetune"].append(test_acc_before)
+                    strategy_results["losses_before_finetune"].append(test_loss_before)
+                    strategy_results["sparsities"].append(overall_sparsity)
+                    strategy_results["weight_distributions_before"].append(weight_dist_before)
+                    
+                    # Fine-tune if configured
+                    test_loss_after = test_loss_before
+                    test_acc_after = test_acc_before
+                    
+                    if self.config.fine_tune_after_pruning:
+                        logger.info(f"      Fine-tuning for {self.config.fine_tune_epochs} epochs")
                         
-                        if (epoch + 1) % 5 == 0:
-                            logger.info(f"      Fine-tune epoch {epoch+1}: Loss={train_loss:.4f}, Acc={train_acc:.2f}%")
+                        # Setup optimizer for fine-tuning
+                        optimizer = torch.optim.Adam(
+                            self.model.parameters(),
+                            lr=self.config.learning_rate * 0.1  # Lower learning rate
+                        )
+                        
+                        # Track fine-tuning progress
+                        finetune_losses = []
+                        finetune_accs = []
+                        
+                        for epoch in range(self.config.fine_tune_epochs):
+                            train_loss, train_acc = self._train_epoch(
+                                optimizer,
+                                nn.CrossEntropyLoss()
+                            )
+                            finetune_losses.append(train_loss)
+                            finetune_accs.append(train_acc)
+                            
+                            if (epoch + 1) % 5 == 0:
+                                logger.info(f"        Fine-tune epoch {epoch+1}: Loss={train_loss:.4f}, Acc={train_acc:.2f}%")
+                        
+                        # Re-evaluate after fine-tuning
+                        test_loss_after, test_acc_after = self._evaluate()
+                        logger.info(f"      After fine-tuning: Loss={test_loss_after:.4f}, Accuracy={test_acc_after:.2f}%")
+                        
+                        # Capture weight distribution after fine-tuning
+                        weight_dist_after = self._get_weight_distribution()
+                    else:
+                        weight_dist_after = weight_dist_before
                     
-                    # Re-evaluate after fine-tuning
-                    test_loss_after, test_acc_after = self._evaluate()
-                    logger.info(f"    After fine-tuning: Loss={test_loss_after:.4f}, Accuracy={test_acc_after:.2f}%")
+                    # Store after fine-tuning results
+                    strategy_results["accuracies_after_finetune"].append(test_acc_after)
+                    strategy_results["losses_after_finetune"].append(test_loss_after)
+                    strategy_results["weight_distributions_after"].append(weight_dist_after)
                     
-                    # Capture weight distribution after fine-tuning
-                    weight_dist_after = self._get_weight_distribution()
-                else:
-                    weight_dist_after = weight_dist_before
+                    # Log improvement
+                    acc_improvement = test_acc_after - test_acc_before
+                    logger.info(f"      Results: Sparsity={overall_sparsity:.2%}, "
+                              f"Acc before={test_acc_before:.2f}%, Acc after={test_acc_after:.2f}%, "
+                              f"Improvement={acc_improvement:+.2f}%")
                 
-                # Store after fine-tuning results
-                strategy_results["accuracies_after_finetune"].append(test_acc_after)
-                strategy_results["losses_after_finetune"].append(test_loss_after)
-                strategy_results["weight_distributions_after"].append(weight_dist_after)
-                
-                # Log improvement
-                acc_improvement = test_acc_after - test_acc_before
-                logger.info(f"    Results: Sparsity={overall_sparsity:.2%}, "
-                          f"Acc before={test_acc_before:.2f}%, Acc after={test_acc_after:.2f}%, "
-                          f"Improvement={acc_improvement:+.2f}%")
-            
-            results["strategies"][strategy_name] = strategy_results
+                results["strategies"][result_key] = strategy_results
         
         # Final cleanup: remove any remaining pruning masks
         for name, module in self.model.named_modules():
