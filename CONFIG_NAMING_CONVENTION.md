@@ -31,10 +31,18 @@ Which weights to prune based on their importance scores.
 - `"high"` - Prune weights with highest importance scores
 - `"random"` - Randomly select weights to prune
 
+**Usage:**
+- **Single mode**: Test one selection mode
+- **Multiple modes**: Test and compare different selection modes
+
 **Config:**
 ```yaml
 pruning:
-  selection_mode: "low"  # Prune least important weights
+  # Single mode
+  selection_mode: "low"
+  
+  # OR multiple modes for comparison
+  selection_mode: ["low", "high", "random"]
 ```
 
 ### 3. **Sparsity Levels** (`sparsity_levels`)
@@ -69,7 +77,8 @@ pruning:
   algorithms: ["magnitude", "gradient", "random"]
   
   # Which weights to prune (by importance)
-  selection_mode: "low"
+  # Can be a single mode or list for comparison
+  selection_mode: ["low", "high", "random"]
   
   # How much to prune
   sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
@@ -81,9 +90,6 @@ pruning:
   fine_tune_after_pruning: true
   fine_tune_epochs: 10
   fine_tune_learning_rate: 0.0001
-  
-  # For comparison experiments
-  selection_modes_to_compare: ["low", "high", "random"]
 ```
 
 ## Migration from Old Names
@@ -94,8 +100,8 @@ For backward compatibility, the system still supports old parameter names:
 |----------|----------|-------------|
 | `strategy` | `algorithms` | Pruning method(s) |
 | `amount` | `sparsity_levels` | How much to prune |
-| `strategies` | `selection_modes_to_compare` | Modes to compare |
-| `pruning_modes` | `selection_modes_to_compare` | Modes to compare |
+| `strategies` | `selection_mode` | Which weights to prune |
+| `pruning_modes` | `selection_mode` | Which weights to prune |
 | `fine_tune` | `fine_tune_after_pruning` | Whether to fine-tune |
 | `fine_tune_lr` | `fine_tune_learning_rate` | Learning rate for fine-tuning |
 
