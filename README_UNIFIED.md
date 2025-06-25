@@ -15,13 +15,13 @@ The unified experiment system can handle:
 
 ```bash
 # Run standard pruning on MNIST with MLP
-python run_unified_experiment.py --config configs/unified_config.yaml
+python run_experiment.py --config configs/unified_config.yaml
 
 # Run with specific experiment type
-python run_unified_experiment.py --config configs/examples/mnist_mlp_standard.yaml
+python run_experiment.py --config configs/examples/mnist_mlp_standard.yaml
 
 # Override parameters from command line
-python run_unified_experiment.py --config configs/unified_config.yaml \
+python run_experiment.py --config configs/unified_config.yaml \
     --experiment_type progressive_dropout \
     --device cuda:1 \
     --seed 123
@@ -117,7 +117,7 @@ Sequential layer pruning:
 ### Creating Custom Configurations
 1. Copy an example configuration
 2. Modify the relevant sections
-3. Run with: `python run_unified_experiment.py --config your_config.yaml`
+3. Run with: `python run_experiment.py --config your_config.yaml`
 
 ## Output Structure
 
@@ -149,7 +149,7 @@ The system automatically generates relevant visualizations based on experiment t
 ### Command Line Overrides
 Override any configuration parameter:
 ```bash
-python run_unified_experiment.py --config base.yaml \
+python run_experiment.py --config base.yaml \
     --dataset.name cifar10 \
     --model.name resnet18 \
     --training.epochs 50 \
