@@ -61,46 +61,44 @@ def load_config(config_path, overrides=None):
 
 def create_experiment_config(unified_config):
     """Convert unified config to experiment config object."""
-    class Config:
-        pass
+    from alignment.experiments.base import ExperimentConfig
     
-    config = Config()
+    # Build ExperimentConfig parameters
+    config_params = {
+        'name': unified_config.get('experiment_name', 'unified_experiment'),
+        'seed': unified_config.get('seed', 42),
+        'device': unified_config.get('device', 'cuda'),
+        'model_name': unified_config['model']['name'],
+        'model_config': unified_config['model'],
+        'dataset_name': unified_config['dataset']['name'],
+        'dataset_config': unified_config['dataset'],
+        'batch_size': unified_config['dataset'].get('batch_size', 128),
+        'num_workers': unified_config['dataset'].get('num_workers', 4),
+        'metrics': unified_config['alignment'].get('metrics', ['rayleigh_quotient']),
+    }
     
-    # Basic settings
-    config.name = unified_config.get('experiment_name', 'unified_experiment')
-    config.seed = unified_config.get('seed', 42)
-    config.device = unified_config.get('device', 'cuda')
-    config.output_dir = unified_config.get('results_path', 'results')
+    # Add training config if present
+    if 'training' in unified_config:
+        training = unified_config['training']
+        config_params['training_epochs'] = training.get('epochs', 10)
+        config_params['learning_rate'] = training.get('learning_rate', 0.001)
+        config_params['optimizer'] = training.get('optimizer', 'adam')
     
-    # Model
-    config.model_name = unified_config['model']['name']
-    config.model_config = unified_config['model']
+    # Create the base ExperimentConfig
+    config = ExperimentConfig(**config_params)
     
-    # Dataset
-    config.dataset_name = unified_config['dataset']['name']
-    config.dataset_config = unified_config['dataset']
-    
-    # Training
+    # Add additional attributes for compatibility with specialized experiments
     config.training_config = unified_config.get('training', {})
     config.train_model = config.training_config.get('epochs', 0) > 0
-    
-    # Metrics
-    config.alignment_metrics = unified_config['alignment'].get('metrics', ['rayleigh_quotient'])
-    
-    # Pruning
-    pruning = unified_config.get('pruning', {})
+    config.alignment_metrics = config.metrics
     config.apply_pruning = True
-    config.pruning_strategy = pruning.get('strategy', 'magnitude')
-    config.pruning_config = pruning
-    
-    # Analysis
+    config.pruning_strategy = unified_config.get('pruning', {}).get('strategy', 'magnitude')
+    config.pruning_config = unified_config.get('pruning', {})
     config.analysis_config = unified_config.get('visualization', {})
     config.eval_model = True
     config.cnn_mode = unified_config['model'].get('cnn_mode', 'unfold')
-    
-    # Additional settings for specialized experiments
     config.dropout_rates = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
-    config.pruning_modes = pruning.get('strategies', ['high', 'low', 'random'])
+    config.pruning_modes = config.pruning_config.get('strategies', ['high', 'low', 'random'])
     config.cascade_direction = unified_config.get('experiment_specific', {}).get('cascade_direction', 'forward')
     config.recompute_scores = True
     
