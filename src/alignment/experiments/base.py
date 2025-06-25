@@ -206,9 +206,17 @@ class BaseExperiment(CoreBaseExperiment):
         self.model = self.model.to(device)
         
         # Wrap model
+        wrapper_kwargs = {
+            'tracked_layers': self.config.tracked_layers
+        }
+        
+        # Add CNN mode if specified
+        if hasattr(self.config, 'cnn_mode'):
+            wrapper_kwargs['cnn_mode'] = self.config.cnn_mode
+            
         self.wrapped_model = ModelWrapper(
             self.model,
-            tracked_layers=self.config.tracked_layers
+            **wrapper_kwargs
         )
         
         logger.info(f"Initialized model: {self.config.model_name}")

@@ -34,6 +34,9 @@ class CascadingConfig(ExperimentConfig):
     exclude_classification_layer: bool = True
     recompute_scores: bool = True  # Whether to recompute scores after each layer pruning
     
+    # CNN preprocessing mode
+    cnn_mode: str = "unfold"  # "unfold", "patchwise", "batch_patch_combined"
+    
     # Training configuration
     train_before_dropout: bool = True
     training_epochs: int = 10
