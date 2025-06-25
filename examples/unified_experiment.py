@@ -382,88 +382,94 @@ def generate_specialized_pruning_report(
     viz_dir = output_dir / "visualizations"
     viz_dir.mkdir(parents=True, exist_ok=True)
     
-    # 1. Performance comparison across dropout rates
+    # Initialize visualizers
+    pruning_viz = PruningVisualizer()
+    alignment_viz = AlignmentVisualizer()
+    
+    # 1. Performance comparison across dropout rates using standard visualization
     if 'accuracies' in results and 'losses' in results:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        # Convert results to format expected by PruningVisualizer
+        # Format: strategy -> sparsity -> metric -> value
+        formatted_results = {}
         
         dropout_rates = results.get('dropout_rates', [])
         
-        # Plot accuracies
         for strategy in ['low', 'high', 'random']:
             if strategy in results['accuracies']:
-                ax1.plot(dropout_rates, results['accuracies'][strategy], 
-                        marker='o', label=f'{strategy} mode')
+                formatted_results[strategy] = {}
+                for i, rate in enumerate(dropout_rates):
+                    formatted_results[strategy][rate] = {
+                        'accuracy': results['accuracies'][strategy][i] if i < len(results['accuracies'][strategy]) else 0,
+                        'loss': results['losses'][strategy][i] if strategy in results['losses'] and i < len(results['losses'][strategy]) else 0
+                    }
         
-        ax1.set_xlabel('Dropout Rate')
-        ax1.set_ylabel('Accuracy (%)')
-        ax1.set_title(f'{experiment_type} - Accuracy vs Dropout Rate')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Plot losses
-        for strategy in ['low', 'high', 'random']:
-            if strategy in results['losses']:
-                ax2.plot(dropout_rates, results['losses'][strategy], 
-                        marker='o', label=f'{strategy} mode')
-        
-        ax2.set_xlabel('Dropout Rate')
-        ax2.set_ylabel('Loss')
-        ax2.set_title(f'{experiment_type} - Loss vs Dropout Rate')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        fig.savefig(viz_dir / "performance_comparison.png", dpi=300, bbox_inches='tight')
-        plt.close(fig)
+        # Use standard pruning performance plot
+        if formatted_results:
+            fig = pruning_viz.plot_pruning_performance(
+                formatted_results,
+                metrics=['accuracy', 'loss'],
+                title=f'{experiment_type.replace("_", " ").title()} - Performance vs Dropout Rate',
+                save_path=viz_dir / "performance_comparison.png"
+            )
+            plt.close(fig)
     
-    # 2. Layer scores visualization (if available)
-    if 'layer_scores' in results:
-        fig, ax = plt.subplots(figsize=(12, 8))
+    # 2. Layer scores visualization using AlignmentVisualizer
+    if 'layer_scores' in results and results['layer_scores']:
+        # Convert layer scores to expected format
+        layer_scores_tensors = {}
+        for layer_name, scores in results['layer_scores'].items():
+            if isinstance(scores, list) and scores:
+                # Convert list to tensor
+                layer_scores_tensors[layer_name] = torch.tensor(scores)
+            elif isinstance(scores, torch.Tensor):
+                layer_scores_tensors[layer_name] = scores
         
-        layer_scores = results['layer_scores']
-        layers = list(layer_scores.keys())
-        
-        # Create box plot of scores per layer
-        scores_data = []
-        for layer in layers:
-            scores_data.append(layer_scores[layer])
-        
-        bp = ax.boxplot(scores_data, labels=layers, patch_artist=True)
-        
-        # Color the boxes
-        for patch in bp['boxes']:
-            patch.set_facecolor('lightblue')
-        
-        ax.set_xlabel('Layer')
-        ax.set_ylabel('Alignment Score')
-        ax.set_title(f'{experiment_type} - Layer Alignment Scores Distribution')
-        ax.set_xticklabels(layers, rotation=45, ha='right')
-        ax.grid(True, alpha=0.3, axis='y')
-        
-        plt.tight_layout()
-        fig.savefig(viz_dir / "layer_scores_distribution.png", dpi=300, bbox_inches='tight')
-        plt.close(fig)
+        if layer_scores_tensors:
+            fig = alignment_viz.plot_layer_scores(
+                layer_scores_tensors,
+                title=f'{experiment_type.replace("_", " ").title()} - Layer Alignment Scores',
+                save_path=viz_dir / "layer_scores_distribution.png"
+            )
+            plt.close(fig)
     
-    # 3. Cascading-specific visualization
+    # 3. Generate comparison grid if we have enough data
+    if 'accuracies' in results and len(results.get('dropout_rates', [])) > 2:
+        # Use the formatted results from above
+        if formatted_results:
+            fig = pruning_viz.plot_pruning_comparison_grid(
+                formatted_results,
+                save_path=viz_dir / "comprehensive_comparison.png"
+            )
+            plt.close(fig)
+    
+    # 4. Specialized visualizations based on experiment type
     if experiment_type == 'cascading_layer' and 'cascade_masks' in results:
-        # Show how sparsity propagates through layers
+        # For cascading experiments, create a custom visualization showing the cascade effect
         fig, ax = plt.subplots(figsize=(12, 6))
         
         dropout_rates_with_masks = []
-        layer_active_neurons = {layer: [] for layer in results.get('layer_order', [])}
+        layer_active_neurons = {}
         
+        # Extract data from cascade masks
         for dropout_key, cascade_info in results['cascade_masks'].items():
             if 'active_neurons' in cascade_info:
-                dropout_rate = float(dropout_key.split('_')[1])
-                dropout_rates_with_masks.append(dropout_rate)
-                
-                for layer, active_count in cascade_info['active_neurons'].items():
-                    layer_active_neurons[layer].append(active_count)
+                try:
+                    dropout_rate = float(dropout_key.split('_')[1])
+                    dropout_rates_with_masks.append(dropout_rate)
+                    
+                    for layer, active_count in cascade_info['active_neurons'].items():
+                        if layer not in layer_active_neurons:
+                            layer_active_neurons[layer] = []
+                        layer_active_neurons[layer].append((dropout_rate, active_count))
+                except (ValueError, IndexError):
+                    continue
         
-        # Plot active neurons per layer at different dropout rates
-        for layer, active_counts in layer_active_neurons.items():
-            if active_counts:
-                ax.plot(dropout_rates_with_masks, active_counts, marker='o', label=layer)
+        # Sort and plot
+        for layer, data_points in layer_active_neurons.items():
+            if data_points:
+                data_points.sort(key=lambda x: x[0])
+                rates, counts = zip(*data_points)
+                ax.plot(rates, counts, marker='o', label=layer, linewidth=2)
         
         ax.set_xlabel('Dropout Rate')
         ax.set_ylabel('Active Neurons')
@@ -475,22 +481,45 @@ def generate_specialized_pruning_report(
         fig.savefig(viz_dir / "cascading_effect.png", dpi=300, bbox_inches='tight')
         plt.close(fig)
     
-    # 4. Summary statistics
+    elif experiment_type == 'layer_isolated' and 'layer_sparsities' in results:
+        # For layer-isolated experiments, use the layer-wise pruning visualization
+        # Format: strategy -> layer -> sparsity
+        layer_sparsity_data = {}
+        model_accuracy = {}
+        
+        for strategy in ['low', 'high', 'random']:
+            if strategy in results.get('layer_sparsities', {}):
+                layer_sparsity_data[strategy] = results['layer_sparsities'][strategy]
+                # Get final accuracy for this strategy
+                if 'accuracies' in results and strategy in results['accuracies']:
+                    accuracies = results['accuracies'][strategy]
+                    model_accuracy[strategy] = accuracies[-1] if accuracies else 0
+        
+        if layer_sparsity_data:
+            fig = pruning_viz.plot_layer_wise_pruning(
+                layer_sparsity_data,
+                model_accuracy,
+                save_path=viz_dir / "layer_wise_patterns.png"
+            )
+            plt.close(fig)
+    
+    # 5. Summary statistics
     summary_stats = {
         'experiment_type': experiment_type,
         'dropout_rates': results.get('dropout_rates', []),
-        'best_accuracy': {},
-        'worst_accuracy': {},
-        'accuracy_drop': {}
+        'performance_summary': {}
     }
     
     for strategy in ['low', 'high', 'random']:
         if strategy in results.get('accuracies', {}):
             accs = results['accuracies'][strategy]
             if accs:
-                summary_stats['best_accuracy'][strategy] = max(accs)
-                summary_stats['worst_accuracy'][strategy] = min(accs)
-                summary_stats['accuracy_drop'][strategy] = max(accs) - min(accs)
+                summary_stats['performance_summary'][strategy] = {
+                    'best_accuracy': max(accs),
+                    'worst_accuracy': min(accs),
+                    'accuracy_drop': max(accs) - min(accs),
+                    'final_accuracy': accs[-1]
+                }
     
     # Save summary statistics
     stats_path = output_dir / "summary_statistics.json"
@@ -498,6 +527,7 @@ def generate_specialized_pruning_report(
         json.dump(summary_stats, f, indent=2)
     
     logger.info(f"Visualizations saved to {viz_dir}")
+    logger.info(f"Summary statistics saved to {stats_path}")
 
 
 def generate_comprehensive_report(
