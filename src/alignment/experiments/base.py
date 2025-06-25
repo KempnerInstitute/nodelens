@@ -182,19 +182,22 @@ class BaseExperiment(CoreBaseExperiment):
         if hasattr(self.config, 'model') and self.config.model is not None:
             self.model = self.config.model
         else:
-            # Get model from registry or create directly
-            if hasattr(get_model, self.config.model_name):
-                model_class = get_model(self.config.model_name)
-                self.model = model_class(**self.config.model_config)
-            else:
-                # Try to get from torchvision
+            # Try to get model from registry first
+            try:
+                from alignment.core.registry import MODEL_REGISTRY
+                self.model = MODEL_REGISTRY.create(self.config.model_name, **self.config.model_config)
+                logger.info(f"Created model '{self.config.model_name}' from registry")
+            except KeyError:
+                # Model not in registry, try torchvision
                 import torchvision.models as models
                 if hasattr(models, self.config.model_name):
                     model_fn = getattr(models, self.config.model_name)
-                    self.model = model_fn(
-                        pretrained=self.config.pretrained,
-                        **self.config.model_config
-                    )
+                    # Prepare model kwargs, avoiding duplicate 'pretrained'
+                    model_kwargs = self.config.model_config.copy()
+                    if 'pretrained' not in model_kwargs:
+                        model_kwargs['pretrained'] = self.config.pretrained
+                    self.model = model_fn(**model_kwargs)
+                    logger.info(f"Created model '{self.config.model_name}' from torchvision")
                 else:
                     raise ValueError(f"Unknown model: {self.config.model_name}")
         
@@ -203,9 +206,17 @@ class BaseExperiment(CoreBaseExperiment):
         self.model = self.model.to(device)
         
         # Wrap model
+        wrapper_kwargs = {
+            'tracked_layers': self.config.tracked_layers
+        }
+        
+        # Add CNN mode if specified
+        if hasattr(self.config, 'cnn_mode'):
+            wrapper_kwargs['cnn_mode'] = self.config.cnn_mode
+            
         self.wrapped_model = ModelWrapper(
             self.model,
-            tracked_layers=self.config.tracked_layers
+            **wrapper_kwargs
         )
         
         logger.info(f"Initialized model: {self.config.model_name}")
@@ -220,11 +231,13 @@ class BaseExperiment(CoreBaseExperiment):
         logger.info(f"Creating dataset with data_path: {self.config.data_path}")
         logger.info(f"Dataset config: {self.config.dataset_config}")
         
+        # Prepare dataset kwargs, avoiding duplicate 'data_path'
+        dataset_kwargs = self.config.dataset_config.copy()
+        if self.config.data_path is not None and 'data_path' not in dataset_kwargs:
+            dataset_kwargs['data_path'] = self.config.data_path
+        
         # Create dataset
-        self.dataset = dataset_class(
-            data_path=self.config.data_path,
-            **self.config.dataset_config
-        )
+        self.dataset = dataset_class(**dataset_kwargs)
         
         # Create data loader
         self.data_loader = create_distributed_loader(
@@ -389,10 +402,26 @@ class BaseExperiment(CoreBaseExperiment):
         self.results['end_time'] = datetime.now().isoformat()
         results_path = Path(self.config.log_dir) / f"{self.config.name}_results.json"
         
+        # Convert tensors to lists for JSON serialization
+        serializable_results = self._make_serializable(self.results)
+        
         with open(results_path, 'w') as f:
-            json.dump(self.results, f, indent=2)
+            json.dump(serializable_results, f, indent=2)
         
         logger.info(f"Saved results to {results_path}")
+    
+    def _make_serializable(self, obj):
+        """Convert PyTorch tensors to lists for JSON serialization."""
+        if isinstance(obj, torch.Tensor):
+            return obj.cpu().tolist()
+        elif isinstance(obj, dict):
+            return {k: self._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_serializable(v) for v in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._make_serializable(v) for v in obj)
+        else:
+            return obj
     
     def setup(self) -> None:
         """Setup the experiment (implementation of abstract method from CoreBaseExperiment)."""

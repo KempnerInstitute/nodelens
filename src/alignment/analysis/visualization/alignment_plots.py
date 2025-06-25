@@ -27,7 +27,7 @@ class AlignmentVisualizer:
     Create various visualizations for alignment metrics analysis.
     """
     
-    def __init__(self, style: str = 'seaborn', figsize: Tuple[int, int] = (10, 6)):
+    def __init__(self, style: str = 'seaborn-v0_8', figsize: Tuple[int, int] = (10, 6)):
         """
         Initialize visualizer.
         
@@ -38,7 +38,11 @@ class AlignmentVisualizer:
         try:
             plt.style.use(style)
         except:
-            plt.style.use('default')
+            # Fallback to default if style not available
+            try:
+                plt.style.use('seaborn-v0_8-darkgrid')
+            except:
+                plt.style.use('default')
         self.figsize = figsize
         if HAS_SEABORN:
             sns.set_palette("husl")
@@ -397,15 +401,17 @@ Number of layers: {len(set(layer for scores in results.get('layer_scores', {}).v
         logger.info(f"Report saved to {output_dir}")
 
 
-def plot_quick_summary(scores: Dict[str, torch.Tensor], title: str = "Alignment Scores"):
+def plot_quick_summary(scores: Dict[str, torch.Tensor], title: str = "Alignment Scores", save_path: Optional[str] = None):
     """
     Quick plotting function for immediate visualization.
     
     Args:
         scores: Dictionary of layer_name -> scores
         title: Plot title
+        save_path: Optional path to save the figure
     """
     visualizer = AlignmentVisualizer()
-    fig = visualizer.plot_layer_scores(scores, title)
-    plt.show()
+    fig = visualizer.plot_layer_scores(scores, title, save_path=save_path)
+    if not save_path:
+        plt.show()
     return fig 

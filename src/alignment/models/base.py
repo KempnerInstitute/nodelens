@@ -135,59 +135,27 @@ class BaseModelWrapper(BaseModel):
         mode: str = "flatten"
     ) -> Dict[str, torch.Tensor]:
         """
-        Preprocess activations for metric computation.
+        Basic activation preprocessing.
+        
+        For advanced preprocessing (CNN modes, attention, etc.),
+        use the preprocessing module: alignment.preprocessing.preprocess_layer_activations
         
         Args:
             activations: Raw activations from hooks
-            mode: Preprocessing mode ("flatten", "unfold", "patchwise")
+            mode: Preprocessing mode ("flatten" or "none")
             
         Returns:
             Preprocessed activations
         """
+        if mode == "none":
+            return activations
+            
         processed = {}
-        
         for name, activation in activations.items():
-            if mode == "flatten":
+            if mode == "flatten" and activation.ndim > 2:
                 # Simple flattening to [batch_size, features]
-                if activation.ndim > 2:
-                    processed[name] = activation.reshape(activation.shape[0], -1)
-                else:
-                    processed[name] = activation
-                    
-            elif mode == "unfold":
-                # For conv layers, unfold to [batch_size, features, patches]
-                if activation.ndim == 4:  # Conv2d output
-                    b, c, h, w = activation.shape
-                    # Get corresponding layer for kernel size
-                    layer_name = name.replace("_input", "") if "_input" in name else name
-                    module = dict(self._model.named_modules()).get(layer_name)
-                    
-                    if isinstance(module, nn.Conv2d):
-                        # Unfold using layer's kernel size
-                        unfolded = torch.nn.functional.unfold(
-                            activation,
-                            kernel_size=module.kernel_size,
-                            stride=module.stride,
-                            padding=module.padding
-                        )
-                        processed[name] = unfolded.permute(0, 2, 1)  # [b, patches, features]
-                    else:
-                        # Fallback to flattening
-                        processed[name] = activation.reshape(b, -1)
-                else:
-                    processed[name] = activation
-                    
-            elif mode == "patchwise":
-                # Keep spatial structure for patch-wise analysis
-                if activation.ndim == 4:  # Conv2d
-                    b, c, h, w = activation.shape
-                    # Reshape to [batch_size, channels, num_patches]
-                    processed[name] = activation.reshape(b, c, h * w)
-                else:
-                    processed[name] = activation
-                    
+                processed[name] = activation.reshape(activation.shape[0], -1)
             else:
-                # No preprocessing
                 processed[name] = activation
         
         return processed
@@ -230,6 +198,13 @@ class BaseModelWrapper(BaseModel):
             info["padding"] = module.padding
         
         return info
+    
+    def get_layer(self, layer_name: str) -> Optional[nn.Module]:
+        """Get a specific layer module by name."""
+        for name, module in self._model.named_modules():
+            if name == layer_name:
+                return module
+        return None
     
     def apply_structured_dropout(
         self,

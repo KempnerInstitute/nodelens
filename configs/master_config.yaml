@@ -1,0 +1,372 @@
+# Master Configuration File for Alignment Framework
+# This file contains ALL available parameters that can be configured
+# Each parameter is documented with its purpose and available options
+
+# ============================================================================
+# EXPERIMENT METADATA
+# ============================================================================
+name: master_experiment                    # Experiment name (used for logging)
+description: "Comprehensive alignment experiment with all configurable parameters"
+tags: [alignment, pruning, metrics]       # Tags for experiment organization
+seed: 42                                  # Random seed for reproducibility
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+model_name: resnet18                      # Options: resnet18, resnet34, resnet50, resnet101, resnet152,
+                                         #          vgg11, vgg13, vgg16, vgg19,
+                                         #          densenet121, densenet161, densenet169, densenet201,
+                                         #          mobilenet_v2, mobilenet_v3_small, mobilenet_v3_large,
+                                         #          efficientnet_b0 through efficientnet_b7,
+                                         #          vit_b_16, vit_b_32, vit_l_16, vit_l_32,
+                                         #          swin_t, swin_s, swin_b, swin_l,
+                                         #          convnext_tiny, convnext_small, convnext_base, convnext_large,
+                                         #          mlp (custom), cnn (custom), transformer (custom)
+
+model_config:                            # Model-specific configuration
+  num_classes: 10                        # Number of output classes
+  pretrained: false                      # Whether to use pretrained weights
+  # For custom models (mlp, cnn, transformer):
+  hidden_dims: [512, 256, 128]          # Hidden layer dimensions (for mlp)
+  num_layers: 3                          # Number of layers (for custom models)
+  dropout: 0.1                           # Dropout rate
+  activation: relu                       # Activation function: relu, gelu, tanh, sigmoid
+  norm_type: batch                       # Normalization: batch, layer, instance, none
+
+# ============================================================================
+# DATASET CONFIGURATION
+# ============================================================================
+dataset_name: cifar10                    # Options: mnist, fashion_mnist, cifar10, cifar100,
+                                        #          imagenet, tiny_imagenet, svhn, stl10,
+                                        #          custom (requires dataset_config)
+
+dataset_config:                          # Dataset-specific configuration
+  data_path: ./data                      # Path to dataset
+  train_split: 0.8                       # Training data split (if creating train/val from train)
+  val_split: 0.2                         # Validation data split
+  test_split: null                       # Test split (if applicable)
+  num_workers: 4                         # Number of data loading workers
+  pin_memory: true                       # Pin memory for faster GPU transfer
+  persistent_workers: true               # Keep workers alive between epochs
+  prefetch_factor: 2                     # Number of batches to prefetch per worker
+  
+  # Data augmentation
+  augmentation:
+    train:                               # Training augmentations
+      random_crop: true                  # Random cropping
+      crop_size: 32                      # Crop size (for CIFAR)
+      crop_padding: 4                    # Padding before crop
+      random_horizontal_flip: true       # Horizontal flipping
+      flip_prob: 0.5                     # Flip probability
+      color_jitter: false                # Color jittering
+      brightness: 0.2                    # Brightness jitter range
+      contrast: 0.2                      # Contrast jitter range
+      saturation: 0.2                    # Saturation jitter range
+      hue: 0.1                          # Hue jitter range
+      random_rotation: false             # Random rotation
+      rotation_degrees: 15               # Max rotation degrees
+      normalize: true                    # Normalize inputs
+      mean: [0.485, 0.456, 0.406]       # Normalization mean
+      std: [0.229, 0.224, 0.225]        # Normalization std
+    val:                                 # Validation augmentations (usually just normalize)
+      normalize: true
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training_config:
+  epochs: 100                            # Number of training epochs
+  batch_size: 128                        # Batch size
+  learning_rate: 0.1                     # Initial learning rate
+  optimizer: sgd                         # Options: sgd, adam, adamw, rmsprop, adagrad
+  optimizer_kwargs:                      # Optimizer-specific parameters
+    momentum: 0.9                        # SGD momentum
+    weight_decay: 0.0001                 # L2 regularization
+    nesterov: true                       # Nesterov momentum (SGD)
+    betas: [0.9, 0.999]                 # Adam/AdamW betas
+    eps: 1.0e-8                         # Adam/AdamW epsilon
+    amsgrad: false                       # AMSGrad variant (Adam/AdamW)
+    
+  scheduler: cosine                      # Options: none, step, multistep, exponential, cosine, 
+                                        #          polynomial, onecycle, cyclic, plateau
+  scheduler_kwargs:                      # Scheduler-specific parameters
+    # For step scheduler
+    step_size: 30                        # Epochs between LR decay
+    gamma: 0.1                          # LR decay factor
+    # For multistep scheduler
+    milestones: [30, 60, 90]            # Epochs to decay LR
+    # For exponential scheduler
+    decay_rate: 0.95                     # Exponential decay rate
+    # For cosine scheduler
+    T_max: 100                          # Maximum iterations
+    eta_min: 0                          # Minimum LR
+    # For polynomial scheduler
+    power: 0.9                          # Polynomial power
+    # For onecycle scheduler
+    max_lr: 0.1                         # Maximum LR
+    pct_start: 0.3                      # Percentage of cycle for increasing LR
+    # For plateau scheduler
+    patience: 10                        # Epochs with no improvement
+    threshold: 0.001                    # Threshold for measuring improvement
+    
+  # Loss function
+  loss_function: cross_entropy           # Options: cross_entropy, mse, mae, smooth_l1, 
+                                        #          kl_div, nll, bce, bce_with_logits
+  loss_kwargs:                          # Loss-specific parameters
+    label_smoothing: 0.0                # Label smoothing (cross_entropy)
+    reduction: mean                     # Reduction: none, mean, sum
+    
+  # Training options
+  gradient_clip: 1.0                    # Gradient clipping value (0 = no clipping)
+  gradient_accumulation_steps: 1        # Steps to accumulate gradients
+  mixed_precision: false                # Use automatic mixed precision
+  compile_model: false                  # Use torch.compile (PyTorch 2.0+)
+  compile_mode: default                 # Compile mode: default, reduce-overhead, max-autotune
+  
+  # Evaluation
+  eval_interval: 1                      # Epochs between evaluations
+  eval_on_train: false                  # Also evaluate on training set
+  early_stopping: true                  # Enable early stopping
+  early_stopping_patience: 20           # Epochs without improvement
+  early_stopping_min_delta: 0.001       # Minimum change to qualify as improvement
+  
+  # Logging
+  log_interval: 50                      # Batches between logging
+  log_grad_norm: true                   # Log gradient norms
+  log_weight_norm: true                 # Log weight norms
+  log_lr: true                         # Log learning rate
+  
+  # Device configuration
+  device: cuda                          # Device: cuda, cpu, mps
+  device_ids: [0]                       # GPU IDs for DataParallel
+  distributed: false                    # Use DistributedDataParallel
+  backend: nccl                        # Distributed backend: nccl, gloo
+
+# ============================================================================
+# ALIGNMENT METRICS CONFIGURATION
+# ============================================================================
+alignment_metrics:                       # List of metrics to compute
+  - rayleigh_quotient                   # Rayleigh quotient
+  - mutual_information                  # Mutual information
+  - canonical_correlation               # Canonical correlation analysis
+  - spectral_gap                        # Spectral gap
+  - weight_similarity                   # Weight similarity metrics
+  - activation_similarity               # Activation similarity metrics
+  - gradient_similarity                 # Gradient similarity metrics
+  - representation_similarity           # Representation similarity
+
+# CNN preprocessing mode for convolutional layers
+cnn_mode: unfold                        # Options: unfold, patchwise, batch_patch_combined
+                                       # unfold: Unfolds spatial dims and flattens (default)
+                                       # patchwise: Keeps patches separate for patch-wise computation
+                                       # batch_patch_combined: Combines batch and patch dimensions
+
+metric_configs:                         # Metric-specific configurations
+  rayleigh_quotient:
+    scale_by_norm: false                # Scale by weight norm
+    aggregation_op: mean                # Aggregation: mean, sum, max, min
+    epsilon: 1e-8                       # Numerical stability
+    
+  mutual_information:
+    method: kraskov                     # Method: kraskov, histogram, kernel
+    n_neighbors: 3                      # Neighbors for kraskov estimator
+    bins: 50                           # Bins for histogram method
+    
+  canonical_correlation:
+    n_components: 10                    # Number of CCA components
+    regularization: 0.0001              # Regularization parameter
+    
+  spectral_gap:
+    n_eigenvalues: 10                   # Number of eigenvalues to compute
+    method: power                       # Method: power, lanczos, full
+    
+  weight_similarity:
+    metric: cosine                      # Metric: cosine, euclidean, correlation
+    normalize: true                     # Normalize weights
+    
+  activation_similarity:
+    metric: cosine                      # Metric: cosine, euclidean, correlation
+    normalize: true                     # Normalize activations
+    pooling: mean                       # Pooling: mean, max, none
+    
+  gradient_similarity:
+    metric: cosine                      # Metric: cosine, euclidean, correlation
+    normalize: true                     # Normalize gradients
+    
+  representation_similarity:
+    method: cka                         # Method: cka, cca, procrustes
+    kernel: linear                      # Kernel: linear, rbf
+
+# Metric computation options
+compute_metrics_on: pruned              # When to compute: initial, trained, pruned, finetuned, all
+metric_batch_size: 256                  # Batch size for metric computation
+metric_num_samples: 1000                # Number of samples for metric computation
+force_cpu_for_large_metric_ops: false   # Force CPU for memory-intensive operations
+exclude_classification_layer: true       # Exclude final classification layer
+
+# ============================================================================
+# PRUNING CONFIGURATION
+# ============================================================================
+# Choose pruning experiment type
+pruning_experiment: standard            # Options: standard, cascading_layer, layer_isolated
+                                       # standard: Use traditional pruning strategies
+                                       # cascading_layer: Prune layers sequentially
+                                       # layer_isolated: Prune each layer independently
+
+# For specialized pruning experiments (cascading_layer, layer_isolated)
+dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]  # Dropout rates to evaluate
+pruning_modes: [low, high, random]      # Which importance scores to prune
+cascade_direction: forward              # For cascading: forward or backward
+recompute_scores: true                  # Recompute scores after each layer (cascading)
+num_random_trials: 3                    # Number of random pruning trials for averaging
+
+# For standard pruning experiment
+apply_pruning: true                     # Whether to apply pruning
+pruning_strategy: magnitude             # Strategy: magnitude, iterative_magnitude, global_magnitude,
+                                       #          gradient, fisher, momentum,
+                                       #          random, bernoulli,
+                                       #          parallel_mode, tensorized, async_parallel
+
+pruning_config:
+  amount: 0.5                          # Fraction of weights to prune (0.0-1.0)
+  structured: false                    # Whether to use structured pruning
+  pruning_mode: low                    # Mode: low (prune small), high (prune large), random
+  
+  # Iterative pruning
+  iterative_steps: 10                  # Number of pruning iterations
+  schedule: polynomial                 # Schedule: constant, linear, exponential, polynomial
+  initial_sparsity: 0.0               # Starting sparsity
+  final_sparsity: 0.9                 # Target sparsity
+  power: 3                            # Polynomial power (for polynomial schedule)
+  
+  # Fine-tuning
+  fine_tune_epochs: 10                # Epochs to fine-tune after pruning
+  fine_tune_lr: 0.001                 # Learning rate for fine-tuning
+  fine_tune_optimizer: sgd            # Optimizer for fine-tuning
+  
+  # Module selection
+  modules_to_prune: null              # List of module names to prune (null = all)
+  exclude_modules:                    # Modules to exclude from pruning
+    - classifier                      # Common exclusions
+    - fc
+    - head
+  
+  # Structured pruning options
+  granularity: weight                 # Granularity: weight, channel, filter, block
+  norm_type: l2                       # Norm for importance: l1, l2, inf
+  block_size: [4, 4]                 # Block dimensions for block pruning
+  
+  # Importance computation
+  importance_metric: magnitude        # Metric: magnitude, gradient, fisher, taylor, random
+  compute_importance_on: train        # Dataset: train, val
+  num_samples_importance: 1000        # Samples for importance estimation
+  
+  # Gradient-based pruning options
+  num_batches_gradient: 10            # Batches for gradient accumulation
+  normalize_gradients: true           # Normalize gradient magnitudes
+  
+  # Fisher pruning options
+  num_samples_fisher: 100             # Samples for Fisher estimation
+  damping: 0.0001                    # Damping factor
+
+# Pruning workflow options
+pruning_based_on_metric: false         # Use alignment metric for importance
+pruning_metric: rayleigh_quotient      # Which metric to use
+fine_tune_after_pruning: true          # Fine-tune after pruning
+evaluate_pruned_model: true            # Evaluate pruned model performance
+
+# ============================================================================
+# ANALYSIS AND VISUALIZATION
+# ============================================================================
+analysis_config:
+  # What to save
+  save_activations: true               # Save layer activations
+  save_gradients: false                # Save gradients
+  save_weights: true                   # Save model weights
+  save_predictions: true               # Save model predictions
+  
+  # When to save
+  save_interval: 10                    # Epochs between saves
+  save_best_only: true                 # Only save best model
+  
+  # Visualization
+  generate_plots: true                 # Generate visualization plots
+  plot_interval: 10                    # Epochs between plot generation
+  plot_format: png                     # Format: png, pdf, svg
+  plot_dpi: 300                       # Plot resolution
+  plot_style: seaborn-v0_8            # Matplotlib style
+  
+  # Report generation
+  generate_html_report: true           # Generate HTML report
+  generate_markdown_report: false      # Generate Markdown report
+  generate_latex_report: false         # Generate LaTeX report
+  include_code_snippets: true          # Include code in reports
+  
+  # Statistical analysis
+  compute_statistics: true             # Compute statistical summaries
+  confidence_level: 0.95              # Confidence level for intervals
+  statistical_tests: [ttest, anova]    # Statistical tests to run
+
+# ============================================================================
+# EXPERIMENT WORKFLOW
+# ============================================================================
+# Control which parts of the experiment to run
+train_model: true                      # Train the model
+compute_initial_metrics: true          # Compute metrics on initialization
+apply_pruning: true                    # Apply pruning
+fine_tune_after_pruning: true          # Fine-tune after pruning
+compute_final_metrics: true            # Compute metrics after training/pruning
+
+# ============================================================================
+# RESOURCE MANAGEMENT
+# ============================================================================
+# Memory management
+empty_cache_interval: 10               # Epochs between GPU cache clearing
+checkpoint_interval: 10                # Epochs between checkpointing
+delete_old_checkpoints: true           # Keep only best and latest
+max_checkpoints_to_keep: 3            # Maximum checkpoints to keep
+
+# Computation resources
+num_workers: 4                        # Data loading workers
+use_amp: false                        # Automatic mixed precision
+cudnn_benchmark: true                 # CuDNN auto-tuner
+cudnn_deterministic: false            # Deterministic operations
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output_dir: ./results                  # Base output directory
+checkpoint_dir: ./checkpoints          # Checkpoint directory
+log_dir: ./logs                       # Log directory
+tensorboard_dir: ./runs               # TensorBoard directory
+
+# File naming
+use_timestamp: true                   # Add timestamp to output files
+timestamp_format: "%Y%m%d_%H%M%S"     # Timestamp format
+experiment_id: null                   # Unique experiment ID (auto-generated if null)
+
+# ============================================================================
+# DISTRIBUTED TRAINING (if applicable)
+# ============================================================================
+distributed_config:
+  world_size: 1                       # Total number of processes
+  rank: 0                            # Rank of current process
+  local_rank: 0                      # Local rank for multi-GPU nodes
+  master_addr: localhost             # Master node address
+  master_port: 29500                 # Master node port
+  init_method: env://                # Initialization method
+
+# ============================================================================
+# WANDB INTEGRATION (optional)
+# ============================================================================
+wandb_config:
+  use_wandb: false                    # Enable Weights & Biases logging
+  project: alignment-experiments      # W&B project name
+  entity: null                       # W&B entity (username or team)
+  tags: []                          # W&B tags
+  notes: ""                         # W&B notes
+  mode: online                      # Mode: online, offline, disabled
+  log_model: true                   # Log model to W&B
+  log_code: true                    # Log code to W&B 

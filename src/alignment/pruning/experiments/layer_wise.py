@@ -33,6 +33,9 @@ class LayerIsolatedConfig(ExperimentConfig):
     pruning_strategy: str = "low"  # "low", "high", "random"
     exclude_classification_layer: bool = True
     
+    # CNN preprocessing mode
+    cnn_mode: str = "unfold"  # "unfold", "patchwise", "batch_patch_combined"
+    
     # Training configuration
     train_before_dropout: bool = True
     training_epochs: int = 10
@@ -102,12 +105,30 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
                 if layer_inputs is None or layer_weights is None:
                     continue
                 
+                # Preprocess activations based on CNN mode
+                from alignment.preprocessing import preprocess_layer_activations
+                layer_modules = dict(self.wrapped_model._model.named_modules())
+                preprocessed = preprocess_layer_activations(
+                    {f"{layer_name}_input": layer_inputs},
+                    layer_modules,
+                    mode=self.config.cnn_mode if hasattr(self.config, 'cnn_mode') else None
+                )
+                layer_inputs = preprocessed.get(f"{layer_name}_input", layer_inputs)
+                
                 # Compute metric scores
                 if hasattr(metric, 'requires_outputs') and metric.requires_outputs:
+                    layer_outputs = activations.get(f"{layer_name}_output")
+                    if layer_outputs is not None:
+                        preprocessed_out = preprocess_layer_activations(
+                            {f"{layer_name}_output": layer_outputs},
+                            layer_modules,
+                            mode=self.config.cnn_mode if hasattr(self.config, 'cnn_mode') else None
+                        )
+                        layer_outputs = preprocessed_out.get(f"{layer_name}_output", layer_outputs)
                     scores = metric.compute(
                         inputs=layer_inputs,
                         weights=layer_weights,
-                        outputs=activations.get(f"{layer_name}_output")
+                        outputs=layer_outputs
                     )
                 else:
                     scores = metric.compute(
@@ -148,7 +169,16 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
         }
         
         for layer_name, scores in layer_scores.items():
-            num_neurons = len(scores)
+            # Handle scalar scores (0-d tensor)
+            if scores.dim() == 0:
+                logger.warning(f"Scores for layer {layer_name} is a scalar, creating single-neuron mask")
+                for strategy in masks:
+                    masks[strategy][layer_name] = torch.ones(1, dtype=torch.bool)
+                continue
+            
+            # Get number of neurons and ensure scores is 1D
+            scores = scores.flatten()
+            num_neurons = scores.numel()
             num_drop = int(num_neurons * dropout_rate)
             
             if num_drop == 0:
@@ -207,7 +237,9 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
                 elif len(layer.weight.shape) == 4:  # Conv layer
                     # Mask output channels
                     layer.weight.data = self.original_weights[layer_name].clone()
-                    layer.weight.data[~mask] = 0
+                    # Expand mask to match weight dimensions
+                    expanded_mask = mask.view(-1, 1, 1, 1).expand_as(layer.weight)
+                    layer.weight.data[~expanded_mask] = 0
                     
                     if hasattr(layer, 'bias') and layer.bias is not None:
                         if layer_name + "_bias" not in self.original_weights:

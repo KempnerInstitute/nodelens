@@ -34,6 +34,9 @@ class CascadingConfig(ExperimentConfig):
     exclude_classification_layer: bool = True
     recompute_scores: bool = True  # Whether to recompute scores after each layer pruning
     
+    # CNN preprocessing mode
+    cnn_mode: str = "unfold"  # "unfold", "patchwise", "batch_patch_combined"
+    
     # Training configuration
     train_before_dropout: bool = True
     training_epochs: int = 10
@@ -60,7 +63,6 @@ class CascadingLayerPruningExperiment(BaseExperiment):
     def __init__(self, config: CascadingConfig):
         """Initialize cascading layer pruning experiment."""
         super().__init__(config)
-        self.config = config
         self.original_weights = {}
         self.layer_order = []
         
@@ -82,6 +84,25 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         logger.info(f"Layer pruning order ({self.config.cascade_direction}): {layers}")
         return layers
     
+    def _get_layer_type(self, layer_name: str) -> str:
+        """Get the type of a layer (linear, conv, etc.)."""
+        layer_info = self.wrapped_model.get_layer_info(layer_name)
+        return layer_info.get('type', 'unknown').lower()
+    
+    def _get_appropriate_metric(self, layer_name: str):
+        """Get the appropriate metric for a layer based on its type."""
+        layer_type = self._get_layer_type(layer_name)
+        
+        # Use patchwise RQ for conv layers if using RQ metric
+        if self.config.pruning_metric == 'rayleigh_quotient' and 'conv' in layer_type:
+            # Check if patchwise variant exists
+            if 'rq_patchwise' in self.metrics:
+                logger.debug(f"Using patchwise RQ for conv layer {layer_name}")
+                return self.metrics['rq_patchwise']
+        
+        # Default to configured metric
+        return self.metrics[self.config.pruning_metric]
+    
     def _compute_alignment_scores(
         self, 
         layer_name: str,
@@ -97,7 +118,7 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         Returns:
             Alignment scores for the layer
         """
-        metric = self.metrics[self.config.pruning_metric]
+        metric = self._get_appropriate_metric(layer_name)
         scores_list = []
         
         # Apply current masks if provided
@@ -123,12 +144,30 @@ class CascadingLayerPruningExperiment(BaseExperiment):
             if layer_inputs is None or layer_weights is None:
                 continue
             
+            # Preprocess activations based on CNN mode
+            from alignment.preprocessing import preprocess_layer_activations
+            layer_modules = dict(self.wrapped_model._model.named_modules())
+            preprocessed = preprocess_layer_activations(
+                {f"{layer_name}_input": layer_inputs},
+                layer_modules,
+                mode=self.config.cnn_mode if hasattr(self.config, 'cnn_mode') else None
+            )
+            layer_inputs = preprocessed.get(f"{layer_name}_input", layer_inputs)
+            
             # Compute metric
             if hasattr(metric, 'requires_outputs') and metric.requires_outputs:
+                layer_outputs = activations.get(f"{layer_name}_output")
+                if layer_outputs is not None:
+                    preprocessed_out = preprocess_layer_activations(
+                        {f"{layer_name}_output": layer_outputs},
+                        layer_modules,
+                        mode=self.config.cnn_mode if hasattr(self.config, 'cnn_mode') else None
+                    )
+                    layer_outputs = preprocessed_out.get(f"{layer_name}_output", layer_outputs)
                 scores = metric.compute(
                     inputs=layer_inputs,
                     weights=layer_weights,
-                    outputs=activations.get(f"{layer_name}_output")
+                    outputs=layer_outputs
                 )
             else:
                 scores = metric.compute(
@@ -166,11 +205,20 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         Returns:
             Boolean mask (True = keep, False = drop)
         """
-        num_neurons = len(scores)
+        # Handle scalar scores (0-d tensor)
+        if scores.dim() == 0:
+            logger.warning("Scores is a scalar, creating single-neuron mask")
+            return torch.ones(1, dtype=torch.bool)
+        
+        # Get number of neurons
+        num_neurons = scores.numel()
         num_drop = int(num_neurons * dropout_rate)
         
         if num_drop == 0:
             return torch.ones(num_neurons, dtype=torch.bool)
+        
+        # Ensure scores is 1D
+        scores = scores.flatten()
         
         if strategy == "low":
             # Drop lowest scoring neurons
@@ -205,10 +253,14 @@ class CascadingLayerPruningExperiment(BaseExperiment):
             # Apply mask
             if hasattr(layer, 'weight'):
                 layer.weight.data = self.original_weights[layer_name].clone()
-                if len(layer.weight.shape) == 2:  # Linear
+                if len(layer.weight.shape) == 2:  # Linear layer
+                    # Mask output neurons (rows)
                     layer.weight.data[~mask] = 0
-                elif len(layer.weight.shape) == 4:  # Conv
-                    layer.weight.data[~mask] = 0
+                elif len(layer.weight.shape) == 4:  # Conv layer
+                    # Mask output channels
+                    # Expand mask to match weight dimensions
+                    expanded_mask = mask.view(-1, 1, 1, 1).expand_as(layer.weight)
+                    layer.weight.data[~expanded_mask] = 0
                 
                 if hasattr(layer, 'bias') and layer.bias is not None:
                     layer.bias.data = self.original_weights[layer_name + "_bias"].clone()
@@ -329,7 +381,7 @@ class CascadingLayerPruningExperiment(BaseExperiment):
                 # Use initial scores
                 scores = self._compute_alignment_scores(layer_name)
             
-            scores_history[layer_name] = scores.tolist()
+            scores_history[layer_name] = scores.flatten().tolist() if scores.dim() > 0 else [scores.item()]
             
             # Create mask for this layer
             mask = self._create_layer_mask(scores, dropout_rate, strategy)

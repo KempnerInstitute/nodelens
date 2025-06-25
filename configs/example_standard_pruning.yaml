@@ -1,0 +1,128 @@
+# Example configuration for standard pruning experiment
+# Uses traditional pruning strategies (magnitude, gradient, fisher, etc.)
+
+name: standard_pruning_experiment
+description: "Standard pruning using various pruning strategies"
+tags: [pruning, standard, magnitude]
+seed: 42
+
+# ============================================================================
+# PRUNING EXPERIMENT CONFIGURATION
+# ============================================================================
+# Type of pruning experiment
+pruning_experiment: standard
+
+# Standard pruning strategy
+pruning_strategy: magnitude  # Options: magnitude, gradient, fisher, random, etc.
+
+# Pruning configuration
+pruning_config:
+  amount: 0.5  # Prune 50% of weights
+  pruning_mode: low  # Options: low, high, random
+  iterative: false  # Single-shot pruning
+  
+# For evaluating multiple sparsity levels, uncomment:
+# sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+model_name: resnet18
+model_config:
+  num_classes: 10
+  pretrained: false
+
+# ============================================================================
+# DATASET CONFIGURATION
+# ============================================================================
+dataset_name: cifar10
+dataset_config:
+  data_path: ./data
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training_config:
+  epochs: 20
+  batch_size: 128
+  learning_rate: 0.1
+  optimizer: sgd
+  optimizer_kwargs:
+    momentum: 0.9
+    weight_decay: 0.0001
+  scheduler: cosine
+  scheduler_kwargs:
+    T_max: 20
+    eta_min: 0.001
+  device: cuda
+
+# ============================================================================
+# ALIGNMENT METRICS
+# ============================================================================
+alignment_metrics:
+  - rayleigh_quotient
+  - weight_cosine_similarity
+  - layer_correlation
+  - gradient_similarity
+
+# ============================================================================
+# ANALYSIS CONFIGURATION
+# ============================================================================
+analysis_config:
+  generate_plots: true
+  plot_dpi: 300
+  generate_html_report: true
+  
+  # Specific plots for standard pruning
+  plot_types:
+    - metric_vs_sparsity
+    - layer_sparsity_distribution
+    - weight_distribution
+    - pruning_heatmap
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+checkpoint_dir: ./checkpoints
+log_dir: ./logs
+output_dir: ./results
+
+use_timestamp: true
+timestamp_format: "%Y%m%d_%H%M%S"
+verbose: true
+
+# ============================================================================
+# ALTERNATIVE CONFIGURATIONS
+# ============================================================================
+# For iterative magnitude pruning:
+# pruning_strategy: iterative_magnitude
+# pruning_config:
+#   initial_sparsity: 0.0
+#   final_sparsity: 0.9
+#   pruning_steps: 10
+#   pruning_frequency: 100  # Prune every 100 iterations
+#
+# For gradient-based pruning:
+# pruning_strategy: gradient
+# pruning_config:
+#   amount: 0.5
+#   accumulation_steps: 100  # Accumulate gradients over 100 steps
+#
+# For Fisher information pruning:
+# pruning_strategy: fisher
+# pruning_config:
+#   amount: 0.5
+#   num_samples: 1000  # Number of samples for Fisher computation
+
+# ============================================================================
+# USAGE
+# ============================================================================
+# Simply run:
+# python unified_experiment.py --config configs/example_standard_pruning.yaml
+#
+# The experiment will:
+# 1. Train the model for 20 epochs
+# 2. Apply the specified pruning strategy
+# 3. Compute all alignment metrics
+# 4. Generate comprehensive visualizations
+# 5. Create an HTML report with all results 
