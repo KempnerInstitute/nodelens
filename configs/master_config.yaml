@@ -203,6 +203,20 @@ exclude_classification_layer: true       # Exclude final classification layer
 # ============================================================================
 # PRUNING CONFIGURATION
 # ============================================================================
+# Choose pruning experiment type
+pruning_experiment: standard            # Options: standard, cascading_layer, layer_isolated
+                                       # standard: Use traditional pruning strategies
+                                       # cascading_layer: Prune layers sequentially
+                                       # layer_isolated: Prune each layer independently
+
+# For specialized pruning experiments (cascading_layer, layer_isolated)
+dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]  # Dropout rates to evaluate
+pruning_modes: [low, high, random]      # Which importance scores to prune
+cascade_direction: forward              # For cascading: forward or backward
+recompute_scores: true                  # Recompute scores after each layer (cascading)
+num_random_trials: 3                    # Number of random pruning trials for averaging
+
+# For standard pruning experiment
 apply_pruning: true                     # Whether to apply pruning
 pruning_strategy: magnitude             # Strategy: magnitude, iterative_magnitude, global_magnitude,
                                        #          gradient, fisher, momentum,
