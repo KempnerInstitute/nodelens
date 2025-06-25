@@ -5,12 +5,14 @@ name: quick_test
 description: "Quick test configuration for debugging"
 seed: 42
 
-# Model - using a small model
+# Model - using MLP for fast experiments
 model_name: mlp
 model_config:
-  num_classes: 10
+  input_dim: 784  # MNIST flattened
   hidden_dims: [256, 128]
-  dropout: 0.1
+  output_dim: 10
+  dropout_rate: 0.1
+  activation_type: relu
 
 # Dataset - using MNIST for speed
 dataset_name: mnist

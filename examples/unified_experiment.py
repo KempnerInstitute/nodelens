@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 # Add parent directory to path
 import sys
@@ -161,61 +162,50 @@ def load_and_merge_config(args) -> Dict[str, Any]:
 
 def create_experiment_config(config: Dict[str, Any]) -> GeneralAlignmentConfig:
     """Create GeneralAlignmentConfig from master config dictionary."""
-    return GeneralAlignmentConfig(
-        # Basic info
+    # Extract the parameters that GeneralAlignmentConfig actually accepts
+    experiment_config = GeneralAlignmentConfig(
+        # Basic info from ExperimentConfig
         name=config.get('name', 'unified_experiment'),
-        description=config.get('description', ''),
-        tags=config.get('tags', []),
-        seed=config.get('seed', 42),
-        
-        # Model
         model_name=config.get('model_name', 'resnet18'),
         model_config=config.get('model_config', {}),
-        pretrained=config.get('model_config', {}).get('pretrained', False),
+        checkpoint_dir=config.get('checkpoint_dir', './checkpoints'),
+        log_dir=config.get('log_dir', './logs'),
+        device=config.get('training_config', {}).get('device', 'cuda'),
+        seed=config.get('seed', 42),
         
-        # Dataset
+        # Dataset configuration
         dataset_name=config.get('dataset_name', 'cifar10'),
         dataset_config=config.get('dataset_config', {}),
-        data_path=config.get('dataset_config', {}).get('data_path', './data'),
         
-        # Training
+        # Training configuration
         training_config=config.get('training_config', {}),
         
-        # Metrics
+        # Metrics configuration
         alignment_metrics=config.get('alignment_metrics', ['rayleigh_quotient']),
-        metric_configs=config.get('metric_configs', {}),
-        compute_metrics_on=config.get('compute_metrics_on', 'pruned'),
-        metric_batch_size=config.get('metric_batch_size', 256),
-        metric_num_samples=config.get('metric_num_samples', 1000),
-        force_cpu_for_large_metric_ops=config.get('force_cpu_for_large_metric_ops', False),
-        exclude_classification_layer=config.get('exclude_classification_layer', True),
+        compute_metrics_on=config.get('compute_metrics_on'),  # None means all layers
         
-        # Pruning
+        # Pruning configuration
         pruning_strategy=config.get('pruning_strategy', 'magnitude'),
         pruning_config=config.get('pruning_config', {}),
-        pruning_based_on_metric=config.get('pruning_based_on_metric', False),
+        pruning_based_on_metric=config.get('pruning_based_on_metric'),
         
-        # Workflow
+        # Experiment flow
         train_model=config.get('train_model', True),
         compute_initial_metrics=config.get('compute_initial_metrics', True),
         apply_pruning=config.get('apply_pruning', True),
         fine_tune_after_pruning=config.get('fine_tune_after_pruning', True),
         fine_tune_epochs=config.get('pruning_config', {}).get('fine_tune_epochs', 10),
         
-        # Analysis
+        # Analysis configuration
         track_performance=config.get('analysis_config', {}).get('save_predictions', True),
         save_checkpoints=config.get('analysis_config', {}).get('save_weights', True),
         save_metrics_history=config.get('analysis_config', {}).get('save_activations', True),
-        
-        # Resources
-        device=config.get('training_config', {}).get('device', 'cuda'),
-        batch_size=config.get('training_config', {}).get('batch_size', 128),
-        num_workers=config.get('dataset_config', {}).get('num_workers', 4),
-        
-        # Paths
-        checkpoint_dir=config.get('checkpoint_dir', './checkpoints'),
-        log_dir=config.get('log_dir', './logs'),
     )
+    
+    # Store additional config parameters that might be used elsewhere
+    experiment_config._full_config = config
+    
+    return experiment_config
 
 
 def generate_comprehensive_report(

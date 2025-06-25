@@ -182,12 +182,13 @@ class BaseExperiment(CoreBaseExperiment):
         if hasattr(self.config, 'model') and self.config.model is not None:
             self.model = self.config.model
         else:
-            # Get model from registry or create directly
-            if hasattr(get_model, self.config.model_name):
-                model_class = get_model(self.config.model_name)
-                self.model = model_class(**self.config.model_config)
-            else:
-                # Try to get from torchvision
+            # Try to get model from registry first
+            try:
+                from alignment.core.registry import MODEL_REGISTRY
+                self.model = MODEL_REGISTRY.create(self.config.model_name, **self.config.model_config)
+                logger.info(f"Created model '{self.config.model_name}' from registry")
+            except KeyError:
+                # Model not in registry, try torchvision
                 import torchvision.models as models
                 if hasattr(models, self.config.model_name):
                     model_fn = getattr(models, self.config.model_name)
@@ -196,6 +197,7 @@ class BaseExperiment(CoreBaseExperiment):
                     if 'pretrained' not in model_kwargs:
                         model_kwargs['pretrained'] = self.config.pretrained
                     self.model = model_fn(**model_kwargs)
+                    logger.info(f"Created model '{self.config.model_name}' from torchvision")
                 else:
                     raise ValueError(f"Unknown model: {self.config.model_name}")
         
