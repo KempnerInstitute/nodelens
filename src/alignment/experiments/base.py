@@ -193,6 +193,9 @@ class BaseExperiment(CoreBaseExperiment):
                 model_kwargs.pop('name', None)
                 # Remove cnn_mode as it's not a model parameter but a wrapper parameter
                 model_kwargs.pop('cnn_mode', None)
+                # Remove other model-specific configs that don't apply to current model
+                model_kwargs.pop('cnn_config', None)
+                model_kwargs.pop('external_config', None)
                 
                 # Special handling for MLP model
                 if self.config.model_name.lower() == 'mlp':
