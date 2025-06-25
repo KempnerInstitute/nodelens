@@ -102,12 +102,22 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
                 if layer_inputs is None or layer_weights is None:
                     continue
                 
+                # Preprocess activations if they are from conv layers
+                # Check if this is a conv layer by examining the input shape
+                if layer_inputs.ndim > 2:
+                    # For conv layers, we need to flatten the spatial dimensions
+                    # to match the flattened weight dimensions
+                    layer_inputs = layer_inputs.reshape(layer_inputs.shape[0], -1)
+                
                 # Compute metric scores
                 if hasattr(metric, 'requires_outputs') and metric.requires_outputs:
+                    layer_outputs = activations.get(f"{layer_name}_output")
+                    if layer_outputs is not None and layer_outputs.ndim > 2:
+                        layer_outputs = layer_outputs.reshape(layer_outputs.shape[0], -1)
                     scores = metric.compute(
                         inputs=layer_inputs,
                         weights=layer_weights,
-                        outputs=activations.get(f"{layer_name}_output")
+                        outputs=layer_outputs
                     )
                 else:
                     scores = metric.compute(
