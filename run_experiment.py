@@ -114,6 +114,10 @@ def create_experiment_config(unified_config):
             # Selection mode can be single value or list
             selection_mode = pruning.get('selection_mode', 'low')
             config.pruning_selection_mode = selection_mode  # Keep as-is, the experiment will handle list vs single
+            
+            # Alignment-based pruning settings
+            config.pruning_alignment_metric = pruning.get('alignment_metric', 'rayleigh_quotient')
+            config.pruning_hybrid_alpha = pruning.get('hybrid_alpha', 0.5)
     else:
         # Create base ExperimentConfig for other experiment types
         config = ExperimentConfig(**base_params)

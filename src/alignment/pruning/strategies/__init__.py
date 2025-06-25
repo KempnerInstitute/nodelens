@@ -25,6 +25,7 @@ from .parallel import (
 from .alignment_based import (
     AlignmentPruning,
     HybridPruning,
+    GlobalAlignmentPruning,
 )
 
 __all__ = [
@@ -51,4 +52,5 @@ __all__ = [
     # Alignment-based
     'AlignmentPruning',
     'HybridPruning',
+    'GlobalAlignmentPruning',
 ] 

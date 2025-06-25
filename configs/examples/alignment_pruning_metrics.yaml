@@ -1,0 +1,80 @@
+# Example: Comparing different alignment metrics for pruning
+# This example shows how to use various alignment metrics to guide pruning decisions
+
+experiment:
+  name: "alignment_metrics_comparison"
+  seed: 42
+  device: "cuda"
+  log_level: "INFO"
+
+# Simple dataset and model for demonstration
+dataset:
+  name: "mnist"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+
+model:
+  name: "mlp"
+  output_dim: 10
+  mlp_config:
+    input_dim: 784
+    hidden_dims: [256, 128]
+    activation: "relu"
+    use_batchnorm: false
+    dropout_rate: 0.0
+
+# Training configuration
+training:
+  epochs: 5  # Quick training for demonstration
+  optimizer: "adam"
+  learning_rate: 0.001
+  scheduler: null
+
+# Pruning configuration showcasing different alignment metrics
+pruning:
+  # Test alignment pruning with different metrics
+  algorithms: ["alignment"]
+  
+  # Try different alignment metrics
+  # (You would typically run this multiple times with different metrics)
+  alignment_metric: "rayleigh_quotient"  
+  # Options:
+  # - "rayleigh_quotient": Neuron-input alignment based on variance
+  # - "weight_cosine_similarity": Cosine similarity between weight vectors  
+  # - "gradient_similarity": Alignment based on gradient information
+  # - "cka": Centered Kernel Alignment (requires output comparison)
+  # - "mutual_information_gaussian": Information shared between neurons
+  
+  # Hybrid pruning: combine alignment with magnitude
+  # algorithms: ["hybrid"]
+  # hybrid_alpha: 0.7  # 70% alignment, 30% magnitude
+  
+  # Structured pruning (prune entire neurons)
+  structured: true  # Alignment naturally works at neuron level
+  
+  # Which neurons to prune
+  selection_mode: "low"  # Remove poorly aligned neurons
+  
+  # Test at multiple sparsity levels
+  sparsity_levels: [0.2, 0.4, 0.6]
+  
+  # Fine-tuning after pruning
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 3
+
+# Metrics to compute during analysis
+metrics:
+  compute_rayleigh_quotient: true
+  compute_spectral_analysis: true
+  
+# Visualization
+visualization:
+  save_plots: true
+  plot_weight_distributions: true
+  plot_activation_patterns: true
+
+# Example: Running with different metrics
+# python run_experiment.py --config configs/examples/alignment_pruning_metrics.yaml
+# python run_experiment.py --config configs/examples/alignment_pruning_metrics.yaml --pruning.alignment_metric weight_cosine_similarity
+# python run_experiment.py --config configs/examples/alignment_pruning_metrics.yaml --pruning.alignment_metric gradient_similarity --pruning.algorithms hybrid 
