@@ -205,11 +205,20 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         Returns:
             Boolean mask (True = keep, False = drop)
         """
-        num_neurons = len(scores)
+        # Handle scalar scores (0-d tensor)
+        if scores.dim() == 0:
+            logger.warning("Scores is a scalar, creating single-neuron mask")
+            return torch.ones(1, dtype=torch.bool)
+        
+        # Get number of neurons
+        num_neurons = scores.numel()
         num_drop = int(num_neurons * dropout_rate)
         
         if num_drop == 0:
             return torch.ones(num_neurons, dtype=torch.bool)
+        
+        # Ensure scores is 1D
+        scores = scores.flatten()
         
         if strategy == "low":
             # Drop lowest scoring neurons
