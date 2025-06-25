@@ -578,6 +578,40 @@ class GeneralAlignmentExperiment(BaseExperiment):
         
         return all_results
     
+    def _get_weight_distribution(self) -> Dict[str, Dict[str, Any]]:
+        """Get weight distribution statistics for each layer."""
+        weight_stats = {}
+        
+        for name, module in self.model.named_modules():
+            if hasattr(module, 'weight'):
+                weight = module.weight.detach().cpu()
+                
+                # Get the actual weight values (not masked values)
+                if hasattr(module, 'weight_mask'):
+                    # For pruned weights, we want to see the non-zero values
+                    mask = module.weight_mask.detach().cpu()
+                    non_zero_weights = weight[mask != 0]
+                else:
+                    non_zero_weights = weight.flatten()
+                
+                if len(non_zero_weights) > 0:
+                    weight_stats[name] = {
+                        'mean': float(non_zero_weights.mean()),
+                        'std': float(non_zero_weights.std()),
+                        'min': float(non_zero_weights.min()),
+                        'max': float(non_zero_weights.max()),
+                        'percentiles': {
+                            '1': float(torch.quantile(non_zero_weights, 0.01)),
+                            '25': float(torch.quantile(non_zero_weights, 0.25)),
+                            '50': float(torch.quantile(non_zero_weights, 0.50)),
+                            '75': float(torch.quantile(non_zero_weights, 0.75)),
+                            '99': float(torch.quantile(non_zero_weights, 0.99))
+                        },
+                        'sparsity': float((weight == 0).sum()) / weight.numel() if weight.numel() > 0 else 0
+                    }
+        
+        return weight_stats
+    
     def _generate_visualizations(self):
         """Generate comprehensive visualizations."""
         output_dir = Path(self.config.log_dir) / "plots"
@@ -597,5 +631,61 @@ class GeneralAlignmentExperiment(BaseExperiment):
         if self.dropout_results:
             # TODO: Plot dropout results
             pass
+        
+        # Pruning experiments - now enhanced with before/after comparisons
+        if self.pruning_results and "strategies" in self.pruning_results:
+            from alignment.metrics.visualization.pruning_plots import PruningVisualizer
+            
+            for strategy_name, strategy_results in self.pruning_results["strategies"].items():
+                if not strategy_results.get("pruning_amounts"):
+                    continue
+                    
+                # Create visualizer
+                visualizer = PruningVisualizer()
+                
+                # 1. Plot accuracy comparison before/after fine-tuning
+                fig = visualizer.plot_accuracy_vs_sparsity_comparison(
+                    sparsities=strategy_results["sparsities"],
+                    accuracies_before=strategy_results["accuracies_before_finetune"],
+                    accuracies_after=strategy_results["accuracies_after_finetune"],
+                    title=f"{strategy_name.capitalize()} Pruning: Before vs After Fine-tuning"
+                )
+                fig.savefig(output_dir / f"pruning_{strategy_name}_accuracy_comparison.png", 
+                           dpi=self.config.plot_dpi, bbox_inches='tight')
+                plt.close(fig)
+                
+                # 2. Plot fine-tuning improvement
+                improvements = [
+                    after - before 
+                    for before, after in zip(
+                        strategy_results["accuracies_before_finetune"],
+                        strategy_results["accuracies_after_finetune"]
+                    )
+                ]
+                
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.bar(range(len(improvements)), improvements, 
+                      tick_label=[f"{s:.0%}" for s in strategy_results["sparsities"]])
+                ax.set_xlabel("Sparsity Level")
+                ax.set_ylabel("Accuracy Improvement (%)")
+                ax.set_title(f"{strategy_name.capitalize()} Pruning: Fine-tuning Improvement")
+                ax.grid(True, alpha=0.3)
+                fig.savefig(output_dir / f"pruning_{strategy_name}_improvement.png",
+                           dpi=self.config.plot_dpi, bbox_inches='tight')
+                plt.close(fig)
+                
+                # 3. Weight distribution evolution (if available)
+                if strategy_results.get("weight_distributions_before"):
+                    # Plot weight distribution changes for highest sparsity
+                    idx = -1  # Last (highest) sparsity
+                    fig = visualizer.plot_weight_distribution_comparison(
+                        weights_before=strategy_results["weight_distributions_before"][idx],
+                        weights_after=strategy_results["weight_distributions_after"][idx],
+                        sparsity=strategy_results["sparsities"][idx],
+                        title=f"{strategy_name.capitalize()} Pruning at {strategy_results['sparsities'][idx]:.0%} Sparsity"
+                    )
+                    fig.savefig(output_dir / f"pruning_{strategy_name}_weight_dist_comparison.png",
+                               dpi=self.config.plot_dpi, bbox_inches='tight')
+                    plt.close(fig)
         
         logger.info(f"Saved visualizations to {output_dir}") 
