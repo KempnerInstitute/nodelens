@@ -29,6 +29,72 @@ python run_experiment.py --config configs/unified_config.yaml \
     --seed 123
 ```
 
+## Alignment-Based Pruning
+
+The unified system now fully supports alignment-based pruning, which uses neuron-input alignment metrics to guide pruning decisions.
+
+### Key Features
+
+1. **Multiple Alignment Metrics**:
+   - `rayleigh_quotient`: Classic neuron-input alignment based on variance
+   - `mutual_information_gaussian`: Information shared between neurons and inputs
+   - `weight_cosine_similarity`: Cosine similarity between weight vectors
+   - `gradient_similarity`: Alignment based on gradient information
+   - `cka`: Centered Kernel Alignment
+
+2. **Structured Pruning by Default**: 
+   - Alignment metrics compute scores per neuron, making them naturally suited for structured pruning
+   - Removes entire neurons/channels instead of individual weights
+   - More hardware-efficient than unstructured pruning
+
+3. **Hybrid Pruning**:
+   - Combines magnitude and alignment scores
+   - Configurable weighting with `hybrid_alpha` parameter
+
+**Note on Pruning Scope**: The `scope` parameter that appeared in some configs has been removed as it was never implemented. Currently, all pruning is done per-layer. Use `structured: true` to prune entire neurons instead of individual weights.
+
+### Configuration Example
+
+```yaml
+pruning:
+  # Compare different approaches
+  algorithms: ["magnitude", "alignment", "hybrid"]
+  
+  # Specify alignment metric
+  alignment_metric: "rayleigh_quotient"
+  
+  # For hybrid: 70% alignment, 30% magnitude
+  hybrid_alpha: 0.7
+  
+  # Structured pruning (default for alignment)
+  structured: true
+  
+  # Test different selection modes
+  selection_mode: ["low", "high"]
+  
+  # Multiple sparsity levels
+  sparsity_levels: [0.3, 0.5, 0.7]
+```
+
+### Running Alignment Pruning
+
+```bash
+# Basic alignment pruning
+python run_experiment.py --config configs/unified_config.yaml \
+    --pruning.algorithms alignment \
+    --pruning.alignment_metric rayleigh_quotient
+
+# Compare multiple metrics
+python run_experiment.py --config configs/examples/mnist_alignment_pruning.yaml
+
+# Hybrid approach with custom weighting
+python run_experiment.py --config configs/unified_config.yaml \
+    --pruning.algorithms hybrid \
+    --pruning.hybrid_alpha 0.8
+```
+
+See `PRUNING_CONCEPTS.md` for detailed explanations of structured vs unstructured pruning.
+
 ## Configuration Structure
 
 All experiments are controlled through YAML configuration files. The main sections are:

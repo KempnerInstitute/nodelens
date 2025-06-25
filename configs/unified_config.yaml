@@ -4,6 +4,29 @@
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
+# Example Use Cases:
+# -----------------------------------------------------------------------------
+# 1. Standard magnitude pruning:
+#    algorithms: ["magnitude"]
+#    selection_mode: "low"
+#    structured: false
+#
+# 2. Alignment-based structured pruning:
+#    algorithms: ["alignment"]
+#    alignment_metric: "rayleigh_quotient"
+#    selection_mode: "low"
+#    structured: true  # Defaults to true for alignment anyway
+#
+# 3. Hybrid pruning comparison:
+#    algorithms: ["magnitude", "alignment", "hybrid"]
+#    alignment_metric: "weight_cosine_similarity"
+#    hybrid_alpha: 0.7
+#    selection_mode: ["low", "high"]
+#    sparsity_levels: [0.3, 0.5, 0.7]
+#
+# See configs/examples/ for more specific examples
+
+# -----------------------------------------------------------------------------
 # I. Experiment Metadata & Core Execution
 # -----------------------------------------------------------------------------
 experiment_name: "mnist_mlp_pruning_experiment"
@@ -162,42 +185,101 @@ alignment:
 # VI. Pruning Configuration
 # -----------------------------------------------------------------------------
 pruning:
-  # Pruning algorithms to test
-  algorithms: ["magnitude"]  # Options: "magnitude", "gradient", "fisher", "alignment", "hybrid"
+  # Pruning algorithms to test (can be single string or list)
+  algorithms: ["magnitude", "alignment", "hybrid"]  # Try: ["magnitude", "alignment", "hybrid"] for comparison
+  # Options:
+  # - "magnitude": Traditional weight magnitude pruning
+  # - "gradient": Gradient-based importance
+  # - "fisher": Fisher information approximation  
+  # - "alignment": Neuron-input alignment using specified metric
+  # - "hybrid": Combine magnitude and alignment scores
   # Note: For random pruning, use selection_mode: "random" instead of algorithms: ["random"]
   
   # Selection mode: which weights to prune based on importance scores
-  selection_mode: ["low", "high", "random"]   # Options: "low" (prune lowest values), "high" (prune highest values), "random"
-  
-  # Pruning scope  
-  scope: "global"         # Options: "global", "layer", "channel", "filter"
+  selection_mode: ["low", "high", "random"]   # Can be single value or list
+  # - "low": Prune weights with lowest importance (default for most algorithms)
+  # - "high": Prune weights with highest importance (useful for studying redundancy)
+  # - "random": Random selection (useful for baselines)
   
   # Sparsity levels to test
   sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]  # Fraction of weights to prune
   
+  # -----------------------------------------------------------------------------
+  # Alignment-based pruning settings (for algorithms: ["alignment", "hybrid"])
+  # -----------------------------------------------------------------------------
+  # Specify which alignment metric to use
+  alignment_metric: "rayleigh_quotient"  
+  # Available metrics:
+  # - "rayleigh_quotient": Classic neuron-input alignment based on variance
+  # - "mutual_information_gaussian": Information shared between neurons and inputs
+  # - "weight_cosine_similarity": Cosine similarity between weight vectors
+  # - "gradient_similarity": Alignment based on gradient information
+  # - "cka": Centered Kernel Alignment (requires output comparison)
+  # See PRUNING_CONCEPTS.md for detailed explanations
+  
+  # For hybrid pruning: balance between magnitude and alignment
+  hybrid_alpha: 0.5         # 0.0 = pure magnitude, 1.0 = pure alignment
+  # Example values:
+  # - 0.3: 30% alignment, 70% magnitude (magnitude-focused)
+  # - 0.5: 50% alignment, 50% magnitude (balanced)
+  # - 0.7: 70% alignment, 30% magnitude (alignment-focused)
+  
+  # -----------------------------------------------------------------------------
+  # Structured pruning options - IMPORTANT FOR ALIGNMENT-BASED PRUNING
+  # -----------------------------------------------------------------------------
+  structured: false         # CRITICAL SETTING - Set to true for neuron/channel pruning!
+  # What this does:
+  # - false: Unstructured pruning - removes individual weights (creates sparse matrices)
+  # - true: Structured pruning - removes entire neurons/channels (creates smaller dense matrices)
+  #
+  # For alignment-based pruning:
+  # - Alignment metrics compute ONE SCORE PER NEURON
+  # - Therefore, structured=true makes the most sense (prune entire neurons)
+  # - The framework will automatically set structured=true for alignment methods
+  #
+  # Example for MLP:
+  # - Layer with shape [256, 128] (256 output neurons, 128 inputs per neuron)
+  # - Alignment computes 256 scores (one per output neuron)
+  # - With structured=true and 50% pruning: removes 128 entire neurons
+  # - Result: effective weight matrix becomes [128, 128]
+  #
+  # Example for CNN:
+  # - Conv layer with 64 output channels
+  # - Alignment computes 64 scores (one per channel)
+  # - With structured=true and 50% pruning: removes 32 entire channels
+  # - Result: layer has only 32 output channels
+  
+  # Note: The "scope" parameter was removed as it was confusing and not implemented.
+  # Instead, use these settings:
+  # - For global comparison across layers: future feature
+  # - For now, pruning is always done per layer
+  
+  # -----------------------------------------------------------------------------
   # Iterative pruning settings
+  # -----------------------------------------------------------------------------
   iterative: false       # Whether to prune iteratively
   iterations: 1          # Number of pruning iterations
   schedule: "polynomial" # Schedule: "constant", "linear", "exponential", "polynomial"
   
+  # -----------------------------------------------------------------------------
   # Fine-tuning after pruning
+  # -----------------------------------------------------------------------------
   fine_tune_after_pruning: true
   fine_tune_epochs: 10
   fine_tune_learning_rate: 0.0001
   
+  # -----------------------------------------------------------------------------
   # Progressive dropout settings (for alignment experiments)
+  # -----------------------------------------------------------------------------
   dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]  # Dropout rates to evaluate
   dropout_mode: "scaled"     # "scaled" or "zero"
   
   # Random selection trials
   num_random_trials: 3       # Number of trials for "random" selection mode
   
-  # Structured pruning options
-  structured: false         # Enable structured pruning
-  granularity: "weight"     # "weight", "channel", "filter", "block"
-  block_size: [4, 4]       # Block dimensions for block pruning
-  
+  # -----------------------------------------------------------------------------
   # Layer-specific settings
+  # -----------------------------------------------------------------------------
   exclude_first_last: true  # Exclude first/last layers from pruning
   modules_to_prune: null    # Specific modules to prune (null = all)
   exclude_modules: ["classifier", "fc", "head"]  # Modules to exclude

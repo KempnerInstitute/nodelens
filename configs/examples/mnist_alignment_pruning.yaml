@@ -1,0 +1,94 @@
+# Example: Alignment-based Pruning with Unified Config
+# This demonstrates how to use alignment metrics for pruning with the unified configuration system
+# Run with: python run_experiment.py --config configs/examples/mnist_alignment_pruning.yaml
+
+# Experiment metadata
+experiment_name: "mnist_alignment_pruning_comparison"
+experiment_type: "standard_pruning"
+device: "cuda"
+seed: 42
+
+# Dataset - using MNIST for quick demonstration
+dataset:
+  name: "mnist"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+
+# Model - simple MLP
+model:
+  name: "mlp"
+  output_dim: 10
+  mlp_config:
+    input_dim: 784
+    hidden_dims: [512, 256, 128]
+    activation: "relu"
+    use_batchnorm: false
+
+# Training - reduced epochs for quick demo
+training:
+  epochs: 10
+  optimizer: "adam"
+  learning_rate: 0.001
+  scheduler: "cosine"
+  scheduler_params:
+    T_max: 10
+
+# Alignment metrics to compute during analysis
+alignment:
+  metrics: ["rayleigh_quotient", "weight_cosine_similarity"]
+  exclude_classification_layer: true
+
+# Pruning configuration - comparing different approaches
+pruning:
+  # Compare three approaches:
+  # 1. Traditional magnitude pruning
+  # 2. Alignment-based pruning 
+  # 3. Hybrid approach
+  algorithms: ["magnitude", "alignment", "hybrid"]
+  
+  # Use rayleigh quotient for alignment scoring
+  alignment_metric: "rayleigh_quotient"
+  # Other options: "mutual_information_gaussian", "weight_cosine_similarity", 
+  #                "gradient_similarity", "cka"
+  
+  # For hybrid: 70% alignment, 30% magnitude
+  hybrid_alpha: 0.7
+  
+  # Test both pruning directions for each algorithm
+  selection_mode: ["low", "high"]
+  
+  # Test at multiple sparsity levels
+  sparsity_levels: [0.3, 0.5, 0.7]
+  
+  # CRITICAL: Use structured pruning to remove entire neurons
+  # - Alignment metrics compute ONE score per neuron
+  # - With structured=true, we prune entire neurons based on these scores
+  # - This is the natural way to use alignment metrics for pruning
+  structured: true
+  
+  # Fine-tune after pruning to recover accuracy
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 5
+  fine_tune_learning_rate: 0.0001
+
+# Visualization
+visualization:
+  generate_plots: true
+  plot_types:
+    - "pruning_performance"     # Key plot: accuracy vs sparsity for each method
+    - "weight_distribution"     # Weight distributions before/after pruning
+    - "layer_importance"        # Which layers are most affected
+    - "alignment_heatmap"       # Neuron alignment scores
+  generate_markdown_report: true
+
+# Logging
+logging:
+  level: "INFO"
+  log_interval: 50
+
+# Expected Results:
+# - Alignment-based pruning should identify less important neurons based on their input alignment
+# - Low selection mode: removes neurons with poor alignment (likely better)
+# - High selection mode: removes neurons with good alignment (likely worse)
+# - Hybrid approach may achieve best of both worlds 

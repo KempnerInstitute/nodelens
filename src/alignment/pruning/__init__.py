@@ -58,6 +58,7 @@ from .strategies import (
     AsyncParallelPruning,
     AlignmentPruning,
     HybridPruning,
+    GlobalAlignmentPruning,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,9 +77,8 @@ PRUNING_STRATEGIES = {
     
     # Alignment-based strategies
     'alignment': AlignmentPruning,
-    'rayleigh_quotient': AlignmentPruning,  # Convenience alias
     'hybrid': HybridPruning,
-    'hybrid_magnitude_alignment': HybridPruning,  # Descriptive alias
+    'global_alignment': GlobalAlignmentPruning,
     
     # Random strategies (kept for backward compatibility)
     # Note: Consider using selection_mode='random' instead
@@ -144,6 +144,7 @@ __all__ = [
     # Alignment strategies
     'AlignmentPruning',
     'HybridPruning',
+    'GlobalAlignmentPruning',
     
     # Random strategies
     'RandomPruning',

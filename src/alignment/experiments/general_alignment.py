@@ -55,6 +55,8 @@ class GeneralAlignmentConfig(ExperimentConfig):
     fine_tune_after_pruning: bool = True
     fine_tune_epochs: int = 10
     pruning_selection_mode: str = "low"  # Which weights to prune: "low", "high", "random"
+    pruning_alignment_metric: str = "rayleigh_quotient"  # Metric for alignment-based pruning
+    pruning_hybrid_alpha: float = 0.5  # Weight for alignment in hybrid pruning (0-1)
     
     # Eigenfeature analysis
     do_eigenfeature_analysis: bool = True
@@ -441,76 +443,130 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     # Create pruning strategy with config
                     pruning_config = PruningConfig(
                         amount=amount,
-                        global_pruning=True,
-                        pruning_mode=selection_mode  # Use current selection mode
+                        global_pruning=self.config.pruning_scope == 'global' if hasattr(self.config, 'pruning_scope') else False,
+                        pruning_mode=selection_mode,  # Use current selection mode
+                        structured=True if strategy_name in ["alignment", "hybrid"] else False  # Structured for alignment
                     )
                     
-                                    # Import additional strategies if needed
-                strategy = None
-                
-                if strategy_name == "magnitude":
-                    strategy = MagnitudePruning(config=pruning_config)
-                elif strategy_name in ["alignment", "rayleigh_quotient"]:
-                    from alignment.pruning.strategies import AlignmentPruning
-                    strategy = AlignmentPruning(
-                        metric='rayleigh_quotient',
-                        config=pruning_config
-                    )
-                elif strategy_name == "hybrid":
-                    from alignment.pruning.strategies import HybridPruning
-                    strategy = HybridPruning(
-                        alignment_metric='rayleigh_quotient',
-                        alpha=0.5,  # Equal weighting
-                        config=pruning_config
-                    )
-                elif strategy_name == "gradient":
-                    from alignment.pruning.strategies import GradientPruning
-                    strategy = GradientPruning(config=pruning_config)
-                elif strategy_name == "fisher":
-                    from alignment.pruning.strategies import FisherPruning
-                    strategy = FisherPruning(config=pruning_config)
-                else:
-                    logger.warning(f"Unsupported pruning strategy: {strategy_name}")
-                    continue
-                
-                # Get sample inputs for alignment-based pruning
-                sample_inputs = None
-                if strategy_name in ["alignment", "rayleigh_quotient", "hybrid"]:
-                    # Get a batch of data for alignment computation
-                    data_iter = iter(self.data_loader)
-                    sample_batch, _ = next(data_iter)
-                    sample_inputs = sample_batch.to(self.config.device)
+                    # Import additional strategies if needed
+                    strategy = None
                     
-                                    # Apply pruning to each layer
-                layer_sparsities = {}
-                for name, module in self.model.named_modules():
-                    if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
-                        # For alignment-based pruning, we need to get layer inputs
-                        layer_inputs = None
-                        if sample_inputs is not None:
-                            # Forward pass to get layer inputs
-                            # This is a simplified approach - in practice you might want
-                            # to use hooks to capture the exact inputs to each layer
-                            with torch.no_grad():
-                                # For now, pass the sample inputs to all layers
-                                # A more sophisticated approach would track activations
-                                layer_inputs = sample_inputs
+                    if strategy_name == "magnitude":
+                        if pruning_config.global_pruning:
+                            from alignment.pruning.strategies import GlobalMagnitudePruning
+                            strategy = GlobalMagnitudePruning(config=pruning_config)
+                        else:
+                            strategy = MagnitudePruning(config=pruning_config)
+                    elif strategy_name == "alignment":
+                        from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning
+                        # Get the alignment metric from config (default to rayleigh_quotient)
+                        alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
+                        if pruning_config.global_pruning:
+                            strategy = GlobalAlignmentPruning(
+                                metric=alignment_metric,
+                                config=pruning_config
+                            )
+                        else:
+                            strategy = AlignmentPruning(
+                                metric=alignment_metric,
+                                config=pruning_config
+                            )
+                    elif strategy_name == "hybrid":
+                        from alignment.pruning.strategies import HybridPruning
+                        alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
+                        alpha = getattr(self.config, 'pruning_hybrid_alpha', 0.5)
+                        # Note: Hybrid doesn't have a global variant yet
+                        strategy = HybridPruning(
+                            alignment_metric=alignment_metric,
+                            alpha=alpha,
+                            config=pruning_config
+                        )
+                    elif strategy_name == "gradient":
+                        from alignment.pruning.strategies import GradientPruning
+                        strategy = GradientPruning(config=pruning_config)
+                    elif strategy_name == "fisher":
+                        from alignment.pruning.strategies import FisherPruning
+                        strategy = FisherPruning(config=pruning_config)
+                    else:
+                        logger.warning(f"Unsupported pruning strategy: {strategy_name}")
+                        continue
+                    
+                    # Get sample inputs for alignment-based pruning
+                    layer_inputs_dict = {}
+                    if strategy_name in ["alignment", "hybrid"] or isinstance(strategy, (AlignmentPruning, GlobalAlignmentPruning)):
+                        # Get a batch of data for alignment computation
+                        data_iter = iter(self.data_loader)
+                        sample_batch, _ = next(data_iter)
+                        sample_inputs = sample_batch.to(self.config.device)
                         
-                        # Prune this layer
-                        strategy.prune(module, inputs=layer_inputs)
-                        # Get sparsity
-                        sparsity = strategy.get_sparsity(module)
-                        layer_sparsities[name] = sparsity
+                        # For global alignment pruning, we need inputs for all layers
+                        if pruning_config.global_pruning and strategy_name == "alignment":
+                            # Use hooks to capture inputs for all layers
+                            hooks = []
+                            
+                            def capture_input(name):
+                                def hook(module, input, output):
+                                    layer_inputs_dict[name] = input[0].detach()
+                                return hook
+                            
+                            # Register hooks
+                            for name, module in self.model.named_modules():
+                                if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
+                                    hook = module.register_forward_hook(capture_input(name))
+                                    hooks.append(hook)
+                            
+                            # Forward pass to capture inputs
+                            with torch.no_grad():
+                                _ = self.model(sample_inputs)
+                            
+                            # Remove hooks
+                            for hook in hooks:
+                                hook.remove()
                     
-                    # Calculate overall sparsity
-                    total_params = 0
-                    zero_params = 0
-                    for module in self.model.modules():
-                        if hasattr(module, 'weight'):
-                            total_params += module.weight.numel()
-                            zero_params += (module.weight == 0).sum().item()
-                    
-                    overall_sparsity = zero_params / total_params if total_params > 0 else 0
+                    # Apply pruning
+                    if pruning_config.global_pruning and hasattr(strategy, 'prune_model'):
+                        # Global pruning across all layers
+                        if strategy_name == "alignment":
+                            # Global alignment pruning needs layer inputs
+                            masks = strategy.prune_model(self.model, layer_inputs_dict, amount=amount)
+                        else:
+                            # Global magnitude pruning
+                            masks = strategy.prune_model(self.model, amount=amount)
+                        
+                        # Calculate overall sparsity from masks
+                        total_params = sum(mask.numel() for mask in masks.values())
+                        zero_params = sum((mask == 0).sum().item() for mask in masks.values())
+                        overall_sparsity = zero_params / total_params if total_params > 0 else 0
+                        
+                    else:
+                        # Layer-wise pruning (current behavior)
+                        layer_sparsities = {}
+                        for name, module in self.model.named_modules():
+                            if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
+                                # For alignment-based pruning, we need layer inputs
+                                layer_inputs = None
+                                if strategy_name in ["alignment", "hybrid"]:
+                                    if name in layer_inputs_dict:
+                                        layer_inputs = layer_inputs_dict[name]
+                                    else:
+                                        # Fallback to sample inputs (less accurate)
+                                        layer_inputs = sample_inputs
+                                
+                                # Prune this layer
+                                strategy.prune(module, inputs=layer_inputs)
+                                # Get sparsity
+                                sparsity = strategy.get_sparsity(module)
+                                layer_sparsities[name] = sparsity
+                        
+                        # Calculate overall sparsity
+                        total_params = 0
+                        zero_params = 0
+                        for module in self.model.modules():
+                            if hasattr(module, 'weight'):
+                                total_params += module.weight.numel()
+                                zero_params += (module.weight == 0).sum().item()
+                        
+                        overall_sparsity = zero_params / total_params if total_params > 0 else 0
                     
                     # Evaluate pruned model BEFORE fine-tuning
                     test_loss_before, test_acc_before = self._evaluate()

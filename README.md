@@ -152,6 +152,8 @@ Key documentation:
 - [Getting Started Guide](docs/source/user_guide/getting_started.md)
 - [Metrics Reference](docs/source/METRICS_REFERENCE.md)
 - [Pruning Strategies](docs/source/user_guide/pruning.md)
+- [Pruning Concepts](PRUNING_CONCEPTS.md) - Structured vs unstructured pruning explained
+- [Experiment Types Guide](EXPERIMENT_TYPES_GUIDE.md) - Different pruning experiment patterns
 - [API Reference](https://kempnerinstitute.github.io/alignment/api/)
 
 ## Contributing
