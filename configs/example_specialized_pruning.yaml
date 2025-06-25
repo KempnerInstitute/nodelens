@@ -42,7 +42,6 @@ model_config:
 dataset_name: cifar10
 dataset_config:
   data_path: ./data
-  num_workers: 4
 
 # ============================================================================
 # TRAINING CONFIGURATION
