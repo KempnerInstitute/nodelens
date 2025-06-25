@@ -392,10 +392,26 @@ class BaseExperiment(CoreBaseExperiment):
         self.results['end_time'] = datetime.now().isoformat()
         results_path = Path(self.config.log_dir) / f"{self.config.name}_results.json"
         
+        # Convert tensors to lists for JSON serialization
+        serializable_results = self._make_serializable(self.results)
+        
         with open(results_path, 'w') as f:
-            json.dump(self.results, f, indent=2)
+            json.dump(serializable_results, f, indent=2)
         
         logger.info(f"Saved results to {results_path}")
+    
+    def _make_serializable(self, obj):
+        """Convert PyTorch tensors to lists for JSON serialization."""
+        if isinstance(obj, torch.Tensor):
+            return obj.cpu().tolist()
+        elif isinstance(obj, dict):
+            return {k: self._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_serializable(v) for v in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._make_serializable(v) for v in obj)
+        else:
+            return obj
     
     def setup(self) -> None:
         """Setup the experiment (implementation of abstract method from CoreBaseExperiment)."""

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment, DATASET_REGISTRY
 from alignment.training import BaseTrainer, TrainingConfig
-from alignment.pruning import get_pruning_strategy
+from alignment.pruning import get_pruning_strategy, PruningConfig
 from alignment.metrics import get_metric
 
 logger = logging.getLogger(__name__)
@@ -273,13 +273,16 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _apply_pruning(self, data_loader) -> Dict[str, torch.Tensor]:
         """Apply pruning strategy to the model."""
-        # Get pruning strategy - extract amount separately
-        pruning_config = self.config.pruning_config.copy()
-        pruning_amount = pruning_config.pop("amount", 0.5)
+        # Create PruningConfig from the pruning_config dict
+        from alignment.pruning import PruningConfig
         
+        pruning_config_dict = self.config.pruning_config.copy()
+        config = PruningConfig(**pruning_config_dict)
+        
+        # Get pruning strategy with the config
         strategy = get_pruning_strategy(
             self.config.pruning_strategy,
-            **pruning_config
+            config=config
         )
         
         # If using metric-based pruning, compute importance scores
@@ -309,14 +312,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     data_batch = None
                 
                 # Apply pruning
-                mask = strategy.compute_mask(
+                mask = strategy.prune(
                     module,
-                    pruning_amount,
-                    importance_scores=importance_scores.get(layer_name) if importance_scores else None
+                    amount=config.amount  # Use amount from config
                 )
                 
-                # Apply mask
-                strategy.apply_mask(module, mask)
                 pruning_masks[layer_name] = mask
         
         return pruning_masks
