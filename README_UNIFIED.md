@@ -294,11 +294,6 @@ The following configs are deprecated and replaced by the unified system:
 - Separate pruning configs
 - Multiple experiment-specific configs
 
-### Old Scripts
-Replace usage of:
-- `examples/unified_experiment.py` → `run_experiment.py`
-- Multiple experiment scripts → Single unified runner
-
 ### Key Differences
 1. **Single entry point** instead of multiple scripts
 2. **Unified configuration** structure
@@ -349,4 +344,22 @@ If you use this unified experiment system, please cite:
   year = {2024},
   url = {https://github.com/yourusername/alignment}
 }
-``` 
+```
+
+## Cleanup Summary
+
+### Deleted Files
+- Redundant examples: `comprehensive_alignment_experiment.py`, `parallel_experiment_demo.py`
+- Obsolete scripts: Various test and demo files
+- Old configs: `master_config.yaml`, individual experiment configs
+
+### Consolidated Files
+- All experiment types → `run_experiment.py`
+- All configurations → `configs/unified_config.yaml`
+- Documentation → `README_UNIFIED.md`
+
+### Result
+- Single entry point for all experiments
+- One comprehensive configuration file
+- Clear documentation
+- Clean directory structure 

@@ -199,11 +199,10 @@ Random pruning:
 1. **Model Wrapping**: Track activations and weights automatically
 2. **Metric Computation**: Rayleigh quotient, mutual information, weight similarity
 3. **Pruning Strategies**: Magnitude, gradient, random with different modes
-4. **Specialized Pruning**: Cascading and layer-isolated pruning experiments
-5. **Parallel Execution**: Compute multiple pruning variations efficiently
-6. **Visualization**: Publication-ready plots and analysis grids
-7. **Statistical Analysis**: Multi-seed experiments with confidence intervals
-8. **Complete Workflow**: From training to analysis in one script
+4. **Parallel Execution**: Compute multiple pruning variations efficiently
+5. **Visualization**: Publication-ready plots and analysis grids
+6. **Statistical Analysis**: Multi-seed experiments with confidence intervals
+7. **Complete Workflow**: From training to analysis in one script
 
 ## Customization
 
@@ -212,13 +211,14 @@ Each example can be customized by modifying:
 - Dataset (MNIST, CIFAR, etc.)
 - Metrics to compute
 - Pruning strategies and sparsity levels
-- Pruning experiment types (standard, cascading, layer-isolated)
 - Visualization styles
+
+For full flexibility, use `run_experiment.py` in the root directory with YAML configs.
 
 ## Example Structure
 
 - **Quick demos** (`quick_demo.py`): Simple, focused demonstrations
-- **Complete experiments** (`standard_alignment_experiment.py`, `unified_experiment.py`): Full workflows
+- **Complete experiments** (`standard_alignment_experiment.py`): Full workflows
 - **Feature demos** (`pruning_strategies_demo.py`, `pruning_visualization_demo.py`): Deep dives into specific features
 
 ## Troubleshooting
@@ -236,10 +236,9 @@ For GPU/CUDA errors:
 
 After running these examples:
 1. Modify `standard_alignment_experiment.py` for your own experiments
-2. Create custom YAML configs for `unified_experiment.py`
-3. Experiment with different pruning experiment types
-4. Explore the API documentation for advanced features
-5. Create custom metrics and pruning strategies
-6. Use the experiment framework for systematic studies
+2. Create custom YAML configs for `run_experiment.py` (see root directory)
+3. Explore the API documentation for advanced features
+4. Create custom metrics and pruning strategies
+5. Use the experiment framework for systematic studies
 
 For more information, see the main documentation at `docs/`. 

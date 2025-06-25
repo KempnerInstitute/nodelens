@@ -1,6 +1,75 @@
 # Configuration Files
 
-This directory contains configuration files for the alignment framework experiments.
+This directory contains YAML configuration files for running alignment experiments. The configurations are designed to work with the unified experiment runner.
+
+## Usage
+
+```bash
+# From repository root
+python run_experiment.py --config configs/example_quick_test.yaml
+```
+
+## Available Configurations
+
+### 1. `unified_config.yaml`
+Comprehensive configuration with all possible options documented. Use this as a reference for creating your own configs.
+
+```bash
+python run_experiment.py --config configs/unified_config.yaml
+```
+
+### 2. Example Configurations
+
+Located in `configs/examples/`:
+
+- **`quick_test.yaml`**: Minimal config for quick testing
+- **`mnist_mlp.yaml`**: Simple MLP on MNIST
+- **`cifar10_resnet.yaml`**: ResNet on CIFAR-10
+- **`alignment_comparison.yaml`**: Compare multiple alignment metrics
+- **`pruning_comparison.yaml`**: Compare pruning strategies
+- **`cascading_alignment_pruning.yaml`**: Cascading scope example
+
+## Creating Custom Configurations
+
+Start with `unified_config.yaml` as a template. You can override any setting:
+
+```yaml
+experiment_name: "my_custom_experiment"
+experiment_type: "standard_pruning"
+
+model:
+  name: "resnet50"
+  pretrained: true
+
+dataset:
+  name: "cifar10"
+  
+pruning:
+  algorithms: ["magnitude", "alignment"]
+  sparsity_levels: [0.3, 0.5, 0.7]
+```
+
+## Configuration Priority
+
+Settings are applied in this order (later overrides earlier):
+1. Default values in code
+2. Configuration file
+3. Command-line arguments
+
+Example:
+```bash
+python run_experiment.py --config configs/unified_config.yaml --device cpu
+```
+
+## Key Configuration Sections
+
+- **experiment_type**: Type of experiment to run
+- **model**: Model architecture and settings
+- **dataset**: Dataset and data loading settings
+- **training**: Training hyperparameters
+- **pruning**: Pruning strategies and settings
+- **alignment**: Alignment metrics to compute
+- **visualization**: Plotting and reporting options
 
 ## Master Configuration
 
@@ -21,7 +90,7 @@ This directory contains configuration files for the alignment framework experime
 ### Basic Usage
 ```bash
 # Run with a configuration file
-python examples/unified_experiment.py --config configs/example_quick_test.yaml
+python run_experiment.py --config configs/example_quick_test.yaml
 ```
 
 ### Override Parameters
@@ -29,19 +98,19 @@ You can override any parameter from the command line:
 
 ```bash
 # Change model
-python examples/unified_experiment.py --config configs/master_config.yaml --model_name resnet50
+python run_experiment.py --config configs/master_config.yaml --model_name resnet50
 
 # Change dataset
-python examples/unified_experiment.py --config configs/master_config.yaml --dataset_name cifar100
+python run_experiment.py --config configs/master_config.yaml --dataset_name cifar100
 
 # Change training parameters
-python examples/unified_experiment.py --config configs/master_config.yaml \
+python run_experiment.py --config configs/master_config.yaml \
     --training_config.epochs 300 \
     --training_config.batch_size 256 \
     --training_config.learning_rate 0.01
 
 # Change pruning strategy
-python examples/unified_experiment.py --config configs/master_config.yaml \
+python run_experiment.py --config configs/master_config.yaml \
     --pruning_strategy gradient \
     --pruning_config.amount 0.7
 ```
@@ -52,7 +121,7 @@ To compare different configurations:
 ```bash
 # Compare pruning strategies
 for strategy in magnitude gradient random; do
-    python examples/unified_experiment.py \
+    python run_experiment.py \
         --config configs/example_pruning_comparison.yaml \
         --pruning_strategy $strategy \
         --name pruning_comparison_$strategy
@@ -60,7 +129,7 @@ done
 
 # Compare pruning amounts
 for amount in 0.3 0.5 0.7 0.9; do
-    python examples/unified_experiment.py \
+    python run_experiment.py \
         --config configs/example_resnet_cifar.yaml \
         --pruning_config.amount $amount \
         --name resnet_pruning_$amount
@@ -101,14 +170,6 @@ done
 
 8. **Workflow Control**
    - Boolean flags to control which parts of the experiment to run
-
-## Creating Custom Configurations
-
-1. Start with `master_config.yaml` as a template
-2. Remove or simplify sections you don't need
-3. Focus on the parameters relevant to your experiment
-4. Use meaningful names and descriptions
-5. Document any special requirements or notes
 
 ## Best Practices
 
