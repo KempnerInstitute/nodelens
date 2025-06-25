@@ -407,6 +407,14 @@ class GeneralAlignmentExperiment(BaseExperiment):
             for amount in self.config.pruning_amounts:
                 logger.info(f"  Pruning amount: {amount * 100:.0f}%")
                 
+                # Remove any existing pruning masks before resetting
+                for name, module in self.model.named_modules():
+                    if hasattr(module, 'weight_mask'):
+                        delattr(module, 'weight_mask')
+                    if hasattr(module, '_pruning_hook'):
+                        module._pruning_hook.remove()
+                        delattr(module, '_pruning_hook')
+                
                 # Reset model to original state
                 self.model.load_state_dict(original_state)
                 
