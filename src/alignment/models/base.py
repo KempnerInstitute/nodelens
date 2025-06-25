@@ -199,6 +199,13 @@ class BaseModelWrapper(BaseModel):
         
         return info
     
+    def get_layer(self, layer_name: str) -> Optional[nn.Module]:
+        """Get a specific layer module by name."""
+        for name, module in self._model.named_modules():
+            if name == layer_name:
+                return module
+        return None
+    
     def apply_structured_dropout(
         self,
         dropout_masks: Dict[str, torch.Tensor],
