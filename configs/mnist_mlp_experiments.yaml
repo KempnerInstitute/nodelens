@@ -1,0 +1,100 @@
+# MNIST MLP Experiments Configuration
+# This inherits all settings from master_config.yaml and overrides specific values for MNIST MLP
+
+# Load master config as base
+# Note: In practice, you would merge this with master_config.yaml programmatically
+# For now, we specify the key overrides
+
+name: mnist_mlp_experiments
+seed: 42
+
+# Model configuration for MLP
+model_name: mlp
+model_config:
+  input_dim: 784  # 28x28 flattened
+  hidden_dims: [512, 256, 128]
+  output_dim: 10
+  activation_type: relu
+  dropout_rate: 0.0  # No dropout during training
+
+# Dataset configuration for MNIST  
+dataset_name: mnist
+dataset_config:
+  root: ./data
+  train_batch_size: 128
+  val_batch_size: 256
+  num_workers: 4
+  download: true
+  normalize: true
+  flatten: true  # Flatten images for MLP
+  augmentation:
+    train:
+      normalize: true
+      mean: [0.1307]  # MNIST mean
+      std: [0.3081]   # MNIST std
+    val:
+      normalize: true
+      mean: [0.1307]
+      std: [0.3081]
+
+# Training configuration
+training_config:
+  epochs: 10
+  batch_size: 128
+  learning_rate: 0.001
+  optimizer: adam
+  scheduler: cosine
+  weight_decay: 0.0001
+  device: cuda
+  eval_interval: 1
+  log_interval: 50
+
+# Alignment metrics
+alignment_metrics:
+  - rayleigh_quotient
+  - mutual_information
+  - correlation
+
+# CNN preprocessing mode (not used for MLP but required)
+cnn_mode: unfold
+
+# Pruning configuration defaults
+apply_pruning: true
+pruning_strategy: magnitude
+pruning_config:
+  amount: 0.5  # Will be overridden for standard experiment
+  fine_tune_epochs: 10
+  fine_tune_lr: 0.001
+
+# For specialized pruning experiments
+dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+dropout_mode: scaled
+exclude_classification_layer: true
+num_random_trials: 3
+recompute_scores: true
+
+# Analysis configuration
+analysis_config:
+  compute_layer_metrics: true
+  generate_plots: true
+  generate_html_report: true
+  plot_dpi: 300
+  save_intermediate_results: true
+
+# Evaluation
+eval_model: true
+eval_batches: 50  # Use subset for faster evaluation
+
+# Workflow
+train_model: true
+compute_initial_metrics: true
+fine_tune_after_pruning: true
+compute_final_metrics: true
+
+# Output directories
+checkpoint_dir: ./checkpoints
+log_dir: ./logs
+results_dir: ./results
+
+# The rest inherits from master_config.yaml
+# These will be overridden via command line for different experiments 

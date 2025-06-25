@@ -1,0 +1,73 @@
+# Comprehensive MNIST MLP Pruning Experiment Configuration
+
+name: mnist_mlp_comprehensive_pruning
+seed: 42
+
+# Model configuration
+model_name: mlp
+model_config:
+  input_dim: 784  # 28x28 flattened
+  hidden_dims: [512, 256, 128]
+  output_dim: 10
+  activation: relu
+  dropout_rate: 0.0  # No dropout during training
+  use_batchnorm: true
+
+# Dataset configuration
+dataset_name: mnist
+dataset_config:
+  root: ./data
+  train_batch_size: 128
+  val_batch_size: 256
+  num_workers: 4
+  download: true
+  normalize: true
+  flatten: true  # Flatten images for MLP
+
+# Training configuration
+train_model: true
+training_config:
+  epochs: 10
+  learning_rate: 0.001
+  optimizer: adam
+  scheduler: cosine
+  weight_decay: 0.0001
+  device: cuda
+  save_best: true
+  patience: 5
+
+# Pruning experiment configuration
+pruning_experiment: standard  # Will run standard, then we'll run cascading separately
+apply_pruning: true
+pruning_strategy: magnitude_based
+pruning_amount: 0.9  # 90% pruning for standard experiment
+
+# For specialized pruning experiments
+dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+dropout_mode: scaled
+exclude_classification_layer: true
+num_random_trials: 3
+recompute_scores: true
+
+# Alignment metrics
+alignment_metrics:
+  - rayleigh_quotient
+  - mutual_information
+  - correlation
+
+# Analysis configuration
+analysis_config:
+  compute_layer_metrics: true
+  generate_plots: true
+  generate_html_report: true
+  plot_dpi: 300
+  save_intermediate_results: true
+
+# Evaluation
+eval_model: true
+eval_batches: null  # Use all validation data
+
+# Output directories
+checkpoint_dir: ./checkpoints
+log_dir: ./logs
+results_dir: ./results 
