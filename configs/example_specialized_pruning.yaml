@@ -65,6 +65,7 @@ training_config:
 # ============================================================================
 alignment_metrics:
   - rayleigh_quotient  # First metric is used for pruning decisions
+  - rq_patchwise  # Patchwise variant for conv layers
   - weight_cosine_similarity
 
 # ============================================================================

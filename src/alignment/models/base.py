@@ -31,6 +31,7 @@ class BaseModelWrapper(BaseModel):
         track_inputs: bool = True,
         track_outputs: bool = True,
         flatten_activations: bool = True,
+        cnn_mode: str = "unfold",
         **config: Any
     ):
         """
@@ -42,12 +43,14 @@ class BaseModelWrapper(BaseModel):
             track_inputs: Whether to track layer inputs
             track_outputs: Whether to track layer outputs
             flatten_activations: Whether to flatten activations to 2D
+            cnn_mode: How to preprocess CNN layers ("unfold", "patchwise", "batch_patch_combined")
             **config: Additional configuration
         """
         super().__init__(model, tracked_layers, **config)
         self.track_inputs = track_inputs
         self.track_outputs = track_outputs
         self.flatten_activations = flatten_activations
+        self.cnn_mode = cnn_mode
         
         # Auto-discover trackable layers if not specified
         if not self._tracked_layers:  # Check if empty list instead of None
@@ -129,65 +132,108 @@ class BaseModelWrapper(BaseModel):
         
         return weights
     
+    def _get_unfold_params(self, layer: nn.Module) -> Dict[str, Any]:
+        """Get unfold parameters from a convolutional layer."""
+        if isinstance(layer, (nn.Conv2d, nn.Conv1d)):
+            return {
+                'dilation': layer.dilation,
+                'padding': layer.padding,
+                'stride': layer.stride
+            }
+        return {}
+    
     def preprocess_activations(
         self,
         activations: Dict[str, torch.Tensor],
-        mode: str = "flatten"
+        mode: Optional[str] = None,
+        layer_modules: Optional[Dict[str, nn.Module]] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Preprocess activations for metric computation.
+        Preprocess activations for metric computation based on CNN mode.
         
         Args:
             activations: Raw activations from hooks
-            mode: Preprocessing mode ("flatten", "unfold", "patchwise")
+            mode: Override preprocessing mode (uses self.cnn_mode if None)
+            layer_modules: Optional dict of layer modules for unfold params
             
         Returns:
             Preprocessed activations
         """
+        mode = mode or self.cnn_mode
         processed = {}
         
+        # Get layer modules if not provided
+        if layer_modules is None:
+            layer_modules = dict(self._model.named_modules())
+        
         for name, activation in activations.items():
-            if mode == "flatten":
-                # Simple flattening to [batch_size, features]
-                if activation.ndim > 2:
+            # Handle input activations (name ends with _input)
+            is_input = name.endswith("_input")
+            layer_name = name.replace("_input", "") if is_input else name
+            module = layer_modules.get(layer_name)
+            
+            # For conv layers with spatial dimensions
+            if activation.ndim == 4 and isinstance(module, nn.Conv2d):
+                if mode == "unfold" or self.cnn_mode == "unfold":
+                    # Unfold spatial dimensions
+                    b, c, h, w = activation.shape
+                    
+                    # For inputs, we unfold based on the layer's kernel params
+                    if is_input:
+                        unfold_params = self._get_unfold_params(module)
+                        unfolded = torch.nn.functional.unfold(
+                            activation,
+                            kernel_size=module.kernel_size,
+                            **unfold_params
+                        )
+                        # Flatten: [b, features*kernel_size, num_patches] -> [b*num_patches, features]
+                        unfolded = unfolded.transpose(1, 2).contiguous()
+                        processed[name] = unfolded.view(-1, unfolded.size(2))
+                    else:
+                        # For outputs, just flatten spatial dims
+                        processed[name] = activation.reshape(b, c, -1).permute(0, 2, 1).reshape(-1, c)
+                        
+                elif mode == "patchwise" or self.cnn_mode == "patchwise":
+                    # Keep patches separate: [b, c, h, w] -> [b, features, patches]
+                    if is_input:
+                        unfold_params = self._get_unfold_params(module)
+                        unfolded = torch.nn.functional.unfold(
+                            activation,
+                            kernel_size=module.kernel_size,
+                            **unfold_params
+                        )
+                        processed[name] = unfolded  # [b, features, patches]
+                    else:
+                        b, c, h, w = activation.shape
+                        processed[name] = activation.reshape(b, c, h * w)
+                        
+                elif mode == "batch_patch_combined" or self.cnn_mode == "batch_patch_combined":
+                    # Combine batch and patch dimensions
+                    if is_input:
+                        unfold_params = self._get_unfold_params(module)
+                        unfolded = torch.nn.functional.unfold(
+                            activation,
+                            kernel_size=module.kernel_size,
+                            **unfold_params
+                        )
+                        # [b, features, patches] -> [b*patches, features]
+                        unfolded = unfolded.transpose(1, 2).contiguous()
+                        processed[name] = unfolded.view(-1, unfolded.size(2))
+                    else:
+                        b, c, h, w = activation.shape
+                        processed[name] = activation.permute(0, 2, 3, 1).reshape(-1, c)
+                        
+                elif mode == "flatten" or self.flatten_activations:
+                    # Simple flattening
                     processed[name] = activation.reshape(activation.shape[0], -1)
                 else:
                     processed[name] = activation
                     
-            elif mode == "unfold":
-                # For conv layers, unfold to [batch_size, features, patches]
-                if activation.ndim == 4:  # Conv2d output
-                    b, c, h, w = activation.shape
-                    # Get corresponding layer for kernel size
-                    layer_name = name.replace("_input", "") if "_input" in name else name
-                    module = dict(self._model.named_modules()).get(layer_name)
-                    
-                    if isinstance(module, nn.Conv2d):
-                        # Unfold using layer's kernel size
-                        unfolded = torch.nn.functional.unfold(
-                            activation,
-                            kernel_size=module.kernel_size,
-                            stride=module.stride,
-                            padding=module.padding
-                        )
-                        processed[name] = unfolded.permute(0, 2, 1)  # [b, patches, features]
-                    else:
-                        # Fallback to flattening
-                        processed[name] = activation.reshape(b, -1)
-                else:
-                    processed[name] = activation
-                    
-            elif mode == "patchwise":
-                # Keep spatial structure for patch-wise analysis
-                if activation.ndim == 4:  # Conv2d
-                    b, c, h, w = activation.shape
-                    # Reshape to [batch_size, channels, num_patches]
-                    processed[name] = activation.reshape(b, c, h * w)
-                else:
-                    processed[name] = activation
-                    
+            elif activation.ndim > 2 and (mode == "flatten" or self.flatten_activations):
+                # Flatten non-conv activations if requested
+                processed[name] = activation.reshape(activation.shape[0], -1)
             else:
-                # No preprocessing
+                # Keep as is for 2D activations or when not flattening
                 processed[name] = activation
         
         return processed
