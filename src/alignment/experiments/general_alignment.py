@@ -263,7 +263,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         weights = self.wrapped_model.get_layer_weights()
         
         # Preprocess activations based on CNN mode
-        from alignment.preprocessing import preprocess_layer_activations
+        from alignment.data.processing import preprocess_layer_activations
         layer_modules = dict(self.wrapped_model._model.named_modules())
         
         # Collect inputs for preprocessing
