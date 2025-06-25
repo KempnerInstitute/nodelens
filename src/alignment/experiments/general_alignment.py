@@ -303,8 +303,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 try:
                     scores = metric.compute(
                         inputs=preprocessed_inputs[layer_name],
-                        weights=weights[layer_name]
-                    )
+                            weights=weights[layer_name]
+                        )
                     layer_values[layer_name] = scores.cpu().tolist()
                 except Exception as e:
                     logger.error(f"Error computing {method} for {layer_name}: {e}")

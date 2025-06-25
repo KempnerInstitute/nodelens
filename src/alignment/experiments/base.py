@@ -189,25 +189,34 @@ class BaseExperiment(CoreBaseExperiment):
                 # Handle parameter mapping for specific models
                 model_kwargs = self.config.model_config.copy()
                 
+                # Remove 'name' from kwargs if it exists to avoid conflict
+                model_kwargs.pop('name', None)
+                
                 # Special handling for MLP model
                 if self.config.model_name.lower() == 'mlp':
+                    # Extract mlp_config parameters if present
+                    if 'mlp_config' in model_kwargs:
+                        mlp_config = model_kwargs.pop('mlp_config')
+                        # Merge mlp_config parameters into model_kwargs
+                        model_kwargs.update(mlp_config)
+                    
                     # Map common parameter names
                     if 'num_classes' in model_kwargs and 'output_dim' not in model_kwargs:
                         model_kwargs['output_dim'] = model_kwargs.pop('num_classes')
                     # Remove parameters that MLP doesn't accept
-                    for param in ['pretrained', 'num_layers', 'dropout', 'activation', 'norm_type']:
+                    for param in ['pretrained', 'num_layers', 'dropout', 'norm_type']:
                         model_kwargs.pop(param, None)
                     # Set default input_dim for MNIST if using MNIST dataset
                     if self.config.dataset_name.lower() == 'mnist' and 'input_dim' not in model_kwargs:
                         model_kwargs['input_dim'] = 784
                     # Map activation to activation_type if present
-                    if 'activation' in self.config.model_config and 'activation_type' not in model_kwargs:
-                        model_kwargs['activation_type'] = self.config.model_config['activation']
+                    if 'activation' in model_kwargs and 'activation_type' not in model_kwargs:
+                        model_kwargs['activation_type'] = model_kwargs.pop('activation')
                     # Map dropout to dropout_rate if present
-                    if 'dropout' in self.config.model_config and 'dropout_rate' not in model_kwargs:
-                        model_kwargs['dropout_rate'] = self.config.model_config['dropout']
+                    if 'dropout' in model_kwargs and 'dropout_rate' not in model_kwargs:
+                        model_kwargs['dropout_rate'] = model_kwargs.pop('dropout')
                 
-                self.model = MODEL_REGISTRY.create(self.config.model_name, **model_kwargs)
+                self.model = MODEL_REGISTRY.create(name=self.config.model_name, **model_kwargs)
                 logger.info(f"Created model '{self.config.model_name}' from registry")
             except KeyError:
                 # Model not in registry, try torchvision
@@ -255,6 +264,8 @@ class BaseExperiment(CoreBaseExperiment):
         
         # Prepare dataset kwargs, avoiding duplicate 'data_path'
         dataset_kwargs = self.config.dataset_config.copy()
+        # Remove 'name' from kwargs if it exists to avoid conflict
+        dataset_kwargs.pop('name', None)
         if self.config.data_path is not None and 'data_path' not in dataset_kwargs:
             dataset_kwargs['data_path'] = self.config.data_path
         
