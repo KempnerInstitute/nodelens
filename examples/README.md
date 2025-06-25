@@ -4,7 +4,7 @@ This directory contains example scripts demonstrating various features of the al
 
 ## Examples Overview
 
-### 1. `quick_demo.py` (107 lines)
+### 1. `quick_demo.py` (127 lines)
 A minimal example showing the basic workflow:
 - Load a pre-trained model
 - Compute alignment metrics
@@ -16,7 +16,7 @@ A minimal example showing the basic workflow:
 python quick_demo.py
 ```
 
-### 2. `standard_alignment_experiment.py` (321 lines)
+### 2. `standard_alignment_experiment.py` (347 lines)
 A complete workflow demonstrating:
 - Training a model from scratch
 - Computing multiple alignment metrics
@@ -28,7 +28,7 @@ A complete workflow demonstrating:
 python standard_alignment_experiment.py
 ```
 
-### 3. `pruning_strategies_demo.py` (388 lines)
+### 3. `pruning_strategies_demo.py` (416 lines)
 Comprehensive demonstration of all pruning features:
 - Multiple pruning strategies (magnitude, gradient, random)
 - Different pruning modes (low, high, random)
@@ -40,7 +40,7 @@ Comprehensive demonstration of all pruning features:
 python pruning_strategies_demo.py
 ```
 
-### 4. `pruning_visualization_demo.py` (218 lines)
+### 4. `pruning_visualization_demo.py` (247 lines)
 Advanced visualization capabilities:
 - Weight distribution plots
 - Sparsity patterns
@@ -52,38 +52,51 @@ Advanced visualization capabilities:
 python pruning_visualization_demo.py
 ```
 
-### 5. `comprehensive_alignment_experiment.py` (NEW - 450+ lines)
-The most complete example demonstrating ALL framework features:
+### 5. `unified_experiment.py` (471 lines)
+The main experiment script that can run any configuration specified in the master config file:
 - Fully configurable via YAML
-- All 36+ alignment metrics
-- Multiple model architectures
-- Various datasets
+- Supports all model architectures
+- All alignment metrics
+- Multiple pruning strategies
 - Advanced training options
 - Comprehensive analysis and reporting
 
 **Usage:**
 ```bash
-# Run with comprehensive config (all options documented)
-python comprehensive_alignment_experiment.py --config ../configs/comprehensive_alignment_config.yaml
+# Run with master config (all options documented)
+python unified_experiment.py --config ../configs/master_config.yaml
 
 # Run quick test
-python comprehensive_alignment_experiment.py --config ../configs/quick_test_config.yaml
+python unified_experiment.py --config ../configs/simple_test.yaml
 
 # Override parameters from command line
-python comprehensive_alignment_experiment.py --config ../configs/quick_test_config.yaml \
+python unified_experiment.py --config ../configs/simple_test.yaml \
     --model_name resnet50 --dataset_name cifar10 --training_config.epochs 10
 
 # Run without training (just compute metrics)
-python comprehensive_alignment_experiment.py --config ../configs/quick_test_config.yaml \
-    --train_model false --compute_initial_metrics true
+python unified_experiment.py --config ../configs/simple_test.yaml \
+    --train_model false --apply_pruning false
+```
+
+### 6. `parallel_experiment_demo.py` (180 lines)
+Demonstrates parallel experiment capabilities:
+- Training multiple networks with different seeds
+- Statistical analysis across multiple runs
+- Parallel metric computation
+- Variance analysis
+
+**Usage:**
+```bash
+python parallel_experiment_demo.py
 ```
 
 ## Configuration Files
 
 The `configs/` directory contains example configuration files:
 
-- `comprehensive_alignment_config.yaml`: Complete configuration with ALL possible options documented
-- `quick_test_config.yaml`: Simplified config for quick testing
+- `master_config.yaml`: Complete configuration with ALL possible options documented
+- `simple_test.yaml`: Simplified config for quick testing
+- `quick_test_config.yaml`: Minimal configuration for demos
 - Other configs: Various experiment configurations
 
 ## Key Features Demonstrated
@@ -106,7 +119,7 @@ Running examples creates the following structure:
 ```
 logs/
 ├── experiment_name/
-│   ├── experiment_name_TIMESTAMP.log
+│   ├── experiment.log
 │   ├── results.json
 │   ├── report.html
 │   └── visualizations/
@@ -124,9 +137,10 @@ results/
 ## Tips
 
 1. Start with `quick_demo.py` to understand the basic workflow
-2. Use `standard_alignment_experiment.py` as a template for your experiments
+2. Use `standard_alignment_experiment.py` as a template for custom experiments
 3. Explore `pruning_strategies_demo.py` for advanced pruning techniques
-4. Use `comprehensive_alignment_experiment.py` with custom configs for research
+4. Use `unified_experiment.py` with custom configs for research
+5. Run `parallel_experiment_demo.py` for statistical analysis across seeds
 
 ## Requirements
 
@@ -139,57 +153,6 @@ Install with:
 ```bash
 pip install -e .[all]
 ```
-
-## Available Examples
-
-### 1. `quick_demo.py` - Quick Start Demo
-A simple introduction to the framework showing:
-- Model wrapping and activation tracking
-- Computing alignment metrics (Rayleigh Quotient, Weight Similarity)
-- Basic pruning with magnitude strategy
-- ~100 lines, runs in seconds
-
-**Run:** `python quick_demo.py`
-
-### 2. `standard_alignment_experiment.py` - Complete Workflow
-A comprehensive experiment template that:
-- Trains a neural network on MNIST
-- Computes alignment metrics before pruning
-- Applies different pruning strategies (magnitude, random)
-- Evaluates performance at various sparsity levels
-- Generates publication-ready visualizations
-- Saves all results as JSON files
-
-**Run:** `python standard_alignment_experiment.py`
-
-**Output files in `results/standard_experiment/`:**
-- `training_history.json` - Training metrics
-- `alignment_metrics.json` - Layer-wise alignment scores
-- `pruning_results.json` - Performance at different sparsities
-- `pruning_performance.png` - Accuracy/loss curves
-- `comparison_grid.png` - Comprehensive 6-panel analysis
-
-### 3. `pruning_strategies_demo.py` - Pruning Strategies
-Demonstrates all pruning capabilities:
-- Different pruning modes (low, high, random)
-- Parallel pruning execution
-- GPU-optimized tensorized operations
-- Gradient-based pruning
-- Performance comparisons
-
-**Run:** `python pruning_strategies_demo.py`
-
-### 4. `pruning_visualization_demo.py` - Visualization Demo
-Shows visualization capabilities with both simulated and real pruning:
-- Performance comparison plots
-- Confidence intervals
-- Multi-seed statistical analysis
-- Comprehensive comparison grids
-- Real pruning demonstration with statistics
-
-**Run:** `python pruning_visualization_demo.py`
-
-**Output:** Plots saved to `results/pruning_visualization/`
 
 ## Getting Started
 
@@ -237,11 +200,12 @@ Random pruning:
   90% sparsity: 14.85% accuracy (drop: 82.80%)
 ```
 
-### Real Pruning Analysis (from pruning_visualization_demo.py)
+### Parallel Experiment Results (from parallel_experiment_demo.py)
 ```
-Low mode: Kept weights 3.0x larger than pruned (0.0569 vs 0.0191)
-High mode: Kept weights 3.0x smaller than pruned (0.0191 vs 0.0569)
-Random mode: Balanced distribution (0.0380 for both)
+Training 3 networks with different seeds...
+Magnitude low mode (50% sparsity): 96.2% ± 0.8%
+Random low mode (50% sparsity): 78.4% ± 2.1%
+Statistical significance: p < 0.001
 ```
 
 ## Key Concepts Demonstrated
@@ -251,7 +215,8 @@ Random mode: Balanced distribution (0.0380 for both)
 3. **Pruning Strategies**: Magnitude, gradient, random with different modes
 4. **Parallel Execution**: Compute multiple pruning variations efficiently
 5. **Visualization**: Publication-ready plots and analysis grids
-6. **Complete Workflow**: From training to analysis in one script
+6. **Statistical Analysis**: Multi-seed experiments with confidence intervals
+7. **Complete Workflow**: From training to analysis in one script
 
 ## Customization
 
@@ -265,8 +230,9 @@ Each example can be customized by modifying:
 ## Example Structure
 
 - **Quick demos** (`quick_demo.py`): Simple, focused demonstrations
-- **Complete experiments** (`standard_alignment_experiment.py`): Full workflows with all components
+- **Complete experiments** (`standard_alignment_experiment.py`, `unified_experiment.py`): Full workflows
 - **Feature demos** (`pruning_strategies_demo.py`, `pruning_visualization_demo.py`): Deep dives into specific features
+- **Statistical analysis** (`parallel_experiment_demo.py`): Multi-seed experiments
 
 ## Troubleshooting
 
@@ -283,8 +249,9 @@ For GPU/CUDA errors:
 
 After running these examples:
 1. Modify `standard_alignment_experiment.py` for your own experiments
-2. Explore the API documentation for advanced features
-3. Create custom metrics and pruning strategies
-4. Use the experiment framework for systematic studies
+2. Create custom YAML configs for `unified_experiment.py`
+3. Explore the API documentation for advanced features
+4. Create custom metrics and pruning strategies
+5. Use the experiment framework for systematic studies
 
 For more information, see the main documentation at `docs/`. 

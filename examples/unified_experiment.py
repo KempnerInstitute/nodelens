@@ -8,10 +8,16 @@ in the master config file. It supports all features of the alignment framework:
 - Various datasets
 - All alignment metrics
 - All pruning strategies
+- Specialized pruning experiments (cascading, layer-isolated)
 - Comprehensive analysis and visualization
 
 Usage:
     python unified_experiment.py --config configs/master_config.yaml
+    
+    # Use specialized pruning experiments:
+    python unified_experiment.py --config configs/master_config.yaml \
+        --pruning_experiment cascading_layer \
+        --dropout_rates 0.1 0.3 0.5 0.7 0.9
     
     # Override specific parameters:
     python unified_experiment.py --config configs/master_config.yaml \
@@ -27,15 +33,20 @@ import json
 import torch
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Add parent directory to path
 import sys
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from alignment.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
+from alignment.experiments.runner import ExperimentRunner
+from alignment.pruning.experiments import CascadingLayerPruningExperiment, LayerIsolatedPruningExperiment
+from alignment.pruning.experiments.cascading_layer import CascadingConfig
+from alignment.pruning.experiments.layer_wise import LayerIsolatedConfig
 from alignment.analysis import HTMLReporter, MarkdownReporter
 from alignment.analysis.visualization import (
     MetricVisualizer,
@@ -95,6 +106,47 @@ def parse_args():
         help="Path to configuration YAML file"
     )
     
+    # Pruning experiment type
+    parser.add_argument(
+        "--pruning_experiment",
+        type=str,
+        choices=['standard', 'cascading_layer', 'layer_isolated'],
+        default='standard',
+        help="Type of pruning experiment to run"
+    )
+    
+    # Specialized pruning experiment parameters
+    parser.add_argument(
+        "--dropout_rates",
+        type=float,
+        nargs='+',
+        default=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
+        help="Dropout rates for specialized pruning experiments"
+    )
+    
+    parser.add_argument(
+        "--cascade_direction",
+        type=str,
+        choices=['forward', 'backward'],
+        default='forward',
+        help="Direction for cascading layer pruning"
+    )
+    
+    parser.add_argument(
+        "--recompute_scores",
+        type=lambda x: x.lower() == 'true',
+        default=True,
+        help="Whether to recompute scores after each layer in cascading"
+    )
+    
+    parser.add_argument(
+        "--pruning_modes",
+        type=str,
+        nargs='+',
+        default=['low', 'high', 'random'],
+        help="Pruning modes to evaluate"
+    )
+    
     # Allow overriding any config parameter from command line
     # Examples of common overrides:
     parser.add_argument("--name", type=str, help="Override experiment name")
@@ -131,10 +183,18 @@ def load_and_merge_config(args) -> Dict[str, Any]:
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     
+    # Add pruning experiment specific parameters
+    config['pruning_experiment'] = args.pruning_experiment
+    config['dropout_rates'] = args.dropout_rates
+    config['cascade_direction'] = args.cascade_direction
+    config['recompute_scores'] = args.recompute_scores
+    config['pruning_modes'] = args.pruning_modes
+    
     # Apply command line overrides
     overrides = vars(args)
     for key, value in overrides.items():
-        if value is not None and key != 'config':
+        if value is not None and key not in ['config', 'pruning_experiment', 'dropout_rates', 
+                                              'cascade_direction', 'recompute_scores', 'pruning_modes']:
             # Handle nested keys (e.g., training_config.epochs)
             if '.' in key:
                 parts = key.split('.')
@@ -206,6 +266,220 @@ def create_experiment_config(config: Dict[str, Any]) -> GeneralAlignmentConfig:
     experiment_config._full_config = config
     
     return experiment_config
+
+
+def create_cascading_config(config: Dict[str, Any]) -> CascadingConfig:
+    """Create CascadingConfig from master config dictionary."""
+    return CascadingConfig(
+        # Basic info
+        name=config.get('name', 'cascading_experiment'),
+        model_name=config.get('model_name', 'resnet18'),
+        model_config=config.get('model_config', {}),
+        checkpoint_dir=config.get('checkpoint_dir', './checkpoints'),
+        log_dir=config.get('log_dir', './logs'),
+        device=config.get('training_config', {}).get('device', 'cuda'),
+        seed=config.get('seed', 42),
+        
+        # Dataset
+        dataset_name=config.get('dataset_name', 'cifar10'),
+        dataset_config=config.get('dataset_config', {}),
+        
+        # Dropout configuration
+        dropout_rates=config.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]),
+        dropout_mode=config.get('dropout_mode', 'scaled'),
+        cascade_direction=config.get('cascade_direction', 'forward'),
+        
+        # Pruning configuration
+        pruning_metric=config.get('alignment_metrics', ['rayleigh_quotient'])[0],
+        pruning_strategy='low',  # Will be varied in the experiment
+        exclude_classification_layer=config.get('exclude_classification_layer', True),
+        recompute_scores=config.get('recompute_scores', True),
+        
+        # Training configuration
+        train_before_dropout=config.get('train_model', True),
+        training_epochs=config.get('training_config', {}).get('epochs', 10),
+        learning_rate=config.get('training_config', {}).get('learning_rate', 0.001),
+        optimizer=config.get('training_config', {}).get('optimizer', 'adam'),
+        
+        # Evaluation
+        eval_batches=config.get('eval_batches'),
+        num_random_trials=config.get('num_random_trials', 3),
+        
+        # Metrics
+        metrics=config.get('alignment_metrics', ['rayleigh_quotient']),
+    )
+
+
+def create_layer_isolated_config(config: Dict[str, Any]) -> LayerIsolatedConfig:
+    """Create LayerIsolatedConfig from master config dictionary."""
+    return LayerIsolatedConfig(
+        # Basic info
+        name=config.get('name', 'layer_isolated_experiment'),
+        model_name=config.get('model_name', 'resnet18'),
+        model_config=config.get('model_config', {}),
+        checkpoint_dir=config.get('checkpoint_dir', './checkpoints'),
+        log_dir=config.get('log_dir', './logs'),
+        device=config.get('training_config', {}).get('device', 'cuda'),
+        seed=config.get('seed', 42),
+        
+        # Dataset
+        dataset_name=config.get('dataset_name', 'cifar10'),
+        dataset_config=config.get('dataset_config', {}),
+        
+        # Dropout configuration
+        dropout_rates=config.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]),
+        dropout_mode=config.get('dropout_mode', 'scaled'),
+        
+        # Pruning configuration
+        pruning_metric=config.get('alignment_metrics', ['rayleigh_quotient'])[0],
+        pruning_strategy='low',  # Will be varied in the experiment
+        exclude_classification_layer=config.get('exclude_classification_layer', True),
+        
+        # Training configuration
+        train_before_dropout=config.get('train_model', True),
+        training_epochs=config.get('training_config', {}).get('epochs', 10),
+        learning_rate=config.get('training_config', {}).get('learning_rate', 0.001),
+        optimizer=config.get('training_config', {}).get('optimizer', 'adam'),
+        
+        # Evaluation
+        eval_batches=config.get('eval_batches'),
+        num_random_trials=config.get('num_random_trials', 3),
+        
+        # Metrics
+        metrics=config.get('alignment_metrics', ['rayleigh_quotient']),
+    )
+
+
+def generate_specialized_pruning_report(
+    results: Dict[str, Any],
+    config: Dict[str, Any],
+    output_dir: Path,
+    experiment_type: str
+) -> None:
+    """Generate visualizations for specialized pruning experiments."""
+    logger = logging.getLogger(__name__)
+    logger.info(f"Generating visualizations for {experiment_type} experiment...")
+    
+    # Create visualizations directory
+    viz_dir = output_dir / "visualizations"
+    viz_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Performance comparison across dropout rates
+    if 'accuracies' in results and 'losses' in results:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        dropout_rates = results.get('dropout_rates', [])
+        
+        # Plot accuracies
+        for strategy in ['low', 'high', 'random']:
+            if strategy in results['accuracies']:
+                ax1.plot(dropout_rates, results['accuracies'][strategy], 
+                        marker='o', label=f'{strategy} mode')
+        
+        ax1.set_xlabel('Dropout Rate')
+        ax1.set_ylabel('Accuracy (%)')
+        ax1.set_title(f'{experiment_type} - Accuracy vs Dropout Rate')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot losses
+        for strategy in ['low', 'high', 'random']:
+            if strategy in results['losses']:
+                ax2.plot(dropout_rates, results['losses'][strategy], 
+                        marker='o', label=f'{strategy} mode')
+        
+        ax2.set_xlabel('Dropout Rate')
+        ax2.set_ylabel('Loss')
+        ax2.set_title(f'{experiment_type} - Loss vs Dropout Rate')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        fig.savefig(viz_dir / "performance_comparison.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+    
+    # 2. Layer scores visualization (if available)
+    if 'layer_scores' in results:
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        layer_scores = results['layer_scores']
+        layers = list(layer_scores.keys())
+        
+        # Create box plot of scores per layer
+        scores_data = []
+        for layer in layers:
+            scores_data.append(layer_scores[layer])
+        
+        bp = ax.boxplot(scores_data, labels=layers, patch_artist=True)
+        
+        # Color the boxes
+        for patch in bp['boxes']:
+            patch.set_facecolor('lightblue')
+        
+        ax.set_xlabel('Layer')
+        ax.set_ylabel('Alignment Score')
+        ax.set_title(f'{experiment_type} - Layer Alignment Scores Distribution')
+        ax.set_xticklabels(layers, rotation=45, ha='right')
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        fig.savefig(viz_dir / "layer_scores_distribution.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+    
+    # 3. Cascading-specific visualization
+    if experiment_type == 'cascading_layer' and 'cascade_masks' in results:
+        # Show how sparsity propagates through layers
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        dropout_rates_with_masks = []
+        layer_active_neurons = {layer: [] for layer in results.get('layer_order', [])}
+        
+        for dropout_key, cascade_info in results['cascade_masks'].items():
+            if 'active_neurons' in cascade_info:
+                dropout_rate = float(dropout_key.split('_')[1])
+                dropout_rates_with_masks.append(dropout_rate)
+                
+                for layer, active_count in cascade_info['active_neurons'].items():
+                    layer_active_neurons[layer].append(active_count)
+        
+        # Plot active neurons per layer at different dropout rates
+        for layer, active_counts in layer_active_neurons.items():
+            if active_counts:
+                ax.plot(dropout_rates_with_masks, active_counts, marker='o', label=layer)
+        
+        ax.set_xlabel('Dropout Rate')
+        ax.set_ylabel('Active Neurons')
+        ax.set_title('Cascading Effect: Active Neurons per Layer')
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        fig.savefig(viz_dir / "cascading_effect.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+    
+    # 4. Summary statistics
+    summary_stats = {
+        'experiment_type': experiment_type,
+        'dropout_rates': results.get('dropout_rates', []),
+        'best_accuracy': {},
+        'worst_accuracy': {},
+        'accuracy_drop': {}
+    }
+    
+    for strategy in ['low', 'high', 'random']:
+        if strategy in results.get('accuracies', {}):
+            accs = results['accuracies'][strategy]
+            if accs:
+                summary_stats['best_accuracy'][strategy] = max(accs)
+                summary_stats['worst_accuracy'][strategy] = min(accs)
+                summary_stats['accuracy_drop'][strategy] = max(accs) - min(accs)
+    
+    # Save summary statistics
+    stats_path = output_dir / "summary_statistics.json"
+    with open(stats_path, 'w') as f:
+        json.dump(summary_stats, f, indent=2)
+    
+    logger.info(f"Visualizations saved to {viz_dir}")
 
 
 def generate_comprehensive_report(
@@ -365,37 +639,60 @@ def generate_results_summary(results: Dict[str, Any], config: Dict[str, Any]) ->
     """Generate HTML summary of results."""
     summary = ["<div class='results-summary'>"]
     
-    # Training results
-    if 'performance_history' in results:
-        perf = results['performance_history']
-        summary.append("<h3>Training Performance</h3>")
+    # Check if this is a specialized pruning experiment
+    if 'dropout_rates' in results:
+        # Specialized pruning experiment summary
+        summary.append("<h3>Pruning Experiment Results</h3>")
         
-        if 'val_acc' in perf and perf['val_acc']:
-            final_acc = perf['val_acc'][-1]
-            best_acc = max(perf['val_acc'])
-            summary.append(f"<p>Final Accuracy: {final_acc:.2%}</p>")
-            summary.append(f"<p>Best Accuracy: {best_acc:.2%}</p>")
+        if 'accuracies' in results:
+            summary.append("<table border='1' style='border-collapse: collapse;'>")
+            summary.append("<tr><th>Dropout Rate</th><th>Low Mode</th><th>High Mode</th><th>Random Mode</th></tr>")
+            
+            dropout_rates = results.get('dropout_rates', [])
+            for i, rate in enumerate(dropout_rates):
+                summary.append(f"<tr><td>{rate:.1%}</td>")
+                for mode in ['low', 'high', 'random']:
+                    if mode in results['accuracies'] and i < len(results['accuracies'][mode]):
+                        acc = results['accuracies'][mode][i]
+                        summary.append(f"<td>{acc:.2f}%</td>")
+                    else:
+                        summary.append("<td>-</td>")
+                summary.append("</tr>")
+            
+            summary.append("</table>")
+    else:
+        # Standard experiment summary
+        # Training results
+        if 'performance_history' in results:
+            perf = results['performance_history']
+            summary.append("<h3>Training Performance</h3>")
+            
+            if 'val_acc' in perf and perf['val_acc']:
+                final_acc = perf['val_acc'][-1]
+                best_acc = max(perf['val_acc'])
+                summary.append(f"<p>Final Accuracy: {final_acc:.2%}</p>")
+                summary.append(f"<p>Best Accuracy: {best_acc:.2%}</p>")
+            
+            if 'train_loss' in perf and perf['train_loss']:
+                final_loss = perf['train_loss'][-1]
+                summary.append(f"<p>Final Training Loss: {final_loss:.4f}</p>")
         
-        if 'train_loss' in perf and perf['train_loss']:
-            final_loss = perf['train_loss'][-1]
-            summary.append(f"<p>Final Training Loss: {final_loss:.4f}</p>")
-    
-    # Pruning results
-    if 'pruning_results' in results and 'sparsity' in results['pruning_results']:
-        summary.append("<h3>Pruning Results</h3>")
-        sparsity = results['pruning_results']['sparsity']
-        summary.append(f"<p>Overall Sparsity: {sparsity.get('overall', 0):.2%}</p>")
+        # Pruning results
+        if 'pruning_results' in results and 'sparsity' in results['pruning_results']:
+            summary.append("<h3>Pruning Results</h3>")
+            sparsity = results['pruning_results']['sparsity']
+            summary.append(f"<p>Overall Sparsity: {sparsity.get('overall', 0):.2%}</p>")
+            
+            if 'performance_retention' in results.get('analysis', {}):
+                retention = results['analysis']['performance_retention']
+                summary.append(f"<p>Performance Retention: {retention:.2%}</p>")
         
-        if 'performance_retention' in results.get('analysis', {}):
-            retention = results['analysis']['performance_retention']
-            summary.append(f"<p>Performance Retention: {retention:.2%}</p>")
-    
-    # Metric changes
-    if 'analysis' in results and 'metric_changes' in results['analysis']:
-        summary.append("<h3>Metric Changes</h3>")
-        for metric, changes in results['analysis']['metric_changes'].items():
-            avg_change = sum(c.get('percent_change', 0) for c in changes.values()) / len(changes)
-            summary.append(f"<p>{metric}: {avg_change:+.1f}% average change</p>")
+        # Metric changes
+        if 'analysis' in results and 'metric_changes' in results['analysis']:
+            summary.append("<h3>Metric Changes</h3>")
+            for metric, changes in results['analysis']['metric_changes'].items():
+                avg_change = sum(c.get('percent_change', 0) for c in changes.values()) / len(changes)
+                summary.append(f"<p>{metric}: {avg_change:+.1f}% average change</p>")
     
     summary.append("</div>")
     return "\n".join(summary)
@@ -421,6 +718,7 @@ def main():
     logger.info(f"Model: {config['model_name']}")
     logger.info(f"Dataset: {config['dataset_name']}")
     logger.info(f"Device: {config.get('training_config', {}).get('device', 'cuda')}")
+    logger.info(f"Pruning Experiment: {config['pruning_experiment']}")
     logger.info(f"Output Directory: {output_dir}")
     logger.info("=" * 80)
     
@@ -430,34 +728,59 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.manual_seed(config.get('seed', 42))
         
-        # Create experiment configuration
-        experiment_config = create_experiment_config(config)
-        
-        # Create and run experiment
-        logger.info("Creating experiment...")
-        experiment = GeneralAlignmentExperiment(experiment_config)
+        # Choose experiment type based on pruning_experiment parameter
+        if config['pruning_experiment'] == 'cascading_layer':
+            logger.info("Running Cascading Layer Pruning Experiment")
+            experiment_config = create_cascading_config(config)
+            experiment = CascadingLayerPruningExperiment(experiment_config)
+            
+        elif config['pruning_experiment'] == 'layer_isolated':
+            logger.info("Running Layer-Isolated Pruning Experiment")
+            experiment_config = create_layer_isolated_config(config)
+            experiment = LayerIsolatedPruningExperiment(experiment_config)
+            
+        else:  # standard
+            logger.info("Running Standard General Alignment Experiment")
+            experiment_config = create_experiment_config(config)
+            experiment = GeneralAlignmentExperiment(experiment_config)
         
         logger.info("Running experiment...")
         results = experiment.run()
         
-        # Generate comprehensive report
-        if config.get('analysis_config', {}).get('generate_plots', True):
-            generate_comprehensive_report(results, config, output_dir)
+        # Generate appropriate report based on experiment type
+        if config['pruning_experiment'] in ['cascading_layer', 'layer_isolated']:
+            generate_specialized_pruning_report(
+                results, config, output_dir, config['pruning_experiment']
+            )
+        else:
+            if config.get('analysis_config', {}).get('generate_plots', True):
+                generate_comprehensive_report(results, config, output_dir)
         
         # Print summary
         logger.info("=" * 80)
         logger.info("EXPERIMENT COMPLETED SUCCESSFULLY")
         logger.info("=" * 80)
         
-        # Print key results
-        if 'performance_history' in results:
-            perf = results['performance_history']
-            if 'val_acc' in perf and perf['val_acc']:
-                logger.info(f"Final Validation Accuracy: {perf['val_acc'][-1]:.2%}")
-        
-        if 'pruning_results' in results and 'sparsity' in results['pruning_results']:
-            sparsity = results['pruning_results']['sparsity'].get('overall', 0)
-            logger.info(f"Achieved Sparsity: {sparsity:.1%}")
+        # Print key results based on experiment type
+        if config['pruning_experiment'] in ['cascading_layer', 'layer_isolated']:
+            # Print specialized experiment results
+            if 'accuracies' in results:
+                logger.info("Performance Summary:")
+                for mode in ['low', 'high', 'random']:
+                    if mode in results['accuracies'] and results['accuracies'][mode]:
+                        best_acc = max(results['accuracies'][mode])
+                        worst_acc = min(results['accuracies'][mode])
+                        logger.info(f"  {mode} mode: Best={best_acc:.2f}%, Worst={worst_acc:.2f}%")
+        else:
+            # Print standard experiment results
+            if 'performance_history' in results:
+                perf = results['performance_history']
+                if 'val_acc' in perf and perf['val_acc']:
+                    logger.info(f"Final Validation Accuracy: {perf['val_acc'][-1]:.2%}")
+            
+            if 'pruning_results' in results and 'sparsity' in results['pruning_results']:
+                sparsity = results['pruning_results']['sparsity'].get('overall', 0)
+                logger.info(f"Achieved Sparsity: {sparsity:.1%}")
         
         logger.info(f"Results saved to: {output_dir}")
         logger.info("=" * 80)

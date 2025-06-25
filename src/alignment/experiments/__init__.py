@@ -8,7 +8,7 @@ conducting alignment analysis experiments.
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.experiments.runner import ExperimentRunner
 from alignment.experiments.general_alignment import GeneralAlignmentExperiment, GeneralAlignmentConfig
-from alignment.experiments.parallel_pruning_experiment import ParallelPruningExperiment
+from alignment.experiments.parallel_pruning_experiment import ParallelPruningExperiment, ParallelExperimentConfig
 
 __all__ = [
     'BaseExperiment',
@@ -17,4 +17,5 @@ __all__ = [
     'GeneralAlignmentExperiment',
     'GeneralAlignmentConfig',
     'ParallelPruningExperiment',
+    'ParallelExperimentConfig',
 ] 
