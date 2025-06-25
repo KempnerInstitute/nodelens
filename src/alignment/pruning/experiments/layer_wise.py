@@ -237,7 +237,9 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
                 elif len(layer.weight.shape) == 4:  # Conv layer
                     # Mask output channels
                     layer.weight.data = self.original_weights[layer_name].clone()
-                    layer.weight.data[~mask] = 0
+                    # Expand mask to match weight dimensions
+                    expanded_mask = mask.view(-1, 1, 1, 1).expand_as(layer.weight)
+                    layer.weight.data[~expanded_mask] = 0
                     
                     if hasattr(layer, 'bias') and layer.bias is not None:
                         if layer_name + "_bias" not in self.original_weights:
