@@ -101,8 +101,11 @@ def create_experiment_config(unified_config):
         # Pruning specific
         if experiment_type == 'standard_pruning':
             pruning = unified_config.get('pruning', {})
-            config.pruning_strategies = [pruning.get('strategy', 'magnitude')]
-            config.pruning_amounts = [pruning.get('amount', 0.5)]
+            # Handle both single values and lists for strategies and amounts
+            strategies = pruning.get('strategy', 'magnitude')
+            config.pruning_strategies = strategies if isinstance(strategies, list) else [strategies]
+            amounts = pruning.get('amount', 0.5)
+            config.pruning_amounts = amounts if isinstance(amounts, list) else [amounts]
             config.fine_tune_after_pruning = pruning.get('fine_tune', True)
             config.fine_tune_epochs = pruning.get('fine_tune_epochs', 5)
     else:

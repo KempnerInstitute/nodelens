@@ -191,6 +191,8 @@ class BaseExperiment(CoreBaseExperiment):
                 
                 # Remove 'name' from kwargs if it exists to avoid conflict
                 model_kwargs.pop('name', None)
+                # Remove cnn_mode as it's not a model parameter but a wrapper parameter
+                model_kwargs.pop('cnn_mode', None)
                 
                 # Special handling for MLP model
                 if self.config.model_name.lower() == 'mlp':
