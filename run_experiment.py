@@ -101,13 +101,16 @@ def create_experiment_config(unified_config):
         # Pruning specific
         if experiment_type == 'standard_pruning':
             pruning = unified_config.get('pruning', {})
-            # Handle both single values and lists for strategies and amounts
-            strategies = pruning.get('strategy', 'magnitude')
-            config.pruning_strategies = strategies if isinstance(strategies, list) else [strategies]
-            amounts = pruning.get('amount', 0.5)
-            config.pruning_amounts = amounts if isinstance(amounts, list) else [amounts]
-            config.fine_tune_after_pruning = pruning.get('fine_tune', True)
+            # Handle both single values and lists for algorithms and sparsity levels
+            algorithms = pruning.get('algorithms', pruning.get('strategy', 'magnitude'))  # Support old name for compatibility
+            config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
+            
+            sparsity_levels = pruning.get('sparsity_levels', pruning.get('amount', 0.5))  # Support old name
+            config.pruning_amounts = sparsity_levels if isinstance(sparsity_levels, list) else [sparsity_levels]
+            
+            config.fine_tune_after_pruning = pruning.get('fine_tune_after_pruning', pruning.get('fine_tune', True))
             config.fine_tune_epochs = pruning.get('fine_tune_epochs', 5)
+            config.pruning_selection_mode = pruning.get('selection_mode', 'low')  # Which weights to prune
     else:
         # Create base ExperimentConfig for other experiment types
         config = ExperimentConfig(**base_params)
@@ -117,13 +120,24 @@ def create_experiment_config(unified_config):
     config.train_model = config.training_config.get('epochs', 0) > 0
     config.alignment_metrics = config.metrics
     config.apply_pruning = True
-    config.pruning_strategy = unified_config.get('pruning', {}).get('strategy', 'magnitude')
-    config.pruning_config = unified_config.get('pruning', {})
+    
+    # Get pruning configuration with backward compatibility
+    pruning_config = unified_config.get('pruning', {})
+    config.pruning_strategy = pruning_config.get('algorithms', pruning_config.get('strategy', 'magnitude'))
+    if isinstance(config.pruning_strategy, list):
+        config.pruning_strategy = config.pruning_strategy[0]  # Use first algorithm as default
+    
+    config.pruning_config = pruning_config
     config.analysis_config = unified_config.get('visualization', {})
     config.eval_model = True
     config.cnn_mode = unified_config['model'].get('cnn_mode', 'unfold')
-    config.dropout_rates = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
-    config.pruning_modes = config.pruning_config.get('strategies', ['high', 'low', 'random'])
+    config.dropout_rates = pruning_config.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+    
+    # Handle selection modes (which importance values to prune)
+    config.pruning_modes = pruning_config.get('selection_modes_to_compare', 
+                                              pruning_config.get('strategies', 
+                                              pruning_config.get('pruning_modes', ['high', 'low', 'random'])))
+    
     config.cascade_direction = unified_config.get('experiment_specific', {}).get('cascade_direction', 'forward')
     config.recompute_scores = True
     
