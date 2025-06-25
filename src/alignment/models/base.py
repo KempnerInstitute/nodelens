@@ -138,7 +138,7 @@ class BaseModelWrapper(BaseModel):
         Basic activation preprocessing.
         
         For advanced preprocessing (CNN modes, attention, etc.),
-        use the preprocessing module: alignment.preprocessing.preprocess_layer_activations
+        use the data processing module: alignment.data.processing.preprocess_layer_activations
         
         Args:
             activations: Raw activations from hooks
