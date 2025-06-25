@@ -375,6 +375,103 @@ class GeneralAlignmentExperiment(BaseExperiment):
         # TODO: Implement targeted dropout based on alignment scores
         return 0.0, 100.0 * (1 - dropout_rate)
     
+    def _pruning_experiments(self) -> Dict[str, Any]:
+        """Perform pruning experiments with various strategies."""
+        if not self.config.do_pruning_experiments:
+            logger.info("Skipping pruning experiments")
+            return {}
+        
+        logger.info("Starting pruning experiments")
+        
+        # Import pruning utilities
+        from alignment.pruning.strategies import create_pruning_strategy
+        from alignment.pruning.mask_manager import MaskManager
+        
+        results = {
+            "strategies": {},
+            "final_model_performance": {}
+        }
+        
+        # Save original model state
+        original_state = self.model.state_dict()
+        
+        for strategy_name in self.config.pruning_strategies:
+            logger.info(f"Testing pruning strategy: {strategy_name}")
+            strategy_results = {
+                "pruning_amounts": [],
+                "accuracies": [],
+                "losses": [],
+                "layer_sparsities": []
+            }
+            
+            for amount in self.config.pruning_amounts:
+                logger.info(f"  Pruning amount: {amount * 100:.0f}%")
+                
+                # Reset model to original state
+                self.model.load_state_dict(original_state)
+                
+                # Create pruning strategy
+                strategy = create_pruning_strategy(
+                    strategy_name,
+                    amount=amount,
+                    scope="global"  # Use global pruning by default
+                )
+                
+                # Create mask manager
+                mask_manager = MaskManager(self.model)
+                
+                # Compute importance scores
+                scores = strategy.compute_scores(self.model, self.data_loader)
+                
+                # Apply pruning
+                masks = strategy.compute_masks(scores)
+                mask_manager.apply_masks(masks)
+                
+                # Evaluate pruned model
+                test_loss, test_acc = self._evaluate()
+                
+                # Compute layer-wise sparsity
+                sparsities = mask_manager.get_sparsity_by_layer()
+                
+                # Fine-tune if configured
+                if self.config.fine_tune_after_pruning:
+                    logger.info(f"    Fine-tuning for {self.config.fine_tune_epochs} epochs")
+                    
+                    # Setup optimizer for fine-tuning
+                    optimizer = torch.optim.Adam(
+                        self.model.parameters(),
+                        lr=self.config.learning_rate * 0.1  # Lower learning rate
+                    )
+                    
+                    for epoch in range(self.config.fine_tune_epochs):
+                        train_loss, train_acc = self._train_epoch(
+                            optimizer,
+                            nn.CrossEntropyLoss()
+                        )
+                        
+                        # Ensure masks remain applied during fine-tuning
+                        mask_manager.apply_masks(masks)
+                    
+                    # Re-evaluate after fine-tuning
+                    test_loss, test_acc = self._evaluate()
+                    logger.info(f"    After fine-tuning: Loss={test_loss:.4f}, Accuracy={test_acc:.2f}%")
+                
+                # Store results
+                strategy_results["pruning_amounts"].append(amount)
+                strategy_results["accuracies"].append(test_acc)
+                strategy_results["losses"].append(test_loss)
+                strategy_results["layer_sparsities"].append(sparsities)
+                
+                logger.info(f"    Results: Loss={test_loss:.4f}, Accuracy={test_acc:.2f}%, "
+                          f"Overall sparsity={mask_manager.get_overall_sparsity():.2%}")
+            
+            results["strategies"][strategy_name] = strategy_results
+        
+        # Restore original model
+        self.model.load_state_dict(original_state)
+        
+        return results
+    
     def run(self) -> Dict[str, Any]:
         """Run the general alignment experiment."""
         logger.info("Starting general alignment experiment")
@@ -393,7 +490,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
         # Dropout analysis
         self.dropout_results = self._dropout_analysis()
         
-        # TODO: Add pruning experiments
+        # Pruning experiments
+        self.pruning_results = self._pruning_experiments()
+        
         # TODO: Add eigenfeature analysis
         
         # Combine all results
