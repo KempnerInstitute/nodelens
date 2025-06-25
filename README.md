@@ -47,13 +47,13 @@ For actual research, use the unified experiment runner:
 
 ```bash
 # Run with the default configuration
-python run_experiment.py --config configs/unified_config.yaml
+python scripts/run_experiment.py --config configs/unified_config.yaml
 
 # Run with a minimal test configuration
-python run_experiment.py --config configs/examples/quick_test.yaml
+python scripts/run_experiment.py --config configs/examples/quick_test.yaml
 ```
 
-The examples are self-contained demos for learning, while `run_experiment.py` is the production tool for research.
+The examples are self-contained demos for learning, while `scripts/run_experiment.py` is the production tool for research.
 
 ## Available Examples
 
@@ -78,11 +78,11 @@ The examples are self-contained demos for learning, while `run_experiment.py` is
    - Interactive visualizations
    - Custom analysis tools
 
-5. **Production Experiments** (`run_experiment.py`)
+5. **Production Experiments** (`scripts/run_experiment.py`)
    - Fully configurable via YAML
    - Supports all models, datasets, and metrics
    - Experiment types: standard, cascading, layer-isolated
-   - Example: `python run_experiment.py --config configs/unified_config.yaml`
+   - Example: `python scripts/run_experiment.py --config configs/unified_config.yaml`
 
 ## Comprehensive Experiments
 
