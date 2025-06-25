@@ -183,7 +183,8 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         
         # Aggregate scores
         if scores_list:
-            return torch.cat(scores_list, dim=0).mean(dim=0)
+            # Stack scores from different batches and average across batches
+            return torch.stack(scores_list, dim=0).mean(dim=0)
         else:
             logger.warning(f"No scores computed for layer {layer_name}")
             return torch.zeros(1)
@@ -192,7 +193,8 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         self, 
         scores: torch.Tensor, 
         dropout_rate: float,
-        strategy: str = "low"
+        strategy: str = "low",
+        layer_name: Optional[str] = None
     ) -> torch.Tensor:
         """
         Create a dropout mask for a single layer.
@@ -201,10 +203,31 @@ class CascadingLayerPruningExperiment(BaseExperiment):
             scores: Alignment scores for the layer
             dropout_rate: Fraction to drop
             strategy: Pruning strategy
+            layer_name: Optional layer name to get actual layer size
             
         Returns:
             Boolean mask (True = keep, False = drop)
         """
+        # Get actual layer size if layer name provided
+        if layer_name is not None:
+            layer = self.wrapped_model.get_layer(layer_name)
+            if layer is not None and hasattr(layer, 'weight'):
+                # Use actual output dimension size
+                if len(layer.weight.shape) >= 1:
+                    actual_neurons = layer.weight.shape[0]
+                    if scores.numel() != actual_neurons:
+                        logger.warning(
+                            f"Score size ({scores.numel()}) doesn't match layer size ({actual_neurons}). "
+                            f"Using layer size for mask."
+                        )
+                        # Create mask based on actual layer size
+                        if scores.numel() == 1:
+                            # Single score - apply uniformly
+                            return torch.ones(actual_neurons, dtype=torch.bool)
+                        else:
+                            # Resize scores if possible
+                            scores = scores[:actual_neurons] if scores.numel() > actual_neurons else scores
+        
         # Handle scalar scores (0-d tensor)
         if scores.dim() == 0:
             logger.warning("Scores is a scalar, creating single-neuron mask")
@@ -384,7 +407,7 @@ class CascadingLayerPruningExperiment(BaseExperiment):
             scores_history[layer_name] = scores.flatten().tolist() if scores.dim() > 0 else [scores.item()]
             
             # Create mask for this layer
-            mask = self._create_layer_mask(scores, dropout_rate, strategy)
+            mask = self._create_layer_mask(scores, dropout_rate, strategy, layer_name)
             masks[layer_name] = mask
             
             # Log pruning info
