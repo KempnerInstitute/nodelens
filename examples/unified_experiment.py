@@ -240,6 +240,9 @@ def load_and_merge_config(args) -> Dict[str, Any]:
 
 def create_experiment_config(config: Dict[str, Any]) -> GeneralAlignmentConfig:
     """Create GeneralAlignmentConfig from master config dictionary."""
+    # Extract training config parameters
+    training_config = config.get('training_config', {})
+    
     # Extract the parameters that GeneralAlignmentConfig actually accepts
     experiment_config = GeneralAlignmentConfig(
         # Basic info from ExperimentConfig
@@ -248,36 +251,48 @@ def create_experiment_config(config: Dict[str, Any]) -> GeneralAlignmentConfig:
         model_config=config.get('model_config', {}),
         checkpoint_dir=config.get('checkpoint_dir', './checkpoints'),
         log_dir=config.get('log_dir', './logs'),
-        device=config.get('training_config', {}).get('device', 'cuda'),
+        device=training_config.get('device', 'cuda'),
         seed=config.get('seed', 42),
         
         # Dataset configuration
         dataset_name=config.get('dataset_name', 'cifar10'),
         dataset_config=config.get('dataset_config', {}),
         
-        # Training configuration
-        training_config=config.get('training_config', {}),
+        # Training configuration (extracted from training_config)
+        do_train=config.get('train_model', True),
+        training_epochs=training_config.get('epochs', 100),
+        learning_rate=training_config.get('learning_rate', 0.1),
+        optimizer=training_config.get('optimizer', 'sgd'),
+        scheduler=training_config.get('scheduler', 'cosine'),
+        scheduler_config=training_config.get('scheduler_kwargs', {"T_max": 100, "eta_min": 0}),
         
-        # Metrics configuration
-        alignment_metrics=config.get('alignment_metrics', ['rayleigh_quotient']),
-        compute_metrics_on=config.get('compute_metrics_on'),  # None means all layers
+        # Alignment measurement
+        measure_alignment_during_training=config.get('compute_initial_metrics', True),
+        alignment_frequency=1,
+        alignment_methods=config.get('alignment_metrics', ['rayleigh_quotient']),
         
-        # Pruning configuration
-        pruning_strategy=config.get('pruning_strategy', 'magnitude'),
-        pruning_config=config.get('pruning_config', {}),
-        pruning_based_on_metric=config.get('pruning_based_on_metric'),
+        # Dropout analysis
+        do_dropout_analysis=config.get('pruning_experiment') == 'standard',
+        dropout_rates=config.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]),
+        dropout_mode=config.get('dropout_mode', 'scaled'),
         
-        # Experiment flow
-        train_model=config.get('train_model', True),
-        compute_initial_metrics=config.get('compute_initial_metrics', True),
-        apply_pruning=config.get('apply_pruning', True),
+        # Pruning experiments
+        do_pruning_experiments=config.get('apply_pruning', True),
+        pruning_strategies=[config.get('pruning_strategy', 'magnitude')],
+        pruning_amounts=[config.get('pruning_config', {}).get('amount', 0.5)],
         fine_tune_after_pruning=config.get('fine_tune_after_pruning', True),
         fine_tune_epochs=config.get('pruning_config', {}).get('fine_tune_epochs', 10),
         
-        # Analysis configuration
-        track_performance=config.get('analysis_config', {}).get('save_predictions', True),
-        save_checkpoints=config.get('analysis_config', {}).get('save_weights', True),
-        save_metrics_history=config.get('analysis_config', {}).get('save_activations', True),
+        # CNN mode
+        cnn_mode=config.get('cnn_mode', 'unfold'),
+        
+        # Visualization
+        generate_plots=config.get('analysis_config', {}).get('generate_plots', True),
+        plot_format=config.get('analysis_config', {}).get('plot_format', 'png'),
+        plot_dpi=config.get('analysis_config', {}).get('plot_dpi', 300),
+        
+        # Results saving
+        save_intermediate_results=config.get('analysis_config', {}).get('save_intermediate_results', True),
     )
     
     # Store additional config parameters that might be used elsewhere
