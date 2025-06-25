@@ -514,7 +514,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     
                     # Get sample inputs for alignment-based pruning
                     layer_inputs_dict = {}
-                    if strategy_name in ["alignment", "hybrid", "cascading_alignment"] or isinstance(strategy, (AlignmentPruning, GlobalAlignmentPruning)):
+                    if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
                         # Get a batch of data for alignment computation
                         data_iter = iter(self.data_loader)
                         sample_batch, _ = next(data_iter)
@@ -561,7 +561,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         
                     elif self.config.pruning_scope == 'cascading' and strategy_name == "alignment":
                         # Cascading alignment needs special handling
-                        from alignment.pruning.strategies import CascadingAlignmentPruning
                         
                         # TODO: Extend cascading to other algorithms (magnitude, gradient, etc)
                         # For now, cascading only works with alignment-based pruning
@@ -600,17 +599,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         total_params = sum(mask.numel() for mask in masks.values())
                         zero_params = sum((mask == 0).sum().item() for mask in masks.values())
                         overall_sparsity = zero_params / total_params if total_params > 0 else 0
-                    elif strategy_name == "cascading_alignment":
-                        # Legacy cascading_alignment handling
-                        logger.warning("'cascading_alignment' algorithm is deprecated. Use algorithms=['alignment'] with scope='cascading'")
-                        from alignment.pruning.strategies import CascadingAlignmentPruning
-                        alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
-                        pruning_config.structured = True
-                        strategy = CascadingAlignmentPruning(
-                            metric=alignment_metric,
-                            direction='forward',
-                            config=pruning_config
-                        )
                     else:
                         # Layer-wise pruning (current behavior)
                         layer_sparsities = {}
@@ -618,7 +606,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
                                 # For alignment-based pruning, we need layer inputs
                                 layer_inputs = None
-                                if strategy_name in ["alignment", "hybrid"]:
+                                if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
                                     if name in layer_inputs_dict:
                                         layer_inputs = layer_inputs_dict[name]
                                     else:

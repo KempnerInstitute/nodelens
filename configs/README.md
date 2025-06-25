@@ -6,7 +6,7 @@ This directory contains YAML configuration files for running alignment experimen
 
 ```bash
 # From repository root
-python run_experiment.py --config configs/example_quick_test.yaml
+python scripts/run_experiment.py --config configs/example_quick_test.yaml
 ```
 
 ## Available Configurations
@@ -15,7 +15,7 @@ python run_experiment.py --config configs/example_quick_test.yaml
 Comprehensive configuration with all possible options documented. Use this as a reference for creating your own configs.
 
 ```bash
-python run_experiment.py --config configs/unified_config.yaml
+python scripts/run_experiment.py --config configs/unified_config.yaml
 ```
 
 ### 2. Example Configurations
@@ -58,7 +58,7 @@ Settings are applied in this order (later overrides earlier):
 
 Example:
 ```bash
-python run_experiment.py --config configs/unified_config.yaml --device cpu
+python scripts/run_experiment.py --config configs/unified_config.yaml --device cpu
 ```
 
 ## Key Configuration Sections
@@ -90,7 +90,7 @@ python run_experiment.py --config configs/unified_config.yaml --device cpu
 ### Basic Usage
 ```bash
 # Run with a configuration file
-python run_experiment.py --config configs/example_quick_test.yaml
+python scripts/run_experiment.py --config configs/example_quick_test.yaml
 ```
 
 ### Override Parameters
@@ -98,19 +98,19 @@ You can override any parameter from the command line:
 
 ```bash
 # Change model
-python run_experiment.py --config configs/master_config.yaml --model_name resnet50
+python scripts/run_experiment.py --config configs/master_config.yaml --model_name resnet50
 
 # Change dataset
-python run_experiment.py --config configs/master_config.yaml --dataset_name cifar100
+python scripts/run_experiment.py --config configs/master_config.yaml --dataset_name cifar100
 
 # Change training parameters
-python run_experiment.py --config configs/master_config.yaml \
+python scripts/run_experiment.py --config configs/master_config.yaml \
     --training_config.epochs 300 \
     --training_config.batch_size 256 \
     --training_config.learning_rate 0.01
 
 # Change pruning strategy
-python run_experiment.py --config configs/master_config.yaml \
+python scripts/run_experiment.py --config configs/master_config.yaml \
     --pruning_strategy gradient \
     --pruning_config.amount 0.7
 ```
@@ -121,7 +121,7 @@ To compare different configurations:
 ```bash
 # Compare pruning strategies
 for strategy in magnitude gradient random; do
-    python run_experiment.py \
+    python scripts/run_experiment.py \
         --config configs/example_pruning_comparison.yaml \
         --pruning_strategy $strategy \
         --name pruning_comparison_$strategy
@@ -129,7 +129,7 @@ done
 
 # Compare pruning amounts
 for amount in 0.3 0.5 0.7 0.9; do
-    python run_experiment.py \
+    python scripts/run_experiment.py \
         --config configs/example_resnet_cifar.yaml \
         --pruning_config.amount $amount \
         --name resnet_pruning_$amount

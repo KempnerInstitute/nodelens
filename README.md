@@ -14,14 +14,14 @@ A comprehensive framework for analyzing neural network alignment through various
 
 ```bash
 # Clone the repository
-git clone https://github.com/KempnerInstitute/alignment.git
+git clone https://github.com/yourusername/alignment.git
 cd alignment
 
 # Install in development mode
 pip install -e .
 
-# Or install with all dependencies
-pip install -e .[all]
+# Run a quick test
+python scripts/run_experiment.py --config configs/examples/quick_test.yaml
 ```
 
 ## Quick Start
@@ -144,20 +144,14 @@ See the [documentation](https://kempnerinstitute.github.io/alignment/) for the c
 
 ```
 alignment/
-├── src/alignment/
-│   ├── core/           # Base classes and protocols
-│   ├── models/         # Model wrappers and architectures
-│   ├── metrics/        # Alignment metrics
-│   ├── pruning/        # Pruning strategies
-│   ├── experiments/    # Experiment framework
-│   ├── data/           # Dataset handling
-│   ├── training/       # Training utilities
-│   ├── analysis/       # Analysis and visualization
-│   └── infrastructure/ # Runtime support (distributed, storage, config)
-├── examples/           # Example scripts
-├── configs/            # Configuration files
-├── tests/              # Unit and integration tests
-└── docs/               # Documentation
+├── src/                    # Main package source code
+│   └── alignment/         # Core library modules
+├── examples/              # Example scripts and demos
+├── scripts/               # Production scripts and tools
+├── configs/               # Configuration files
+├── tests/                 # Unit and integration tests
+├── docs/                  # Documentation
+└── data/                  # Data directory (auto-created)
 ```
 
 ## Documentation

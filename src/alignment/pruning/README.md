@@ -169,6 +169,51 @@ strategy = BernoulliPruning(probability=0.5)
 mask = strategy.prune(layer)
 ```
 
+### Alignment-Based Pruning
+
+#### AlignmentPruning
+Prunes based on neuron-input alignment metrics (defaults to structured pruning).
+
+```python
+from alignment.pruning import AlignmentPruning
+
+# Prune neurons with low alignment
+strategy = AlignmentPruning(metric='rayleigh_quotient')
+
+# Need inputs for alignment computation
+inputs = torch.randn(batch_size, input_dim)
+mask = strategy.prune(layer, inputs=inputs, amount=0.5)
+```
+
+#### GlobalAlignmentPruning
+Global pruning based on alignment scores across all layers.
+
+```python
+from alignment.pruning import GlobalAlignmentPruning
+
+strategy = GlobalAlignmentPruning(metric='rayleigh_quotient')
+
+# Need inputs for each layer
+layer_inputs = {}
+# ... collect inputs with hooks ...
+
+masks = strategy.prune_model(model, layer_inputs, amount=0.5)
+```
+
+#### HybridPruning
+Combines magnitude and alignment information.
+
+```python
+from alignment.pruning import HybridPruning
+
+# 70% alignment, 30% magnitude
+strategy = HybridPruning(
+    alignment_metric='rayleigh_quotient',
+    alpha=0.7
+)
+mask = strategy.prune(layer, inputs=inputs, amount=0.5)
+```
+
 ## Configuration
 
 Use `PruningConfig` to configure pruning behavior:
@@ -342,24 +387,45 @@ pruning/
 │   ├── __init__.py
 │   ├── magnitude.py     # Magnitude-based strategies
 │   ├── gradient.py      # Gradient-based strategies
-│   └── random.py        # Random strategies
-├── structured/          # Structured pruning implementations
-│   ├── channel.py       # Channel pruning
-│   ├── filter.py        # Filter pruning
-│   └── ...             # Other structured methods
+│   ├── random.py        # Random strategies
+│   ├── alignment_based.py # Alignment-based strategies (with structured support)
+│   └── cascading.py     # Cascading alignment strategy
 ├── experiments/         # Pruning experiments
 │   ├── __init__.py
 │   ├── progressive.py   # Progressive pruning analysis
 │   ├── cascading_layer.py # Cascading layer-wise pruning
 │   ├── layer_wise.py    # Layer-wise pruning analysis
 │   └── eigenvector_based.py # Eigenvector-based pruning
+├── STRUCTURED_PRUNING_STATUS.md # Status of structured pruning implementation
 └── README.md           # This file
 ```
 
 ## Future Enhancements
 
-- **Structured Pruning**: Channel and filter pruning implementations
+- **Advanced Structured Patterns**: Block pruning, N:M sparsity patterns
 - **Advanced Schedules**: Polynomial, exponential, and custom schedules
 - **Hardware-Aware Pruning**: Optimize for specific hardware constraints
 - **Lottery Ticket**: Find winning tickets in neural networks
-- **Dynamic Pruning**: Adapt sparsity during training 
+- **Dynamic Pruning**: Adapt sparsity during training
+
+Note: Basic structured pruning (channel/neuron removal) is already implemented. See `STRUCTURED_PRUNING_STATUS.md` for details.
+
+## Structured vs Unstructured Pruning
+
+The module supports both structured and unstructured pruning:
+
+```python
+from alignment.pruning import PruningConfig
+
+# Unstructured: Remove individual weights (default for magnitude)
+config = PruningConfig(amount=0.5, structured=False)
+
+# Structured: Remove entire neurons/channels (default for alignment)
+config = PruningConfig(amount=0.5, structured=True)
+```
+
+**Key differences:**
+- **Unstructured**: Creates sparse weight matrices, higher theoretical compression
+- **Structured**: Removes entire neurons/channels, hardware-efficient, maintains dense matrices
+
+See `STRUCTURED_PRUNING_STATUS.md` for implementation details. 
