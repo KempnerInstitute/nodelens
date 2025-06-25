@@ -33,6 +33,9 @@ class LayerIsolatedConfig(ExperimentConfig):
     pruning_strategy: str = "low"  # "low", "high", "random"
     exclude_classification_layer: bool = True
     
+    # CNN preprocessing mode
+    cnn_mode: str = "unfold"  # "unfold", "patchwise", "batch_patch_combined"
+    
     # Training configuration
     train_before_dropout: bool = True
     training_epochs: int = 10

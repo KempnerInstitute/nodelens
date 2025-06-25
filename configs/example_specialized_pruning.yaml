@@ -28,6 +28,12 @@ num_random_trials: 3
 # Exclude classification layer from pruning
 exclude_classification_layer: true
 
+# CNN preprocessing mode
+cnn_mode: unfold  # Options: unfold, patchwise, batch_patch_combined
+# - unfold: Unfolds conv layers and flattens (standard approach)
+# - patchwise: Keeps patches separate for patch-wise metric computation
+# - batch_patch_combined: Combines batch and patch dimensions
+
 # ============================================================================
 # MODEL CONFIGURATION
 # ============================================================================
