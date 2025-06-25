@@ -185,7 +185,29 @@ class BaseExperiment(CoreBaseExperiment):
             # Try to get model from registry first
             try:
                 from alignment.core.registry import MODEL_REGISTRY
-                self.model = MODEL_REGISTRY.create(self.config.model_name, **self.config.model_config)
+                
+                # Handle parameter mapping for specific models
+                model_kwargs = self.config.model_config.copy()
+                
+                # Special handling for MLP model
+                if self.config.model_name.lower() == 'mlp':
+                    # Map common parameter names
+                    if 'num_classes' in model_kwargs and 'output_dim' not in model_kwargs:
+                        model_kwargs['output_dim'] = model_kwargs.pop('num_classes')
+                    # Remove parameters that MLP doesn't accept
+                    for param in ['pretrained', 'num_layers', 'dropout', 'activation', 'norm_type']:
+                        model_kwargs.pop(param, None)
+                    # Set default input_dim for MNIST if using MNIST dataset
+                    if self.config.dataset_name.lower() == 'mnist' and 'input_dim' not in model_kwargs:
+                        model_kwargs['input_dim'] = 784
+                    # Map activation to activation_type if present
+                    if 'activation' in self.config.model_config and 'activation_type' not in model_kwargs:
+                        model_kwargs['activation_type'] = self.config.model_config['activation']
+                    # Map dropout to dropout_rate if present
+                    if 'dropout' in self.config.model_config and 'dropout_rate' not in model_kwargs:
+                        model_kwargs['dropout_rate'] = self.config.model_config['dropout']
+                
+                self.model = MODEL_REGISTRY.create(self.config.model_name, **model_kwargs)
                 logger.info(f"Created model '{self.config.model_name}' from registry")
             except KeyError:
                 # Model not in registry, try torchvision

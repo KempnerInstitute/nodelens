@@ -140,7 +140,8 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
             
             # Aggregate scores across batches
             if scores_list:
-                layer_scores[layer_name] = torch.cat(scores_list, dim=0).mean(dim=0)
+                # Stack scores from different batches and average across batches
+                layer_scores[layer_name] = torch.stack(scores_list, dim=0).mean(dim=0)
                 logger.info(f"Layer {layer_name}: computed {len(layer_scores[layer_name])} scores")
             else:
                 logger.warning(f"No scores computed for layer {layer_name}")
