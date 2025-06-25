@@ -13,6 +13,22 @@ The unified experiment system can handle:
 - **Any Pruning Strategy**: Magnitude, Gradient, Fisher, Random, Taylor expansion
 - **Any Experiment Type**: Standard pruning, Progressive dropout, Layer-wise analysis, etc.
 
+## Getting Started
+
+### Understanding the System
+
+1. **For Learning**: Start with examples in `examples/` directory
+   - `quick_demo.py` - Minimal working example
+   - `standard_alignment_experiment.py` - Complete workflow demo
+   - These are self-contained and easy to understand
+
+2. **For Research**: Use `run_experiment.py` with YAML configs
+   - Production-ready experiment runner
+   - Fully configurable via YAML
+   - Supports all features and experiment types
+
+The examples show you HOW things work, while `run_experiment.py` is what you'll use for actual experiments.
+
 ## Quick Start
 
 ```bash
