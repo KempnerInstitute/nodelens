@@ -31,7 +31,6 @@ class BaseModelWrapper(BaseModel):
         track_inputs: bool = True,
         track_outputs: bool = True,
         flatten_activations: bool = True,
-        cnn_mode: str = "unfold",
         **config: Any
     ):
         """
@@ -43,14 +42,12 @@ class BaseModelWrapper(BaseModel):
             track_inputs: Whether to track layer inputs
             track_outputs: Whether to track layer outputs
             flatten_activations: Whether to flatten activations to 2D
-            cnn_mode: How to preprocess CNN layers ("unfold", "patchwise", "batch_patch_combined")
             **config: Additional configuration
         """
         super().__init__(model, tracked_layers, **config)
         self.track_inputs = track_inputs
         self.track_outputs = track_outputs
         self.flatten_activations = flatten_activations
-        self.cnn_mode = cnn_mode
         
         # Auto-discover trackable layers if not specified
         if not self._tracked_layers:  # Check if empty list instead of None
