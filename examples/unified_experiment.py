@@ -233,29 +233,54 @@ def generate_comprehensive_report(
         # Plot each metric
         for metric_name in config.get('alignment_metrics', []):
             if 'initial_metrics' in results and metric_name in results['initial_metrics']:
-                # Create layer comparison if we have both initial and final
+                # Plot layer comparison for initial metrics
+                initial_data = results['initial_metrics'][metric_name]
+                fig = metric_viz.plot_layer_comparison(
+                    initial_data,
+                    title=f"{metric_name} - Initial Values by Layer",
+                    ylabel=metric_name
+                )
+                if fig:
+                    fig.savefig(
+                        viz_dir / f"{metric_name}_initial.png",
+                        dpi=config.get('analysis_config', {}).get('plot_dpi', 300),
+                        bbox_inches='tight'
+                    )
+                    plt.close(fig)
+                
+                # If we have both initial and final, create comparison
                 if 'final_metrics' in results and metric_name in results['final_metrics']:
-                    initial_data = results['initial_metrics'][metric_name]
                     final_data = results['final_metrics'][metric_name]
                     
-                    # Convert to format expected by visualizer
-                    comparison_data = {
-                        'initial': initial_data,
-                        'final': final_data
-                    }
+                    # Create a combined plot showing before/after
+                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
                     
-                    fig = metric_viz.plot_metric_comparison(
-                        comparison_data,
-                        metric_name=metric_name,
-                        title=f"{metric_name} - Initial vs Final"
+                    # Initial values
+                    layers = list(initial_data.keys())
+                    initial_values = list(initial_data.values())
+                    ax1.bar(range(len(layers)), initial_values, color='blue', alpha=0.7)
+                    ax1.set_xticks(range(len(layers)))
+                    ax1.set_xticklabels(layers, rotation=45, ha='right')
+                    ax1.set_title(f"{metric_name} - Initial", fontsize=12)
+                    ax1.set_ylabel("Value")
+                    
+                    # Final values
+                    final_values = list(final_data.values())
+                    ax2.bar(range(len(layers)), final_values, color='green', alpha=0.7)
+                    ax2.set_xticks(range(len(layers)))
+                    ax2.set_xticklabels(layers, rotation=45, ha='right')
+                    ax2.set_title(f"{metric_name} - After Pruning", fontsize=12)
+                    ax2.set_ylabel("Value")
+                    
+                    fig.suptitle(f"{metric_name} Comparison", fontsize=14, fontweight='bold')
+                    plt.tight_layout()
+                    
+                    fig.savefig(
+                        viz_dir / f"{metric_name}_comparison.png",
+                        dpi=config.get('analysis_config', {}).get('plot_dpi', 300),
+                        bbox_inches='tight'
                     )
-                    if fig:
-                        fig.savefig(
-                            viz_dir / f"{metric_name}_comparison.png",
-                            dpi=config.get('analysis_config', {}).get('plot_dpi', 300),
-                            bbox_inches='tight'
-                        )
-                        plt.close(fig)
+                    plt.close(fig)
     
     # 2. Generate pruning visualizations
     if 'pruning_results' in results and config.get('apply_pruning', False):
