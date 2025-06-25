@@ -197,7 +197,7 @@ pruning:
   # Note: For random pruning, use selection_mode: "random" instead of algorithms: ["random"]
   
   # How to select weights to prune
-  selection_mode: "low"    # Options: "low" (default), "high", "random"
+  selection_mode: ["low", "high", "random"]    # Options: "low" (default), "high", "random"
   
   # Pruning scope - how to apply pruning across layers
   scope: "layer"          # Options: "layer" (default), "global", "cascading"

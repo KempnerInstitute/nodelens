@@ -54,14 +54,14 @@ python pruning_visualization_demo.py
 
 ## Running Production Experiments
 
-For actual research experiments, use the main runner in the root directory:
+For actual research experiments, use the main runner in the scripts directory:
 
 ```bash
 # From the repository root
-python run_experiment.py --config configs/unified_config.yaml
+python scripts/run_experiment.py --config configs/unified_config.yaml
 ```
 
-The examples in this directory are for learning and demonstration. The production runner (`run_experiment.py`) supports:
+The examples in this directory are for learning and demonstration. The production runner (`scripts/run_experiment.py`) supports:
 - Fully configurable via YAML
 - All model architectures
 - All alignment metrics
@@ -128,7 +128,7 @@ results/
 1. Start with `quick_demo.py` to understand the basic workflow
 2. Use `standard_alignment_experiment.py` as a template for custom experiments
 3. Explore `pruning_strategies_demo.py` for advanced pruning techniques
-4. For production research, use `run_experiment.py` with custom configs (see root directory)
+4. For production research, use `scripts/run_experiment.py` with custom configs (see root directory)
 5. Check `README_UNIFIED.md` for comprehensive documentation
 
 ## Requirements
@@ -167,7 +167,7 @@ pip install -e .[all]
 
 5. **For production experiments (from repository root):**
    ```bash
-   python run_experiment.py --config configs/unified_config.yaml
+   python scripts/run_experiment.py --config configs/unified_config.yaml
    ```
 
 ## Example Outputs
@@ -213,7 +213,7 @@ Each example can be customized by modifying:
 - Pruning strategies and sparsity levels
 - Visualization styles
 
-For full flexibility, use `run_experiment.py` in the root directory with YAML configs.
+For full flexibility, use `scripts/run_experiment.py` in the root directory with YAML configs.
 
 ## Example Structure
 
@@ -236,7 +236,7 @@ For GPU/CUDA errors:
 
 After running these examples:
 1. Modify `standard_alignment_experiment.py` for your own experiments
-2. Create custom YAML configs for `run_experiment.py` (see root directory)
+2. Create custom YAML configs for `scripts/run_experiment.py` (see root directory)
 3. Explore the API documentation for advanced features
 4. Create custom metrics and pruning strategies
 5. Use the experiment framework for systematic studies

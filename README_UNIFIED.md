@@ -2,7 +2,7 @@
 
 This unified system provides a single entry point for all neural network alignment experiments. It replaces the previous fragmented approach with a comprehensive, configuration-driven system.
 
-**Note**: The main experiment runner `run_experiment.py` is kept in the root directory as the primary entry point to the alignment framework. All configuration files are in `configs/`, examples in `examples/`, and the core library code in `src/alignment/`.
+**Note**: The main experiment runner `scripts/run_experiment.py` is the primary entry point to the alignment framework. All configuration files are in `configs/`, examples in `examples/`, and the core library code in `src/alignment/`.
 
 ## Overview
 
@@ -22,24 +22,24 @@ The unified experiment system can handle:
    - `standard_alignment_experiment.py` - Complete workflow demo
    - These are self-contained and easy to understand
 
-2. **For Research**: Use `run_experiment.py` with YAML configs
+2. **For Research**: Use `scripts/run_experiment.py` with YAML configs
    - Production-ready experiment runner
    - Fully configurable via YAML
    - Supports all features and experiment types
 
-The examples show you HOW things work, while `run_experiment.py` is what you'll use for actual experiments.
+The examples show you HOW things work, while `scripts/run_experiment.py` is what you'll use for actual experiments.
 
 ## Quick Start
 
 ```bash
 # Run standard pruning on MNIST with MLP
-python run_experiment.py --config configs/unified_config.yaml
+python scripts/run_experiment.py --config configs/unified_config.yaml
 
 # Run with specific experiment type
-python run_experiment.py --config configs/examples/mnist_mlp_standard.yaml
+python scripts/run_experiment.py --config configs/examples/mnist_mlp_standard.yaml
 
 # Override parameters from command line
-python run_experiment.py --config configs/unified_config.yaml \
+python scripts/run_experiment.py --config configs/unified_config.yaml \
     --experiment_type progressive_dropout \
     --device cuda:1 \
     --seed 123
@@ -96,15 +96,15 @@ pruning:
 
 ```bash
 # Basic alignment pruning
-python run_experiment.py --config configs/unified_config.yaml \
+python scripts/run_experiment.py --config configs/unified_config.yaml \
     --pruning.algorithms alignment \
     --pruning.alignment_metric rayleigh_quotient
 
 # Compare multiple metrics
-python run_experiment.py --config configs/examples/mnist_alignment_pruning.yaml
+python scripts/run_experiment.py --config configs/examples/mnist_alignment_pruning.yaml
 
 # Hybrid approach with custom weighting
-python run_experiment.py --config configs/unified_config.yaml \
+python scripts/run_experiment.py --config configs/unified_config.yaml \
     --pruning.algorithms hybrid \
     --pruning.hybrid_alpha 0.8
 ```
@@ -229,7 +229,7 @@ Sequential layer pruning:
 ### Creating Custom Configurations
 1. Copy an example configuration
 2. Modify the relevant sections
-3. Run with: `python run_experiment.py --config your_config.yaml`
+3. Run with: `python scripts/run_experiment.py --config your_config.yaml`
 
 ## Output Structure
 
@@ -261,7 +261,7 @@ The system automatically generates relevant visualizations based on experiment t
 ### Command Line Overrides
 Override any configuration parameter:
 ```bash
-python run_experiment.py --config base.yaml \
+python scripts/run_experiment.py --config base.yaml \
     --dataset.name cifar10 \
     --model.name resnet18 \
     --training.epochs 50 \
@@ -333,7 +333,7 @@ To add new features:
 1. **New Dataset**: Add to `alignment/data/datasets/`
 2. **New Model**: Add to `alignment/models/architectures/`
 3. **New Metric**: Add to `alignment/metrics/`
-4. **New Experiment Type**: Extend `run_experiment.py`
+4. **New Experiment Type**: Extend `scripts/run_experiment.py`
 
 ## Citation
 
@@ -354,7 +354,7 @@ If you use this unified experiment system, please cite:
 - Old configs: `master_config.yaml`, individual experiment configs
 
 ### Consolidated Files
-- All experiment types → `run_experiment.py`
+- All experiment types → `scripts/run_experiment.py`
 - All configurations → `configs/unified_config.yaml`
 - Documentation → `README_UNIFIED.md`
 

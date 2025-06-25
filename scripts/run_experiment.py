@@ -10,7 +10,7 @@ A single entry point for all alignment experiments that can handle:
 - Any experiment type (standard, progressive, layer-wise, etc.)
 
 Usage:
-    python run_experiment.py --config configs/unified_config.yaml
+    python scripts/run_experiment.py --config configs/unified_config.yaml
 """
 
 import argparse
