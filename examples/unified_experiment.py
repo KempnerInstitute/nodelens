@@ -612,41 +612,54 @@ def generate_comprehensive_report(
         if 'sparsity' in results['pruning_results']:
             sparsity_data = results['pruning_results']['sparsity']
             
-            # Convert sparsity data to the format expected by plot_layer_wise_pruning
-            # The method expects: layer_sparsities: Dict[str, Dict[str, float]]
-            # and model_accuracy: Dict[str, float]
+            # Use PruningVisualizer for layer-wise sparsity visualization
+            # Convert to expected format: strategy -> layer -> sparsity
+            layer_sparsity_by_strategy = {
+                config.get('pruning_strategy', 'magnitude_based'): {
+                    k: v for k, v in sparsity_data.items() if k != 'overall'
+                }
+            }
             
-            # For now, create a simple visualization showing layer sparsities
-            fig, ax = plt.subplots(figsize=(10, 6))
+            # Get model accuracy if available
+            model_accuracy = {}
+            if 'performance_after' in results['pruning_results']:
+                strategy = config.get('pruning_strategy', 'magnitude_based')
+                model_accuracy[strategy] = results['pruning_results']['performance_after'].get('val_acc', 0) * 100
             
-            # Filter out 'overall' key and plot only layer sparsities
-            layer_names = [k for k in sparsity_data.keys() if k != 'overall']
-            layer_values = [sparsity_data[k] for k in layer_names]
+            # Use the standard layer-wise pruning visualization
+            fig = pruning_viz.plot_layer_wise_pruning(
+                layer_sparsity_by_strategy,
+                model_accuracy,
+                save_path=viz_dir / "layer_wise_sparsity.png"
+            )
+            plt.close(fig)
+        
+        # If we have performance comparison data, create pruning performance plot
+        if 'performance_history' in results and 'val_acc' in results['performance_history']:
+            # Create a simple before/after comparison
+            performance_data = {
+                'before_pruning': {
+                    0.0: {
+                        'accuracy': results['performance_history']['val_acc'][-1] * 100,
+                        'loss': results['performance_history']['val_loss'][-1] if 'val_loss' in results['performance_history'] else 0
+                    }
+                }
+            }
             
-            bars = ax.bar(range(len(layer_names)), layer_values, color='steelblue', alpha=0.7)
-            ax.set_xticks(range(len(layer_names)))
-            ax.set_xticklabels(layer_names, rotation=45, ha='right')
-            ax.set_ylabel('Sparsity Level')
-            ax.set_xlabel('Layer')
-            ax.set_title('Layer-wise Sparsity Distribution')
-            ax.grid(True, alpha=0.3, axis='y')
+            if 'performance_after' in results['pruning_results']:
+                sparsity = results['pruning_results']['sparsity'].get('overall', 0)
+                performance_data['after_pruning'] = {
+                    sparsity: {
+                        'accuracy': results['pruning_results']['performance_after'].get('val_acc', 0) * 100,
+                        'loss': results['pruning_results']['performance_after'].get('val_loss', 0)
+                    }
+                }
             
-            # Add value labels on bars
-            for bar, val in zip(bars, layer_values):
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                       f'{val:.2%}', ha='center', va='bottom', fontsize=9)
-            
-            # Add overall sparsity as a horizontal line
-            if 'overall' in sparsity_data:
-                ax.axhline(y=sparsity_data['overall'], color='red', linestyle='--',
-                          label=f"Overall: {sparsity_data['overall']:.2%}")
-                ax.legend()
-            
-            plt.tight_layout()
-            fig.savefig(
-                viz_dir / "sparsity_distribution.png",
-                dpi=config.get('analysis_config', {}).get('plot_dpi', 300),
-                bbox_inches='tight'
+            fig = pruning_viz.plot_pruning_performance(
+                performance_data,
+                metrics=['accuracy', 'loss'],
+                title='Pruning Impact on Performance',
+                save_path=viz_dir / "pruning_performance.png"
             )
             plt.close(fig)
     
