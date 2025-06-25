@@ -75,7 +75,7 @@ class RayleighQuotient(BaseMetric):
         Compute Rayleigh Quotient values for each neuron.
         
         Args:
-            inputs: Input activations [batch_size, input_features]
+            inputs: Input activations [batch_size, input_features] or [batch_size, features, patches]
             weights: Layer weights [output_features, input_features]
             outputs: Not used for this metric
             **kwargs: Additional parameters
@@ -86,7 +86,12 @@ class RayleighQuotient(BaseMetric):
         if inputs is None or weights is None:
             raise ValueError("RayleighQuotient requires both inputs and weights")
         
-        # Validate shapes
+        # Handle patchwise inputs (3D tensors)
+        if inputs.ndim == 3:
+            # Compute patchwise RQ
+            return self._compute_patchwise(inputs, weights, **kwargs)
+        
+        # Validate shapes for standard 2D computation
         if inputs.ndim != 2:
             inputs = inputs.reshape(inputs.shape[0], -1)
         if weights.ndim != 2:
@@ -161,6 +166,100 @@ class RayleighQuotient(BaseMetric):
         rq_values = torch.nan_to_num(rq_values, nan=0.0, posinf=0.0, neginf=0.0)
         
         return rq_values
+    
+    def _compute_patchwise(
+        self,
+        inputs: torch.Tensor,
+        weights: torch.Tensor,
+        weight_by_variance: bool = True,
+        **kwargs: Any
+    ) -> torch.Tensor:
+        """
+        Compute patch-wise RQ for CNN layers.
+        
+        Args:
+            inputs: Input patches [batch_size, features, num_patches]
+            weights: Flattened weights [output_features, features]
+            weight_by_variance: Whether to weight patches by their variance
+            
+        Returns:
+            RQ values [output_features]
+        """
+        batch_size, features, num_patches = inputs.shape
+        output_features = weights.shape[0]
+        
+        if batch_size < self.min_samples:
+            logger.warning(f"Only {batch_size} samples, minimum {self.min_samples} recommended")
+            return torch.zeros(output_features, device=weights.device, dtype=weights.dtype)
+        
+        # Ensure weight dimensions match
+        if weights.ndim > 2:
+            weights = weights.reshape(weights.shape[0], -1)
+        
+        # Compute variance for each patch
+        patch_var = torch.var(inputs, dim=0, keepdim=False)  # [features, num_patches]
+        patch_total_var = patch_var.sum(dim=0)  # [num_patches]
+        
+        # Initialize accumulators
+        weighted_rq_sum = torch.zeros(output_features, device=weights.device)
+        total_weight = 0.0
+        
+        # Compute RQ for each patch
+        for p in range(num_patches):
+            patch_data = inputs[:, :, p]  # [batch_size, features]
+            
+            # Center the data
+            patch_data_centered = patch_data - patch_data.mean(dim=0, keepdim=True)
+            
+            # Compute covariance for this patch
+            patch_cov = torch.matmul(patch_data_centered.T, patch_data_centered) / (batch_size - 1)
+            
+            # Scale by norm if requested
+            if self.scale_by_norm:
+                cov_norm = torch.norm(patch_cov, p='fro')
+                if cov_norm > 0:
+                    patch_cov = patch_cov / cov_norm
+            
+            # Handle dimension mismatch
+            min_dim = min(features, weights.shape[1])
+            if features != weights.shape[1]:
+                patch_cov = patch_cov[:min_dim, :min_dim]
+                weights_adj = weights[:, :min_dim]
+            else:
+                weights_adj = weights
+            
+            # Compute RQ for this patch
+            wc = torch.matmul(weights_adj, patch_cov)
+            numerator = torch.sum(wc * weights_adj, dim=1)
+            denominator = torch.sum(weights_adj * weights_adj, dim=1)
+            
+            eps = 1e-12
+            patch_rq = torch.zeros_like(numerator)
+            valid_mask = denominator > eps
+            patch_rq[valid_mask] = numerator[valid_mask] / denominator[valid_mask]
+            
+            # Normalize by trace if relative
+            if self.relative:
+                trace = torch.trace(patch_cov)
+                if trace > eps:
+                    patch_rq = patch_rq / trace
+            
+            # Weight by patch variance if requested
+            if weight_by_variance:
+                patch_weight = patch_total_var[p].item()
+            else:
+                patch_weight = 1.0
+            
+            weighted_rq_sum += patch_rq * patch_weight
+            total_weight += patch_weight
+        
+        # Average across patches
+        if total_weight > 0:
+            final_rq = weighted_rq_sum / total_weight
+        else:
+            final_rq = weighted_rq_sum
+        
+        return torch.nan_to_num(final_rq, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 @register_metric("rq_patchwise")
