@@ -57,6 +57,7 @@ class GeneralAlignmentConfig(ExperimentConfig):
     pruning_selection_mode: str = "low"  # Which weights to prune: "low", "high", "random"
     pruning_alignment_metric: str = "rayleigh_quotient"  # Metric for alignment-based pruning
     pruning_hybrid_alpha: float = 0.5  # Weight for alignment in hybrid pruning (0-1)
+    pruning_scope: str = "layer"  # "global" or "layer" - how to select neurons/weights for pruning
     
     # Eigenfeature analysis
     do_eigenfeature_analysis: bool = True

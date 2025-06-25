@@ -249,10 +249,23 @@ pruning:
   # - With structured=true and 50% pruning: removes 32 entire channels
   # - Result: layer has only 32 output channels
   
-  # Note: The "scope" parameter was removed as it was confusing and not implemented.
-  # Instead, use these settings:
-  # - For global comparison across layers: future feature
-  # - For now, pruning is always done per layer
+  # -----------------------------------------------------------------------------
+  # Pruning scope - How to select weights/neurons across layers
+  # -----------------------------------------------------------------------------
+  scope: "layer"  # IMPORTANT: "global" or "layer"
+  # - "layer": Each layer pruned to its own target sparsity (default)
+  #   Example: Every layer pruned to 50% sparsity
+  # - "global": Compare all weights/neurons globally, prune worst overall
+  #   Example: Some layers might be 70% pruned, others 30%, average 50%
+  #
+  # For alignment-based pruning with scope="global":
+  # - Collects alignment scores from ALL neurons across ALL layers
+  # - Sorts them globally
+  # - Prunes the globally worst neurons
+  # - Result: Uneven pruning across layers based on alignment quality
+  
+  # Note: The old "scope" parameter was removed as it was confusing and not implemented.
+  # This new "scope" parameter specifically controls pruning selection strategy.
   
   # -----------------------------------------------------------------------------
   # Iterative pruning settings

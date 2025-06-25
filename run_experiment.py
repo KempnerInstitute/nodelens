@@ -118,6 +118,12 @@ def create_experiment_config(unified_config):
             # Alignment-based pruning settings
             config.pruning_alignment_metric = pruning.get('alignment_metric', 'rayleigh_quotient')
             config.pruning_hybrid_alpha = pruning.get('hybrid_alpha', 0.5)
+            
+            # Pruning scope
+            config.pruning_scope = pruning.get('scope', 'layer')
+        else:
+            # Create base ExperimentConfig for other experiment types
+            config = ExperimentConfig(**base_params)
     else:
         # Create base ExperimentConfig for other experiment types
         config = ExperimentConfig(**base_params)
