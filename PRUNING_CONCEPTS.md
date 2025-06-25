@@ -86,6 +86,57 @@ pruning:
   structured: true  # This ensures entire neurons are pruned!
 ```
 
+## Global vs Layer-wise Pruning
+
+### Layer-wise Pruning (Default)
+Each layer is pruned independently to achieve the target sparsity:
+
+```yaml
+pruning:
+  scope: "layer"  # Default
+  sparsity_levels: [0.5]
+```
+
+**What happens:**
+- Layer 1: Prune 50% of its neurons/weights
+- Layer 2: Prune 50% of its neurons/weights  
+- Layer 3: Prune 50% of its neurons/weights
+- Result: Uniform sparsity across all layers
+
+### Global Pruning
+Compare all neurons/weights across ALL layers and prune the globally worst:
+
+```yaml
+pruning:
+  scope: "global"
+  sparsity_levels: [0.5]
+  algorithms: ["alignment"]  # or "magnitude"
+```
+
+**What happens with alignment-based global pruning:**
+1. Compute alignment scores for ALL neurons in the network
+2. Sort all neurons by their alignment scores
+3. Prune the globally worst 50% of neurons
+4. Result: Some layers heavily pruned, others lightly pruned
+
+**Example outcome:**
+- Layer 1: 70% pruned (had many poorly aligned neurons)
+- Layer 2: 30% pruned (had well-aligned neurons)
+- Layer 3: 50% pruned
+- Overall: 50% pruned (as requested)
+
+### When to Use Each
+
+**Use Layer-wise Pruning when:**
+- You want consistent sparsity across layers
+- You want to preserve network balance
+- You're doing standard pruning experiments
+
+**Use Global Pruning when:**
+- You want to find the truly least important neurons/weights
+- You're okay with uneven layer sparsity
+- You believe some layers are more important than others
+
 ## Configuration Examples
 
 ### Unstructured Magnitude Pruning
