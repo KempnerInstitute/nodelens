@@ -106,8 +106,11 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
                     continue
                 
                 # Preprocess activations based on CNN mode
-                preprocessed = self.wrapped_model.preprocess_activations(
+                from alignment.preprocessing import preprocess_layer_activations
+                layer_modules = dict(self.wrapped_model._model.named_modules())
+                preprocessed = preprocess_layer_activations(
                     {f"{layer_name}_input": layer_inputs},
+                    layer_modules,
                     mode=self.config.cnn_mode if hasattr(self.config, 'cnn_mode') else None
                 )
                 layer_inputs = preprocessed.get(f"{layer_name}_input", layer_inputs)
