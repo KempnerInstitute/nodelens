@@ -384,7 +384,12 @@ class GeneralAlignmentExperiment(BaseExperiment):
         logger.info("Starting pruning experiments")
         
         # Import pruning utilities
-        from alignment.pruning.strategies import create_pruning_strategy
+        from alignment.pruning.strategies import (
+            MagnitudePruning,
+            GradientPruning,
+            FisherPruning,
+            RandomPruning
+        )
         from alignment.pruning.mask_manager import MaskManager
         
         results = {
