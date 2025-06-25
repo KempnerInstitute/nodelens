@@ -193,13 +193,20 @@ pruning:
   # - "fisher": Fisher information approximation  
   # - "alignment": Neuron-input alignment using specified metric
   # - "hybrid": Combine magnitude and alignment scores
+  # - "cascading_alignment": Prune layers sequentially, recomputing alignment after each
   # Note: For random pruning, use selection_mode: "random" instead of algorithms: ["random"]
   
-  # Selection mode: which weights to prune based on importance scores
-  selection_mode: ["low", "high", "random"]   # Can be single value or list
-  # - "low": Prune weights with lowest importance (default for most algorithms)
-  # - "high": Prune weights with highest importance (useful for studying redundancy)
-  # - "random": Random selection (useful for baselines)
+  # How to select weights to prune
+  selection_mode: "low"    # Options: "low" (default), "high", "random"
+  
+  # Pruning scope - how to apply pruning across layers
+  scope: "layer"          # Options: "layer" (default), "global", "cascading"
+  # - "layer": Prune each layer independently to target sparsity
+  # - "global": Pool scores from all layers and prune globally
+  # - "cascading": Prune layers sequentially, recomputing scores after each (alignment only)
+  
+  # For cascading scope
+  cascading_direction: "forward"  # Options: "forward", "backward"
   
   # Sparsity levels to test
   sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]  # Fraction of weights to prune
@@ -248,24 +255,6 @@ pruning:
   # - Alignment computes 64 scores (one per channel)
   # - With structured=true and 50% pruning: removes 32 entire channels
   # - Result: layer has only 32 output channels
-  
-  # -----------------------------------------------------------------------------
-  # Pruning scope - How to select weights/neurons across layers
-  # -----------------------------------------------------------------------------
-  scope: "layer"  # IMPORTANT: "global" or "layer"
-  # - "layer": Each layer pruned to its own target sparsity (default)
-  #   Example: Every layer pruned to 50% sparsity
-  # - "global": Compare all weights/neurons globally, prune worst overall
-  #   Example: Some layers might be 70% pruned, others 30%, average 50%
-  #
-  # For alignment-based pruning with scope="global":
-  # - Collects alignment scores from ALL neurons across ALL layers
-  # - Sorts them globally
-  # - Prunes the globally worst neurons
-  # - Result: Uneven pruning across layers based on alignment quality
-  
-  # Note: The old "scope" parameter was removed as it was confusing and not implemented.
-  # This new "scope" parameter specifically controls pruning selection strategy.
   
   # -----------------------------------------------------------------------------
   # Iterative pruning settings

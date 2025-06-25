@@ -459,19 +459,39 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         else:
                             strategy = MagnitudePruning(config=pruning_config)
                     elif strategy_name == "alignment":
-                        from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning
+                        from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning, CascadingAlignmentPruning
                         # Get the alignment metric from config (default to rayleigh_quotient)
                         alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
-                        if pruning_config.global_pruning:
+                        
+                        if self.config.pruning_scope == 'global':
                             strategy = GlobalAlignmentPruning(
                                 metric=alignment_metric,
                                 config=pruning_config
                             )
-                        else:
+                        elif self.config.pruning_scope == 'cascading':
+                            # Cascading always uses structured pruning
+                            pruning_config.structured = True
+                            strategy = CascadingAlignmentPruning(
+                                metric=alignment_metric,
+                                direction=getattr(self.config, 'cascading_direction', 'forward'),
+                                config=pruning_config
+                            )
+                        else:  # layer scope (default)
                             strategy = AlignmentPruning(
                                 metric=alignment_metric,
                                 config=pruning_config
                             )
+                    elif strategy_name == "cascading_alignment":
+                        # Legacy cascading_alignment handling
+                        logger.warning("'cascading_alignment' algorithm is deprecated. Use algorithms=['alignment'] with scope='cascading'")
+                        from alignment.pruning.strategies import CascadingAlignmentPruning
+                        alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
+                        pruning_config.structured = True
+                        strategy = CascadingAlignmentPruning(
+                            metric=alignment_metric,
+                            direction='forward',
+                            config=pruning_config
+                        )
                     elif strategy_name == "hybrid":
                         from alignment.pruning.strategies import HybridPruning
                         alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
@@ -494,7 +514,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     
                     # Get sample inputs for alignment-based pruning
                     layer_inputs_dict = {}
-                    if strategy_name in ["alignment", "hybrid"] or isinstance(strategy, (AlignmentPruning, GlobalAlignmentPruning)):
+                    if strategy_name in ["alignment", "hybrid", "cascading_alignment"] or isinstance(strategy, (AlignmentPruning, GlobalAlignmentPruning)):
                         # Get a batch of data for alignment computation
                         data_iter = iter(self.data_loader)
                         sample_batch, _ = next(data_iter)
@@ -539,6 +559,55 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         zero_params = sum((mask == 0).sum().item() for mask in masks.values())
                         overall_sparsity = zero_params / total_params if total_params > 0 else 0
                         
+                    elif self.config.pruning_scope == 'cascading' and strategy_name == "alignment":
+                        # Cascading alignment needs special handling
+                        from alignment.pruning.strategies import CascadingAlignmentPruning
+                        
+                        # Create a function to get current layer inputs
+                        def get_layer_inputs_fn():
+                            # Capture current inputs with hooks
+                            current_inputs = {}
+                            hooks = []
+                            
+                            def capture_input(name):
+                                def hook(module, input, output):
+                                    current_inputs[name] = input[0].detach()
+                                return hook
+                            
+                            # Register hooks
+                            for name, module in self.model.named_modules():
+                                if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
+                                    hook = module.register_forward_hook(capture_input(name))
+                                    hooks.append(hook)
+                            
+                            # Forward pass
+                            with torch.no_grad():
+                                _ = self.model(sample_inputs)
+                            
+                            # Remove hooks
+                            for hook in hooks:
+                                hook.remove()
+                            
+                            return current_inputs
+                        
+                        # Apply cascading pruning
+                        masks = strategy.prune_model(self.model, get_layer_inputs_fn, amount=amount)
+                        
+                        # Calculate overall sparsity
+                        total_params = sum(mask.numel() for mask in masks.values())
+                        zero_params = sum((mask == 0).sum().item() for mask in masks.values())
+                        overall_sparsity = zero_params / total_params if total_params > 0 else 0
+                    elif strategy_name == "cascading_alignment":
+                        # Legacy cascading_alignment handling
+                        logger.warning("'cascading_alignment' algorithm is deprecated. Use algorithms=['alignment'] with scope='cascading'")
+                        from alignment.pruning.strategies import CascadingAlignmentPruning
+                        alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
+                        pruning_config.structured = True
+                        strategy = CascadingAlignmentPruning(
+                            metric=alignment_metric,
+                            direction='forward',
+                            config=pruning_config
+                        )
                     else:
                         # Layer-wise pruning (current behavior)
                         layer_sparsities = {}

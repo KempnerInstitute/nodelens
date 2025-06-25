@@ -167,6 +167,52 @@ pruning:
   sparsity_levels: [0.5]
 ```
 
+## 4. Pruning Scope - How to Apply Pruning Across Layers
+
+The `scope` parameter controls how pruning decisions are made across the network:
+
+### Layer-wise Scope (default)
+```yaml
+pruning:
+  scope: "layer"  # Each layer pruned independently
+```
+- Each layer is pruned to its target sparsity
+- Example: Every layer pruned to 50%
+- Simple and predictable
+
+### Global Scope
+```yaml
+pruning:
+  scope: "global"  # Compare all weights/neurons globally
+```
+- Pools importance scores from all layers
+- Prunes globally worst weights/neurons
+- Example: Some layers 70% pruned, others 30%, average 50%
+- Better preserves important layers
+
+### Cascading Scope (alignment only)
+```yaml
+pruning:
+  scope: "cascading"  # Sequential pruning with recomputation
+  cascading_direction: "forward"  # or "backward"
+```
+- Prunes layers sequentially
+- Recomputes alignment scores after each layer
+- Accounts for pruning effects on subsequent layers
+- More accurate but computationally intensive
+
+## 4. Cascading Alignment Pruning
+```yaml
+pruning:
+  algorithms: ["alignment"]
+  scope: "cascading"
+  cascading_direction: "forward"
+  alignment_metric: "rayleigh_quotient"  
+  selection_mode: "low"
+  sparsity_levels: [0.3, 0.5, 0.7]
+  structured: true
+```
+
 ## Implementation Details
 
 ### For Linear Layers

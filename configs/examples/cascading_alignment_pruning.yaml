@@ -1,0 +1,70 @@
+# Example: Cascading Alignment Pruning
+# Demonstrates cascading scope where layers are pruned sequentially
+# with alignment scores recomputed after each layer
+
+experiment_name: "cascading_alignment_demo"
+experiment_type: "standard_pruning"
+device: "cuda"
+seed: 42
+
+# Dataset and model
+dataset:
+  name: "mnist"
+  data_path: "./data"
+  batch_size: 128
+
+model:
+  name: "mlp"
+  output_dim: 10
+  mlp_config:
+    input_dim: 784
+    hidden_dims: [512, 256, 128]
+    activation: "relu"
+
+# Training
+training:
+  epochs: 10
+  optimizer: "adam"
+  learning_rate: 0.001
+
+# Cascading alignment pruning configuration
+pruning:
+  # Use alignment algorithm with cascading scope
+  algorithms: ["alignment"]
+  scope: "cascading"              # Sequential layer pruning
+  cascading_direction: "forward"  # Prune from input to output
+  
+  # Alignment metric for scoring neurons
+  alignment_metric: "rayleigh_quotient"
+  
+  # Pruning parameters
+  selection_mode: "low"  # Remove poorly aligned neurons
+  sparsity_levels: [0.3, 0.5, 0.7]
+  structured: true  # Prune entire neurons
+  
+  # Fine-tuning
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 5
+
+# Compare different scopes
+# To see the difference between scopes, you could run:
+# 1. scope: "layer" - Standard layer-wise pruning
+# 2. scope: "global" - Global selection across all layers  
+# 3. scope: "cascading" - This config
+
+# Visualization
+visualization:
+  generate_plots: true
+  plot_types:
+    - "pruning_performance"
+    - "layer_importance"
+
+# Key Features of Cascading:
+# 1. Prunes layer 1 first
+# 2. Recomputes alignment for layer 2 (accounting for pruned layer 1)
+# 3. Continues through all layers
+# 4. Can reveal different importance patterns than standard pruning
+
+# To compare strategies:
+# algorithms: ["alignment", "cascading_alignment", "global_alignment"]
+# This would show how different selection strategies affect performance 
