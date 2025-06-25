@@ -146,6 +146,34 @@ pruning:
   fine_tune_epochs: 5
 ```
 
+### 5. Pruning Strategies
+
+The system supports multiple pruning algorithms via the `algorithms` parameter:
+
+- **magnitude**: Traditional weight magnitude pruning
+- **gradient**: Gradient-based importance
+- **fisher**: Fisher information approximation
+- **alignment**: Neuron-input alignment using specified metric
+- **hybrid**: Combine magnitude and alignment scores
+
+### 6. Pruning Scope
+
+The `scope` parameter controls how pruning is applied across layers:
+
+- **layer** (default): Each layer pruned independently to target sparsity
+- **global**: Pool scores from all layers and prune globally
+- **cascading**: Prune layers sequentially, recomputing scores after each (alignment only)
+
+Example with cascading scope:
+```yaml
+pruning:
+  algorithms: ["alignment"]
+  scope: "cascading"
+  cascading_direction: "forward"  # or "backward"
+  alignment_metric: "rayleigh_quotient"
+  sparsity_levels: [0.3, 0.5, 0.7]
+```
+
 ## Experiment Types
 
 ### 1. Standard Pruning (`standard_pruning`)
