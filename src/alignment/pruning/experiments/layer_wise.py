@@ -119,8 +119,9 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
                 if hasattr(metric, 'requires_outputs') and metric.requires_outputs:
                     layer_outputs = activations.get(f"{layer_name}_output")
                     if layer_outputs is not None:
-                        preprocessed_out = self.wrapped_model.preprocess_activations(
+                        preprocessed_out = preprocess_layer_activations(
                             {f"{layer_name}_output": layer_outputs},
+                            layer_modules,
                             mode=self.config.cnn_mode if hasattr(self.config, 'cnn_mode') else None
                         )
                         layer_outputs = preprocessed_out.get(f"{layer_name}_output", layer_outputs)
