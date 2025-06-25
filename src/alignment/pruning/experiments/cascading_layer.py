@@ -377,7 +377,7 @@ class CascadingLayerPruningExperiment(BaseExperiment):
                 # Use initial scores
                 scores = self._compute_alignment_scores(layer_name)
             
-            scores_history[layer_name] = scores.tolist()
+            scores_history[layer_name] = scores.flatten().tolist() if scores.dim() > 0 else [scores.item()]
             
             # Create mask for this layer
             mask = self._create_layer_mask(scores, dropout_rate, strategy)
