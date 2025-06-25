@@ -374,7 +374,8 @@ class UnifiedDataset(BaseDataset):
 
 
 # Register specific dataset types for backward compatibility
-for dataset_type in DATASET_CONFIGS.keys():
+def create_dataset_class(dataset_type):
+    """Create a dataset class for a specific type."""
     @register_dataset(dataset_type)
     class SpecificDataset(UnifiedDataset):
         """Dataset wrapper for specific dataset type."""
@@ -383,4 +384,9 @@ for dataset_type in DATASET_CONFIGS.keys():
     
     # Set proper class name
     SpecificDataset.__name__ = f"{dataset_type.upper()}Dataset"
-    SpecificDataset.__qualname__ = f"{dataset_type.upper()}Dataset" 
+    SpecificDataset.__qualname__ = f"{dataset_type.upper()}Dataset"
+    return SpecificDataset
+
+# Create and register all dataset types
+for dataset_type in DATASET_CONFIGS.keys():
+    create_dataset_class(dataset_type) 

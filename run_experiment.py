@@ -62,9 +62,12 @@ def load_config(config_path, overrides=None):
 def create_experiment_config(unified_config):
     """Convert unified config to experiment config object."""
     from alignment.experiments.base import ExperimentConfig
+    from alignment.experiments.general_alignment import GeneralAlignmentConfig
     
-    # Build ExperimentConfig parameters
-    config_params = {
+    experiment_type = unified_config.get('experiment_type', 'alignment_analysis')
+    
+    # Build base parameters for all experiment types
+    base_params = {
         'name': unified_config.get('experiment_name', 'unified_experiment'),
         'seed': unified_config.get('seed', 42),
         'device': unified_config.get('device', 'cuda'),
@@ -80,12 +83,31 @@ def create_experiment_config(unified_config):
     # Add training config if present
     if 'training' in unified_config:
         training = unified_config['training']
-        config_params['training_epochs'] = training.get('epochs', 10)
-        config_params['learning_rate'] = training.get('learning_rate', 0.001)
-        config_params['optimizer'] = training.get('optimizer', 'adam')
+        base_params['training_epochs'] = training.get('epochs', 10)
+        base_params['learning_rate'] = training.get('learning_rate', 0.001)
+        base_params['optimizer'] = training.get('optimizer', 'adam')
     
-    # Create the base ExperimentConfig
-    config = ExperimentConfig(**config_params)
+    # Create the appropriate config type based on experiment
+    if experiment_type in ['standard_pruning', 'progressive_dropout', 'alignment_analysis']:
+        # Create GeneralAlignmentConfig for general experiments
+        config = GeneralAlignmentConfig(**base_params)
+        
+        # Set GeneralAlignmentConfig specific fields
+        config.do_train = unified_config.get('training', {}).get('epochs', 0) > 0
+        config.do_dropout_analysis = experiment_type == 'progressive_dropout'
+        config.do_pruning_experiments = experiment_type == 'standard_pruning'
+        config.generate_plots = unified_config.get('visualization', {}).get('generate_plots', True)
+        
+        # Pruning specific
+        if experiment_type == 'standard_pruning':
+            pruning = unified_config.get('pruning', {})
+            config.pruning_strategies = [pruning.get('strategy', 'magnitude')]
+            config.pruning_amounts = [pruning.get('amount', 0.5)]
+            config.fine_tune_after_pruning = pruning.get('fine_tune', True)
+            config.fine_tune_epochs = pruning.get('fine_tune_epochs', 5)
+    else:
+        # Create base ExperimentConfig for other experiment types
+        config = ExperimentConfig(**base_params)
     
     # Add additional attributes for compatibility with specialized experiments
     config.training_config = unified_config.get('training', {})
@@ -151,7 +173,15 @@ def main():
     # Run experiment
     results = experiment.run()
     
-    logger.info(f"Experiment completed. Results saved to: {experiment.experiment_dir}")
+    # Get the appropriate directory based on experiment type
+    if hasattr(experiment, 'experiment_dir'):
+        save_dir = experiment.experiment_dir
+    elif hasattr(experiment, 'results_dir'):
+        save_dir = experiment.results_dir
+    else:
+        save_dir = "logs"
+    
+    logger.info(f"Experiment completed. Results saved to: {save_dir}")
 
 
 if __name__ == '__main__':
