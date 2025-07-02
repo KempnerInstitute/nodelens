@@ -875,65 +875,133 @@ class PruningVisualizer:
     def plot_accuracy_vs_sparsity_comparison(
         self,
         sparsities: List[float],
-        accuracies_before: List[float],
-        accuracies_after: List[float],
+        accuracies_before: Dict[str, List[float]],
+        accuracies_after: Dict[str, List[float]],
         title: str = "Pruning: Before vs After Fine-tuning",
-        save_path: Optional[str] = None
-    ) -> plt.Figure:
+        save_path_prefix: Optional[str] = None,
+        errors_before: Optional[Dict[str, List[float]]] = None,
+        errors_after: Optional[Dict[str, List[float]]] = None
+    ) -> Tuple[plt.Figure, plt.Figure]:
         """
-        Compare accuracy before and after fine-tuning across sparsity levels.
+        Create two separate plots for accuracy vs sparsity - before and after fine-tuning.
+        Uses the exact style from the old alignment codebase.
         
         Args:
             sparsities: List of sparsity levels
-            accuracies_before: Accuracies before fine-tuning
-            accuracies_after: Accuracies after fine-tuning
-            title: Plot title
-            save_path: Path to save the plot
+            accuracies_before: Dict of selection_mode -> accuracies before fine-tuning
+            accuracies_after: Dict of selection_mode -> accuracies after fine-tuning
+            title: Plot title prefix
+            save_path_prefix: Path prefix for saving plots
+            errors_before: Dict of selection_mode -> standard errors before fine-tuning
+            errors_after: Dict of selection_mode -> standard errors after fine-tuning
             
         Returns:
-            Matplotlib figure
+            Tuple of (before_figure, after_figure)
         """
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        import matplotlib as mpl
         
-        # Plot 1: Before vs After
-        ax1.plot(sparsities, accuracies_before, 'o-', label='Before Fine-tuning',
-                color='#FF6B6B', linewidth=2.5, markersize=8)
-        ax1.plot(sparsities, accuracies_after, 'o-', label='After Fine-tuning',
-                color='#4ECDC4', linewidth=2.5, markersize=8)
+        # Style parameters from old codebase
+        cmap = mpl.colormaps["Set1"]
+        alpha = 0.3
+        msize = 10
+        figdim = 3
         
-        ax1.set_xlabel('Sparsity Level', fontsize=12)
-        ax1.set_ylabel('Accuracy (%)', fontsize=12)
-        ax1.set_title('Accuracy vs Sparsity', fontsize=14, fontweight='bold')
-        ax1.grid(True, alpha=0.3)
-        ax1.legend(loc='best', frameon=True, fancybox=True, shadow=True)
-        ax1.set_xlim(0, 1)
-        ax1.set_ylim(0, 105)
+        # Convert sparsities to percentages for x-axis
+        sparsity_pct = [s * 100 for s in sparsities]
         
-        # Plot 2: Improvement
-        improvements = [after - before for before, after in zip(accuracies_before, accuracies_after)]
-        bars = ax2.bar(range(len(sparsities)), improvements, 
-                       tick_label=[f"{s:.0%}" for s in sparsities],
-                       color=['#4ECDC4' if imp >= 0 else '#FF6B6B' for imp in improvements],
-                       alpha=0.8)
+        # Selection modes and their display names
+        mode_labels = {
+            'high': 'From high',
+            'low': 'From low', 
+            'random': 'Random'
+        }
         
-        # Add value labels on bars
-        for bar, imp in zip(bars, improvements):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{imp:+.1f}%', ha='center', va='bottom' if height >= 0 else 'top',
-                    fontsize=10, fontweight='bold')
+        # Create figure for BEFORE fine-tuning
+        fig_before = plt.figure(figsize=(figdim * 2, figdim * 1.5))
+        ax_before = fig_before.add_subplot(111)
         
-        ax2.set_xlabel('Sparsity Level', fontsize=12)
-        ax2.set_ylabel('Accuracy Improvement (%)', fontsize=12)
-        ax2.set_title('Fine-tuning Improvement', fontsize=14, fontweight='bold')
-        ax2.grid(True, alpha=0.3, axis='y')
-        ax2.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        # Plot each selection mode
+        for i, (mode, label) in enumerate(mode_labels.items()):
+            if mode in accuracies_before:
+                acc = accuracies_before[mode]
+                ax_before.plot(
+                    sparsity_pct,
+                    acc,
+                    color=cmap(i),
+                    marker=".",
+                    markersize=msize,
+                    label=label,
+                    linewidth=2
+                )
+                
+                # Add confidence bands if we have standard errors
+                if errors_before and mode in errors_before:
+                    se = errors_before[mode]
+                    acc_array = np.array(acc)
+                    se_array = np.array(se)
+                    ax_before.fill_between(
+                        sparsity_pct,
+                        acc_array - se_array,
+                        acc_array + se_array,
+                        color=cmap(i),
+                        alpha=alpha
+                    )
+                
+        ax_before.set_xlabel("Pruning %", fontsize=12)
+        ax_before.set_ylabel("Accuracy (%)", fontsize=12)
+        ax_before.set_title("Accuracy vs Pruning (Before Fine-tuning)", fontsize=14)
+        ax_before.set_xlim(0, 100)
+        ax_before.set_ylim(0, 100)
+        ax_before.grid(True, alpha=0.3)
+        ax_before.legend(loc="best", frameon=True, fancybox=True, shadow=True)
         
-        fig.suptitle(title, fontsize=16, fontweight='bold')
-        plt.tight_layout()
+        fig_before.tight_layout()
         
-        if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            logger.info(f"Saved comparison plot to {save_path}")
+        # Create figure for AFTER fine-tuning
+        fig_after = plt.figure(figsize=(figdim * 2, figdim * 1.5))
+        ax_after = fig_after.add_subplot(111)
         
-        return fig 
+        # Plot each selection mode
+        for i, (mode, label) in enumerate(mode_labels.items()):
+            if mode in accuracies_after:
+                acc = accuracies_after[mode]
+                ax_after.plot(
+                    sparsity_pct,
+                    acc,
+                    color=cmap(i),
+                    marker=".",
+                    markersize=msize,
+                    label=label,
+                    linewidth=2
+                )
+                
+                # Add confidence bands if we have standard errors
+                if errors_after and mode in errors_after:
+                    se = errors_after[mode]
+                    acc_array = np.array(acc)
+                    se_array = np.array(se)
+                    ax_after.fill_between(
+                        sparsity_pct,
+                        acc_array - se_array,
+                        acc_array + se_array,
+                        color=cmap(i),
+                        alpha=alpha
+                    )
+                
+        ax_after.set_xlabel("Pruning %", fontsize=12)
+        ax_after.set_ylabel("Accuracy (%)", fontsize=12)
+        ax_after.set_title("Accuracy vs Pruning (After Fine-tuning)", fontsize=14)
+        ax_after.set_xlim(0, 100)
+        ax_after.set_ylim(0, 100)
+        ax_after.grid(True, alpha=0.3)
+        ax_after.legend(loc="best", frameon=True, fancybox=True, shadow=True)
+        
+        fig_after.tight_layout()
+        
+        # Save if requested
+        if save_path_prefix:
+            fig_before.savefig(f"{save_path_prefix}_before_finetuning.png", dpi=300, bbox_inches='tight')
+            fig_after.savefig(f"{save_path_prefix}_after_finetuning.png", dpi=300, bbox_inches='tight')
+            logger.info(f"Saved pruning plots to {save_path_prefix}_before/after_finetuning.png")
+        
+        return fig_before, fig_after 

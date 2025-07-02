@@ -406,7 +406,7 @@ pruning/
 - **Advanced Schedules**: Polynomial, exponential, and custom schedules
 - **Hardware-Aware Pruning**: Optimize for specific hardware constraints
 - **Lottery Ticket**: Find winning tickets in neural networks
-- **Dynamic Pruning**: Adapt sparsity during training
+- **Dynamic Pruning**: Adapt sparsity during training 
 
 Note: Basic structured pruning (channel/neuron removal) is already implemented. See `STRUCTURED_PRUNING_STATUS.md` for details.
 

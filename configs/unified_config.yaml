@@ -1,203 +1,221 @@
-# Unified Alignment Experiment Configuration
-# This single configuration file can handle all experiment types, datasets, models, metrics, and pruning strategies
-# For detailed parameter documentation, see configs/master_config.yaml
-# -----------------------------------------------------------------------------
+# Unified Configuration for Alignment Analysis Framework
+# This config can be used for various experiment types
+
+experiment_name: "mnist_alignment_analysis"
+experiment_type: "standard_pruning"  # Changed from general_alignment to standard_pruning
+
+# Random seed for reproducibility
+seed: 42
+
+# Device configuration
+device: "cuda"  # or "cpu"
 
 # -----------------------------------------------------------------------------
-# Example Use Cases:
+# Data Configuration
 # -----------------------------------------------------------------------------
-# 1. Standard magnitude pruning:
-#    algorithms: ["magnitude"]
-#    selection_mode: "low"
-#    structured: false
-#
-# 2. Alignment-based structured pruning:
-#    algorithms: ["alignment"]
-#    alignment_metric: "rayleigh_quotient"
-#    selection_mode: "low"
-#    structured: true  # Defaults to true for alignment anyway
-#
-# 3. Hybrid pruning comparison:
-#    algorithms: ["magnitude", "alignment", "hybrid"]
-#    alignment_metric: "weight_cosine_similarity"
-#    hybrid_alpha: 0.7
-#    selection_mode: ["low", "high"]
-#    sparsity_levels: [0.3, 0.5, 0.7]
-#
-# See configs/examples/ for more specific examples
+dataset:
+  name: "mnist"  # Added name field
+  batch_size: 128
+  num_workers: 4
+  data_augmentation: false
+  normalize: true
+
+# -----------------------------------------------------------------------------
+# Model Configuration  
+# -----------------------------------------------------------------------------
+model:
+  name: "mlp"  # Changed from architecture to name
+  
+  # MLP specific
+  hidden_sizes: [64, 32]
+  activation: "relu"  # Options: relu, tanh, sigmoid, gelu
+  dropout_rate: 0.0
+  
+  # CNN specific (if using cnn/resnet/vgg)
+  num_conv_layers: 3
+  channels: [32, 64, 128]
+  kernel_size: 3
+  pool_size: 2
+  cnn_mode: "unfold"  # How to handle conv layers for alignment: unfold, patchwise, batch_patch_combined
+
+# -----------------------------------------------------------------------------
+# Training Configuration
+# -----------------------------------------------------------------------------
+training:
+  epochs: 10  # Reduced for faster testing
+  learning_rate: 0.001
+  optimizer: "adam"  # Simplified structure
+  weight_decay: 0.0001
+  momentum: 0.9  # For SGD
+  
+  scheduler: "cosine"  # Simplified structure
+  scheduler_params:
+    step_size: 30  # For step scheduler
+    gamma: 0.1     # For step/exponential scheduler
+    
+  early_stopping: false
+  patience: 10
+  min_delta: 0.001
+
+# -----------------------------------------------------------------------------
+# Alignment Configuration
+# -----------------------------------------------------------------------------
+alignment:
+  metrics: ["rayleigh_quotient"]  # Can add: gradient_similarity, mutual_information, cka
+  track_during_training: true
+  frequency: 1  # Compute every N epochs
+  
+  # Layer-wise or aggregated analysis
+  aggregate_layers: false
+  layers_to_analyze: null  # null means all layers, or specify: ["layer1", "layer2"]
+
+# -----------------------------------------------------------------------------
+# Pruning Configuration
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  
+  # Pruning algorithms to test
+  algorithms: ["alignment"]  # Focus on alignment pruning
+  
+  # Sparsity levels to test (0-1 range with fine granularity)
+  sparsity_levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+  
+  # Selection modes - which weights/neurons to prune
+  # Test all three modes: low (prune poorly aligned), high (prune well aligned), random
+  selection_mode: ["low", "high", "random"]
+  
+  # Scope of pruning
+  scope: "layer"  # Options: layer, global, cascading
+  
+  # Fine-tuning after pruning
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 10
+  
+  # Alignment-specific settings
+  alignment_metric: "rayleigh_quotient"  # Metric for alignment-based pruning
+  
+  # Hybrid pruning settings (when using hybrid algorithm)
+  hybrid_alpha: 0.5  # Weight between magnitude (0) and alignment (1)
+
+# -----------------------------------------------------------------------------
+# Visualization Configuration
+# -----------------------------------------------------------------------------
+visualization:
+  generate_plots: true
+  plot_format: "png"
+  plot_dpi: 300
+  save_raw_data: true
+
+# -----------------------------------------------------------------------------
+# Experiment-specific Configuration
+# -----------------------------------------------------------------------------
+experiment_specific:
+  # For cascading experiments
+  cascade_direction: "forward"  # Options: forward, backward
+  recompute_after_each_layer: true
+  
+  # For layer-isolated experiments  
+  analyze_layer_interactions: true
+  
+  # For progressive experiments
+  progressive_steps: 10
 
 # -----------------------------------------------------------------------------
 # I. Experiment Metadata & Core Execution
 # -----------------------------------------------------------------------------
-experiment_name: "mnist_mlp_pruning_experiment"
-experiment_type: "standard_pruning"  # Options: 
-  # "standard_pruning" - Standard magnitude/gradient/fisher pruning
-  # "alignment_analysis" - Comprehensive alignment study with multiple dropout strategies
-  # "progressive_dropout" - Progressive dropout with high/low/random strategies  
-  # "layer_isolated_pruning" - Prune one layer at a time
-  # "cascading_layer_pruning" - Sequential layer pruning
-  # "training_alignment" - Track alignment during training
-
 results_path: "results"
 use_timestamp: true
 debug_mode: false
-device: "cuda"
 save_networks: false      # Save full model checkpoints
 save_best_only: true      # Only save best model
-seed: 42
 
 # -----------------------------------------------------------------------------
 # II. Dataset Configuration
 # -----------------------------------------------------------------------------
-dataset:
-  name: "mnist"           # Options: "mnist", "fashion_mnist", "cifar10", "cifar100", "imagenet", "svhn"
-  data_path: "./data"     # Root directory for dataset
-  batch_size: 128
-  num_workers: 4          # Data loading workers
-  download: true
-  normalize: true
-  augmentation: false     # Enable data augmentation
+data_path: "./data"     # Root directory for dataset
+download: true
+augmentation: false     # Enable data augmentation
   
-  # Data splits (for custom train/val split)
-  train_split: 0.8        # Training data split
-  val_split: 0.2          # Validation split from training data
+# Data splits (for custom train/val split)
+train_split: 0.8        # Training data split
+val_split: 0.2          # Validation split from training data
   
-  # Augmentation parameters (when augmentation: true)
-  augmentation_config:
-    random_crop: true
-    crop_padding: 4
-    random_horizontal_flip: true
-    color_jitter: false
-    random_rotation: false
-    rotation_degrees: 15
+# Augmentation parameters (when augmentation: true)
+augmentation_config:
+  random_crop: true
+  crop_padding: 4
+  random_horizontal_flip: true
+  color_jitter: false
+  random_rotation: false
+  rotation_degrees: 15
 
 # -----------------------------------------------------------------------------
 # III. Model Configuration
 # -----------------------------------------------------------------------------
-model:
-  # Model identifier
-  name: "mlp"             # Options: "mlp", "cnn", "resnet18", "resnet50", "vgg16", "densenet121", etc.
-  
-  # Common parameters
-  output_dim: 10          # Number of output classes
-  dropout_rate: 0.0       # Model internal dropout (not pruning dropout)
-  pretrained: false       # Load pretrained weights for torchvision models
-  
-  # CNN preprocessing mode for metrics
-  cnn_mode: "unfold"      # How to process CNN features: "unfold", "patchwise", "batch_patch_combined"
-  
-  # Model-specific parameters (only relevant block is used based on model name)
-  mlp_config:
-    input_dim: 784        # Input dimension (784 for MNIST, 3072 for CIFAR-10)
-    hidden_dims: [512, 256, 128]
-    activation: "relu"    # Options: "relu", "gelu", "tanh", "sigmoid"
-    use_batchnorm: false
-    dropout: 0.0          # Dropout between layers
-  
-  cnn_config:
-    in_channels: 1        # 1 for grayscale, 3 for RGB
-    conv_channels: [32, 64]
-    kernel_sizes: [5, 5]
-    fc_dims: [128]
-    use_batchnorm: true
-  
-  # External model settings (for torchvision models)
-  external_config:
-    num_classes_override: null  # Override number of output classes
-    freeze_features: false      # Freeze feature extractor layers
+output_dim: 10          # Number of output classes
+pretrained: false       # Load pretrained weights for torchvision models
+
+# External model settings (for torchvision models)
+external_config:
+  num_classes_override: null  # Override number of output classes
+  freeze_features: false      # Freeze feature extractor layers
 
 # -----------------------------------------------------------------------------
 # IV. Training Configuration
 # -----------------------------------------------------------------------------
-training:
-  epochs: 20              # Reduced for MNIST (converges quickly)
-  optimizer: "adam"       # Options: "adam", "sgd", "adamw", "rmsprop", "adagrad"
-  learning_rate: 0.001
-  momentum: 0.9           # For SGD
-  weight_decay: 0.0001
-  nesterov: true          # For SGD
-  betas: [0.9, 0.999]     # For Adam/AdamW
-  
-  # Learning rate scheduler
-  scheduler: "cosine"     # Options: null, "step", "cosine", "exponential", "multistep", "plateau"
-  scheduler_params:
-    # For step scheduler
-    step_size: 30         
-    gamma: 0.1           
-    # For multistep scheduler
-    milestones: [30, 60, 90]
-    # For cosine scheduler
-    T_max: 20            # Match training epochs
-    eta_min: 0
-    # For plateau scheduler
-    patience: 10
-    threshold: 0.001
-  
-  # Training options
+training_options:
   gradient_clip: 0.0      # Gradient clipping (0 = disabled)
   mixed_precision: false  # Automatic mixed precision
   
-  # Early stopping
-  early_stopping: false
-  patience: 20
+# Early stopping
+early_stopping:
+  enabled: false
+  patience: 10
   min_delta: 0.001
   
-  # Checkpointing
-  save_checkpoints: true
-  checkpoint_interval: 10
+# Checkpointing
+save_checkpoints: false  # Don't save model checkpoints to save space
+checkpoint_interval: 10
   
-  # Evaluation
-  eval_interval: 1        # Evaluate every N epochs
-  eval_on_train: false    # Also evaluate on training set
+# Evaluation
+eval_interval: 1        # Evaluate every N epochs
+eval_on_train: false    # Also evaluate on training set
 
 # -----------------------------------------------------------------------------
 # V. Alignment Metrics Configuration
 # -----------------------------------------------------------------------------
-alignment:
-  # Metrics to compute
-  metrics:
-    - "rayleigh_quotient"      # Node-wise Rayleigh quotient
-    # - "weight_cosine_similarity" # Weight-based similarity
-    # - "mutual_information"     # Mutual information between layers
-    # - "cka"                   # Centered Kernel Alignment
-    # - "spectral_gap"          # Spectral gap analysis
-    # - "gradient_similarity"   # Gradient-based similarity
-  
-  # Metric computation settings
+alignment_metrics:
   num_batches: null       # Batches for metric computation (null = all)
   scale_by_norm: false    # Scale metrics by weight norm
   force_cpu: false        # Force CPU computation for large matrices
   exclude_classification_layer: true  # Exclude final layer from analysis
   
-  # CNN-specific metric settings
-  cnn_aggregation: "mean" # How to aggregate CNN metrics: "mean", "max", "sum", "var"
+# CNN-specific metric settings
+cnn_aggregation: "mean" # How to aggregate CNN metrics: "mean", "max", "sum", "var"
   
-  # Metric-specific configurations
-  metric_configs:
-    rayleigh_quotient:
-      epsilon: 1e-8       # Numerical stability
-    mutual_information:
-      n_neighbors: 3      # For kraskov estimator
-    cka:
-      kernel: "linear"    # Kernel type: "linear", "rbf"
+# Metric-specific configurations
+metric_configs:
+  rayleigh_quotient:
+    epsilon: 1e-8       # Numerical stability
+  mutual_information:
+    n_neighbors: 3      # For kraskov estimator
+  cka:
+    kernel: "linear"    # Kernel type: "linear", "rbf"
 
 # -----------------------------------------------------------------------------
 # VI. Pruning Configuration
 # -----------------------------------------------------------------------------
-pruning:
-  # Pruning algorithms to test (can be single string or list)
-  algorithms: ["magnitude", "alignment", "hybrid"]  # Try: ["magnitude", "alignment", "hybrid"] for comparison
-  # Options:
-  # - "magnitude": Traditional weight magnitude pruning
-  # - "gradient": Gradient-based importance
-  # - "fisher": Fisher information approximation  
-  # - "alignment": Neuron-input alignment using specified metric
-  # - "hybrid": Combine magnitude and alignment scores
-  # - "cascading_alignment": Prune layers sequentially, recomputing alignment after each
-  # Note: For random pruning, use selection_mode: "random" instead of algorithms: ["random"]
+pruning_experiments:
+  # Pruning algorithms to test
+  algorithms: ["alignment"]  # Focus on alignment pruning
   
-  # How to select weights to prune
-  selection_mode: ["low", "high", "random"]    # Options: "low" (default), "high", "random"
+  # Sparsity levels to test (0-1 range with fine granularity)
+  sparsity_levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+  
+  # Selection modes - which weights/neurons to prune
+  # Test all three modes: low (prune poorly aligned), high (prune well aligned), random
+  selection_mode: ["low", "high", "random"]
   
   # Pruning scope - how to apply pruning across layers
   scope: "layer"          # Options: "layer" (default), "global", "cascading"
@@ -208,110 +226,108 @@ pruning:
   # For cascading scope (currently only works with alignment algorithm)
   cascading_direction: "forward"  # Options: "forward", "backward"
   
-  # Sparsity levels to test
-  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]  # Fraction of weights to prune
+# -----------------------------------------------------------------------------
+# MAIN PRUNING PARAMETER - Sparsity levels to test
+# -----------------------------------------------------------------------------
+# This is THE key parameter that defines what pruning experiments to run
+# Each value represents the fraction of weights to remove (0.0 = no pruning, 1.0 = remove all)
   
-  # -----------------------------------------------------------------------------
-  # Alignment-based pruning settings (for algorithms: ["alignment", "hybrid"])
-  # -----------------------------------------------------------------------------
-  # Specify which alignment metric to use
-  alignment_metric: "rayleigh_quotient"  
-  # Available metrics:
-  # - "rayleigh_quotient": Classic neuron-input alignment based on variance
-  # - "mutual_information_gaussian": Information shared between neurons and inputs
-  # - "weight_cosine_similarity": Cosine similarity between weight vectors
-  # - "gradient_similarity": Alignment based on gradient information
-  # - "cka": Centered Kernel Alignment (requires output comparison)
-  # See PRUNING_CONCEPTS.md for detailed explanations
+# The experiment will run pruning for EACH level in this list
   
-  # For hybrid pruning: balance between magnitude and alignment
-  hybrid_alpha: 0.5         # 0.0 = pure magnitude, 1.0 = pure alignment
-  # Example values:
-  # - 0.3: 30% alignment, 70% magnitude (magnitude-focused)
-  # - 0.5: 50% alignment, 50% magnitude (balanced)
-  # - 0.7: 70% alignment, 30% magnitude (alignment-focused)
+# -----------------------------------------------------------------------------
+# Alignment-based pruning settings (for algorithms: ["alignment", "hybrid"])
+# -----------------------------------------------------------------------------
+# Specify which alignment metric to use
+alignment_metric: "rayleigh_quotient"  
+# Available metrics:
+# - "rayleigh_quotient": Classic neuron-input alignment based on variance
+# - "mutual_information_gaussian": Information shared between neurons and inputs
+# - "weight_cosine_similarity": Cosine similarity between weight vectors
+# - "gradient_similarity": Alignment based on gradient information
+# - "cka": Centered Kernel Alignment (requires output comparison)
+# See PRUNING_CONCEPTS.md for detailed explanations
   
-  # -----------------------------------------------------------------------------
-  # Structured pruning options - IMPORTANT FOR ALIGNMENT-BASED PRUNING
-  # -----------------------------------------------------------------------------
-  structured: false         # CRITICAL SETTING - Set to true for neuron/channel pruning!
-  # What this does:
-  # - false: Unstructured pruning - removes individual weights (creates sparse matrices)
-  # - true: Structured pruning - removes entire neurons/channels (creates smaller dense matrices)
-  #
-  # For alignment-based pruning:
-  # - Alignment metrics compute ONE SCORE PER NEURON
-  # - Therefore, structured=true makes the most sense (prune entire neurons)
-  # - The framework will automatically set structured=true for alignment methods
-  #
-  # Example for MLP:
-  # - Layer with shape [256, 128] (256 output neurons, 128 inputs per neuron)
-  # - Alignment computes 256 scores (one per output neuron)
-  # - With structured=true and 50% pruning: removes 128 entire neurons
-  # - Result: effective weight matrix becomes [128, 128]
-  #
-  # Example for CNN:
-  # - Conv layer with 64 output channels
-  # - Alignment computes 64 scores (one per channel)
-  # - With structured=true and 50% pruning: removes 32 entire channels
-  # - Result: layer has only 32 output channels
+# For hybrid pruning: balance between magnitude and alignment
+hybrid_alpha: 0.5         # 0.0 = pure magnitude, 1.0 = pure alignment
+# Example values:
+# - 0.3: 30% alignment, 70% magnitude (magnitude-focused)
+# - 0.5: 50% alignment, 50% magnitude (balanced)
+# - 0.7: 70% alignment, 30% magnitude (alignment-focused)
   
-  # -----------------------------------------------------------------------------
-  # Iterative pruning settings
-  # -----------------------------------------------------------------------------
-  iterative: false       # Whether to prune iteratively
-  iterations: 1          # Number of pruning iterations
-  schedule: "polynomial" # Schedule: "constant", "linear", "exponential", "polynomial"
+# -----------------------------------------------------------------------------
+# Structured pruning options - IMPORTANT FOR ALIGNMENT-BASED PRUNING
+# -----------------------------------------------------------------------------
+structured: false         # CRITICAL SETTING - Set to true for neuron/channel pruning!
+# What this does:
+# - false: Unstructured pruning - removes individual weights (creates sparse matrices)
+# - true: Structured pruning - removes entire neurons/channels (creates smaller dense matrices)
+#
+# For alignment-based pruning:
+# - Alignment metrics compute ONE SCORE PER NEURON
+# - Therefore, structured=true makes the most sense (prune entire neurons)
+# - The framework will automatically set structured=true for alignment methods
+#
+# Example for MLP:
+# - Layer with shape [256, 128] (256 output neurons, 128 inputs per neuron)
+# - Alignment computes 256 scores (one per output neuron)
+# - With structured=true and 50% pruning: removes 128 entire neurons
+# - Result: effective weight matrix becomes [128, 128]
+#
+# Example for CNN:
+# - Conv layer with 64 output channels
+# - Alignment computes 64 scores (one per channel)
+# - With structured=true and 50% pruning: removes 32 entire channels
+# - Result: layer has only 32 output channels
   
-  # -----------------------------------------------------------------------------
-  # Fine-tuning after pruning
-  # -----------------------------------------------------------------------------
-  fine_tune_after_pruning: true
-  fine_tune_epochs: 10
-  fine_tune_learning_rate: 0.0001
+# -----------------------------------------------------------------------------
+# Iterative pruning settings
+# -----------------------------------------------------------------------------
+iterative: false       # Whether to prune iteratively
+iterations: 1          # Number of pruning iterations
+schedule: "polynomial" # Schedule: "constant", "linear", "exponential", "polynomial"
   
-  # -----------------------------------------------------------------------------
-  # Progressive dropout settings (for alignment experiments)
-  # -----------------------------------------------------------------------------
-  dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]  # Dropout rates to evaluate
-  dropout_mode: "scaled"     # "scaled" or "zero"
+# -----------------------------------------------------------------------------
+# Fine-tuning after pruning
+# -----------------------------------------------------------------------------
+fine_tune_after_pruning: true
+fine_tune_epochs: 10
+fine_tune_learning_rate: 0.0001
   
-  # Random selection trials
-  num_random_trials: 3       # Number of trials for "random" selection mode
+# Random selection trials
+num_random_trials: 3       # Number of trials for "random" selection mode
   
-  # -----------------------------------------------------------------------------
-  # Layer-specific settings
-  # -----------------------------------------------------------------------------
-  exclude_first_last: true  # Exclude first/last layers from pruning
-  modules_to_prune: null    # Specific modules to prune (null = all)
-  exclude_modules: ["classifier", "fc", "head"]  # Modules to exclude
+# -----------------------------------------------------------------------------
+# Layer-specific settings
+# -----------------------------------------------------------------------------
+exclude_first_last: true  # Exclude first/last layers from pruning
+modules_to_prune: null    # Specific modules to prune (null = all)
+exclude_modules: ["classifier", "fc", "head"]  # Modules to exclude
 
 # -----------------------------------------------------------------------------
 # VII. Visualization & Analysis
 # -----------------------------------------------------------------------------
-visualization:
-  generate_plots: true
-  plot_format: "png"       # "png", "pdf", "svg"
-  dpi: 300
-  figure_size: [10, 8]
+generate_plots: true
+plot_format: "png"       # "png", "pdf", "svg"
+dpi: 300
+figure_size: [10, 8]
   
-  # Plot types to generate
-  plot_types:
-    - "training_curves"    # Training loss/accuracy curves
-    - "pruning_performance" # Performance vs sparsity (key for this experiment)
-    - "weight_distribution" # Weight distribution histograms
-    - "layer_importance"   # Layer importance scores
-    - "alignment_heatmap"  # Cross-layer alignment heatmap
-    - "metric_evolution"   # Metric values over time
-    - "sparsity_by_layer"  # Layer-wise sparsity distribution
+# Plot types to generate
+plot_types:
+  - "training_curves"    # Training loss/accuracy curves
+  - "pruning_performance" # Performance vs sparsity (key for this experiment)
+  - "weight_distribution" # Weight distribution histograms
+  - "layer_importance"   # Layer importance scores
+  - "alignment_heatmap"  # Cross-layer alignment heatmap
+  - "metric_evolution"   # Metric values over time
+  - "sparsity_by_layer"  # Layer-wise sparsity distribution
   
-  # Report generation
-  generate_html_report: false    # Generate HTML report
-  generate_markdown_report: true  # Generate Markdown report
+# Report generation
+generate_html_report: false    # Generate HTML report
+generate_markdown_report: true  # Generate Markdown report
   
-  # Statistical analysis
-  compute_statistics: true        # Compute statistical summaries
-  confidence_level: 0.95         # Confidence intervals
+# Statistical analysis
+compute_statistics: true        # Compute statistical summaries
+confidence_level: 0.95         # Confidence intervals
 
 # -----------------------------------------------------------------------------
 # VIII. Experiment-Specific Settings
@@ -331,61 +347,61 @@ experiment_specific:
   track_layers: null      # Specific layers to track (null = all)
   measure_alignment_during_training: true
   alignment_frequency: 1   # Epochs between alignment measurements
+  
+  # For dropout-based experiments (progressive_dropout, general_alignment, etc.)
+  dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]  # Dropout rates to evaluate
+  dropout_mode: "scaled"     # "scaled" or "zero" - how to apply dropout
 
 # -----------------------------------------------------------------------------
 # IX. Computational Resources
 # -----------------------------------------------------------------------------
-resources:
-  # Multi-GPU settings
-  distributed: false
-  backend: "nccl"         # "nccl", "gloo"
-  world_size: 1
-  rank: 0
+distributed: false
+backend: "nccl"         # "nccl", "gloo"
+world_size: 1
+rank: 0
   
-  # Memory management
-  gradient_checkpointing: false
-  mixed_precision: false
-  empty_cache_interval: 10  # Clear GPU cache every N epochs
+# Memory management
+gradient_checkpointing: false
+mixed_precision: false
+empty_cache_interval: 10  # Clear GPU cache every N epochs
   
-  # Performance
-  cudnn_benchmark: true
-  cudnn_deterministic: false
-  num_workers: 4          # Data loading workers
-  pin_memory: true        # Pin memory for GPU transfer
-  persistent_workers: true # Keep workers alive
+# Performance
+cudnn_benchmark: true
+cudnn_deterministic: false
+pin_memory: true        # Pin memory for GPU transfer
+persistent_workers: true # Keep workers alive
   
-  # Reproducibility
-  deterministic: true
+# Reproducibility
+deterministic: true
 
 # -----------------------------------------------------------------------------
 # X. Logging & Output
 # -----------------------------------------------------------------------------
-logging:
-  level: "INFO"           # "DEBUG", "INFO", "WARNING", "ERROR"
-  console: true
-  file: true
-  log_interval: 50        # Batches between logging
+level: "INFO"           # "DEBUG", "INFO", "WARNING", "ERROR"
+console: true
+file: true
+log_interval: 50        # Batches between logging
   
-  # Experiment tracking
-  use_wandb: false
-  wandb_project: "alignment_experiments"
-  wandb_entity: null
-  wandb_tags: []
-  wandb_mode: "online"    # "online", "offline", "disabled"
+# Experiment tracking
+use_wandb: false
+wandb_project: "alignment_experiments"
+wandb_entity: null
+wandb_tags: []
+wandb_mode: "online"    # "online", "offline", "disabled"
   
-  # TensorBoard
-  use_tensorboard: false
-  tensorboard_dir: "./runs"
+# TensorBoard
+use_tensorboard: false
+tensorboard_dir: "./runs"
   
-  # Output directories
-  output_dir: "./results"
-  checkpoint_dir: "./checkpoints"
-  log_dir: "./logs"
+# Output directories
+output_dir: "./results"
+checkpoint_dir: "./checkpoints"
+log_dir: "./logs"
   
-  # File naming
-  timestamp_format: "%Y%m%d_%H%M%S"
+# File naming
+timestamp_format: "%Y%m%d_%H%M%S"
   
-  # Save options
-  save_raw_results: true
-  compression: true       # Compress saved results
-  save_interval: 10       # Epochs between saves 
+# Save options
+save_raw_results: true
+compression: true       # Compress saved results
+save_interval: 10       # Epochs between saves 

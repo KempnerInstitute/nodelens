@@ -50,7 +50,7 @@ class GeneralAlignmentConfig(ExperimentConfig):
     
     # Pruning experiments
     do_pruning_experiments: bool = True
-    pruning_strategies: List[str] = field(default_factory=lambda: ["magnitude", "gradient", "fisher"])
+    pruning_strategies: List[str] = field(default_factory=lambda: ["magnitude", "random", "alignment"])
     pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7, 0.9])
     fine_tune_after_pruning: bool = True
     fine_tune_epochs: int = 10
@@ -113,7 +113,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         optimizer = self._setup_optimizer()
         scheduler = self._setup_scheduler(optimizer)
         criterion = nn.CrossEntropyLoss()
-        
+            
         # Training history
         train_losses = []
         train_accs = []
@@ -132,7 +132,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
             val_loss, val_acc = self._evaluate()
             val_losses.append(val_loss)
             val_accs.append(val_acc)
-            
+        
             # Update scheduler
             if scheduler is not None:
                 scheduler.step()
@@ -142,7 +142,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 alignment_values = self._measure_alignment()
                 for method, values in alignment_values.items():
                     alignment_history[method].append(values)
-            
+        
             # Log progress
             logger.info(
                 f"Epoch {epoch+1}/{self.config.training_epochs}: "
@@ -191,7 +191,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
             return torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer,
                 **self.config.scheduler_config
-            )
+        )
         elif self.config.scheduler == "step":
             return torch.optim.lr_scheduler.StepLR(
                 optimizer,
@@ -312,7 +312,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     layer_values[layer_name] = scores.cpu().tolist()
                 except Exception as e:
                     logger.error(f"Error computing {method} for {layer_name}: {e}")
-            
+        
             alignment_values[method] = layer_values
         
         return alignment_values
@@ -437,6 +437,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         if hasattr(module, '_pruning_hook'):
                             module._pruning_hook.remove()
                             delattr(module, '_pruning_hook')
+                        if hasattr(module, '_original_weight'):
+                            delattr(module, '_original_weight')
                     
                     # Reset model to original state
                     self.model.load_state_dict(original_state)
@@ -503,11 +505,16 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             config=pruning_config
                         )
                     elif strategy_name == "gradient":
+                        logger.warning("Gradient pruning is not suitable for post-training pruning on converged models")
                         from alignment.pruning.strategies import GradientPruning
                         strategy = GradientPruning(config=pruning_config)
                     elif strategy_name == "fisher":
+                        logger.warning("Fisher pruning is not suitable for post-training pruning on converged models")
                         from alignment.pruning.strategies import FisherPruning
                         strategy = FisherPruning(config=pruning_config)
+                    elif strategy_name == "random":
+                        from alignment.pruning.strategies import RandomPruning
+                        strategy = RandomPruning(config=pruning_config)
                     else:
                         logger.warning(f"Unsupported pruning strategy: {strategy_name}")
                         continue
@@ -670,7 +677,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             
                             if (epoch + 1) % 5 == 0:
                                 logger.info(f"        Fine-tune epoch {epoch+1}: Loss={train_loss:.4f}, Acc={train_acc:.2f}%")
-                        
+        
                         # Re-evaluate after fine-tuning
                         test_loss_after, test_acc_after = self._evaluate()
                         logger.info(f"      After fine-tuning: Loss={test_loss_after:.4f}, Accuracy={test_acc_after:.2f}%")
@@ -700,6 +707,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
             if hasattr(module, '_pruning_hook'):
                 module._pruning_hook.remove()
                 delattr(module, '_pruning_hook')
+            if hasattr(module, '_original_weight'):
+                delattr(module, '_original_weight')
         
         # Restore original model
         self.model.load_state_dict(original_state)
@@ -810,56 +819,121 @@ class GeneralAlignmentExperiment(BaseExperiment):
             from alignment.analysis.visualization.pruning_plots import PruningVisualizer
             import matplotlib.pyplot as plt
             
-            for strategy_name, strategy_results in self.pruning_results["strategies"].items():
+            # Group results by algorithm (for multi-selection mode comparison)
+            algorithm_results = {}
+            
+            for strategy_key, strategy_results in self.pruning_results["strategies"].items():
                 if not strategy_results.get("pruning_amounts"):
                     continue
+                
+                # Extract algorithm name and selection mode from key
+                if "_" in strategy_key and strategy_key.split("_")[-1] in ["low", "high", "random"]:
+                    # Format: "algorithm_selectionmode"
+                    parts = strategy_key.rsplit("_", 1)
+                    algorithm = parts[0]
+                    selection_mode = parts[1]
+                else:
+                    # Single selection mode
+                    algorithm = strategy_key
+                    selection_mode = self.config.pruning_selection_mode
+                    if isinstance(selection_mode, list):
+                        selection_mode = selection_mode[0]
+                
+                # Initialize algorithm group if needed
+                if algorithm not in algorithm_results:
+                    algorithm_results[algorithm] = {
+                        "sparsities": strategy_results["sparsities"],
+                        "before": {},
+                        "after": {}
+                    }
+                
+                # Store accuracies by selection mode
+                algorithm_results[algorithm]["before"][selection_mode] = strategy_results["accuracies_before_finetune"]
+                algorithm_results[algorithm]["after"][selection_mode] = strategy_results["accuracies_after_finetune"]
+            
+            # Create visualizer
+            visualizer = PruningVisualizer()
+            
+            # Generate plots for each algorithm
+            for algorithm, results in algorithm_results.items():
+                # Only create comparison plots if we have multiple selection modes
+                if len(results["before"]) > 1:
+                    # Create before/after comparison plots
+                    fig_before, fig_after = visualizer.plot_accuracy_vs_sparsity_comparison(
+                        sparsities=results["sparsities"],
+                        accuracies_before=results["before"],
+                        accuracies_after=results["after"],
+                        title=f"{algorithm.capitalize()} Pruning",
+                        save_path_prefix=str(output_dir / f"pruning_{algorithm}_accuracy")
+                    )
+                    plt.close(fig_before)
+                    plt.close(fig_after)
+                else:
+                    # Single selection mode - create simple plot
+                    selection_mode = list(results["before"].keys())[0]
                     
-                # Create visualizer
-                visualizer = PruningVisualizer()
-                
-                # 1. Plot accuracy comparison before/after fine-tuning
-                fig = visualizer.plot_accuracy_vs_sparsity_comparison(
-                    sparsities=strategy_results["sparsities"],
-                    accuracies_before=strategy_results["accuracies_before_finetune"],
-                    accuracies_after=strategy_results["accuracies_after_finetune"],
-                    title=f"{strategy_name.capitalize()} Pruning: Before vs After Fine-tuning"
-                )
-                fig.savefig(output_dir / f"pruning_{strategy_name}_accuracy_comparison.png", 
-                           dpi=self.config.plot_dpi, bbox_inches='tight')
-                plt.close(fig)
-                
-                # 2. Plot fine-tuning improvement
-                improvements = [
-                    after - before 
-                    for before, after in zip(
-                        strategy_results["accuracies_before_finetune"],
-                        strategy_results["accuracies_after_finetune"]
-                    )
-                ]
-                
-                fig, ax = plt.subplots(figsize=(10, 6))
-                ax.bar(range(len(improvements)), improvements, 
-                      tick_label=[f"{s:.0%}" for s in strategy_results["sparsities"]])
-                ax.set_xlabel("Sparsity Level")
-                ax.set_ylabel("Accuracy Improvement (%)")
-                ax.set_title(f"{strategy_name.capitalize()} Pruning: Fine-tuning Improvement")
-                ax.grid(True, alpha=0.3)
-                fig.savefig(output_dir / f"pruning_{strategy_name}_improvement.png",
-                           dpi=self.config.plot_dpi, bbox_inches='tight')
-                plt.close(fig)
-                
-                # 3. Weight distribution evolution (if available)
-                if strategy_results.get("weight_distributions_before"):
-                    # Plot weight distribution changes for highest sparsity
-                    idx = -1  # Last (highest) sparsity
-                    fig = visualizer.plot_weight_distribution_comparison(
-                        weights_before=strategy_results["weight_distributions_before"][idx],
-                        weights_after=strategy_results["weight_distributions_after"][idx],
-                        sparsity=strategy_results["sparsities"][idx],
-                        title=f"{strategy_name.capitalize()} Pruning at {strategy_results['sparsities'][idx]:.0%} Sparsity"
-                    )
-                    fig.savefig(output_dir / f"pruning_{strategy_name}_weight_dist_comparison.png",
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    
+                    # Plot before and after on same plot
+                    ax.plot([s * 100 for s in results["sparsities"]], 
+                           results["before"][selection_mode],
+                           'o-', label='Before Fine-tuning', color='#FF6B6B', 
+                           linewidth=2.5, markersize=8)
+                    ax.plot([s * 100 for s in results["sparsities"]], 
+                           results["after"][selection_mode],
+                           'o-', label='After Fine-tuning', color='#4ECDC4',
+                           linewidth=2.5, markersize=8)
+                    
+                    ax.set_xlabel('Pruning %', fontsize=12)
+                    ax.set_ylabel('Accuracy (%)', fontsize=12)
+                    ax.set_title(f'{algorithm.capitalize()} Pruning ({selection_mode} mode)', 
+                                fontsize=14, fontweight='bold')
+                    ax.grid(True, alpha=0.3)
+                    ax.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+                    ax.set_xlim(0, 100)
+                    ax.set_ylim(0, 105)
+                    
+                    fig.tight_layout()
+                    fig.savefig(output_dir / f"pruning_{algorithm}_accuracy.png",
                                dpi=self.config.plot_dpi, bbox_inches='tight')
                     plt.close(fig)
+                
+                # Also create improvement plot for each selection mode
+                for selection_mode in results["before"]:
+                    if selection_mode in results["after"]:
+                        improvements = [
+                            after - before 
+                            for before, after in zip(
+                                results["before"][selection_mode],
+                                results["after"][selection_mode]
+                            )
+                        ]
+                        
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        bars = ax.bar(range(len(improvements)), improvements, 
+                                      tick_label=[f"{s:.0%}" for s in results["sparsities"]],
+                                      color=['#4ECDC4' if imp >= 0 else '#FF6B6B' for imp in improvements],
+                                      alpha=0.8)
+                        
+                        # Add value labels on bars
+                        for bar, imp in zip(bars, improvements):
+                            height = bar.get_height()
+                            ax.text(bar.get_x() + bar.get_width()/2., height,
+                                   f'{imp:+.1f}%', ha='center', 
+                                   va='bottom' if height >= 0 else 'top',
+                                   fontsize=10, fontweight='bold')
+                        
+                        ax.set_xlabel("Sparsity Level", fontsize=12)
+                        ax.set_ylabel("Accuracy Improvement (%)", fontsize=12)
+                        ax.set_title(f"{algorithm.capitalize()} Pruning ({selection_mode} mode): Fine-tuning Improvement",
+                                    fontsize=14, fontweight='bold')
+                        ax.grid(True, alpha=0.3, axis='y')
+                        ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+                        
+                        fig.tight_layout()
+                        suffix = f"_{selection_mode}" if len(results["before"]) > 1 else ""
+                        fig.savefig(output_dir / f"pruning_{algorithm}_improvement{suffix}.png",
+                                   dpi=self.config.plot_dpi, bbox_inches='tight')
+                        plt.close(fig)
         
         logger.info(f"Saved visualizations to {output_dir}") 

@@ -1,0 +1,19 @@
+Experiment Results Summary
+==================================================
+
+Final Model Performance:
+  - Accuracy: 99.41%
+  - Loss: 0.0179
+
+Pruning Results Summary:
+
+ALIGNMENT_LOW:
+  At ~50% sparsity: 60.2% → 60.9% (+0.6%)
+  At ~90% sparsity: 17.0% → 21.0% (+4.0%)
+  At ~90% sparsity: 18.8% → 20.9% (+2.1%)
+
+ALIGNMENT_HIGH:
+  At ~90% sparsity: 20.9% → 97.2% (+76.2%)
+
+ALIGNMENT_RANDOM:
+

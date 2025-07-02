@@ -147,16 +147,21 @@ class BasePruningStrategy(ABC):
         if not hasattr(module, 'weight'):
             raise ValueError(f"Module {module} does not have a weight parameter")
         
-        # Apply mask to weights
-        module.weight.data *= mask
-        
         if not make_permanent:
+            # Store original weights BEFORE applying mask
+            if not hasattr(module, '_original_weight'):
+                module.register_buffer('_original_weight', module.weight.data.clone())
+            
             # Register mask as buffer for forward passes
             module.register_buffer('weight_mask', mask)
             
+            # Apply mask to weights
+            module.weight.data *= mask
+            
             # Hook to apply mask during forward pass
             def apply_mask_hook(mod, inputs):
-                mod.weight.data *= mod.weight_mask
+                # Apply mask to original weights to maintain pruning
+                mod.weight.data = mod._original_weight * mod.weight_mask
                 return inputs
             
             # Remove old hook if exists
@@ -165,6 +170,9 @@ class BasePruningStrategy(ABC):
             
             # Register new hook
             module._pruning_hook = module.register_forward_pre_hook(apply_mask_hook)
+        else:
+            # Apply mask permanently
+            module.weight.data *= mask
     
     def remove_pruning(self, module: nn.Module):
         """
@@ -175,7 +183,11 @@ class BasePruningStrategy(ABC):
         """
         if hasattr(module, 'weight_mask'):
             # Apply mask permanently
-            module.weight.data *= module.weight_mask
+            if hasattr(module, '_original_weight'):
+                module.weight.data = module._original_weight * module.weight_mask
+                delattr(module, '_original_weight')
+            else:
+                module.weight.data *= module.weight_mask
             # Remove mask buffer
             delattr(module, 'weight_mask')
         

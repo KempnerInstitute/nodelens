@@ -4,6 +4,24 @@ This unified system provides a single entry point for all neural network alignme
 
 **Note**: The main experiment runner `scripts/run_experiment.py` is the primary entry point to the alignment framework. All configuration files are in `configs/`, examples in `examples/`, and the core library code in `src/alignment/`.
 
+## Key Concepts: Sparsity vs Dropout
+
+### `sparsity_levels` (Pruning Parameter)
+- **Location**: `pruning.sparsity_levels`
+- **Purpose**: Defines the fraction of weights to permanently remove through pruning
+- **Values**: List of floats between 0 and 1 (e.g., `[0.1, 0.3, 0.5, 0.7, 0.9]`)
+- **Effect**: Permanently zeros out weights, creating sparse networks
+- **Usage**: Used in all pruning experiments (standard_pruning, layer_isolated_pruning, etc.)
+
+### `dropout_rates` (Dropout Experiment Parameter)  
+- **Location**: `experiment_specific.dropout_rates`
+- **Purpose**: Defines dropout probabilities for dropout-based alignment experiments
+- **Values**: List of floats between 0 and 1 (e.g., `[0.0, 0.1, 0.3, 0.5, 0.7, 0.9]`)
+- **Effect**: Temporarily drops neurons during forward passes to study alignment
+- **Usage**: Used only in dropout experiments (progressive_dropout, general_alignment)
+
+**Key Difference**: Pruning (sparsity) permanently removes weights, while dropout temporarily deactivates neurons during training/evaluation for analysis purposes.
+
 ## Overview
 
 The unified experiment system can handle:

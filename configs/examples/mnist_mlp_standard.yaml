@@ -36,10 +36,10 @@ alignment:
 
 # Pruning
 pruning:
-  strategy: "magnitude"
+  algorithms: ["magnitude"]
   scope: "global"
-  amount: 0.5
-  fine_tune: true
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  fine_tune_after_pruning: true
   fine_tune_epochs: 5
 
 # Visualization

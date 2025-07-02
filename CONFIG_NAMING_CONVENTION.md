@@ -13,8 +13,8 @@ The actual pruning method used to compute importance scores.
 
 **Options:**
 - `"magnitude"` - Prune based on weight magnitude
-- `"gradient"` - Prune based on gradient magnitude  
-- `"fisher"` - Prune based on Fisher information
+- `"gradient"` - Prune based on gradient magnitude (requires active training)
+- `"fisher"` - Prune based on Fisher information (requires active training)
 - `"alignment"` - Prune based on neuron-input alignment (specify metric separately)
 - `"hybrid"` - Combine magnitude and alignment scores
 - `"random"` - Random importance scores (Note: Consider using `selection_mode: "random"` instead)
@@ -215,4 +215,6 @@ config = PruningConfig(
 2. **Descriptive names** that clearly indicate purpose
 3. **Consistent terminology** throughout codebase
 4. **Backward compatible** with existing configs
-5. **Self-documenting** configuration files 
+5. **Self-documenting** configuration files
+
+**Note**: `gradient` and `fisher` algorithms require active gradients and are only suitable for pruning during training. For post-training pruning on converged models, use `magnitude`, `random`, or `alignment` instead. 

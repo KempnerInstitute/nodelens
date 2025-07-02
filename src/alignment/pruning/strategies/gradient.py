@@ -81,7 +81,9 @@ class GradientPruning(BasePruningStrategy):
         if module.weight.grad is None:
             raise ValueError(
                 f"Module {module} has no gradients. "
-                "Run backward pass before pruning."
+                "Run backward pass before pruning. "
+                "Note: Gradient-based pruning is not suitable for post-training pruning "
+                "on converged models as gradients will be near-zero."
             )
         
         if self.mode == 'gradient':

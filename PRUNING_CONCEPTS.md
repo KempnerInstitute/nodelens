@@ -244,4 +244,86 @@ pruning:
   alignment_metric: "rayleigh_quotient"
   hybrid_alpha: 0.7  # 70% alignment, 30% magnitude
   structured: true   # Prune entire neurons
+```
+
+## When to Use Different Pruning Algorithms
+
+### Post-Training Pruning (Current Focus)
+When pruning a fully trained, converged model:
+
+**Suitable algorithms:**
+- **Magnitude-based**: Prunes weights with smallest absolute values
+  - Assumption: Small weights contribute less to the output
+  - Most common and well-studied approach
+  
+- **Random**: Baseline for comparison
+  - No intelligence, just random selection
+  - Useful to show that smart pruning beats random
+  
+- **Alignment-based**: Prunes based on neuron-input alignment
+  - Uses metrics like Rayleigh quotient, gradient similarity, etc.
+  - Can identify neurons that are poorly aligned with their inputs
+
+**NOT suitable:**
+- **Gradient-based**: Gradients are near-zero on converged models
+- **Fisher-based**: Also relies on gradients during training
+
+### During-Training Pruning (Future Work)
+When pruning while the model is still training:
+
+**All algorithms can be used:**
+- **Gradient-based**: Uses gradient magnitudes as importance scores
+  - High gradients = weight is important for reducing loss
+  
+- **Fisher-based**: Approximates second-order importance
+  - Uses accumulated gradient information
+  - More stable than single-batch gradients
+  
+- **Magnitude/Random/Alignment**: Still applicable
+
+## Selection Modes
+
+Once you've computed importance scores, you need to decide which weights to prune:
+
+- **Low mode**: Prune weights with lowest importance scores (default)
+  - For magnitude: prune small weights
+  - For alignment: prune poorly aligned neurons
+  
+- **High mode**: Prune weights with highest importance scores
+  - Counterintuitive but sometimes useful for analysis
+  - For magnitude: prune large weights
+  
+- **Random mode**: Ignore scores, select randomly
+  - Another baseline approach
+
+## Pruning Scope
+
+- **Layer-wise**: Each layer pruned independently to target sparsity
+- **Global**: All weights pooled, pruned to overall target sparsity
+- **Cascading**: Prune layers sequentially, recomputing after each
+
+## Current Implementation Status
+
+✅ **Implemented for post-training pruning:**
+- Magnitude (layer-wise and global)
+- Random
+- Alignment (all variants)
+- Fine-tuning after pruning
+- Visualization of results
+
+❌ **Not yet implemented:**
+- Pruning during training
+- Gradual pruning (increasing sparsity over time)
+- Structured pruning (entire channels/filters)
+
+## Example Usage
+
+For post-training pruning experiments:
+```yaml
+pruning:
+  algorithms: ["magnitude", "random", "alignment"]
+  selection_mode: "low"
+  sparsity_levels: [0.1, 0.5, 0.9]
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 10
 ``` 
