@@ -164,12 +164,20 @@ class BasePruningStrategy(ABC):
                 mod.weight.data = mod._original_weight * mod.weight_mask
                 return inputs
             
-            # Remove old hook if exists
+            # Hook to mask gradients during backward pass
+            def mask_gradient_hook(grad):
+                # Mask gradients to prevent updates to pruned weights
+                return grad * module.weight_mask
+            
+            # Remove old hooks if exist
             if hasattr(module, '_pruning_hook'):
                 module._pruning_hook.remove()
+            if hasattr(module, '_gradient_hook_handle'):
+                module._gradient_hook_handle.remove()
             
-            # Register new hook
+            # Register hooks
             module._pruning_hook = module.register_forward_pre_hook(apply_mask_hook)
+            module._gradient_hook_handle = module.weight.register_hook(mask_gradient_hook)
         else:
             # Apply mask permanently
             module.weight.data *= mask
@@ -191,10 +199,14 @@ class BasePruningStrategy(ABC):
             # Remove mask buffer
             delattr(module, 'weight_mask')
         
-        # Remove hook
+        # Remove hooks
         if hasattr(module, '_pruning_hook'):
             module._pruning_hook.remove()
             delattr(module, '_pruning_hook')
+        
+        if hasattr(module, '_gradient_hook_handle'):
+            module._gradient_hook_handle.remove()
+            delattr(module, '_gradient_hook_handle')
     
     def get_sparsity(self, module: nn.Module) -> float:
         """
