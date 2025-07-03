@@ -15,7 +15,7 @@ device: "cuda"  # or "cpu"
 # -----------------------------------------------------------------------------
 dataset:
   name: "mnist"  # Added name field
-  batch_size: 128
+  batch_size: 512
   num_workers: 4
   data_augmentation: false
   normalize: true

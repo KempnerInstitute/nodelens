@@ -1,0 +1,58 @@
+# Test configuration for multi-network general alignment experiment
+name: "test_multi_network_alignment"
+description: "Test multi-network support in general alignment experiment"
+
+# Multi-network configuration
+num_networks: 3  # Train 3 networks in parallel
+parallel_batch_size: 32  # Smaller batch size for parallel training
+use_tensorized_training: true
+aggregate_metrics: true
+save_individual_networks: false
+
+# Model configuration
+model_name: "mlp"
+model_config:
+  hidden_sizes: [128, 64]
+  activation: "relu"
+  output_dim: 10
+
+# Dataset configuration  
+dataset_name: "mnist"
+dataset_config:
+  data_path: "./data"
+  train: true
+  download: true
+batch_size: 128
+num_workers: 4
+
+# Training configuration
+do_train: true
+training_epochs: 10
+learning_rate: 0.001
+optimizer: "adam"
+device: "cuda"
+seed: 42
+
+# Alignment measurement
+measure_alignment_during_training: true
+alignment_frequency: 2
+metrics: ["rayleigh_quotient"]
+
+# Pruning experiments
+do_pruning_experiments: true
+pruning_strategies: ["magnitude", "alignment", "random"]
+pruning_amounts: [0.1, 0.3, 0.5]
+fine_tune_after_pruning: true
+fine_tune_epochs: 5
+pruning_selection_mode: "low"
+pruning_scope: "layer"
+
+# Other analyses
+do_dropout_analysis: false
+do_eigenfeature_analysis: false
+
+# Output
+generate_plots: true
+save_intermediate_results: true
+checkpoint_dir: "./checkpoints/multi_network_test"
+log_dir: "./logs/multi_network_test" 

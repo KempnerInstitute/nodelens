@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 class GeneralAlignmentConfig(ExperimentConfig):
     """Configuration for general alignment experiment."""
     
+    # Multi-network configuration
+    num_networks: int = 1  # Number of networks to train (1 = single network, >1 = parallel)
+    parallel_batch_size: Optional[int] = None  # Batch size for parallel training (None = use batch_size)
+    use_tensorized_training: bool = True  # Use efficient tensorized ops when possible
+    aggregate_metrics: bool = True  # Aggregate metrics across networks
+    save_individual_networks: bool = False  # Save each network separately
+    
     # Training configuration
     do_train: bool = True
     training_epochs: int = 100
@@ -101,12 +108,61 @@ class GeneralAlignmentExperiment(BaseExperiment):
         self.pruning_results = {}
         self.eigenfeature_results = {}
         
+        # Multi-network mode
+        self.is_multi_network = config.num_networks > 1
+        if self.is_multi_network:
+            self.networks = []
+            self.wrapped_networks = []
+            self._initialize_multiple_networks()
+            # Setup parallel processing
+            import multiprocessing
+            self.num_workers = min(config.num_networks, multiprocessing.cpu_count())
+            logger.info(f"Multi-network mode: {config.num_networks} networks, {self.num_workers} workers")
+    
+    def _initialize_multiple_networks(self):
+        """Initialize multiple networks with different seeds."""
+        base_seed = self.config.seed
+        
+        for i in range(self.config.num_networks):
+            # Set unique seed for each network
+            seed = base_seed + i
+            self._set_seed(seed)
+            
+            # Create a new model instance
+            # Store original model/wrapped_model temporarily
+            original_model = self.model
+            original_wrapped = self.wrapped_model
+            
+            # Initialize new model (this sets self.model and self.wrapped_model)
+            self._initialize_model()
+            
+            # Store the new model
+            self.networks.append(self.model)
+            self.wrapped_networks.append(self.wrapped_model)
+            
+            # Restore original references
+            self.model = original_model
+            self.wrapped_model = original_wrapped
+            
+            logger.info(f"Initialized network {i+1}/{self.config.num_networks} with seed {seed}")
+        
+        # For multi-network mode, model/wrapped_model will be None
+        self.model = None
+        self.wrapped_model = None
+        
     def _train_model(self) -> Dict[str, Any]:
         """Train the model and collect alignment metrics."""
         if not self.config.do_train:
             logger.info("Skipping training (do_train=False)")
             return {}
         
+        if self.is_multi_network:
+            return self._train_multiple_networks()
+        else:
+            return self._train_single_network()
+    
+    def _train_single_network(self) -> Dict[str, Any]:
+        """Train a single network (original implementation)."""
         logger.info(f"Training model for {self.config.training_epochs} epochs")
         
         # Setup optimizer
@@ -166,6 +222,207 @@ class GeneralAlignmentExperiment(BaseExperiment):
             "val_accs": val_accs,
             "alignment": alignment_history
         }
+    
+    def _train_multiple_networks(self) -> Dict[str, Any]:
+        """Train multiple networks in parallel."""
+        logger.info(f"Training {self.config.num_networks} networks for {self.config.training_epochs} epochs")
+        
+        # Determine batch size for parallel training
+        batch_size = self.config.parallel_batch_size or self.config.batch_size
+        
+        if self.config.use_tensorized_training and self.config.num_networks <= 8:
+            # Use tensorized training for efficiency
+            return self._train_networks_tensorized(batch_size)
+        else:
+            # Use multiprocessing for larger numbers of networks
+            return self._train_networks_parallel(batch_size)
+    
+    def _train_networks_tensorized(self, batch_size: int) -> Dict[str, Any]:
+        """Train networks using tensorized operations."""
+        from alignment.training.multi_network import train_networks_fully_tensorized
+        
+        # Setup optimizer class and kwargs
+        if self.config.optimizer.lower() == "sgd":
+            optimizer_class = torch.optim.SGD
+            optimizer_kwargs = {
+                "lr": self.config.learning_rate,
+                "momentum": 0.9,
+                "weight_decay": 0.0001
+            }
+        else:
+            optimizer_class = torch.optim.Adam
+            optimizer_kwargs = {
+                "lr": self.config.learning_rate,
+                "weight_decay": 0.0001
+            }
+        
+        # Callbacks for alignment measurement
+        alignment_histories = [{method: [] for method in self.config.alignment_methods} 
+                              for _ in range(self.config.num_networks)]
+        
+        def alignment_callback(model, epoch, batch_idx):
+            if self.config.measure_alignment_during_training and epoch % self.config.alignment_frequency == 0:
+                if batch_idx == 0:  # Only measure at start of epoch
+                    # Measure alignment for each network
+                    for i, (net, wrapped_net) in enumerate(zip(self.networks, self.wrapped_networks)):
+                        # Temporarily set as current model for measurement
+                        self.model = net
+                        self.wrapped_model = wrapped_net
+                        alignment_values = self._measure_alignment()
+                        for method, values in alignment_values.items():
+                            alignment_histories[i][method].append(values)
+                    # Reset
+                    self.model = None
+                    self.wrapped_model = None
+        
+        # Train networks
+        trained_networks, history = train_networks_fully_tensorized(
+            networks=self.networks,
+            train_loader=self.data_loader,
+            val_loader=None,  # TODO: Add validation loader support
+            epochs=self.config.training_epochs,
+            optimizer_class=optimizer_class,
+            optimizer_kwargs=optimizer_kwargs,
+            device=self.config.device,
+            checkpoint_dir=Path(self.config.checkpoint_dir) if self.config.save_intermediate_results else None,
+            log_interval=self.config.log_interval,
+            eval_interval=self.config.checkpoint_interval,
+            callbacks=[alignment_callback] if self.config.measure_alignment_during_training else None
+        )
+        
+        # Update networks with trained versions
+        self.networks = trained_networks
+        
+        # Aggregate results
+        if self.config.aggregate_metrics:
+            # Average metrics across networks
+            aggregated_history = {
+                "train_losses": history["train_loss"],
+                "train_accs": history["train_acc"],
+                "val_losses": history["val_loss"],
+                "val_accs": history["val_acc"],
+                "alignment": {}
+            }
+            
+            # Aggregate alignment metrics
+            for method in self.config.alignment_methods:
+                method_values = {}
+                for layer in self.wrapped_networks[0].tracked_layers:
+                    # Collect values from all networks for this layer
+                    all_values = []
+                    for net_history in alignment_histories:
+                        if method in net_history and net_history[method]:
+                            for epoch_values in net_history[method]:
+                                if layer in epoch_values:
+                                    all_values.extend(epoch_values[layer])
+                    if all_values:
+                        method_values[layer] = all_values
+                
+                if method_values:
+                    aggregated_history["alignment"][method] = method_values
+            
+            return aggregated_history
+        else:
+            # Return individual results
+            return {
+                "networks": [
+                    {
+                        "train_losses": history["train_loss"],
+                        "train_accs": history["train_acc"],
+                        "val_losses": history["val_loss"],
+                        "val_accs": history["val_acc"],
+                        "alignment": alignment_histories[i]
+                    }
+                    for i in range(self.config.num_networks)
+                ]
+            }
+    
+    def _train_networks_parallel(self, batch_size: int) -> Dict[str, Any]:
+        """Train networks using multiprocessing (for larger numbers)."""
+        # TODO: Implement multiprocessing version
+        logger.warning("Multiprocessing training not yet implemented, falling back to sequential")
+        
+        # Train each network sequentially for now
+        all_results = []
+        
+        for i, (net, wrapped_net) in enumerate(zip(self.networks, self.wrapped_networks)):
+            logger.info(f"Training network {i+1}/{self.config.num_networks}")
+            
+            # Set current network
+            self.model = net
+            self.wrapped_model = wrapped_net
+            
+            # Train
+            result = self._train_single_network()
+            all_results.append(result)
+            
+        # Reset
+        self.model = None
+        self.wrapped_model = None
+        
+        # Aggregate or return individual results
+        if self.config.aggregate_metrics:
+            return self._aggregate_training_results(all_results)
+        else:
+            return {"networks": all_results}
+    
+    def _aggregate_training_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Aggregate training results from multiple networks."""
+        import numpy as np
+        
+        # Average numerical metrics
+        aggregated = {
+            "train_losses": [],
+            "train_accs": [],
+            "val_losses": [],
+            "val_accs": [],
+            "alignment": {}
+        }
+        
+        # Get number of epochs from first result
+        num_epochs = len(results[0]["train_losses"])
+        
+        # Average losses and accuracies
+        for epoch in range(num_epochs):
+            aggregated["train_losses"].append(
+                np.mean([r["train_losses"][epoch] for r in results])
+            )
+            aggregated["train_accs"].append(
+                np.mean([r["train_accs"][epoch] for r in results])
+            )
+            aggregated["val_losses"].append(
+                np.mean([r["val_losses"][epoch] for r in results])
+            )
+            aggregated["val_accs"].append(
+                np.mean([r["val_accs"][epoch] for r in results])
+            )
+        
+        # Aggregate alignment metrics
+        for method in self.config.alignment_methods:
+            method_values = {}
+            
+            # Get all layers
+            if results[0]["alignment"] and method in results[0]["alignment"]:
+                sample_alignment = results[0]["alignment"][method]
+                if sample_alignment:  # Check if not empty
+                    layers = list(sample_alignment[0].keys()) if isinstance(sample_alignment, list) else []
+                    
+                    for layer in layers:
+                        # Collect all values for this layer across networks and epochs
+                        all_values = []
+                        for result in results:
+                            if method in result["alignment"]:
+                                for epoch_values in result["alignment"][method]:
+                                    if layer in epoch_values:
+                                        all_values.extend(epoch_values[layer])
+                        
+                        if all_values:
+                            method_values[layer] = all_values
+            
+            if method_values:
+                aggregated["alignment"][method] = method_values
+        
+        return aggregated
     
     def _setup_optimizer(self) -> torch.optim.Optimizer:
         """Setup optimizer based on config."""
@@ -325,6 +582,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
         
         logger.info("Starting progressive dropout analysis")
         
+        if self.is_multi_network:
+            return self._dropout_analysis_multi()
+        else:
+            return self._dropout_analysis_single()
+    
+    def _dropout_analysis_single(self) -> Dict[str, Any]:
+        """Perform dropout analysis on a single network."""
         # Get initial alignment
         initial_alignment = self._measure_alignment()
         
@@ -368,6 +632,55 @@ class GeneralAlignmentExperiment(BaseExperiment):
         
         return results
     
+    def _dropout_analysis_multi(self) -> Dict[str, Any]:
+        """Perform dropout analysis on multiple networks."""
+        all_results = []
+        
+        # Run dropout analysis for each network
+        for i, (net, wrapped_net) in enumerate(zip(self.networks, self.wrapped_networks)):
+            logger.info(f"Dropout analysis for network {i+1}/{self.config.num_networks}")
+            
+            # Temporarily set as current model
+            self.model = net
+            self.wrapped_model = wrapped_net
+            
+            # Run analysis
+            result = self._dropout_analysis_single()
+            all_results.append(result)
+        
+        # Reset
+        self.model = None
+        self.wrapped_model = None
+        
+        # Aggregate results
+        if self.config.aggregate_metrics:
+            return self._aggregate_dropout_results(all_results)
+        else:
+            return {"networks": all_results}
+    
+    def _aggregate_dropout_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Aggregate dropout results from multiple networks."""
+        import numpy as np
+        
+        # Structure: same as single network but with averaged values
+        aggregated = {
+            "dropout_rates": results[0]["dropout_rates"],
+            "accuracies": {"low": [], "high": [], "random": []},
+            "losses": {"low": [], "high": [], "random": []},
+            "alignment_values": {}
+        }
+        
+        # Average accuracies and losses
+        for strategy in ["low", "high", "random"]:
+            for i in range(len(results[0]["dropout_rates"])):
+                acc_values = [r["accuracies"][strategy][i] for r in results]
+                loss_values = [r["losses"][strategy][i] for r in results]
+                
+                aggregated["accuracies"][strategy].append(np.mean(acc_values))
+                aggregated["losses"][strategy].append(np.mean(loss_values))
+        
+        return aggregated
+    
     def _apply_dropout_and_evaluate(
         self,
         dropout_rate: float,
@@ -387,6 +700,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
         
         logger.info("Starting pruning experiments")
         
+        if self.is_multi_network:
+            return self._pruning_experiments_multi()
+        else:
+            return self._pruning_experiments_single()
+    
+    def _pruning_experiments_single(self) -> Dict[str, Any]:
+        """Perform pruning experiments on a single network."""
         # Import pruning utilities
         from alignment.pruning.strategies import MagnitudePruning
         from alignment.pruning.base import PruningConfig
@@ -717,6 +1037,78 @@ class GeneralAlignmentExperiment(BaseExperiment):
         self.model.load_state_dict(original_state)
         
         return results
+    
+    def _pruning_experiments_multi(self) -> Dict[str, Any]:
+        """Perform pruning experiments on multiple networks."""
+        all_results = []
+        
+        # Run pruning experiments for each network
+        for i, (net, wrapped_net) in enumerate(zip(self.networks, self.wrapped_networks)):
+            logger.info(f"Pruning experiments for network {i+1}/{self.config.num_networks}")
+            
+            # Temporarily set as current model
+            self.model = net
+            self.wrapped_model = wrapped_net
+            
+            # Run experiments
+            result = self._pruning_experiments_single()
+            all_results.append(result)
+        
+        # Reset
+        self.model = None
+        self.wrapped_model = None
+        
+        # Aggregate results
+        if self.config.aggregate_metrics:
+            return self._aggregate_pruning_results(all_results)
+        else:
+            return {"networks": all_results}
+    
+    def _aggregate_pruning_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Aggregate pruning results from multiple networks."""
+        import numpy as np
+        
+        # Get structure from first result
+        aggregated = {
+            "strategies": {},
+            "final_model_performance": {}
+        }
+        
+        # Aggregate each strategy
+        first_result = results[0]
+        for strategy_key in first_result["strategies"]:
+            strategy_data = first_result["strategies"][strategy_key]
+            
+            # Initialize aggregated strategy data
+            agg_strategy = {
+                "pruning_amounts": strategy_data["pruning_amounts"],
+                "accuracies_before_finetune": [],
+                "losses_before_finetune": [],
+                "accuracies_after_finetune": [],
+                "losses_after_finetune": [],
+                "sparsities": []
+            }
+            
+            # Average metrics across networks
+            num_amounts = len(strategy_data["pruning_amounts"])
+            for i in range(num_amounts):
+                # Collect values from all networks
+                acc_before = [r["strategies"][strategy_key]["accuracies_before_finetune"][i] for r in results]
+                loss_before = [r["strategies"][strategy_key]["losses_before_finetune"][i] for r in results]
+                acc_after = [r["strategies"][strategy_key]["accuracies_after_finetune"][i] for r in results]
+                loss_after = [r["strategies"][strategy_key]["losses_after_finetune"][i] for r in results]
+                sparsity = [r["strategies"][strategy_key]["sparsities"][i] for r in results]
+                
+                # Average
+                agg_strategy["accuracies_before_finetune"].append(np.mean(acc_before))
+                agg_strategy["losses_before_finetune"].append(np.mean(loss_before))
+                agg_strategy["accuracies_after_finetune"].append(np.mean(acc_after))
+                agg_strategy["losses_after_finetune"].append(np.mean(loss_after))
+                agg_strategy["sparsities"].append(np.mean(sparsity))
+            
+            aggregated["strategies"][strategy_key] = agg_strategy
+        
+        return aggregated
     
     def run(self) -> Dict[str, Any]:
         """Run the general alignment experiment."""
