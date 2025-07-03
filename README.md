@@ -1,187 +1,196 @@
-# Neural Network Alignment Analysis Framework
+# Alignment Analysis Framework
 
-A comprehensive framework for analyzing neural network alignment through various metrics and pruning strategies.
+A comprehensive framework for analyzing neural network alignment, pruning, and information-theoretic properties.
 
-## Features
+## Overview
 
-- **36+ Alignment Metrics**: Rayleigh quotient, mutual information, spectral analysis, and more
-- **Advanced Pruning**: Multiple strategies with low/high/random modes and parallel execution
-- **Comprehensive Experiments**: Fully configurable system supporting all models and datasets
-- **Automatic Analysis**: Built-in visualization and reporting tools
-- **GPU Optimized**: Efficient implementations with automatic memory management
+This framework provides tools for:
+- **Alignment Analysis**: Measure how neural representations align with data and task structure
+- **Pruning Experiments**: Test various pruning strategies and their effects on model performance
+- **Multi-Network Analysis**: Train and analyze multiple networks in parallel
+- **Information Theory Metrics**: Compute mutual information, Rayleigh quotients, and other metrics
+- **Visualization**: Generate comprehensive plots and reports
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/alignment.git
+git clone <repository-url>
 cd alignment
+
+# Create conda environment
+conda env create -f environment.yml
+conda activate alignment
 
 # Install in development mode
 pip install -e .
-
-# Run a quick test
-python scripts/run_experiment.py --config configs/examples/quick_test.yaml
 ```
 
 ## Quick Start
 
-### 1. Learning the Framework
+### Basic Alignment Analysis
 
-Start with the examples to understand how things work:
+```python
+from alignment.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
 
-```bash
-# Basic demonstration
-python examples/quick_demo.py
+# Create configuration
+config = GeneralAlignmentConfig(
+    experiment_name="mnist_alignment",
+    dataset_name="mnist",
+    model_name="mlp",
+    hidden_sizes=[128, 64],
+    num_epochs=10,
+    compute_alignment=True,
+    alignment_metrics=["rayleigh_quotient", "mutual_information_gaussian"]
+)
 
-# Complete workflow example  
-python examples/standard_alignment_experiment.py
-
-# Advanced pruning features
-python examples/pruning_strategies_demo.py
+# Run experiment
+experiment = GeneralAlignmentExperiment(config)
+results = experiment.run()
 ```
 
-### 2. Running Experiments
+### Multi-Network Analysis
 
-For actual research, use the unified experiment runner:
+```python
+# Train multiple networks in parallel
+config = GeneralAlignmentConfig(
+    experiment_name="multi_network_analysis",
+    num_networks=5,  # Train 5 networks
+    dataset_name="mnist",
+    model_name="cnn",
+    num_epochs=20
+)
 
-```bash
-# Run with the default configuration
-python scripts/run_experiment.py --config configs/unified_config.yaml
-
-# Run with a minimal test configuration
-python scripts/run_experiment.py --config configs/examples/quick_test.yaml
+experiment = GeneralAlignmentExperiment(config)
+results = experiment.run()
 ```
 
-The examples are self-contained demos for learning, while `scripts/run_experiment.py` is the production tool for research.
+### Pruning Experiments
 
-## Available Examples
+```python
+from alignment.pruning.experiments import LayerIsolatedPruningExperiment
 
-1. **Quick Demo** (`examples/quick_demo.py`)
-   - Basic alignment metric computation
-   - Simple pruning demonstration
-   - ~5 minute runtime
+# Layer-wise pruning
+config = LayerIsolatedConfig(
+    experiment_name="layer_pruning",
+    dataset_name="mnist",
+    model_name="mlp",
+    pruning_ratios=[0.1, 0.3, 0.5, 0.7, 0.9],
+    pruning_strategy="magnitude"
+)
 
-2. **Standard Experiment** (`examples/standard_alignment_experiment.py`)
-   - Complete workflow from training to analysis
-   - Multiple pruning strategies comparison
-   - Comprehensive visualizations
-   - ~10 minute runtime
-
-3. **Pruning Strategies Demo** (`examples/pruning_strategies_demo.py`)
-   - All available pruning algorithms
-   - Performance comparisons
-   - Advanced features demonstration
-
-4. **Visualization Demo** (`examples/pruning_visualization_demo.py`)
-   - Advanced plotting capabilities
-   - Interactive visualizations
-   - Custom analysis tools
-
-5. **Production Experiments** (`scripts/run_experiment.py`)
-   - Fully configurable via YAML
-   - Supports all models, datasets, and metrics
-   - Experiment types: standard, cascading, layer-isolated
-   - Example: `python scripts/run_experiment.py --config configs/unified_config.yaml`
-
-## Comprehensive Experiments
-
-The framework provides a unified experiment system through YAML configuration:
-
-```yaml
-# Example configuration
-name: "my_experiment"
-model_name: "resnet18"
-dataset_name: "cifar10"
-
-training_config:
-  epochs: 20
-  batch_size: 128
-  learning_rate: 0.001
-
-alignment_metrics:
-  - "rayleigh_quotient"
-  - "mutual_information_gaussian"
-  - "spectral_gap"
-
-pruning_strategy: "magnitude"
-pruning_config:
-  amount: 0.5
+experiment = LayerIsolatedPruningExperiment(config)
+results = experiment.run()
 ```
-
-Run with:
-```bash
-python examples/comprehensive_alignment_experiment.py --config my_config.yaml
-```
-
-## Available Metrics
-
-The framework includes 36+ metrics organized by type:
-
-### Rayleigh Quotient Based
-- `rayleigh_quotient` (aliases: `rq`, `RQ`)
-- `delta_alignment`
-- `normalized_delta_alignment`
-
-### Information Theoretic
-- `mutual_information_gaussian` (aliases: `mi_gaussian`, `mi_0`)
-- `mutual_information_binning` (aliases: `mi_binning`, `mi_1`)
-- `average_redundancy`, `node_redundancy`, `layer_redundancy`
-- `total_correlation`, `interaction_information`
-
-### Similarity Metrics
-- `weight_cosine_similarity`
-- `activation_cosine_similarity`
-- `weight_activation_alignment`
-
-### Spectral Metrics
-- `spectral_gap`, `eigenvalue_alignment`
-- `spectral_clustering`, `eigenvalue_entropy`
-
-See the [documentation](https://kempnerinstitute.github.io/alignment/) for the complete list.
 
 ## Project Structure
 
 ```
 alignment/
-├── src/                    # Main package source code
-│   └── alignment/         # Core library modules
-├── examples/              # Example scripts and demos
-├── scripts/               # Production scripts and tools
+├── src/alignment/
+│   ├── core/              # Core functionality
+│   ├── models/            # Model architectures
+│   ├── data/              # Data loading and processing
+│   ├── metrics/           # Alignment and information metrics
+│   ├── pruning/           # Pruning strategies and experiments
+│   │   ├── strategies/    # Core pruning algorithms
+│   │   └── experiments/   # High-level pruning experiments
+│   ├── experiments/       # Main experiment classes
+│   ├── analysis/          # Analysis and visualization tools
+│   └── training/          # Training utilities
 ├── configs/               # Configuration files
+├── examples/              # Example scripts
 ├── tests/                 # Unit and integration tests
-├── docs/                  # Documentation
-└── data/                  # Data directory (auto-created)
+└── docs/                  # Documentation
+```
+
+## Key Components
+
+### Experiments
+- `GeneralAlignmentExperiment`: Main experiment class with multi-network support
+- `LayerIsolatedPruningExperiment`: Layer-wise pruning analysis
+- `GlobalDropoutExperiment`: Global pruning across all layers
+- `CascadingLayerPruningExperiment`: Cascading pruning strategy
+- `EigenvectorDropoutExperiment`: Eigenvector-based pruning
+
+### Metrics
+- **Rayleigh Quotient**: Measures alignment between representations and data
+- **Mutual Information**: Information-theoretic similarity measures
+- **Spectral Metrics**: Eigenvalue and singular value analysis
+- **Task-Specific Metrics**: Accuracy, loss, and other performance metrics
+
+### Pruning Strategies
+- **Magnitude-based**: Prune weights with smallest magnitudes
+- **Gradient-based**: Use gradient information for importance
+- **Random**: Baseline random pruning
+- **Alignment-based**: Use alignment metrics to guide pruning
+
+## Configuration
+
+Experiments can be configured via YAML files or programmatically:
+
+```yaml
+# configs/example_config.yaml
+experiment_name: "alignment_analysis"
+experiment_type: "general_alignment"
+seed: 42
+
+# Model configuration
+model_name: "mlp"
+hidden_sizes: [128, 64]
+
+# Training configuration
+num_epochs: 20
+batch_size: 128
+learning_rate: 0.001
+
+# Alignment configuration
+compute_alignment: true
+alignment_metrics:
+  - "rayleigh_quotient"
+  - "mutual_information_gaussian"
+```
+
+## Running Experiments
+
+### Command Line
+
+```bash
+# Run with config file
+python scripts/run_experiment.py --config configs/example_config.yaml
+
+# Run pruning experiment
+python run_pruning_experiment.py --config configs/pruning_config.yaml
+
+# Visualize results
+python visualize_experiment_results.py --results_dir results/experiment_name
+```
+
+### Python API
+
+```python
+from alignment.experiments import create_experiment_from_config
+
+# Load and run experiment
+config = load_config("configs/example_config.yaml")
+experiment = create_experiment_from_config(config)
+results = experiment.run()
+
+# Access results
+print(f"Final accuracy: {results['final_metrics']['accuracy']}")
+print(f"Alignment scores: {results['alignment_metrics']}")
 ```
 
 ## Documentation
 
-Full documentation is available at: https://kempnerinstitute.github.io/alignment/
-
-Key documentation:
-- [Getting Started Guide](docs/source/user_guide/getting_started.md)
-- [Metrics Reference](docs/source/METRICS_REFERENCE.md)
-- [Pruning Strategies](docs/source/user_guide/pruning.md)
-- [Pruning Concepts](PRUNING_CONCEPTS.md) - Structured vs unstructured pruning explained
-- [Experiment Types Guide](EXPERIMENT_TYPES_GUIDE.md) - Different pruning experiment patterns
-- [API Reference](https://kempnerinstitute.github.io/alignment/api/)
+See the [docs](docs/) directory for detailed documentation on:
+- [Experiment Types](docs/EXPERIMENT_TYPES_GUIDE.md)
+- [Pruning Concepts](docs/PRUNING_CONCEPTS.md)
+- [Analysis Tools](docs/PRUNING_ANALYSIS_SUMMARY.md)
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-## Citation
-
-If you use this framework in your research, please cite:
-
-```bibtex
-@software{alignment2024,
-  title={Neural Network Alignment Analysis Framework},
-  author={Kempner Institute},
-  year={2024},
-  url={https://github.com/KempnerInstitute/alignment}
-}
-```
+Contributions are welcome! Please see our contributing guidelines and ensure all tests pass before submitting PRs.
 
 ## License
 
