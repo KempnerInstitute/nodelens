@@ -97,7 +97,7 @@ def validate_experiment_config(config_dict: Dict[str, Any], experiment_type: str
     errors = validate_config(config_dict)
     
     # Experiment-specific validations
-    if experiment_type == 'progressive_dropout':
+    if experiment_type in ['progressive_dropout', 'global_dropout']:
         if 'dropout_fractions' not in config_dict:
             errors.append("Progressive dropout requires 'dropout_fractions'")
     
