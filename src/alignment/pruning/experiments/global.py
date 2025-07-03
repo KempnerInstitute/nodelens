@@ -1,8 +1,8 @@
 """
-Progressive dropout experiment for analyzing model alignment under dropout.
+Global dropout experiment for analyzing model alignment under dropout.
 
-This module implements experiments that progressively apply dropout to neurons
-and track changes in alignment metrics.
+This module implements experiments that apply the same dropout rate globally
+across all layers and track changes in alignment metrics.
 """
 
 from typing import Dict, List, Optional, Any
@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ProgressiveDropoutConfig(ExperimentConfig):
-    """Configuration for progressive dropout experiment."""
+class GlobalDropoutConfig(ExperimentConfig):
+    """Configuration for global dropout experiment."""
     
     # Dropout configuration
     dropout_rates: List[float] = field(default_factory=lambda: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
@@ -51,21 +51,21 @@ class ProgressiveDropoutConfig(ExperimentConfig):
     eval_batches: Optional[int] = None
 
 
-@register_experiment("progressive_dropout")
-class ProgressiveDropoutExperiment(BaseExperiment):
+@register_experiment("global_dropout")
+class GlobalDropoutExperiment(BaseExperiment):
     """
-    Experiment for progressively applying dropout to analyze alignment changes.
+    Experiment for applying global dropout to analyze alignment changes.
     
     This experiment:
     1. Trains a model (if configured)
-    2. Progressively applies dropout at different rates
+    2. Applies the same dropout rate globally across all layers
     3. Tracks alignment metrics at each dropout level
     4. Analyzes how dropout affects model structure
     """
     
-    def __init__(self, config: ProgressiveDropoutConfig):
+    def __init__(self, config: GlobalDropoutConfig):
         """
-        Initialize progressive dropout experiment.
+        Initialize global dropout experiment.
         """
         super().__init__(config)
         
@@ -111,12 +111,12 @@ class ProgressiveDropoutExperiment(BaseExperiment):
     
     def run(self, models=None, dataset=None, **kwargs) -> Dict[str, Any]:
         """
-        Run the progressive dropout experiment.
+        Run the global dropout experiment.
         
         Returns:
             Experiment results including metrics at each dropout rate
         """
-        logger.info("Starting progressive dropout experiment")
+        logger.info("Starting global dropout experiment")
         
         # Collect initial model statistics
         self._collect_initial_statistics()

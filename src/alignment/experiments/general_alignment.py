@@ -16,9 +16,11 @@ import numpy as np
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+import multiprocessing as mp
 
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment
+from alignment.models import ModelWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +117,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
             self.wrapped_networks = []
             self._initialize_multiple_networks()
             # Setup parallel processing
-            import multiprocessing
-            self.num_workers = min(config.num_networks, multiprocessing.cpu_count())
+            self.num_workers = min(config.num_networks, mp.cpu_count())
             logger.info(f"Multi-network mode: {config.num_networks} networks, {self.num_workers} workers")
     
     def _initialize_multiple_networks(self):
@@ -339,26 +340,57 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _train_networks_parallel(self, batch_size: int) -> Dict[str, Any]:
         """Train networks using multiprocessing (for larger numbers)."""
-        # TODO: Implement multiprocessing version
-        logger.warning("Multiprocessing training not yet implemented, falling back to sequential")
+        logger.info(f"Training {self.config.num_networks} networks in parallel using multiprocessing")
         
-        # Train each network sequentially for now
-        all_results = []
+        # Create training function that works with a single network
+        def train_single_network(args):
+            """Train a single network with given seed."""
+            net_idx, seed = args
+            
+            # Set seeds
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            
+            # Create network and wrapped version
+            network = self._create_model()
+            wrapped_network = ModelWrapper(network)
+            
+            # Move to device
+            network = network.to(self.config.device)
+            
+            # Temporarily set as current model for training
+            old_model = self.model
+            old_wrapped = self.wrapped_model
+            
+            self.model = network
+            self.wrapped_model = wrapped_network
+            
+            # Train using the single network method
+            try:
+                result = self._train_single_network()
+                result['network_idx'] = net_idx
+                result['seed'] = seed
+                # Store model state for later loading
+                result['model_state'] = network.state_dict()
+            finally:
+                # Restore
+                self.model = old_model
+                self.wrapped_model = old_wrapped
+            
+            return result
         
-        for i, (net, wrapped_net) in enumerate(zip(self.networks, self.wrapped_networks)):
-            logger.info(f"Training network {i+1}/{self.config.num_networks}")
-            
-            # Set current network
-            self.model = net
-            self.wrapped_model = wrapped_net
-            
-            # Train
-            result = self._train_single_network()
-            all_results.append(result)
-            
-        # Reset
-        self.model = None
-        self.wrapped_model = None
+        # Create args for each network
+        base_seed = self.config.seed
+        train_args = [(i, base_seed + i) for i in range(self.config.num_networks)]
+        
+        # Use multiprocessing pool directly
+        with mp.Pool(processes=min(self.config.num_networks, mp.cpu_count())) as pool:
+            all_results = pool.map(train_single_network, train_args)
+        
+        # Update stored networks with trained ones
+        for i, result in enumerate(all_results):
+            if 'model_state' in result:
+                self.networks[i].load_state_dict(result['model_state'])
         
         # Aggregate or return individual results
         if self.config.aggregate_metrics:

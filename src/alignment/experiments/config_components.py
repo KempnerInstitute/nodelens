@@ -260,4 +260,55 @@ def unflatten_config_dict(
     # Add remaining keys
     components.update(remaining)
     
-    return components 
+    return components
+
+
+def create_config_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Create configuration components from a dictionary.
+    
+    This is a convenience function that takes a flat or nested dictionary
+    and returns properly structured configuration components.
+    """
+    # If already structured with components, return as-is
+    if any(key in config_dict for key in ['training', 'pruning', 'evaluation', 'cnn']):
+        return config_dict
+    
+    # Otherwise, unflatten into components
+    return unflatten_config_dict(config_dict)
+
+
+def create_backward_compatible_config(
+    base_config: Any,
+    training: Optional[TrainingConfig] = None,
+    pruning: Optional[PruningConfig] = None,
+    evaluation: Optional[EvaluationConfig] = None,
+    **kwargs
+) -> Any:
+    """
+    Create a backward-compatible configuration by merging components into a base config.
+    
+    This allows using the new component system with existing experiment classes.
+    """
+    # Start with base config
+    if hasattr(base_config, '__dict__'):
+        config_dict = vars(base_config).copy()
+    else:
+        config_dict = base_config.copy() if isinstance(base_config, dict) else {}
+    
+    # Merge in component configs
+    if training:
+        config_dict.update(training.to_dict())
+    if pruning:
+        config_dict.update(pruning.to_dict())
+    if evaluation:
+        config_dict.update(evaluation.to_dict())
+    
+    # Add any additional kwargs
+    config_dict.update(kwargs)
+    
+    # If base_config was a class instance, create new instance with merged values
+    if hasattr(base_config, '__class__') and hasattr(base_config.__class__, '__init__'):
+        return base_config.__class__(**config_dict)
+    
+    return config_dict 

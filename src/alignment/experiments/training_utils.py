@@ -139,4 +139,37 @@ def convert_training_history(
                     network_history['val_metrics'][-1].get('accuracy', 0.0) \
                     if network_history['val_metrics'] and network_history['val_metrics'][-1] else 0.0
     
-    return results 
+    return results
+
+
+def evaluate_with_metrics(
+    trainer: ExperimentTrainer,
+    model: torch.nn.Module,
+    data_loader: torch.utils.data.DataLoader,
+    device: str = 'cuda',
+    compute_alignment: bool = True
+) -> Dict[str, Any]:
+    """
+    Evaluate model and compute metrics.
+    
+    Args:
+        trainer: The trainer instance
+        model: Model to evaluate
+        data_loader: Data loader for evaluation
+        device: Device to use
+        compute_alignment: Whether to compute alignment metrics
+        
+    Returns:
+        Dictionary of evaluation metrics
+    """
+    # Basic evaluation
+    metrics = trainer.evaluate(model, data_loader, device=device)
+    
+    # Add alignment metrics if requested
+    if compute_alignment and hasattr(trainer, 'compute_alignment_metrics'):
+        alignment_metrics = trainer.compute_alignment_metrics(
+            model, data_loader, device=device
+        )
+        metrics.update(alignment_metrics)
+    
+    return metrics 
