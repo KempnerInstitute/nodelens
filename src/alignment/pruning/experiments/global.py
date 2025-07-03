@@ -52,6 +52,7 @@ class GlobalDropoutConfig(ExperimentConfig):
 
 
 @register_experiment("global_dropout")
+@register_experiment("progressive_dropout")  # Backward compatibility
 class GlobalDropoutExperiment(BaseExperiment):
     """
     Experiment for applying global dropout to analyze alignment changes.
