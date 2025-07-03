@@ -52,6 +52,7 @@ from .strategies import (
     FisherPruning,
     MomentumPruning,
     RandomPruning,
+    LayerwiseRandomPruning,
     BernoulliPruning,
     ParallelModePruning,
     TensorizedPruning,
@@ -151,6 +152,7 @@ __all__ = [
     
     # Random strategies
     'RandomPruning',
+    'LayerwiseRandomPruning',
     'BernoulliPruning',
     
     # Parallel strategies

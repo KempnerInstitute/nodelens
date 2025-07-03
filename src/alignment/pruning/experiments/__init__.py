@@ -5,7 +5,7 @@ Pruning experiments for alignment analysis.
 from .eigenvector_based import EigenvectorDropoutExperiment, EigenvectorConfig
 from .cascading_layer import CascadingLayerPruningExperiment, CascadingConfig
 from .layer_wise import LayerIsolatedPruningExperiment, LayerIsolatedConfig
-from .global import GlobalDropoutExperiment, GlobalDropoutConfig
+from .global_pruning import GlobalDropoutExperiment, GlobalDropoutConfig
 
 __all__ = [
     'EigenvectorDropoutExperiment',
