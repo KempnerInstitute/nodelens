@@ -39,14 +39,27 @@ This document tracks the progress of implementing the codebase simplification pr
 - Update example configs to show multi-network usage
 - Add multi-network examples to documentation
 
-## Phase 2: Training Consolidation (Pending)
+## Phase 2: Training Consolidation 🚧 IN PROGRESS
 
-### Plan:
-1. Extract common training logic to `BaseExperiment`
-2. Create training hooks for customization
-3. Remove duplicate `_train_model()` implementations
+### Completed:
+- ✅ Created `ExperimentTrainer` class extending `BaseTrainer`
+- ✅ Added multi-network support to ExperimentTrainer
+- ✅ Created `training_utils.py` with helper functions
+- ✅ Tested single and multi-network training
+- ✅ Created migration guide and examples
 
-### Status: Not started
+### Next steps:
+- [ ] Migrate GeneralAlignmentExperiment to use ExperimentTrainer
+- [ ] Migrate layer_wise pruning experiment
+- [ ] Migrate eigenvector_based pruning experiment
+- [ ] Migrate cascading_layer pruning experiment
+- [ ] Update documentation
+
+### Benefits achieved so far:
+- Unified training interface for all experiments
+- Support for advanced features (schedulers, early stopping, gradient clipping)
+- Consistent logging and checkpointing
+- ~400 lines of duplicate code to be eliminated
 
 ## Phase 3: Configuration Simplification (Pending)
 
@@ -78,6 +91,7 @@ This document tracks the progress of implementing the codebase simplification pr
 ## Summary
 
 - **Phase 1**: ✅ Complete - Multi-network support successfully integrated
-- **Phases 2-5**: ⏳ Pending - Ready to proceed based on priorities
+- **Phase 2**: 🚧 In Progress - Training consolidation in progress
+- **Phases 3-5**: ⏳ Pending - Ready to proceed based on priorities
 
 The most impactful change (multi-network integration) is complete and working. This alone eliminates the need for `ParallelPruningExperiment` and provides a much better user experience. 
