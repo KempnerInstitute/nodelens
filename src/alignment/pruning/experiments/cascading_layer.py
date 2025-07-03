@@ -9,12 +9,17 @@ from typing import Dict, List, Optional, Any, Tuple
 import torch
 import numpy as np
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment
 from alignment.models import ModelWrapper
+from alignment.experiments.training_utils import (
+    create_experiment_trainer,
+    train_with_metrics,
+    convert_training_history
+)
 
 logger = logging.getLogger(__name__)
 
@@ -332,48 +337,39 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         
         return avg_loss, accuracy
     
-    def _train_model(self):
+    def _train_model(self) -> Dict[str, Any]:
         """Train the model if configured."""
         if not self.config.train_before_dropout:
             logger.info("Skipping initial training")
-            return
+            return {}
             
         logger.info(f"Training model for {self.config.training_epochs} epochs")
         
-        # Setup optimizer
-        if self.config.optimizer.lower() == "adam":
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
-        elif self.config.optimizer.lower() == "sgd":
-            optimizer = torch.optim.SGD(self.model.parameters(), lr=self.config.learning_rate, momentum=0.9)
-        else:
-            raise ValueError(f"Unknown optimizer: {self.config.optimizer}")
+        # Create trainer using the unified interface
+        trainer = create_experiment_trainer(
+            self.model,
+            asdict(self.config),
+            device=self.config.device
+        )
         
-        criterion = torch.nn.CrossEntropyLoss()
+        # Train with metrics
+        history = train_with_metrics(
+            trainer,
+            self.data_loader,
+            val_loader=None,  # No validation in original implementation
+            compute_accuracy=True
+        )
         
-        # Training loop
-        for epoch in range(self.config.training_epochs):
-            self.model.train()
-            train_loss = 0
-            correct = 0
-            total = 0
-            
-            for batch_idx, (inputs, targets) in enumerate(self.data_loader):
-                inputs, targets = inputs.to(self.config.device), targets.to(self.config.device)
-                
-                optimizer.zero_grad()
-                outputs = self.model(inputs)
-                loss = criterion(outputs, targets)
-                loss.backward()
-                optimizer.step()
-                
-                train_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
-            
-            avg_loss = train_loss / (batch_idx + 1)
-            accuracy = 100. * correct / total
-            logger.info(f"Epoch {epoch+1}: Loss={avg_loss:.4f}, Accuracy={accuracy:.2f}%")
+        # Log final metrics (trainer already logs per-epoch)
+        if history['train_loss']:
+            final_metrics = {
+                "train_loss": history['train_loss'][-1],
+                "train_accuracy": history['train_metrics'][-1].get('accuracy', 0.0)
+            }
+            self.log_metrics(len(history['train_loss']) - 1, final_metrics)
+        
+        # Return training results
+        return convert_training_history(history)
     
     def _cascading_prune(
         self, 
@@ -427,7 +423,7 @@ class CascadingLayerPruningExperiment(BaseExperiment):
         logger.info("Starting cascading layer pruning experiment")
         
         # Train model
-        self._train_model()
+        training_results = self._train_model()
         
         # Get layer order
         self.layer_order = self._get_layer_order()
@@ -440,7 +436,8 @@ class CascadingLayerPruningExperiment(BaseExperiment):
             "accuracies": {"low": [], "high": [], "random": []},
             "losses": {"low": [], "high": [], "random": []},
             "layer_scores": {},
-            "cascade_masks": {}
+            "cascade_masks": {},
+            "training_results": training_results  # Include training results
         }
         
         # Evaluate at each dropout rate
