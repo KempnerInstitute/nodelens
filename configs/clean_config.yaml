@@ -57,25 +57,65 @@ tracked_layers: null  # null = all layers
 exclude_classification_layer: true
 
 # ==============================================================================
-# PRUNING EXPERIMENTS
+# PRUNING ANALYSIS (Research - temporary masking to study effects)
 # ==============================================================================
-# Dropout analysis (progressive dropout)
-dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
-dropout_mode: "scaled"  # How to apply dropout
-num_random_trials: 3    # Trials for random dropout
-
-# Pruning analysis
-pruning_experiments:
+pruning_analysis:
   enabled: true
-  sparsity_levels: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
-  algorithms: ["alignment"]  # Options: alignment, magnitude, random, hybrid
-  selection_mode: ["low", "high", "random"]  # Which neurons to prune
-  scope: "layer"  # Options: layer, global, cascading
-  structured: true  # Prune entire neurons (true) or individual weights (false)
   
-  # Fine-tuning
-  fine_tune_after_pruning: true
+  # Dropout rates for temporary masking analysis
+  dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+  dropout_mode: "scaled"  # How to apply temporary masking
+  
+  # Pruning algorithms to study
+  algorithms: ["alignment"]  # Options: alignment, magnitude, random, hybrid
+  selection_strategies: ["low", "high", "random"]  # Which neurons to mask
+  
+  # Analysis scope - more intuitive names
+  analysis_level: "per_layer"  # Options: per_layer, global, cascading
+  # per_layer: Analyze each layer independently
+  # global: Analyze across all layers jointly  
+  # cascading: Analyze layer-by-layer with cumulative effects
+  
+  # Structure
+  structured: true  # Mask entire neurons (true) or individual weights (false)
+  
+  # Random trials for statistical significance
+  num_random_trials: 3
+  
+  # What to analyze
+  compute_alignment_changes: true
+  compute_performance_impact: true
+  save_analysis_results: true
+
+# ==============================================================================
+# NETWORK COMPRESSION (Production - create smaller networks)
+# ==============================================================================
+network_compression:
+  enabled: false  # Disabled by default since this is for analysis
+  
+  # Sparsity levels for actual compression
+  target_sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  
+  # Compression algorithms
+  algorithms: ["alignment"]  # Options: alignment, magnitude, random, hybrid
+  selection_strategy: "low"  # Which neurons to prune permanently
+  
+  # Compression scope
+  compression_level: "per_layer"  # Options: per_layer, global, cascading
+  
+  # Structure
+  structured: true  # Remove entire neurons (true) or individual weights (false)
+  
+  # Post-compression fine-tuning
+  fine_tune_after_compression: true
   fine_tune_epochs: 5
+  fine_tune_learning_rate: 0.0001  # Often needs lower LR
+  
+  # Output options
+  return_compressed_networks: false  # Whether to save compressed models
+  save_compression_masks: true       # Save masks for reproducibility
+  export_onnx: false                 # Export to ONNX format
+  benchmark_compressed_models: true  # Test inference speed/accuracy
 
 # ==============================================================================
 # MULTI-NETWORK EXPERIMENTS
