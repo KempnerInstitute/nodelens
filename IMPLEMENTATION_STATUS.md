@@ -58,19 +58,31 @@ Successfully consolidated duplicate `_train_model()` implementations to use unif
 - Better logging and metrics tracking
 - Total code reduction: ~150 lines
 
-## Phase 3: Configuration Simplification 🚧 STARTING
+## Phase 3: Configuration Simplification 🚧 IN PROGRESS
 
-Will use composition to reduce configuration duplication:
-- Create base configuration classes for common patterns
-- Use dataclass inheritance effectively
-- Reduce boilerplate in experiment configs
+Using composition to reduce configuration duplication.
 
-### Initial analysis:
-Common configuration patterns identified:
-1. Training parameters (epochs, learning rate, optimizer)
-2. Pruning parameters (dropout rates, strategies, metrics)
-3. Evaluation parameters (eval_batches, num_trials)
-4. CNN-specific parameters (cnn_mode, preprocessing)
+### What was done:
+- Created `src/alignment/experiments/config_components.py` with composable configs:
+  - `TrainingConfig` - Training-related parameters
+  - `PruningConfig` - Pruning/dropout parameters
+  - `EvaluationConfig` - Evaluation settings
+  - `CNNConfig` - CNN-specific parameters
+  - `MultiNetworkConfig` - Multi-network training settings
+- Added factory functions for common patterns
+- Added backward compatibility helpers (`flatten_config_dict`, `unflatten_config_dict`)
+- Updated `__init__.py` to export new components
+
+### Next steps:
+- Migrate one experiment config as pilot (e.g., LayerIsolatedConfig)
+- Test backward compatibility thoroughly
+- Migrate remaining experiment configs
+- Update documentation and examples
+
+### Benefits so far:
+- Clear separation of concerns
+- Reusable configuration components
+- Foundation for reducing config duplication
 
 ## Phase 4: Unified Parallel Execution ⏳ PENDING
 
@@ -90,7 +102,7 @@ Will consolidate related files:
 
 - **Phase 1**: ✅ Complete - Multi-network support integrated
 - **Phase 2**: ✅ Complete - Training consolidation (3 pruning experiments migrated)
-- **Phase 3**: 🚧 Starting - Configuration simplification
+- **Phase 3**: 🚧 In Progress - Configuration simplification (components created)
 - **Phase 4-5**: ⏳ Pending
 
 The simplification is progressing well, with significant code reduction and improved maintainability already achieved. Total lines of code eliminated so far: ~450+ lines. 

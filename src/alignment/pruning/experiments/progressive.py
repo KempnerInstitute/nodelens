@@ -1,8 +1,8 @@
 """
-Progressive dropout experiment for alignment analysis.
+Progressive dropout experiment for analyzing model alignment under dropout.
 
-This experiment progressively applies dropout to model layers
-and tracks how alignment metrics change.
+This module implements experiments that progressively apply dropout to neurons
+and track changes in alignment metrics.
 """
 
 from typing import Dict, List, Optional, Any
@@ -11,56 +11,103 @@ import torch.nn as nn
 import numpy as np
 from pathlib import Path
 import logging
+from dataclasses import dataclass, field, asdict
 
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment
+from alignment.experiments.config_components import PruningConfig
+from alignment.experiments.training_utils import (
+    create_experiment_trainer,
+    train_with_metrics,
+    convert_training_history
+)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ProgressiveDropoutConfig(ExperimentConfig):
+    """Configuration for progressive dropout experiment."""
+    
+    # Dropout configuration
+    dropout_rates: List[float] = field(default_factory=lambda: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+    dropout_structure: str = 'random'  # 'random', 'magnitude', 'gradient'
+    dropout_mode: str = 'scaled'  # 'scaled' or 'unscaled'
+    
+    # Pruning configuration (when using structured dropout)
+    pruning_mode: str = 'global_joint'  # 'global_joint', 'layer_wise', etc.
+    pruning_strategy: str = 'low'  # 'low', 'high', 'random'
+    exclude_classification_layer: bool = True
+    
+    # Training configuration
+    train_before_dropout: bool = True
+    training_epochs: int = 10
+    learning_rate: float = 0.001
+    optimizer: str = "adam"
+    
+    # Evaluation
+    num_samples: int = 1000
+    apply_to_layers: Optional[List[str]] = None
+    eval_batches: Optional[int] = None
 
 
 @register_experiment("progressive_dropout")
 class ProgressiveDropoutExperiment(BaseExperiment):
     """
-    Experiment that progressively applies dropout to model layers.
+    Experiment for progressively applying dropout to analyze alignment changes.
     
     This experiment:
-    1. Starts with a trained model
-    2. Progressively increases dropout rates
+    1. Trains a model (if configured)
+    2. Progressively applies dropout at different rates
     3. Tracks alignment metrics at each dropout level
-    4. Analyzes how alignment changes with dropout
+    4. Analyzes how dropout affects model structure
     """
     
-    def __init__(self, config: ExperimentConfig):
+    def __init__(self, config: ProgressiveDropoutConfig):
         """
         Initialize progressive dropout experiment.
-        
-        Additional config parameters:
-            dropout_rates: List of dropout rates to test
-            dropout_structure: Type of structured dropout ('random', 'magnitude', 'gradient')
-            num_samples: Number of data samples to use for metrics
-            apply_to_layers: Specific layers to apply dropout to (None = all)
         """
         super().__init__(config)
         
-        # Experiment-specific config
-        self.dropout_rates = getattr(config, 'dropout_rates', 
-                                     [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
-        self.dropout_structure = getattr(config, 'dropout_structure', 'random')
-        self.num_samples = getattr(config, 'num_samples', 1000)
-        self.apply_to_layers = getattr(config, 'apply_to_layers', None)
-        
-        # Dropout configuration
-        self.dropout_mode = getattr(config, 'dropout_mode', 'scaled')
-        self.pruning_mode = getattr(config, 'pruning_mode', 'global_joint')
-        self.pruning_strategy = getattr(config, 'pruning_strategy', 'low')
-        self.exclude_classification_layer = getattr(config, 'exclude_classification_layer', True)
-        
         # Results storage
         self.dropout_results = {
-            'dropout_rates': self.dropout_rates,
+            'dropout_rates': self.config.dropout_rates,
             'metrics_by_rate': {},
             'layer_statistics': {}
         }
+        
+    def _train_model(self) -> Dict[str, Any]:
+        """Train the model if configured."""
+        if not self.config.train_before_dropout:
+            logger.info("Skipping initial training")
+            return {}
+            
+        logger.info(f"Training model for {self.config.training_epochs} epochs")
+        
+        # Create trainer using the unified interface
+        trainer = create_experiment_trainer(
+            self.model,
+            asdict(self.config),
+            device=self.config.device
+        )
+        
+        # Train with metrics
+        history = train_with_metrics(
+            trainer,
+            self.data_loader,
+            val_loader=None,
+            compute_accuracy=True
+        )
+        
+        # Log final metrics
+        if history['train_loss']:
+            final_metrics = {
+                "train_loss": history['train_loss'][-1],
+                "train_accuracy": history['train_metrics'][-1].get('accuracy', 0.0)
+            }
+            self.log_metrics(len(history['train_loss']) - 1, final_metrics)
+        
+        return convert_training_history(history)
     
     def run(self, models=None, dataset=None, **kwargs) -> Dict[str, Any]:
         """
@@ -78,7 +125,7 @@ class ProgressiveDropoutExperiment(BaseExperiment):
         eval_data = self._get_evaluation_data()
         
         # Test each dropout rate
-        for dropout_rate in self.dropout_rates:
+        for dropout_rate in self.config.dropout_rates:
             logger.info(f"Testing dropout rate: {dropout_rate}")
             
             # Create dropout masks for this rate
@@ -165,7 +212,7 @@ class ProgressiveDropoutExperiment(BaseExperiment):
             return {}
             
         dropout_masks = {}
-        layers_to_apply = self.apply_to_layers or self.wrapped_model.tracked_layers
+        layers_to_apply = self.config.apply_to_layers or self.wrapped_model.tracked_layers
         
         for layer_name in layers_to_apply:
             layer_info = self.wrapped_model.get_layer_info(layer_name)
@@ -182,21 +229,21 @@ class ProgressiveDropoutExperiment(BaseExperiment):
                 continue
             
             # Create mask based on dropout structure
-            if self.dropout_structure == 'random':
+            if self.config.dropout_structure == 'random':
                 # Random dropout
                 mask = torch.rand(num_units) > dropout_rate
-            elif self.dropout_structure == 'magnitude':
+            elif self.config.dropout_structure == 'magnitude':
                 # Magnitude-based dropout (keep high magnitude units)
                 weights = self.wrapped_model.get_layer_weights([layer_name])[layer_name]
                 magnitudes = weights.abs().sum(dim=tuple(range(1, weights.ndim)))
                 threshold = torch.quantile(magnitudes, dropout_rate)
                 mask = magnitudes > threshold
-            elif self.dropout_structure == 'gradient':
+            elif self.config.dropout_structure == 'gradient':
                 # Gradient-based dropout (requires gradients)
                 # For now, fallback to random
                 mask = torch.rand(num_units) > dropout_rate
             else:
-                raise ValueError(f"Unknown dropout structure: {self.dropout_structure}")
+                raise ValueError(f"Unknown dropout structure: {self.config.dropout_structure}")
             
             dropout_masks[layer_name] = mask.float().to(self.config.device)
             
@@ -212,11 +259,11 @@ class ProgressiveDropoutExperiment(BaseExperiment):
             eval_data.append(inputs)
             
             total_samples += inputs.size(0)
-            if total_samples >= self.num_samples:
+            if total_samples >= self.config.num_samples:
                 break
         
         # Concatenate and trim to exact number
-        eval_data = torch.cat(eval_data, dim=0)[:self.num_samples]
+        eval_data = torch.cat(eval_data, dim=0)[:self.config.num_samples]
         
         logger.info(f"Collected {eval_data.size(0)} samples for evaluation")
         return eval_data
