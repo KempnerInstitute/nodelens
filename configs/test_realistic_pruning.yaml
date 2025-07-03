@@ -1,0 +1,58 @@
+# Test configuration with realistic model size
+experiment_name: "mnist_realistic_pruning_test"
+experiment_type: "standard_pruning"
+
+seed: 42
+device: "cuda"
+
+# Dataset
+dataset:
+  name: "mnist"
+  batch_size: 128
+  num_workers: 4
+
+# Model - More realistic size
+model:
+  name: "mlp"
+  hidden_sizes: [512, 256, 128]  # Much larger network
+  activation: "relu"
+  dropout_rate: 0.0
+
+# Training
+training:
+  epochs: 20  # Train longer for better baseline
+  learning_rate: 0.001
+  optimizer: "adam"
+
+# Alignment metrics
+alignment:
+  metrics: ["rayleigh_quotient"]
+  track_during_training: true
+  frequency: 5
+
+# Pruning configuration
+pruning:
+  enabled: true
+  algorithms: ["alignment", "magnitude"]  # Compare alignment vs magnitude
+  
+  # Test fewer sparsity levels for clarity
+  sparsity_levels: [0.0, 0.3, 0.5, 0.7, 0.9]
+  
+  # Test all selection modes
+  selection_mode: ["low", "high"]
+  
+  scope: "layer"
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 10
+  
+  alignment_metric: "rayleigh_quotient"
+
+# Visualization
+visualization:
+  generate_plots: true
+  plot_format: "png"
+  plot_dpi: 300
+
+# Output settings
+save_networks: false
+save_checkpoints: false 

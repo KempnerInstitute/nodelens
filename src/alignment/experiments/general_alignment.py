@@ -527,29 +527,31 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         sample_batch, _ = next(data_iter)
                         sample_inputs = sample_batch.to(self.config.device)
                         
-                        # For global alignment pruning, we need inputs for all layers
-                        if pruning_config.global_pruning and strategy_name == "alignment":
-                            # Use hooks to capture inputs for all layers
-                            hooks = []
-                            
-                            def capture_input(name):
-                                def hook(module, input, output):
-                                    layer_inputs_dict[name] = input[0].detach()
-                                return hook
-                            
-                            # Register hooks
-                            for name, module in self.model.named_modules():
-                                if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
-                                    hook = module.register_forward_hook(capture_input(name))
-                                    hooks.append(hook)
-                            
-                            # Forward pass to capture inputs
-                            with torch.no_grad():
-                                _ = self.model(sample_inputs)
-                            
-                            # Remove hooks
-                            for hook in hooks:
-                                hook.remove()
+                        # For alignment-based pruning, we ALWAYS need inputs for all layers
+                        # (not just for global pruning)
+                        # Use hooks to capture inputs for all layers
+                        hooks = []
+                        
+                        def capture_input(name):
+                            def hook(module, input, output):
+                                layer_inputs_dict[name] = input[0].detach()
+                            return hook
+                        
+                        # Register hooks
+                        for name, module in self.model.named_modules():
+                            if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
+                                hook = module.register_forward_hook(capture_input(name))
+                                hooks.append(hook)
+                        
+                        # Forward pass to capture inputs
+                        with torch.no_grad():
+                            _ = self.model(sample_inputs)
+                        
+                        # Remove hooks
+                        for hook in hooks:
+                            hook.remove()
+                        
+                        logger.info(f"      Captured inputs for {len(layer_inputs_dict)} layers")
                     
                     # Apply pruning
                     if pruning_config.global_pruning and hasattr(strategy, 'prune_model'):
@@ -617,8 +619,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                     if name in layer_inputs_dict:
                                         layer_inputs = layer_inputs_dict[name]
                                     else:
-                                        # Fallback to sample inputs (less accurate)
-                                        layer_inputs = sample_inputs
+                                        # This should not happen if hooks worked correctly
+                                        logger.error(f"No captured inputs for layer {name} - this will cause incorrect pruning!")
+                                        continue  # Skip this layer rather than using wrong inputs
                                 
                                 # Prune this layer
                                 strategy.prune(module, inputs=layer_inputs)

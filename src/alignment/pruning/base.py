@@ -165,9 +165,11 @@ class BasePruningStrategy(ABC):
                 return inputs
             
             # Hook to mask gradients during backward pass
+            # Capture the mask in the closure to avoid attribute access issues
+            weight_mask = module.weight_mask
             def mask_gradient_hook(grad):
                 # Mask gradients to prevent updates to pruned weights
-                return grad * module.weight_mask
+                return grad * weight_mask
             
             # Remove old hooks if exist
             if hasattr(module, '_pruning_hook'):
