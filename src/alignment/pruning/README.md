@@ -235,22 +235,22 @@ config = PruningConfig(
 
 The pruning module includes several experiments for analyzing how pruning affects model alignment:
 
-### Progressive Pruning Experiment
-Progressively increases pruning rates and tracks alignment metrics.
+### Global Pruning Experiment
+Applies the same pruning rate globally across all layers and tracks alignment metrics.
 
 ```python
-from alignment.pruning.experiments import ProgressiveDropoutExperiment
+from alignment.pruning.experiments import GlobalDropoutExperiment
 from alignment.experiments import ExperimentConfig
 
 
 config = ExperimentConfig(
-    name="progressive_pruning",
+    name="global_pruning",
     dropout_rates=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
     dropout_structure='magnitude',  # or 'random', 'gradient'
     metrics=['rayleigh_quotient', 'mutual_information_gaussian']
 )
 
-experiment = ProgressiveDropoutExperiment(config)
+experiment = GlobalDropoutExperiment(config)
 results = experiment.run()
 ```
 
@@ -392,7 +392,7 @@ pruning/
 │   └── cascading.py     # Cascading alignment strategy
 ├── experiments/         # Pruning experiments
 │   ├── __init__.py
-│   ├── progressive.py   # Progressive pruning analysis
+│   ├── global.py        # Global pruning analysis (same rate across all layers)
 │   ├── cascading_layer.py # Cascading layer-wise pruning
 │   ├── layer_wise.py    # Layer-wise pruning analysis
 │   └── eigenvector_based.py # Eigenvector-based pruning
