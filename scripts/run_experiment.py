@@ -101,6 +101,10 @@ def create_experiment_config(unified_config):
         'batch_size': dataset_config.get('batch_size', unified_config.get('data', {}).get('batch_size', 128)),
         'num_workers': dataset_config.get('num_workers', unified_config.get('data', {}).get('num_workers', 4)),
         'metrics': unified_config.get('alignment', {}).get('metrics', unified_config.get('analysis', {}).get('metrics', ['rayleigh_quotient'])),
+        'num_networks': unified_config.get('num_networks', 1),
+        'aggregate_metrics': unified_config.get('aggregate_metrics', True),
+        'save_individual_networks': unified_config.get('save_individual_networks', False),
+        'save_checkpoints': unified_config.get('save_checkpoints', False),
     }
     
     # Build model config with proper parameter names
@@ -149,29 +153,71 @@ def create_experiment_config(unified_config):
         config.do_pruning_experiments = mapped_experiment_type == 'standard_pruning' or unified_config.get('pruning', {}).get('enabled', False)
         config.generate_plots = unified_config.get('visualization', {}).get('generate_plots', unified_config.get('output', {}).get('generate_plots', True))
         
-        # Pruning specific
-        if config.do_pruning_experiments:
-            pruning = unified_config.get('pruning', {})
-            # Handle both single values and lists for algorithms and sparsity levels
-            algorithms = pruning.get('algorithms', pruning.get('strategy', 'magnitude'))  # Support old name for compatibility
-            config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
+        # Pruning specific - handle our new clean structure
+        pruning_analysis = unified_config.get('pruning_analysis', {})
+        network_compression = unified_config.get('network_compression', {})
+        
+        # Determine which mode is enabled
+        analysis_enabled = pruning_analysis.get('enabled', False)
+        compression_enabled = network_compression.get('enabled', False)
+        
+        if analysis_enabled or compression_enabled:
+            config.do_pruning_experiments = True
             
-            sparsity_levels = pruning.get('sparsity_levels', pruning.get('amount', pruning.get('pruning_amounts', 0.5)))  # Support old names
-            config.pruning_amounts = sparsity_levels if isinstance(sparsity_levels, list) else [sparsity_levels]
+            if analysis_enabled:
+                # Analysis mode: temporary masking with dropout_rates
+                logger.info("Using Analysis Mode (temporary masking)")
+                algorithms = pruning_analysis.get('algorithms', ['magnitude'])
+                config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
+                
+                # Use dropout_rates for analysis mode
+                dropout_rates = pruning_analysis.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+                config.pruning_amounts = dropout_rates
+                
+                # Selection strategies
+                selection_strategies = pruning_analysis.get('selection_strategies', ['low'])
+                config.pruning_selection_mode = selection_strategies if isinstance(selection_strategies, list) else [selection_strategies]
+                
+                # FIXED: Enable fine-tuning for analysis mode too - it shows recovery potential
+                config.fine_tune_after_pruning = pruning_analysis.get('fine_tune_after_analysis', True)
+                config.fine_tune_epochs = pruning_analysis.get('fine_tune_epochs', 5)
+                config.fine_tune_learning_rate = pruning_analysis.get('fine_tune_learning_rate', 0.0001)
+                
+                # Map analysis_level to pruning_scope
+                analysis_level = pruning_analysis.get('analysis_level', 'per_layer')
+                scope_mapping = {'per_layer': 'layer', 'global': 'global', 'cascading': 'cascading'}
+                config.pruning_scope = scope_mapping.get(analysis_level, 'layer')
+                
+            elif compression_enabled:
+                # Compression mode: permanent pruning with sparsity_levels
+                logger.info("Using Compression Mode (permanent pruning)")
+                algorithms = network_compression.get('algorithms', ['magnitude'])
+                config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
+                
+                # Use target_sparsity_levels for compression mode
+                sparsity_levels = network_compression.get('target_sparsity_levels', [0.1, 0.3, 0.5, 0.7, 0.9])
+                config.pruning_amounts = sparsity_levels
+                
+                # Selection strategy (singular for compression)
+                selection_strategy = network_compression.get('selection_strategy', 'low')
+                config.pruning_selection_mode = [selection_strategy] if isinstance(selection_strategy, str) else selection_strategy
+                
+                # Compression includes fine-tuning
+                config.fine_tune_after_pruning = network_compression.get('fine_tune_after_compression', True)
+                config.fine_tune_epochs = network_compression.get('fine_tune_epochs', 5)
+                
+                # Map compression_level to pruning_scope
+                compression_level = network_compression.get('compression_level', 'per_layer')
+                scope_mapping = {'per_layer': 'layer', 'global': 'global', 'cascading': 'cascading'}
+                config.pruning_scope = scope_mapping.get(compression_level, 'layer')
             
-            config.fine_tune_after_pruning = pruning.get('fine_tune_after_pruning', pruning.get('fine_tune', True))
-            config.fine_tune_epochs = pruning.get('fine_tune_epochs', 5)
+            # Common settings
+            config.pruning_alignment_metric = 'rayleigh_quotient'
+            config.pruning_hybrid_alpha = 0.5
             
-            # Selection mode can be single value or list
-            selection_mode = pruning.get('selection_mode', 'low')
-            config.pruning_selection_mode = selection_mode  # Keep as-is, the experiment will handle list vs single
-            
-            # Alignment-based pruning settings
-            config.pruning_alignment_metric = pruning.get('alignment_metric', 'rayleigh_quotient')
-            config.pruning_hybrid_alpha = pruning.get('hybrid_alpha', 0.5)
-            
-            # Pruning scope
-            config.pruning_scope = pruning.get('scope', 'layer')
+            logger.info(f"Pruning enabled: algorithms={config.pruning_strategies}, levels={config.pruning_amounts}")
+        else:
+            config.do_pruning_experiments = False
     else:
         # Create base ExperimentConfig for other experiment types
         config = ExperimentConfig(**base_params)
@@ -182,21 +228,41 @@ def create_experiment_config(unified_config):
     config.alignment_metrics = config.metrics
     config.apply_pruning = True
     
-    # Get pruning configuration with backward compatibility
-    pruning_config = unified_config.get('pruning', {})
-    config.pruning_strategy = pruning_config.get('algorithms', pruning_config.get('strategy', 'magnitude'))
-    if isinstance(config.pruning_strategy, list):
-        config.pruning_strategy = config.pruning_strategy[0]  # Use first algorithm as default
+    # Get pruning configuration with our new clean structure
+    pruning_analysis = unified_config.get('pruning_analysis', {})
+    network_compression = unified_config.get('network_compression', {})
     
-    config.pruning_config = pruning_config
+    # Use the appropriate config based on what's enabled
+    if pruning_analysis.get('enabled', False):
+        active_pruning_config = pruning_analysis
+        config.pruning_strategy = active_pruning_config.get('algorithms', ['magnitude'])[0]
+    elif network_compression.get('enabled', False):
+        active_pruning_config = network_compression
+        config.pruning_strategy = active_pruning_config.get('algorithms', ['magnitude'])[0]
+    else:
+        # Fallback to empty config
+        active_pruning_config = {}
+        config.pruning_strategy = 'magnitude'
+    
+    config.pruning_config = active_pruning_config
     config.analysis_config = unified_config.get('visualization', unified_config.get('analysis', {}))
     config.eval_model = True
     config.cnn_mode = model_config.get('cnn_mode', 'unfold')
-    config.dropout_rates = unified_config.get('dropout', {}).get('rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+    # Set dropout rates based on our new structure
+    if pruning_analysis.get('enabled', False):
+        config.dropout_rates = pruning_analysis.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+    else:
+        config.dropout_rates = unified_config.get('dropout', {}).get('rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
     
     # Handle selection modes (which importance values to prune)
-    # Support both single value and list
-    selection_mode = pruning_config.get('selection_mode', 'low')
+    # Support both single value and list from our new structure
+    if pruning_analysis.get('enabled', False):
+        selection_mode = pruning_analysis.get('selection_strategies', ['low'])
+    elif network_compression.get('enabled', False):
+        selection_mode = [network_compression.get('selection_strategy', 'low')]
+    else:
+        selection_mode = ['low']
+    
     config.pruning_modes = selection_mode if isinstance(selection_mode, list) else [selection_mode]
     
     config.cascade_direction = unified_config.get('experiment_specific', {}).get('cascade_direction', 'forward')

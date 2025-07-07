@@ -22,7 +22,7 @@ num_workers: 4
 # ==============================================================================
 model_name: "mlp"
 model_config:
-  hidden_sizes: [512, 256, 128]  # MLP layers
+  hidden_sizes: [128, 64]  # MLP layers
   activation: "relu"
   dropout_rate: 0.0
 
@@ -33,14 +33,15 @@ model_config:
 #   cnn_mode: "unfold"  # How to compute alignment for conv layers
 
 # ==============================================================================
-# TRAINING
+# TRAINING - FIXED: All parameters now under 'training:' section
 # ==============================================================================
-training_epochs: 10
-learning_rate: 0.001
-optimizer: "adam"
-scheduler: "cosine"
-scheduler_config:
-  T_max: 10
+training:
+  epochs: 10  # Train the model first (IMPORTANT!)
+  learning_rate: 0.001
+  optimizer: "adam"
+  scheduler: "cosine"
+  scheduler_config:
+    T_max: 10
 
 # ==============================================================================
 # ALIGNMENT ANALYSIS
@@ -57,72 +58,114 @@ tracked_layers: null  # null = all layers
 exclude_classification_layer: true
 
 # ==============================================================================
-# PRUNING ANALYSIS (Research - temporary masking to study effects)
+# PRUNING EXPERIMENTS 
 # ==============================================================================
+# Choose what type of pruning experiment to run
+# TIP: Enable performance optimizations below to speed up experiments!
+
+# OPTION 1: Analysis Mode (temporary masking to study effects)
+# Uses dropout_rates - neurons are temporarily masked then restored
+# Purpose: Research to understand which neurons matter for alignment
 pruning_analysis:
-  enabled: true
+  enabled: true  # Set to true for research analysis
   
-  # Dropout rates for temporary masking analysis
-  dropout_rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
-  dropout_mode: "scaled"  # How to apply temporary masking
+  # Temporary masking levels to test (0.0 = no masking, 0.9 = 90% masked)
+  dropout_rates: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+
+  # Which pruning strategy to simulate
+  algorithms: ["alignment"]  # Options: magnitude, alignment, random
+  selection_strategies: ["low", "high", "random"]  # Which neurons to mask: low, high, random
+  # IMPORTANT: For magnitude strategy:
+  #   - "low" = prune weights with LOW magnitude (keep high magnitude)
+  #   - "high" = prune weights with HIGH magnitude (keep low magnitude) 
+  #   - "random" = prune random weights (ignore magnitude)
+  # For random strategy: selection_strategies is ignored (always random)
+  # For alignment strategy: uses alignment scores instead of magnitude
   
-  # Pruning algorithms to study
-  algorithms: ["alignment"]  # Options: alignment, magnitude, random, hybrid
-  selection_strategies: ["low", "high", "random"]  # Which neurons to mask
-  
-  # Analysis scope - more intuitive names
-  analysis_level: "per_layer"  # Options: per_layer, global, cascading
-  # per_layer: Analyze each layer independently
-  # global: Analyze across all layers jointly  
-  # cascading: Analyze layer-by-layer with cumulative effects
-  
-  # Structure
+  # How to apply masking
+  analysis_level: "per_layer"  # per_layer, global, cascading
   structured: true  # Mask entire neurons (true) or individual weights (false)
   
-  # Random trials for statistical significance
+  # Fine-tuning to measure recovery potential
+  fine_tune_after_analysis: true  # Whether to fine-tune after masking
+  fine_tune_epochs: 10             # How many epochs to fine-tune
+  fine_tune_learning_rate: 0.0001 # Lower LR for fine-tuning (usually 1/10 of training LR)
+  
+  # Statistical robustness
   num_random_trials: 3
-  
-  # What to analyze
-  compute_alignment_changes: true
-  compute_performance_impact: true
-  save_analysis_results: true
 
-# ==============================================================================
-# NETWORK COMPRESSION (Production - create smaller networks)
-# ==============================================================================
+# OPTION 2: Compression Mode (permanent pruning to create smaller networks)  
+# Uses target_sparsity_levels - neurons are permanently removed
+# Purpose: Create deployable compressed models
 network_compression:
-  enabled: false  # Disabled by default since this is for analysis
+  enabled: false  # Set to true for actual model compression
   
-  # Sparsity levels for actual compression
+  # Permanent pruning levels to test (0.1 = remove 10%, 0.9 = remove 90%)
   target_sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
   
-  # Compression algorithms
-  algorithms: ["alignment"]  # Options: alignment, magnitude, random, hybrid
-  selection_strategy: "low"  # Which neurons to prune permanently
+  # Which pruning strategy to use
+  algorithms: ["magnitude"]  # Options: magnitude, alignment, random
+  selection_strategy: "low"  # Which neurons to remove: low, high, random
   
-  # Compression scope
-  compression_level: "per_layer"  # Options: per_layer, global, cascading
-  
-  # Structure
+  # How to apply pruning
+  compression_level: "per_layer"  # per_layer, global, cascading  
   structured: true  # Remove entire neurons (true) or individual weights (false)
   
-  # Post-compression fine-tuning
+  # Recovery training after pruning
   fine_tune_after_compression: true
   fine_tune_epochs: 5
-  fine_tune_learning_rate: 0.0001  # Often needs lower LR
+  fine_tune_learning_rate: 0.0001
   
-  # Output options
-  return_compressed_networks: false  # Whether to save compressed models
-  save_compression_masks: true       # Save masks for reproducibility
-  export_onnx: false                 # Export to ONNX format
-  benchmark_compressed_models: true  # Test inference speed/accuracy
+  # Output control
+  return_compressed_networks: false  # Whether to save the compressed models
+  save_compression_masks: true       # Save pruning masks for reproducibility
+  export_onnx: false                 # Export to ONNX format for deployment
+
+# ==============================================================================
+# SIMPLE EXPLANATION:
+# - Enable pruning_analysis for research (temporary masking with dropout_rates)
+# - Enable network_compression for deployment (permanent pruning with sparsity_levels)  
+# - Don't enable both at the same time - pick one based on your goal
+# ==============================================================================
 
 # ==============================================================================
 # MULTI-NETWORK EXPERIMENTS
 # ==============================================================================
-num_networks: 1  # Set >1 for multi-network analysis
+num_networks: 10  # Set >1 for multi-network analysis
 aggregate_metrics: true
 save_individual_networks: false
+
+# ==============================================================================
+# PERFORMANCE OPTIMIZATION
+# ==============================================================================
+# Speed vs memory trade-offs for faster experiments
+#
+# QUICK SETTINGS:
+# - For normal use: use_tensorized_* = true, use_optimized_* = true, ultra_fast = false
+# - For maximum speed: all = true (requires lots of memory)
+# - Total speedup possible: 5-10x
+#
+# IMPORTANT: These settings significantly affect experiment runtime!
+
+# Level 1: Tensorized operations (recommended - always enable)
+# Processes multiple networks in batches instead of sequentially
+# Speed: 2-3x faster, Memory: moderate increase
+use_tensorized_training: true  # For training phase
+use_tensorized_pruning: true   # For pruning experiments
+
+# Level 2: Optimized implementation (recommended)
+# Enhanced tensorized operations with reduced memory copying
+# Speed: 1.5-2x faster than tensorized, Memory: same as tensorized
+use_optimized_pruning: true
+
+# Level 3: Ultra-fast mode (use with caution)
+# Creates network copies for all pruning configurations
+# Speed: 1.5-3x faster than optimized, Memory: very high
+# Only enable if you have >16GB GPU memory and need maximum speed
+use_ultra_fast_pruning: true
+
+# Additional performance settings
+parallel_batch_size: null  # Batch size for parallel training (null = use batch_size)
 
 # ==============================================================================
 # OUTPUT & VISUALIZATION

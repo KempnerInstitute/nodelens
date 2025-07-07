@@ -192,13 +192,23 @@ class AlignmentPruning(BasePruningStrategy):
             if k == 0:
                 return torch.ones_like(weights)
             
-            # Get threshold based on pruning mode
-            if self.config.pruning_mode == 'low':
+            # Handle different pruning modes
+            if self.config.pruning_mode == 'random':
+                # Random selection of neurons to prune
+                indices = torch.randperm(importance_scores.numel(), device=importance_scores.device)[:k]
+                keep_mask = torch.ones(importance_scores.numel(), dtype=torch.bool, device=importance_scores.device)
+                keep_mask[indices] = False
+            elif self.config.pruning_mode == 'low':
+                # Prune neurons with lowest scores
                 threshold = importance_scores.kthvalue(k).values
                 keep_mask = importance_scores > threshold
             else:  # 'high' mode
-                threshold = importance_scores.kthvalue(importance_scores.numel() - k).values
-                keep_mask = importance_scores < threshold
+                # Prune neurons with highest scores
+                # Sort in descending order and take top k to prune
+                _, sorted_indices = torch.sort(importance_scores, descending=True)
+                indices_to_prune = sorted_indices[:k]
+                keep_mask = torch.ones(importance_scores.numel(), dtype=torch.bool, device=importance_scores.device)
+                keep_mask[indices_to_prune] = False
             
             # Expand mask to all weights in the neuron/channel
             if len(weights.shape) == 2:  # Linear
