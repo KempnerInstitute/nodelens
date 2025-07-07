@@ -22,7 +22,7 @@ num_workers: 4
 # ==============================================================================
 model_name: "mlp"
 model_config:
-  hidden_sizes: [128, 64]  # MLP layers
+  hidden_sizes: [256, 128, 64]  # MLP layers
   activation: "relu"
   dropout_rate: 0.0
 
@@ -36,7 +36,7 @@ model_config:
 # TRAINING - FIXED: All parameters now under 'training:' section
 # ==============================================================================
 training:
-  epochs: 10  # Train the model first (IMPORTANT!)
+  epochs: 100  # Train the model first (IMPORTANT!)
   learning_rate: 0.001
   optimizer: "adam"
   scheduler: "cosine"
@@ -50,7 +50,7 @@ training:
 metrics: ["rayleigh_quotient"]
 
 # When to measure alignment
-measure_alignment_during_training: true
+measure_alignment_during_training: false
 alignment_frequency: 1  # Every N epochs
 
 # Layer selection
@@ -70,7 +70,7 @@ pruning_analysis:
   enabled: true  # Set to true for research analysis
   
   # Temporary masking levels to test (0.0 = no masking, 0.9 = 90% masked)
-  dropout_rates: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+  dropout_rates: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99]
 
   # Which pruning strategy to simulate
   algorithms: ["alignment"]  # Options: magnitude, alignment, random
@@ -83,7 +83,7 @@ pruning_analysis:
   # For alignment strategy: uses alignment scores instead of magnitude
   
   # How to apply masking
-  analysis_level: "per_layer"  # per_layer, global, cascading
+  analysis_level: "global"  # per_layer, global, cascading
   structured: true  # Mask entire neurons (true) or individual weights (false)
   
   # Fine-tuning to measure recovery potential
