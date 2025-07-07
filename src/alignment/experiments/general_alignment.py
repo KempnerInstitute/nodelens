@@ -72,6 +72,7 @@ class GeneralAlignmentConfig(ExperimentConfig):
     pruning_alignment_metric: str = "rayleigh_quotient"  # Metric for alignment-based pruning
     pruning_hybrid_alpha: float = 0.5  # Weight for alignment in hybrid pruning (0-1)
     pruning_scope: str = "layer"  # "global" or "layer" - how to select neurons/weights for pruning
+    alignment_structured_pruning: bool = True  # Use structured pruning for alignment-based methods
     
     # Eigenfeature analysis
     do_eigenfeature_analysis: bool = True
@@ -966,13 +967,17 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     # Reset model to original state
                     self.model.load_state_dict(original_state)
                     
-                    # Create pruning strategy with config
+                    # Create pruning configuration
                     pruning_config = PruningConfig(
                         amount=amount,
-                        global_pruning=self.config.pruning_scope == 'global' if hasattr(self.config, 'pruning_scope') else False,
-                        pruning_mode=selection_mode,  # Use current selection mode
-                        structured=True if strategy_name in ["alignment", "hybrid"] else False  # Structured for alignment
+                        pruning_mode=selection_mode,
+                        structured=False,  # We handle structured pruning differently for alignment
+                        global_pruning=(self.config.pruning_scope == 'global')
                     )
+                    
+                    # For alignment-based pruning, override structured setting
+                    if strategy_name == "alignment" and self.config.alignment_structured_pruning:
+                        pruning_config.structured = True
                     
                     # Import additional strategies if needed
                     strategy = None
@@ -1287,7 +1292,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     "losses_before_finetune": [],
                     "accuracies_after_finetune": [],
                     "losses_after_finetune": [],
-                    "sparsities": []
+                    "sparsities": [],
+                    # Add standard deviations for error bars
+                    "accuracies_before_finetune_std": [],
+                    "accuracies_after_finetune_std": [],
+                    "losses_before_finetune_std": [],
+                    "losses_after_finetune_std": [],
+                    "sparsities_std": []
                 }
                 
                 # Process all pruning amounts simultaneously for all networks
@@ -1307,12 +1318,19 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         strategy_name, selection_mode, self.config.pruning_amounts
                     )
                 
-                # Aggregate results across networks
+                # Aggregate results across networks - compute both mean and std
                 strategy_results["accuracies_before_finetune"] = batch_results["accuracies_before"].mean(dim=0).tolist()
                 strategy_results["losses_before_finetune"] = batch_results["losses_before"].mean(dim=0).tolist()
                 strategy_results["accuracies_after_finetune"] = batch_results["accuracies_after"].mean(dim=0).tolist()
                 strategy_results["losses_after_finetune"] = batch_results["losses_after"].mean(dim=0).tolist()
                 strategy_results["sparsities"] = batch_results["sparsities"].mean(dim=0).tolist()
+                
+                # Store standard deviations for error bars
+                strategy_results["accuracies_before_finetune_std"] = batch_results["accuracies_before"].std(dim=0).tolist()
+                strategy_results["accuracies_after_finetune_std"] = batch_results["accuracies_after"].std(dim=0).tolist()
+                strategy_results["losses_before_finetune_std"] = batch_results["losses_before"].std(dim=0).tolist()
+                strategy_results["losses_after_finetune_std"] = batch_results["losses_after"].std(dim=0).tolist()
+                strategy_results["sparsities_std"] = batch_results["sparsities"].std(dim=0).tolist()
                 
                 results["strategies"][result_key] = strategy_results
                 
@@ -1822,9 +1840,16 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 self._restore_weights_from_dict(model, original_states[net_idx])
                 
                 # Apply alignment-based pruning using pre-computed inputs
-                self._apply_alignment_pruning_optimized(
-                    model, all_layer_inputs[net_idx], amount, selection_mode
-                )
+                if self.config.alignment_structured_pruning:
+                    # Use structured pruning for alignment methods
+                    self._apply_alignment_pruning_optimized(
+                        model, all_layer_inputs[net_idx], amount, selection_mode
+                    )
+                else:
+                    # Use unstructured pruning (original behavior)
+                    self._apply_alignment_pruning(
+                        model, all_layer_inputs[net_idx], amount, selection_mode
+                    )
                 
                 # Calculate sparsity
                 sparsities[net_idx, amount_idx] = self._calculate_model_sparsity(model)
@@ -1846,9 +1871,16 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 # Restore and re-apply pruning for this amount
                 for net_idx, model in enumerate(self.networks):
                     self._restore_weights_from_dict(model, original_states[net_idx])
-                    self._apply_alignment_pruning_optimized(
-                        model, all_layer_inputs[net_idx], amount, selection_mode
-                    )
+                    if self.config.alignment_structured_pruning:
+                        # Use structured pruning for alignment methods
+                        self._apply_alignment_pruning_optimized(
+                            model, all_layer_inputs[net_idx], amount, selection_mode
+                        )
+                    else:
+                        # Use unstructured pruning (original behavior)
+                        self._apply_alignment_pruning(
+                            model, all_layer_inputs[net_idx], amount, selection_mode
+                        )
                 
                 # Fine-tune all networks
                 self._finetune_networks_batch()
@@ -1880,7 +1912,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         }
     
     def _apply_alignment_pruning_optimized(self, model: nn.Module, layer_inputs_dict: Dict[str, torch.Tensor], amount: float, selection_mode: str):
-        """Apply alignment-based pruning more efficiently."""
+        """Apply alignment-based pruning more efficiently with proper structured pruning."""
         # Process all layers at once
         all_masks = {}
         
@@ -1888,15 +1920,79 @@ class GeneralAlignmentExperiment(BaseExperiment):
             if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
                 layer_inputs = layer_inputs_dict.get(name)
                 if layer_inputs is not None:
-                    # Compute alignment-based importance scores
-                    importance_scores = self._compute_alignment_importance(module, layer_inputs)
+                    # Compute alignment-based importance scores (per neuron)
+                    neuron_importance = self._compute_neuron_alignment_importance(module, layer_inputs)
                     
-                    # Create mask based on selection mode
-                    mask = self._create_pruning_mask_tensor(importance_scores, amount, selection_mode)
+                    # Create structured mask based on selection mode
+                    mask = self._create_structured_pruning_mask(module, neuron_importance, amount, selection_mode)
                     all_masks[name] = mask
         
         # Apply all masks at once
         self._apply_tensorized_mask(model, all_masks)
+    
+    def _compute_neuron_alignment_importance(self, module: nn.Module, layer_inputs: torch.Tensor) -> torch.Tensor:
+        """Compute per-neuron alignment scores for structured pruning."""
+        from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
+        
+        try:
+            # Get weight matrix
+            W = module.weight.detach()
+            
+            # Ensure inputs have the right shape
+            if layer_inputs.dim() > 2:
+                # Flatten spatial dimensions if needed (for conv layers)
+                X = layer_inputs.view(layer_inputs.size(0), -1)
+            else:
+                X = layer_inputs
+            
+            # Initialize the RayleighQuotient metric
+            rq_metric = RayleighQuotient(relative=True, min_samples=2)
+            
+            # Compute RQ scores for each neuron (these represent alignment with input covariance)
+            neuron_scores = rq_metric.compute(inputs=X, weights=W)
+            
+            # Return per-neuron scores
+            return neuron_scores.abs()
+            
+        except Exception as e:
+            logger.warning(f"Error computing alignment importance: {e}. Falling back to magnitude.")
+            # Fallback to magnitude-based importance per neuron
+            return module.weight.abs().mean(dim=1)
+    
+    def _create_structured_pruning_mask(self, module: nn.Module, neuron_scores: torch.Tensor, amount: float, selection_mode: str) -> torch.Tensor:
+        """Create a structured pruning mask that removes entire neurons."""
+        weights = module.weight
+        num_neurons = neuron_scores.numel()
+        num_to_prune = int(amount * num_neurons)
+        
+        if num_to_prune == 0:
+            return torch.ones_like(weights)
+        
+        # Initialize keep mask (True = keep neuron, False = prune neuron)
+        keep_mask = torch.ones(num_neurons, dtype=torch.bool, device=weights.device)
+        
+        if selection_mode == "random":
+            # Random selection of neurons to prune
+            indices_to_prune = torch.randperm(num_neurons, device=weights.device)[:num_to_prune]
+            keep_mask[indices_to_prune] = False
+        elif selection_mode == "low":
+            # Prune neurons with LOW alignment scores (keep high alignment)
+            _, sorted_indices = torch.sort(neuron_scores)
+            indices_to_prune = sorted_indices[:num_to_prune]
+            keep_mask[indices_to_prune] = False
+        elif selection_mode == "high":
+            # Prune neurons with HIGH alignment scores (keep low alignment)
+            _, sorted_indices = torch.sort(neuron_scores, descending=True)
+            indices_to_prune = sorted_indices[:num_to_prune]
+            keep_mask[indices_to_prune] = False
+        
+        # Expand mask to all weights in the neuron
+        if len(weights.shape) == 2:  # Linear layer
+            mask = keep_mask.unsqueeze(1).expand_as(weights).float()
+        else:  # Conv layer
+            mask = keep_mask.view(-1, 1, 1, 1).expand_as(weights).float()
+        
+        return mask
     
     def _capture_layer_inputs(self, model: nn.Module, inputs: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Capture inputs to each layer for alignment-based pruning."""
@@ -1925,7 +2021,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         return layer_inputs_dict
     
     def _apply_alignment_pruning(self, model: nn.Module, layer_inputs_dict: Dict[str, torch.Tensor], amount: float, selection_mode: str):
-        """Apply alignment-based pruning to a model."""
+        """Apply alignment-based pruning to a model with structured pruning."""
         # For alignment-based pruning, we need to compute alignment scores manually
         # to ensure proper handling of different selection modes
         
@@ -1936,11 +2032,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     # Clean up any existing pruning artifacts
                     self._cleanup_single_module_pruning(module)
                     
-                    # Compute alignment-based importance scores
-                    importance_scores = self._compute_alignment_importance(module, layer_inputs)
+                    # Compute alignment-based importance scores (per neuron)
+                    neuron_importance = self._compute_neuron_alignment_importance(module, layer_inputs)
                     
-                    # Create mask based on selection mode
-                    mask = self._create_pruning_mask_tensor(importance_scores, amount, selection_mode)
+                    # Create structured mask based on selection mode
+                    mask = self._create_structured_pruning_mask(module, neuron_importance, amount, selection_mode)
                     
                     # Apply the mask
                     layer_masks = {name: mask}
@@ -2126,6 +2222,14 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 # Store accuracies by selection mode
                 algorithm_results[algorithm]["before"][selection_mode] = strategy_results["accuracies_before_finetune"]
                 algorithm_results[algorithm]["after"][selection_mode] = strategy_results["accuracies_after_finetune"]
+                
+                # Store standard deviations if available
+                if "accuracies_before_finetune_std" in strategy_results:
+                    if "before_std" not in algorithm_results[algorithm]:
+                        algorithm_results[algorithm]["before_std"] = {}
+                        algorithm_results[algorithm]["after_std"] = {}
+                    algorithm_results[algorithm]["before_std"][selection_mode] = strategy_results["accuracies_before_finetune_std"]
+                    algorithm_results[algorithm]["after_std"][selection_mode] = strategy_results["accuracies_after_finetune_std"]
             
             # Create visualizer
             visualizer = UnifiedVisualizer()
@@ -2138,8 +2242,16 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     # Before fine-tuning plot
                     fig_before, ax_before = plt.subplots(figsize=(10, 6))
                     for mode, accuracies in results["before"].items():
-                        ax_before.plot([s * 100 for s in results["sparsities"]], accuracies,
-                                     'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
+                        x_values = [s * 100 for s in results["sparsities"]]
+                        # Check if we have error bars
+                        if "before_std" in results and mode in results["before_std"]:
+                            yerr = results["before_std"][mode]
+                            ax_before.errorbar(x_values, accuracies, yerr=yerr,
+                                             fmt='o-', label=f'{mode} mode', 
+                                             linewidth=2.5, markersize=8, capsize=5, capthick=2)
+                        else:
+                            ax_before.plot(x_values, accuracies,
+                                         'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
                     ax_before.set_xlabel('Pruning %', fontsize=12)
                     ax_before.set_ylabel('Accuracy (%)', fontsize=12)
                     ax_before.set_title(f'{algorithm.capitalize()} Pruning - Before Fine-tuning', 
@@ -2156,8 +2268,16 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     # After fine-tuning plot
                     fig_after, ax_after = plt.subplots(figsize=(10, 6))
                     for mode, accuracies in results["after"].items():
-                        ax_after.plot([s * 100 for s in results["sparsities"]], accuracies,
-                                    'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
+                        x_values = [s * 100 for s in results["sparsities"]]
+                        # Check if we have error bars
+                        if "after_std" in results and mode in results["after_std"]:
+                            yerr = results["after_std"][mode]
+                            ax_after.errorbar(x_values, accuracies, yerr=yerr,
+                                            fmt='o-', label=f'{mode} mode', 
+                                            linewidth=2.5, markersize=8, capsize=5, capthick=2)
+                        else:
+                            ax_after.plot(x_values, accuracies,
+                                        'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
                     ax_after.set_xlabel('Pruning %', fontsize=12)
                     ax_after.set_ylabel('Accuracy (%)', fontsize=12)
                     ax_after.set_title(f'{algorithm.capitalize()} Pruning - After Fine-tuning', 
@@ -2176,15 +2296,35 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     
                     fig, ax = plt.subplots(figsize=(10, 6))
                     
-                    # Plot before and after on same plot
-                    ax.plot([s * 100 for s in results["sparsities"]], 
-                           results["before"][selection_mode],
-                           'o-', label='Before Fine-tuning', color='#FF6B6B', 
-                           linewidth=2.5, markersize=8)
-                    ax.plot([s * 100 for s in results["sparsities"]], 
-                           results["after"][selection_mode],
-                           'o-', label='After Fine-tuning', color='#4ECDC4',
-                           linewidth=2.5, markersize=8)
+                    x_values = [s * 100 for s in results["sparsities"]]
+                    
+                    # Check if we have error bars
+                    if "before_std" in results and selection_mode in results["before_std"]:
+                        yerr_before = results["before_std"][selection_mode]
+                        yerr_after = results["after_std"][selection_mode] if "after_std" in results and selection_mode in results["after_std"] else None
+                        
+                        # Plot before with error bars
+                        ax.errorbar(x_values, results["before"][selection_mode], yerr=yerr_before,
+                                   fmt='o-', label='Before Fine-tuning', color='#FF6B6B', 
+                                   linewidth=2.5, markersize=8, capsize=5, capthick=2)
+                        
+                        # Plot after with error bars if available
+                        if yerr_after is not None:
+                            ax.errorbar(x_values, results["after"][selection_mode], yerr=yerr_after,
+                                       fmt='o-', label='After Fine-tuning', color='#4ECDC4',
+                                       linewidth=2.5, markersize=8, capsize=5, capthick=2)
+                        else:
+                            ax.plot(x_values, results["after"][selection_mode],
+                                   'o-', label='After Fine-tuning', color='#4ECDC4',
+                                   linewidth=2.5, markersize=8)
+                    else:
+                        # Plot without error bars
+                        ax.plot(x_values, results["before"][selection_mode],
+                               'o-', label='Before Fine-tuning', color='#FF6B6B', 
+                               linewidth=2.5, markersize=8)
+                        ax.plot(x_values, results["after"][selection_mode],
+                               'o-', label='After Fine-tuning', color='#4ECDC4',
+                               linewidth=2.5, markersize=8)
                     
                     ax.set_xlabel('Pruning %', fontsize=12)
                     ax.set_ylabel('Accuracy (%)', fontsize=12)
