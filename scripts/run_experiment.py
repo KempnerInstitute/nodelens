@@ -171,70 +171,42 @@ def create_experiment_config(unified_config):
         logger.info(f"Plot generation enabled: {config.generate_plots}")
         
         # Pruning specific - handle our new clean structure
-        pruning_analysis = unified_config.get('pruning_analysis', {})
-        network_compression = unified_config.get('network_compression', {})
+        pruning_cfg = unified_config.get('pruning', {})
         
-        # Determine which mode is enabled
-        analysis_enabled = pruning_analysis.get('enabled', False)
-        compression_enabled = network_compression.get('enabled', False)
-        
-        if analysis_enabled or compression_enabled:
+        # Check if pruning is enabled
+        if pruning_cfg.get('enabled', False):
             config.do_pruning_experiments = True
             
-            if analysis_enabled:
-                # Analysis mode: temporary masking with dropout_rates
-                logger.info("Using Analysis Mode (temporary masking)")
-                algorithms = pruning_analysis.get('algorithms', ['magnitude'])
-                config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
-                
-                # Use dropout_rates for analysis mode
-                dropout_rates = pruning_analysis.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
-                config.pruning_amounts = dropout_rates
-                
-                # Selection strategies
-                selection_strategies = pruning_analysis.get('selection_strategies', ['low'])
-                config.pruning_selection_mode = selection_strategies if isinstance(selection_strategies, list) else [selection_strategies]
-                
-                # FIXED: Enable fine-tuning for analysis mode too - it shows recovery potential
-                config.fine_tune_after_pruning = pruning_analysis.get('fine_tune_after_analysis', True)
-                config.fine_tune_epochs = pruning_analysis.get('fine_tune_epochs', 5)
-                config.fine_tune_learning_rate = pruning_analysis.get('fine_tune_learning_rate', 0.0001)
-                
-                # Map analysis_level to pruning_scope
-                analysis_level = pruning_analysis.get('analysis_level', 'per_layer')
-                scope_mapping = {'per_layer': 'layer', 'global': 'global', 'cascading': 'cascading'}
-                config.pruning_scope = scope_mapping.get(analysis_level, 'layer')
-                
-            elif compression_enabled:
-                # Compression mode: permanent pruning with sparsity_levels
-                logger.info("Using Compression Mode (permanent pruning)")
-                algorithms = network_compression.get('algorithms', ['magnitude'])
-                config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
-                
-                # Use target_sparsity_levels for compression mode
-                sparsity_levels = network_compression.get('target_sparsity_levels', [0.1, 0.3, 0.5, 0.7, 0.9])
-                config.pruning_amounts = sparsity_levels
-                
-                # Selection strategy (singular for compression)
-                selection_strategy = network_compression.get('selection_strategy', 'low')
-                config.pruning_selection_mode = [selection_strategy] if isinstance(selection_strategy, str) else selection_strategy
-                
-                # Compression includes fine-tuning
-                config.fine_tune_after_pruning = network_compression.get('fine_tune_after_compression', True)
-                config.fine_tune_epochs = network_compression.get('fine_tune_epochs', 5)
-                
-                # Map compression_level to pruning_scope
-                compression_level = network_compression.get('compression_level', 'per_layer')
-                scope_mapping = {'per_layer': 'layer', 'global': 'global', 'cascading': 'cascading'}
-                config.pruning_scope = scope_mapping.get(compression_level, 'layer')
+            # Get algorithms
+            algorithms = pruning_cfg.get('algorithms', ['magnitude'])
+            config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
             
-            # Common settings
-            config.pruning_alignment_metric = 'rayleigh_quotient'
-            config.pruning_hybrid_alpha = 0.5
+            # Get sparsity levels
+            sparsity_levels = pruning_cfg.get('sparsity_levels', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+            config.pruning_amounts = sparsity_levels
             
-            logger.info(f"Pruning enabled: algorithms={config.pruning_strategies}, levels={config.pruning_amounts}")
-        else:
-            config.do_pruning_experiments = False
+            # Get selection modes (note the plural form)
+            selection_modes = pruning_cfg.get('selection_modes', pruning_cfg.get('selection_mode', ['low']))
+            config.pruning_selection_mode = selection_modes if isinstance(selection_modes, list) else [selection_modes]
+            
+            # Fine-tuning settings
+            config.fine_tune_after_pruning = pruning_cfg.get('fine_tune_after_pruning', True)
+            config.fine_tune_epochs = pruning_cfg.get('fine_tune_epochs', 5)
+            config.fine_tune_learning_rate = pruning_cfg.get('fine_tune_learning_rate', 0.0001)
+            
+            # Scope settings
+            scope = pruning_cfg.get('scope', 'layer')
+            config.pruning_scope = scope
+            
+            # Alignment metric settings
+            config.pruning_alignment_metric = pruning_cfg.get('alignment_metric', 'rayleigh_quotient')
+            config.pruning_hybrid_alpha = pruning_cfg.get('hybrid_alpha', 0.5)
+            
+            logger.info(f"Pruning enabled: algorithms={config.pruning_strategies}, levels={config.pruning_amounts}, modes={config.pruning_selection_mode}")
+        
+        # Legacy support for pruning_analysis and network_compression blocks
+        pruning_analysis = unified_config.get('pruning_analysis', {})
+        network_compression = unified_config.get('network_compression', {})
     else:
         # Create base ExperimentConfig for other experiment types
         config = ExperimentConfig(**base_params)
@@ -299,7 +271,6 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description='Unified Alignment Experiment Runner')
     parser.add_argument('--config', type=str, required=True, help='Configuration file')
-    parser.add_argument('--experiment_type', type=str, help='Override experiment type')
     parser.add_argument('--device', type=str, help='Override device')
     parser.add_argument('--seed', type=int, help='Override seed')
     parser.add_argument('--output-dir', type=str, help='Override output directory')
@@ -308,8 +279,6 @@ def main():
     
     # Parse additional overrides
     overrides = {}
-    if args.experiment_type:
-        overrides['experiment_type'] = args.experiment_type
     if args.device:
         overrides['device'] = args.device
     if args.seed:
@@ -370,7 +339,33 @@ def main():
     print(f"Configuration: {args.config}")
     print(f"Output directory: {output_dir}")
     print(f"Device: {config.device}")
-    print(f"Experiment type: {unified_config.get('experiment_type', 'alignment_analysis')}")
+    # ------------------------------------------------------------------
+    # Infer experiment_type automatically if the user did not specify it
+    # Priority:
+    #   1. cascading pruning  -> 'cascading_layer_pruning'
+    #   2. standard pruning   -> 'standard_pruning'
+    #   3. progressive dropout-> 'progressive_dropout'
+    #   4. default            -> 'alignment_analysis'
+    # ------------------------------------------------------------------
+    if 'experiment_type' in unified_config:
+        experiment_type = unified_config['experiment_type']
+    else:
+        pruning_cfg = unified_config.get('pruning', {})
+        dropout_cfg = unified_config.get('dropout', {})
+
+        pruning_enabled  = pruning_cfg.get('enabled', False)
+        cascading_scope  = pruning_cfg.get('scope', 'layer') == 'cascading'
+        dropout_enabled  = dropout_cfg.get('enabled', False)
+
+        if cascading_scope and pruning_enabled:
+            experiment_type = 'cascading_layer_pruning'
+        elif pruning_enabled:
+            experiment_type = 'standard_pruning'
+        elif dropout_enabled:
+            experiment_type = 'progressive_dropout'
+        else:
+            experiment_type = 'alignment_analysis'
+# ------------------------------------------------------------------
     print(f"Plot generation: {getattr(config, 'generate_plots', True)}")
     print(f"Plots directory: {plots_dir}")
     print(f"{'='*60}\n")
@@ -392,6 +387,25 @@ def main():
     
     logger.info(f"Running {experiment_type} experiment (mapped to {mapped_experiment_type})")
     
+    # DEBUGGING: Check pruning configuration before creating experiment
+    pruning_analysis = unified_config.get('pruning_analysis', {})
+    network_compression = unified_config.get('network_compression', {})
+    
+    logger.info("=== PRUNING CONFIGURATION DEBUG ===")
+    logger.info(f"pruning_analysis.enabled: {pruning_analysis.get('enabled', False)}")
+    logger.info(f"network_compression.enabled: {network_compression.get('enabled', False)}")
+    logger.info(f"config.do_pruning_experiments: {getattr(config, 'do_pruning_experiments', 'NOT SET')}")
+    logger.info(f"config.generate_plots: {getattr(config, 'generate_plots', 'NOT SET')}")
+    
+    if hasattr(config, 'pruning_strategies'):
+        logger.info(f"config.pruning_strategies: {config.pruning_strategies}")
+    if hasattr(config, 'pruning_amounts'):
+        logger.info(f"config.pruning_amounts: {config.pruning_amounts}")
+    if hasattr(config, 'pruning_selection_mode'):
+        logger.info(f"config.pruning_selection_mode: {config.pruning_selection_mode}")
+    
+    logger.info("=== END PRUNING DEBUG ===")
+    
     if mapped_experiment_type in ['standard_pruning', 'progressive_dropout', 'alignment_analysis']:
         experiment = GeneralAlignmentExperiment(config)
     elif mapped_experiment_type == 'layer_isolated_pruning':
@@ -408,14 +422,48 @@ def main():
     logger.info(f"  - log_dir: {config.log_dir}")
     logger.info(f"  - plots_dir exists: {plots_dir.exists()}")
     
+    # DEBUGGING: Check if the experiment object has the right configuration
+    if hasattr(experiment, 'config'):
+        exp_config = experiment.config
+        logger.info(f"Experiment object config:")
+        logger.info(f"  - generate_plots: {getattr(exp_config, 'generate_plots', 'NOT SET')}")
+        logger.info(f"  - do_pruning_experiments: {getattr(exp_config, 'do_pruning_experiments', 'NOT SET')}")
+        logger.info(f"  - log_dir: {getattr(exp_config, 'log_dir', 'NOT SET')}")
+        
+        # Check if pruning methods exist
+        if hasattr(experiment, 'run_pruning_experiments'):
+            logger.info("  - run_pruning_experiments method exists")
+        else:
+            logger.warning("  - run_pruning_experiments method MISSING")
+            
+        if hasattr(experiment, 'visualize_pruning_results'):
+            logger.info("  - visualize_pruning_results method exists")
+        else:
+            logger.warning("  - visualize_pruning_results method MISSING")
+    
     # Run experiment
     results = experiment.run()
     
-    # DEBUGGING: Check if plots were actually created
+    # DEBUGGING: Check if plots were actually created and log detailed info
     plots_created = list(plots_dir.glob('*.png')) + list(plots_dir.glob('*.pdf')) + list(plots_dir.glob('*.jpg'))
     logger.info(f"Plots created after experiment: {len(plots_created)} files")
     for plot_file in plots_created:
-        logger.info(f"  - {plot_file.name}")
+        logger.info(f"  - {plot_file.name} (size: {plot_file.stat().st_size} bytes)")
+    
+    # DEBUGGING: Check if pruning results exist in the results
+    if 'pruning_results' in results:
+        logger.info("Pruning results found in experiment results")
+        pruning_results = results['pruning_results']
+        if isinstance(pruning_results, dict):
+            logger.info(f"Pruning results keys: {list(pruning_results.keys())}")
+            if 'strategies' in pruning_results:
+                strategies = pruning_results['strategies']
+                logger.info(f"Pruning strategies in results: {list(strategies.keys()) if isinstance(strategies, dict) else strategies}")
+        else:
+            logger.info(f"Pruning results type: {type(pruning_results)}")
+    else:
+        logger.warning("NO pruning results found in experiment results")
+        logger.info(f"Available result keys: {list(results.keys()) if isinstance(results, dict) else 'Results not a dict'}")
     
     # Save results with timestamp
     results_file = output_dir / f'results_{timestamp}.json'
@@ -497,6 +545,9 @@ def main():
                 print(f"    * {plot_file.name}")
     else:
         print(f"  - No plots generated (check generate_plots setting and experiment configuration)")
+        print(f"    * Pruning enabled: {getattr(config, 'do_pruning_experiments', False)}")
+        print(f"    * Plot generation: {getattr(config, 'generate_plots', False)}")
+        print(f"    * Pruning results in output: {'pruning_results' in results}")
     
     print(f"{'='*60}\n")
 

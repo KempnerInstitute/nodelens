@@ -1839,7 +1839,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 # Restore original weights first
                 self._restore_weights_from_dict(model, original_states[net_idx])
                 
-                # Apply alignment-based pruning using pre-computed inputs
+                                # Apply alignment-based pruning using pre-computed inputs
                 if self.config.alignment_structured_pruning:
                     # Use structured pruning for alignment methods
                     self._apply_alignment_pruning_optimized(
@@ -2251,7 +2251,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                              linewidth=2.5, markersize=8, capsize=5, capthick=2)
                         else:
                             ax_before.plot(x_values, accuracies,
-                                         'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
+                                     'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
                     ax_before.set_xlabel('Pruning %', fontsize=12)
                     ax_before.set_ylabel('Accuracy (%)', fontsize=12)
                     ax_before.set_title(f'{algorithm.capitalize()} Pruning - Before Fine-tuning', 
@@ -2277,7 +2277,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                             linewidth=2.5, markersize=8, capsize=5, capthick=2)
                         else:
                             ax_after.plot(x_values, accuracies,
-                                        'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
+                                    'o-', label=f'{mode} mode', linewidth=2.5, markersize=8)
                     ax_after.set_xlabel('Pruning %', fontsize=12)
                     ax_after.set_ylabel('Accuracy (%)', fontsize=12)
                     ax_after.set_title(f'{algorithm.capitalize()} Pruning - After Fine-tuning', 
@@ -2320,11 +2320,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     else:
                         # Plot without error bars
                         ax.plot(x_values, results["before"][selection_mode],
-                               'o-', label='Before Fine-tuning', color='#FF6B6B', 
-                               linewidth=2.5, markersize=8)
+                           'o-', label='Before Fine-tuning', color='#FF6B6B', 
+                           linewidth=2.5, markersize=8)
                         ax.plot(x_values, results["after"][selection_mode],
-                               'o-', label='After Fine-tuning', color='#4ECDC4',
-                               linewidth=2.5, markersize=8)
+                           'o-', label='After Fine-tuning', color='#4ECDC4',
+                           linewidth=2.5, markersize=8)
                     
                     ax.set_xlabel('Pruning %', fontsize=12)
                     ax.set_ylabel('Accuracy (%)', fontsize=12)

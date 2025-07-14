@@ -1,0 +1,398 @@
+# Comprehensive Configuration for Alignment Analysis Framework
+# This config file documents ALL available parameters with their options
+
+# ==============================================================================
+# EXPERIMENT IDENTIFICATION
+# ==============================================================================
+experiment_name: "comprehensive_alignment_analysis"
+description: "Full configuration example with all available options"
+tags: ["example", "comprehensive", "all_options"]
+
+# Random seed for reproducibility
+seed: 42
+
+# Device configuration
+device: "cuda"  # Options: "cuda", "cpu", "cuda:0", "cuda:1", etc.
+
+# ==============================================================================
+# MULTI-NETWORK CONFIGURATION
+# ==============================================================================
+# Number of networks to train in parallel (1 = single network, >1 = parallel)
+num_networks: 10  # Default: 1
+
+# Batch size for parallel training (None = use standard batch_size)
+parallel_batch_size: null  # Default: null
+
+# Use efficient tensorized operations when possible
+use_tensorized_training: true  # Default: true
+use_tensorized_pruning: true   # Default: true
+use_ultra_fast_pruning: false  # Default: false (more memory intensive)
+use_optimized_pruning: true    # Default: true (recommended)
+
+# Aggregate metrics across networks
+aggregate_metrics: true  # Default: true
+
+# Save each network separately
+save_individual_networks: false  # Default: false
+
+# ==============================================================================
+# MODEL CONFIGURATION
+# ==============================================================================
+model:
+  # Model architecture name
+  # Options: "mlp", "cnn2p2", "simple_conv", "resnet18", "resnet50", "vgg16", etc.
+  name: "mlp"
+  
+  # MLP-specific parameters
+  hidden_sizes: [512, 256, 128, 64, 32, 16]  # List of hidden layer dimensions
+  activation: "relu"  # Options: "relu", "tanh", "sigmoid", "gelu", "identity"
+  dropout_rate: 0.0   # Dropout probability between layers (0.0 to 1.0)
+  
+  # CNN-specific parameters (for cnn2p2)
+  conv_channels: [32, 64]      # Output channels for each conv layer
+  kernel_sizes: [5, 5]         # Kernel sizes for conv layers
+  strides: [1, 1]              # Strides for conv layers
+  paddings: [2, 2]             # Paddings for conv layers
+  pool_kernel_size: 2          # Kernel size for pooling layers
+  pool_stride: 2               # Stride for pooling layers
+  hidden_fc_dim: 128           # Dimension of hidden FC layer
+  
+  # SimpleConvNet-specific parameters
+  hidden_channels: [32, 64, 128]  # List of hidden channel sizes
+  fc_hidden: 256                  # Hidden dimension for FC layer
+  
+  # General model parameters
+  pretrained: false    # Whether to use pretrained weights (for torchvision models)
+  num_classes: 10      # Number of output classes (auto-set based on dataset)
+
+# ==============================================================================
+# DATASET CONFIGURATION
+# ==============================================================================
+dataset:
+  # Dataset name
+  # Options: "mnist", "fashion_mnist", "cifar10", "cifar100", "imagenet", "svhn"
+  name: "mnist"
+  
+  # Data loading parameters
+  batch_size: 512      # Batch size for training
+  num_workers: 4       # Number of data loading workers
+  pin_memory: true     # Pin memory for faster GPU transfer
+  drop_last: true      # Drop last incomplete batch
+  persistent_workers: true  # Keep workers alive between epochs
+  prefetch_factor: 2   # Number of batches to prefetch
+  
+  # Data augmentation and preprocessing
+  normalize: true      # Apply normalization with dataset mean/std
+  augment: false       # Apply data augmentation (training only)
+  
+  # Dataset-specific augmentation parameters
+  augmentation:
+    # For MNIST/Fashion-MNIST
+    rotation: 10                    # Random rotation degrees
+    translate: [0.1, 0.1]          # Random translation (fraction of image)
+    scale: [0.9, 1.1]              # Random scaling range
+    
+    # For CIFAR/ImageNet
+    crop: 32                       # Random crop size
+    padding: 4                     # Padding for random crop
+    horizontal_flip: true          # Random horizontal flip
+    color_jitter:
+      brightness: 0.2              # Brightness jitter
+      contrast: 0.2                # Contrast jitter
+      saturation: 0.2              # Saturation jitter
+      hue: 0.1                     # Hue jitter
+    
+    # For ImageNet
+    random_resized_crop: 224       # Random resized crop size
+    
+  # Custom dataset path (optional)
+  data_path: "./data"  # Default: "./data"
+  download: true       # Download dataset if not found
+
+# ==============================================================================
+# TRAINING CONFIGURATION
+# ==============================================================================
+training:
+  # Whether to train the model
+  do_train: true       # Default: true
+  
+  # Training epochs
+  epochs: 10           # Number of training epochs
+  
+  # Optimizer configuration
+  optimizer: "adam"    # Options: "sgd", "adam", "adamw", "rmsprop"
+  learning_rate: 0.001 # Initial learning rate
+  momentum: 0.9        # Momentum (for SGD)
+  weight_decay: 0.0001 # Weight decay (L2 regularization)
+  
+  # Learning rate scheduler
+  scheduler: "cosine"  # Options: "cosine", "step", "exponential", "plateau", null
+  scheduler_config:
+    # For cosine scheduler
+    T_max: 10          # Maximum number of iterations
+    eta_min: 0         # Minimum learning rate
+    
+    # For step scheduler
+    step_size: 30      # Period of learning rate decay
+    gamma: 0.1         # Multiplicative factor of learning rate decay
+    
+    # For exponential scheduler
+    gamma: 0.95        # Multiplicative factor of learning rate decay
+    
+    # For plateau scheduler
+    mode: "min"        # Options: "min", "max"
+    factor: 0.1        # Factor by which the learning rate will be reduced
+    patience: 10       # Number of epochs with no improvement
+    threshold: 0.0001  # Threshold for measuring the new optimum
+  
+  # Training options
+  gradient_clip_val: null     # Gradient clipping value (null = no clipping)
+  early_stopping_patience: null  # Early stopping patience (null = no early stopping)
+  
+  # Checkpointing
+  save_checkpoints: false     # Whether to save checkpoints during training
+  checkpoint_interval: 10     # Save checkpoint every N epochs
+  save_best: true            # Save best model based on validation accuracy
+
+# ==============================================================================
+# ALIGNMENT MEASUREMENT CONFIGURATION
+# ==============================================================================
+alignment:
+  # Measure alignment during training
+  measure_during_training: true  # Default: true
+  frequency: 1                   # Measure every N epochs
+  
+  # Alignment metrics to compute
+  # Options: "rayleigh_quotient", "spectral_gap", "gradient_alignment", 
+  #          "weight_alignment", "activation_alignment"
+  metrics: ["rayleigh_quotient"]
+  
+  # Metric-specific configurations
+  metric_configs:
+    rayleigh_quotient:
+      scale_by_norm: false         # Scale scores by weight norm
+      force_cpu_for_large_ops: true  # Move large operations to CPU
+      aggregation_op: "mean"       # Options: "mean", "max", "var", "sum"
+    
+    spectral_gap:
+      num_eigenvalues: 2           # Number of eigenvalues to compute
+    
+    gradient_alignment:
+      normalize: true              # Normalize gradients before computing alignment
+  
+  # Layer tracking
+  tracked_layers: null             # List of layers to track (null = auto-discover)
+  exclude_classification_layer: true  # Exclude final classification layer
+  
+  # Distribution analysis
+  measure_expected_distribution: true  # Measure alignment distribution
+  distribution_bins: 50              # Number of bins for distribution
+
+# ==============================================================================
+# PRUNING EXPERIMENTS CONFIGURATION
+# ==============================================================================
+pruning:
+  # Enable pruning experiments
+  enabled: true  # Default: true
+  
+  # Pruning algorithms to test
+  # Options: "magnitude", "random", "alignment", "gradient", "hybrid"
+  algorithms: ["magnitude", "alignment", "random"]
+  
+  # Sparsity levels to test (0.0 to 1.0)
+  sparsity_levels: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 
+                    0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+  
+  # Selection modes for pruning
+  # Options: "low" (prune lowest scores), "high" (prune highest scores), 
+  #          "random" (random selection)
+  # Can be a single value or list to test multiple modes
+  selection_modes: ["low", "high", "random"]
+  
+  # Pruning scope
+  # Options: "layer" (per-layer pruning), "global" (global pruning), 
+  #          "cascading" (sequential layer pruning)
+  scope: "layer"  # Default: "layer"
+  
+  # Fine-tuning after pruning
+  fine_tune: true       # Whether to fine-tune after pruning
+  fine_tune_epochs: 10  # Number of fine-tuning epochs
+  
+  # Alignment-based pruning options
+  alignment_metric: "rayleigh_quotient"  # Metric for alignment-based pruning
+  structured_pruning: true               # Use structured pruning for alignment
+  
+  # Hybrid pruning options
+  hybrid_alpha: 0.5     # Weight for alignment in hybrid pruning (0-1)
+  
+  # Cascading pruning options (when scope="cascading")
+  cascading_direction: "forward"  # Options: "forward", "backward"
+
+# ==============================================================================
+# DROPOUT ANALYSIS CONFIGURATION
+# ==============================================================================
+dropout:
+  # Enable progressive dropout analysis
+  enabled: false  # Default: false
+  
+  # Dropout rates to test
+  rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+  
+  # Dropout mode
+  # Options: "scaled" (scale remaining weights), "unscaled" (no scaling)
+  mode: "scaled"  # Default: "scaled"
+  
+  # Dropout pruning mode
+  # Options: "global", "per_layer_combined", "per_layer_independent"
+  pruning_mode: "global"  # Default: "global"
+  
+  # Number of random trials for dropout
+  num_random_trials: 3  # Default: 3
+
+# ==============================================================================
+# EIGENFEATURE ANALYSIS CONFIGURATION
+# ==============================================================================
+eigenfeature:
+  # Enable eigenfeature analysis
+  enabled: true  # Default: true
+  
+  # Number of eigenfeatures to compute
+  num_eigenfeatures: 10  # Default: 10
+  
+  # Compute eigenfeatures for which layers
+  layers: null  # null = all tracked layers
+
+# ==============================================================================
+# CNN-SPECIFIC CONFIGURATION
+# ==============================================================================
+cnn:
+  # CNN processing mode for alignment metrics
+  # Options: "unfold" (unfold conv operations), "patchwise" (keep patch structure),
+  #          "batch_patch_combined", "filter_patch_summary"
+  mode: "unfold"  # Default: "unfold"
+  
+  # CNN-specific parameters
+  kernel_size: 3   # Kernel size for analysis
+  stride: 1        # Stride for analysis
+  padding: 1       # Padding for analysis
+
+# ==============================================================================
+# VISUALIZATION CONFIGURATION
+# ==============================================================================
+visualization:
+  # Generate plots
+  enabled: true      # Default: true
+  
+  # Plot format
+  format: "png"      # Options: "png", "pdf", "svg"
+  dpi: 300          # DPI for raster formats
+  
+  # Plot types to generate
+  plot_types:
+    - "training_curves"      # Loss and accuracy curves
+    - "alignment_evolution"  # Alignment over training
+    - "pruning_results"      # Pruning accuracy curves
+    - "dropout_analysis"     # Dropout impact analysis
+    - "eigenfeature_vis"     # Eigenfeature visualizations
+    - "weight_distributions" # Weight distribution plots
+  
+  # Plot styling
+  style: "seaborn"   # Matplotlib style
+  figsize: [10, 6]   # Default figure size
+  
+  # Save intermediate plots during training
+  save_intermediate: false  # Default: false
+  intermediate_frequency: 10  # Save every N epochs
+
+# ==============================================================================
+# RESULTS AND LOGGING CONFIGURATION
+# ==============================================================================
+results:
+  # Save intermediate results during experiments
+  save_intermediate: true  # Default: true
+  
+  # Save trained networks
+  save_networks: false     # Default: false
+  
+  # Results format
+  format: "json"          # Options: "json", "pickle", "hdf5"
+  
+  # Compression for saved files
+  compress: false         # Default: false
+
+logging:
+  # Log level
+  level: "INFO"           # Options: "DEBUG", "INFO", "WARNING", "ERROR"
+  
+  # Log to file
+  log_to_file: true       # Default: true
+  log_file: "experiment.log"
+  
+  # Console logging
+  console: true           # Default: true
+  
+  # Weights & Biases integration
+  wandb:
+    enabled: false        # Default: false
+    project: "alignment-analysis"
+    entity: null          # Your W&B entity/username
+    tags: ["alignment", "pruning"]
+    
+  # TensorBoard integration
+  tensorboard:
+    enabled: false        # Default: false
+    log_dir: "./tensorboard_logs"
+
+# ==============================================================================
+# DISTRIBUTED TRAINING CONFIGURATION
+# ==============================================================================
+distributed:
+  # Enable distributed training
+  enabled: false          # Default: false
+  
+  # Distributed backend
+  backend: "nccl"         # Options: "nccl" (GPU), "gloo" (CPU)
+  
+  # World size and rank (auto-detected if not specified)
+  world_size: null        # Total number of processes
+  rank: null              # Rank of current process
+  
+  # Master address and port
+  master_addr: "localhost"
+  master_port: "12355"
+
+# ==============================================================================
+# MEMORY OPTIMIZATION
+# ==============================================================================
+memory:
+  # Gradient accumulation steps (simulate larger batch sizes)
+  gradient_accumulation_steps: 1  # Default: 1
+  
+  # Mixed precision training
+  mixed_precision: false   # Default: false
+  
+  # Empty cache frequency
+  empty_cache_frequency: null  # Empty GPU cache every N batches (null = never)
+  
+  # Activation checkpointing (gradient checkpointing)
+  activation_checkpointing: false  # Default: false
+
+# ==============================================================================
+# ADVANCED OPTIONS
+# ==============================================================================
+advanced:
+  # Reproducibility
+  deterministic: true      # Use deterministic algorithms
+  benchmark: false         # Use cudnn.benchmark (trades reproducibility for speed)
+  
+  # Debugging
+  debug_mode: false        # Enable debug mode with extra checks
+  profile: false           # Enable profiling
+  detect_anomaly: false    # Enable anomaly detection in autograd
+  
+  # Custom hooks
+  enable_custom_hooks: false  # Enable custom forward/backward hooks
+  
+  # Experimental features
+  use_torch_compile: false    # Use torch.compile (PyTorch 2.0+)
+  compile_mode: "default"     # Options: "default", "reduce-overhead", "max-autotune" 
