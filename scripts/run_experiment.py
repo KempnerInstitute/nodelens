@@ -1,4 +1,4 @@
-t #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Unified Alignment Experiment Runner
 
@@ -151,7 +151,24 @@ def create_experiment_config(unified_config):
         config.do_train = training_config.get('epochs', training_config.get('do_train', 0)) > 0
         config.do_dropout_analysis = mapped_experiment_type == 'progressive_dropout'
         config.do_pruning_experiments = mapped_experiment_type == 'standard_pruning' or unified_config.get('pruning', {}).get('enabled', False)
-        config.generate_plots = unified_config.get('visualization', {}).get('generate_plots', unified_config.get('output', {}).get('generate_plots', True))
+        
+        # CRITICAL FIX: Ensure plot generation is enabled
+        # Check multiple possible locations for plot configuration
+        visualization_config = unified_config.get('visualization', {})
+        output_config = unified_config.get('output', {})
+        analysis_config = unified_config.get('analysis', {})
+        
+        # Default to True if not explicitly set to False
+        generate_plots = True
+        if 'generate_plots' in visualization_config:
+            generate_plots = visualization_config['generate_plots']
+        elif 'generate_plots' in output_config:
+            generate_plots = output_config['generate_plots']
+        elif 'generate_plots' in analysis_config:
+            generate_plots = analysis_config['generate_plots']
+        
+        config.generate_plots = generate_plots
+        logger.info(f"Plot generation enabled: {config.generate_plots}")
         
         # Pruning specific - handle our new clean structure
         pruning_analysis = unified_config.get('pruning_analysis', {})
@@ -221,6 +238,10 @@ def create_experiment_config(unified_config):
     else:
         # Create base ExperimentConfig for other experiment types
         config = ExperimentConfig(**base_params)
+        # Ensure plot generation is enabled for other experiment types too
+        visualization_config = unified_config.get('visualization', {})
+        output_config = unified_config.get('output', {})
+        config.generate_plots = visualization_config.get('generate_plots', output_config.get('generate_plots', True))
     
     # Add additional attributes for compatibility with specialized experiments
     config.training_config = training_config
@@ -326,6 +347,11 @@ def main():
     Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     Path(config.log_dir).mkdir(parents=True, exist_ok=True)
     
+    # CRITICAL FIX: Create plots directory explicitly
+    plots_dir = Path(config.log_dir) / 'plots'
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created plots directory: {plots_dir}")
+    
     # Setup logging to both file and console
     log_file = output_dir / 'experiment.log'
     logging.basicConfig(
@@ -345,6 +371,8 @@ def main():
     print(f"Output directory: {output_dir}")
     print(f"Device: {config.device}")
     print(f"Experiment type: {unified_config.get('experiment_type', 'alignment_analysis')}")
+    print(f"Plot generation: {getattr(config, 'generate_plots', True)}")
+    print(f"Plots directory: {plots_dir}")
     print(f"{'='*60}\n")
     
     # Create experiment based on type
@@ -373,8 +401,21 @@ def main():
     else:
         raise ValueError(f"Unknown experiment type: {mapped_experiment_type}")
     
+    # DEBUGGING: Log configuration state before running
+    logger.info(f"Final config state:")
+    logger.info(f"  - generate_plots: {getattr(config, 'generate_plots', 'NOT SET')}")
+    logger.info(f"  - do_pruning_experiments: {getattr(config, 'do_pruning_experiments', 'NOT SET')}")
+    logger.info(f"  - log_dir: {config.log_dir}")
+    logger.info(f"  - plots_dir exists: {plots_dir.exists()}")
+    
     # Run experiment
     results = experiment.run()
+    
+    # DEBUGGING: Check if plots were actually created
+    plots_created = list(plots_dir.glob('*.png')) + list(plots_dir.glob('*.pdf')) + list(plots_dir.glob('*.jpg'))
+    logger.info(f"Plots created after experiment: {len(plots_created)} files")
+    for plot_file in plots_created:
+        logger.info(f"  - {plot_file.name}")
     
     # Save results with timestamp
     results_file = output_dir / f'results_{timestamp}.json'
@@ -401,6 +442,7 @@ def main():
         f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Configuration: {args.config}\n")
         f.write(f"Experiment Type: {experiment_type}\n")
+        f.write(f"Plot Generation: {getattr(config, 'generate_plots', True)}\n")
         f.write("=" * 50 + "\n\n")
         
         # Add results summary
@@ -414,6 +456,16 @@ def main():
             strategies = results['pruning_results'].get('strategies', {})
             f.write(f"  - Strategies tested: {list(strategies.keys())}\n")
             f.write(f"  - Plots saved in: {config.log_dir}/plots/\n")
+        
+        # List plots created
+        plots_created = list(plots_dir.glob('*'))
+        if plots_created:
+            f.write(f"\nPlots Generated ({len(plots_created)}):\n")
+            for plot_file in sorted(plots_created):
+                if plot_file.is_file():
+                    f.write(f"  - {plot_file.name}\n")
+        else:
+            f.write("\nNo plots were generated.\n")
         
         f.write("\nGenerated Files:\n")
         for file_path in sorted(output_dir.rglob('*')):
@@ -436,8 +488,15 @@ def main():
     print(f"  - Summary: {summary_file}")
     print(f"  - Logs: {log_file}")
     
-    if Path(config.log_dir, 'plots').exists():
-        print(f"  - Plots: {config.log_dir}/plots/")
+    # Check and report on plots
+    plots_created = list(plots_dir.glob('*'))
+    if plots_created:
+        print(f"  - Plots ({len(plots_created)}): {plots_dir}/")
+        for plot_file in sorted(plots_created):
+            if plot_file.is_file():
+                print(f"    * {plot_file.name}")
+    else:
+        print(f"  - No plots generated (check generate_plots setting and experiment configuration)")
     
     print(f"{'='*60}\n")
 
