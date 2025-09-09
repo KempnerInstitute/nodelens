@@ -1,41 +1,67 @@
-experiment:
-  name: "vit_b16_alignment_analysis"
-  seed: 42
-  device: "cuda"
+# Vision Transformer Base 16 Analysis Configuration
+# Fixed configuration for TIMM ViT-B/16 experiments
+name: "vit_b16_alignment_analysis"
+description: "Vision Transformer Base 16 alignment analysis with pruning experiments"
+tags: ["vit", "transformer", "timm", "alignment", "pruning"]
 
-dataset:
-  name: "cifar10"
-  data_path: "./data"
-  batch_size: 128
-  num_workers: 4
+# Experiment settings
+seed: 42
+device: "cuda"
 
-model:
-  name: "timm_model"
+# Dataset configuration
+dataset_name: "cifar10"
+data_path: "./data"
+batch_size: 64  # Smaller batch size for ViT due to memory requirements
+num_workers: 4
+dataset_config:
+  download: true
+  normalize: true
+  augmentation: true
+  resize_to: 224  # ViT requires 224x224 input
+
+# Model configuration - Using timm_model loader
+model_name: "timm_model"
+model_config:
   model_name: "vit_base_patch16_224"
   pretrained: true
+  num_classes: 10  # CIFAR-10 classes
+  img_size: 224
+  patch_size: 16
+pretrained: true
 
-wrapper:
-  name: "transformer_wrapper"
-  tracked_layers:
-    - "blocks.0.attn"
-    - "blocks.0.mlp"
-    - "blocks.6.attn"
-    - "blocks.6.mlp"
-    - "blocks.11.attn"
-    - "blocks.11.mlp"
+# Training configuration
+train_before_dropout: true
+training_epochs: 20  # ViT may need more epochs for fine-tuning
+learning_rate: 0.00001  # Very low LR for pretrained ViT
+optimizer: "adamw"  # AdamW is preferred for transformers
 
-alignment:
-  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
-analysis:
-  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+# Metrics configuration
+metrics: ["rayleigh_quotient", "mutual_information_gaussian"]
+metric_configs:
+  rayleigh_quotient:
+    scale_by_norm: false
+  mutual_information_gaussian:
+    bins: 50
 
-pruning:
-  enabled: true
-  algorithms: ["alignment"]
-  sparsity_levels: [0.5]
-  selection_modes: ["low"]
-  alignment_metric: "rayleigh_quotient"
-  fine_tune_after_pruning: true
-  fine_tune_epochs: 3
+# Layer tracking - ViT specific layers (attention and MLP blocks)
+tracked_layers:
+  - "patch_embed.proj"   # Patch embedding projection
+  - "blocks.0.attn.qkv"  # First attention block QKV
+  - "blocks.0.mlp.fc1"   # First MLP block fc1
+  - "blocks.0.mlp.fc2"   # First MLP block fc2
+  - "blocks.3.attn.qkv"  # Mid attention block QKV
+  - "blocks.3.mlp.fc1"   # Mid MLP block fc1
+  - "blocks.6.attn.qkv"  # Mid attention block QKV
+  - "blocks.6.mlp.fc1"   # Mid MLP block fc1
+  - "blocks.9.attn.qkv"  # Late attention block QKV
+  - "blocks.9.mlp.fc1"   # Late MLP block fc1
+  - "blocks.11.attn.qkv" # Final attention block QKV
+  - "blocks.11.mlp.fc1"  # Final MLP block fc1
+  - "head"               # Classification head
+
+# Transformer-specific settings
+scale_by_norm: false
+force_cpu_for_large_metric_ops: true
+exclude_classification_layer: true
 
 

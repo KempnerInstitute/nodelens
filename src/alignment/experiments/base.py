@@ -51,6 +51,15 @@ class ExperimentConfig:
     training_epochs: int = 10
     learning_rate: float = 0.001
     optimizer: str = "adam"
+    scheduler: Optional[str] = None
+    weight_decay: float = 0.0
+    momentum: float = 0.9
+    
+    # Multi-network configuration
+    num_networks: int = 1
+    
+    # Training control flags
+    do_train: bool = True
     
     # Metrics configuration
     metrics: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
@@ -61,6 +70,47 @@ class ExperimentConfig:
     cnn_rq_aggregation_op: str = "mean"  # "mean", "max", "var", "sum" for CNN RQ
     exclude_classification_layer: bool = True  # Whether to exclude classification layer from analysis
     
+    # Alignment-specific configuration
+    alignment_methods: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
+    compute_alignment: bool = True
+    save_alignment_history: bool = True
+    measure_alignment_during_training: bool = True
+    alignment_frequency: int = 1
+    
+    # CNN-specific configuration
+    cnn_mode: str = "unfold"  # Options: "unfold", "patchwise", "batch_patch_combined"
+    
+    # Analysis control flags
+    do_dropout_analysis: bool = False
+    do_eigenfeature_analysis: bool = False
+    do_pruning_experiments: bool = False
+    
+    # Dropout analysis configuration
+    dropout_rates: List[float] = field(default_factory=lambda: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+    dropout_mode: str = "scaled"  # "scaled" or "unscaled"
+    
+    # Distribution analysis
+    measure_expected_distribution: bool = True
+    distribution_bins: int = 50
+    
+    # Pruning configuration
+    pruning_strategies: List[str] = field(default_factory=lambda: ["magnitude", "random"])
+    pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7, 0.9])
+    pruning_selection_mode: str = "low"  # "low", "high", "random"
+    fine_tune_after_pruning: bool = True
+    fine_tune_epochs: int = 5
+    pruning_alignment_metric: str = "rayleigh_quotient"
+    pruning_hybrid_alpha: float = 0.5
+    pruning_scope: str = "layer"  # "global" or "layer"
+    fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
+    alignment_structured_pruning: bool = False  # Use structured pruning for alignment
+    cascading_direction: str = "forward"  # Direction for cascading pruning
+    
+    # Plotting and visualization
+    generate_plots: bool = True
+    plot_format: str = "png"
+    plot_dpi: int = 300
+    
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
     checkpoint_interval: int = 1000
@@ -69,6 +119,7 @@ class ExperimentConfig:
     # Logging
     log_dir: str = "./logs"
     log_interval: int = 100
+    plots_dir: str = "./plots"  # Directory for saving plots
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
     
@@ -280,7 +331,7 @@ class BaseExperiment(CoreBaseExperiment):
         dataset_kwargs.pop('val_split', None)
         dataset_kwargs.pop('augmentation_config', None)
         dataset_kwargs.pop('normalize', None)
-        dataset_kwargs.pop('download', None)  # Will be handled separately
+        # Keep download parameter as it's needed for torchvision datasets
         if self.config.data_path is not None and 'data_path' not in dataset_kwargs:
             dataset_kwargs['data_path'] = self.config.data_path
         

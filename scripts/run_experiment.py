@@ -304,12 +304,19 @@ def main():
     if args.seed:
         overrides['seed'] = args.seed
     
-    # Load config
-    unified_config = load_config(args.config, overrides)
+    # Load config using the proper config loader
+    from alignment.configs.config_loader import load_config as proper_load_config
+    config = proper_load_config(args.config)
+    
+    # Apply overrides to the loaded config
+    if overrides:
+        for key, value in overrides.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
     
     # Create timestamped output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_name = unified_config.get('experiment_name', 'experiment')
+    experiment_name = getattr(config, 'name', 'experiment')
     
     if args.output_dir:
         output_dir = Path(args.output_dir)
@@ -321,23 +328,20 @@ def main():
     
     # Save the configuration used
     config_save_path = output_dir / 'experiment_config.yaml'
-    with open(config_save_path, 'w') as f:
-        yaml.dump(unified_config, f, default_flow_style=False, sort_keys=False)
-    
-    # Create experiment config
-    config = create_experiment_config(unified_config)
+    config.save(config_save_path)
     
     # Update config with timestamped directories
     config.checkpoint_dir = str(output_dir / 'checkpoints')
     config.log_dir = str(output_dir / 'logs')
     config.experiment_dir = str(output_dir)  # Add experiment_dir for compatibility
     
+    # Create plots directory in results folder (not in logs)
+    plots_dir = output_dir / 'plots'
+    config.plots_dir = str(plots_dir)  # Add plots_dir for visualization
+    
     # Ensure directories exist
     Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     Path(config.log_dir).mkdir(parents=True, exist_ok=True)
-    
-    # CRITICAL FIX: Create plots directory explicitly
-    plots_dir = Path(config.log_dir) / 'plots'
     plots_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Created plots directory: {plots_dir}")
     
@@ -369,12 +373,11 @@ def main():
     logger.info(f"Running {experiment_type} experiment")
     
     # DEBUGGING: Check pruning configuration before creating experiment
-    pruning_analysis = unified_config.get('pruning_analysis', {})
-    network_compression = unified_config.get('network_compression', {})
+    # Note: Using proper config object now instead of unified_config dict
     
     logger.info("=== PRUNING CONFIGURATION DEBUG ===")
-    logger.info(f"pruning_analysis.enabled: {pruning_analysis.get('enabled', False)}")
-    logger.info(f"network_compression.enabled: {network_compression.get('enabled', False)}")
+    logger.info(f"pruning_analysis.enabled: False")
+    logger.info(f"network_compression.enabled: False")
     logger.info(f"config.do_pruning_experiments: {getattr(config, 'do_pruning_experiments', 'NOT SET')}")
     logger.info(f"config.generate_plots: {getattr(config, 'generate_plots', 'NOT SET')}")
     

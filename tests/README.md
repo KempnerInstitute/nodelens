@@ -1,34 +1,63 @@
-# Alignment Tests
+# Tests
 
-This directory contains test files for the alignment metrics package.
+This directory contains unit and integration tests for the alignment framework.
 
-## Test Files
+## Test Structure
 
-- `test_benchmark.py`: Tests the alignment metrics using the full package imports
-- `test_metrics_standalone.py`: Tests the RQ metric implementation in a standalone manner
-- `benchmark_ml.py`: Benchmarks different processing approaches (sequential, batched, tensorized)
+### Unit Tests (`unit/`)
+- `test_models.py` - Model architecture and loading tests
+- `test_metrics.py` - Alignment metric computation tests
+- `test_experiments.py` - Experiment configuration and execution tests
+- `test_checkpoint.py` - Checkpointing and state management tests
+- `metrics/` - Detailed tests for specific metric categories
+  - `test_rayleigh_metrics.py` - Rayleigh quotient and related metrics
+  - `test_information_metrics.py` - Information-theoretic metrics
+  - `test_similarity_metrics.py` - Similarity and correlation metrics
+
+### Integration Tests (`integration/`)
+- `test_all_completed.py` - End-to-end workflow tests
 
 ## Running Tests
 
-To run the tests, you can use the following commands from the project root:
-
+### Run All Tests
 ```bash
-# Run the basic alignment metric test
-python -m tests.test_benchmark
-
-# Run the standalone metric test (no package imports)
-python -m tests.test_metrics_standalone
-
-# Run the benchmark to compare different processing approaches
-python -m tests.benchmark_ml
+cd /path/to/alignment
+python -m pytest tests/
 ```
 
-## Benchmarking Results
+### Run Specific Test Categories
+```bash
+# Unit tests only
+python -m pytest tests/unit/
 
-The `benchmark_ml.py` script compares three different approaches:
+# Integration tests only
+python -m pytest tests/integration/
 
-1. **Sequential**: Process networks one at a time
-2. **Batched**: Process networks in small batches
-3. **Tensorized**: Process all networks simultaneously using tensor operations
+# Specific test file
+python -m pytest tests/unit/test_models.py
 
-In our tests, we observed modest speedups for the batched (1.05x) and tensorized (1.06x) approaches. With larger networks and datasets, these differences would likely become more pronounced. 
+# Specific test function
+python -m pytest tests/unit/test_models.py::test_model_creation
+```
+
+### Test with Coverage
+```bash
+python -m pytest tests/ --cov=alignment --cov-report=html
+```
+
+## Test Configuration
+
+Tests use `conftest.py` for shared fixtures and configuration. The test suite automatically:
+- Sets up temporary directories for test outputs
+- Configures logging for test runs
+- Provides common test data and model fixtures
+- Cleans up after test completion
+
+## Requirements
+
+Tests require the alignment package to be installed in development mode:
+```bash
+pip install -e .
+```
+
+Additional test dependencies are specified in `pyproject.toml`.

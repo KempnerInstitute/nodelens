@@ -49,7 +49,7 @@ class TorchvisionModel(nn.Module):
         model_kwargs: forwarded to model constructor
     """
 
-    def __init__(self, model_name: str, pretrained: bool = True, weights: Optional[str] = None, **model_kwargs: Any):
+    def __init__(self, model_name: str, pretrained: bool = True, weights: Optional[str] = None, num_classes: int = None, **model_kwargs: Any):
         super().__init__()
         try:
             import torchvision.models as tvm
@@ -60,15 +60,66 @@ class TorchvisionModel(nn.Module):
             raise ValueError(f"Unknown torchvision model: {model_name}")
 
         model_fn = getattr(tvm, model_name)
-        # Newer torchvision uses 'weights' over 'pretrained'
+        
+        # Extract num_classes from model_kwargs if present
+        if num_classes is None:
+            num_classes = model_kwargs.pop('num_classes', None)
+        
+        # Load model with pretrained weights (using ImageNet classes)
         if weights is not None:
-            self.model = model_fn(weights=weights, **model_kwargs)
+            self.model = model_fn(weights=weights)
         else:
             # Fallback: many models still accept pretrained
             try:
-                self.model = model_fn(pretrained=pretrained, **model_kwargs)
+                self.model = model_fn(pretrained=pretrained)
             except TypeError:
-                self.model = model_fn(**model_kwargs)
+                self.model = model_fn()
+        
+        # Modify classifier for different number of classes if needed
+        if num_classes is not None and num_classes != 1000:
+            self._modify_classifier(model_name, num_classes)
+
+    def _modify_classifier(self, model_name: str, num_classes: int):
+        """Modify the classifier layer for different number of classes."""
+        import torch.nn as nn
+        
+        if model_name.startswith('resnet'):
+            # ResNet models have 'fc' as final layer
+            in_features = self.model.fc.in_features
+            self.model.fc = nn.Linear(in_features, num_classes)
+        elif model_name.startswith('vgg'):
+            # VGG models have classifier Sequential with final Linear layer
+            in_features = self.model.classifier[-1].in_features
+            self.model.classifier[-1] = nn.Linear(in_features, num_classes)
+        elif model_name.startswith('alexnet'):
+            # AlexNet has classifier Sequential with final Linear layer
+            in_features = self.model.classifier[-1].in_features
+            self.model.classifier[-1] = nn.Linear(in_features, num_classes)
+        elif model_name.startswith('densenet'):
+            # DenseNet models have 'classifier' as final layer
+            in_features = self.model.classifier.in_features
+            self.model.classifier = nn.Linear(in_features, num_classes)
+        elif model_name.startswith('mobilenet'):
+            # MobileNet models have classifier Sequential with final Linear layer
+            in_features = self.model.classifier[-1].in_features
+            self.model.classifier[-1] = nn.Linear(in_features, num_classes)
+        elif model_name.startswith('efficientnet'):
+            # EfficientNet models have 'classifier' as final layer
+            in_features = self.model.classifier.in_features
+            self.model.classifier = nn.Linear(in_features, num_classes)
+        else:
+            logger.warning(f"Unknown model architecture '{model_name}' - classifier modification may fail")
+            # Try common patterns
+            if hasattr(self.model, 'fc'):
+                in_features = self.model.fc.in_features
+                self.model.fc = nn.Linear(in_features, num_classes)
+            elif hasattr(self.model, 'classifier'):
+                if isinstance(self.model.classifier, nn.Sequential):
+                    in_features = self.model.classifier[-1].in_features
+                    self.model.classifier[-1] = nn.Linear(in_features, num_classes)
+                else:
+                    in_features = self.model.classifier.in_features
+                    self.model.classifier = nn.Linear(in_features, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)

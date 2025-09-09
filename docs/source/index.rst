@@ -10,20 +10,20 @@ Overview
 
 The Alignment Analysis Framework provides tools for:
 
-- **Alignment Analysis**: Measure how neural representations align with data and task structure
-- **Pruning Experiments**: Test various pruning strategies and their effects on model performance
-- **Multi-Network Analysis**: Train and analyze multiple networks in parallel
-- **Information Theory Metrics**: Compute mutual information, Rayleigh quotients, and other metrics
-- **Comprehensive Visualization**: Generate plots and reports for analysis
+- Alignment Analysis: Measure how neural representations align with data and task structure
+- Pruning Experiments: Test various pruning strategies and their effects on model performance
+- Multi-Network Analysis: Train and analyze multiple networks in parallel
+- Information Theory Metrics: Compute mutual information, Rayleigh quotients, and other metrics
+- Comprehensive Visualization: Generate plots and reports for analysis
 
 Key Features
 ------------
 
-- **30+ Alignment Metrics**: Including Rayleigh quotient, mutual information, spectral metrics
-- **Multiple Pruning Strategies**: Magnitude, gradient, random, and alignment-based pruning
-- **Flexible Experiments**: Support for various experiment types and configurations
-- **GPU Optimized**: Efficient implementations with automatic device management
-- **Extensible Design**: Easy to add custom metrics and strategies
+- 30+ Alignment Metrics: Including Rayleigh quotient, mutual information, spectral metrics
+- Multiple Pruning Strategies: Magnitude, gradient, random, and alignment-based pruning
+- Flexible Experiments: Support for various experiment types and configurations
+- GPU Optimized: Efficient implementations with automatic device management
+- Extensible Design: Easy to add custom metrics and strategies
 
 Quick Start
 -----------

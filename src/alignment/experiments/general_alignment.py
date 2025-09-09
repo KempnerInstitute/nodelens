@@ -2240,7 +2240,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _generate_visualizations(self):
         """Generate comprehensive visualizations."""
-        output_dir = Path(self.config.log_dir) / "plots"
+        output_dir = Path(self.config.plots_dir) if hasattr(self.config, 'plots_dir') else Path(self.config.log_dir) / "plots"
         output_dir.mkdir(exist_ok=True)
         
         # Training curves

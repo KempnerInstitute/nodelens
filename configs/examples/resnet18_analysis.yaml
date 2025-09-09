@@ -1,8 +1,8 @@
-# ResNet-50 Analysis Configuration
-# Fixed configuration for torchvision ResNet-50 experiments
-name: "resnet50_alignment_analysis"
-description: "ResNet-50 alignment analysis with pruning experiments"
-tags: ["resnet50", "torchvision", "alignment", "pruning"]
+# ResNet-18 Analysis Configuration
+# Lightweight ResNet configuration for faster experiments
+name: "resnet18_alignment_analysis"
+description: "ResNet-18 alignment analysis with pruning experiments"
+tags: ["resnet18", "torchvision", "alignment", "pruning", "lightweight"]
 
 # Experiment settings
 seed: 42
@@ -11,25 +11,25 @@ device: "cuda"
 # Dataset configuration
 dataset_name: "cifar10"
 data_path: "./data"
-batch_size: 128
+batch_size: 256  # Larger batch size for smaller model
 num_workers: 4
 dataset_config:
   download: true
   normalize: true
-  augmentation: true  # ResNet benefits from data augmentation
+  augmentation: true
 
 # Model configuration - Using torchvision_model loader
 model_name: "torchvision_model"
 model_config:
-  model_name: "resnet50"
+  model_name: "resnet18"
   pretrained: true
-  num_classes: 10  # CIFAR-10 classes
+  num_classes: 10  # CIFAR-10 classes (will modify classifier after loading pretrained)
 pretrained: true
 
 # Training configuration
 train_before_dropout: true
-training_epochs: 15
-learning_rate: 0.0001  # Lower LR for pretrained model fine-tuning
+training_epochs: 10
+learning_rate: 0.001
 optimizer: "adam"
 
 # Metrics configuration
@@ -40,11 +40,13 @@ metric_configs:
   mutual_information_gaussian:
     bins: 50
 
-# Layer tracking - ResNet-50 key layers
+# Layer tracking - ResNet-18 key layers
 tracked_layers:
   - "conv1"              # Initial 7x7 conv
   - "layer1.0.conv1"     # First residual block conv1
   - "layer1.0.conv2"     # First residual block conv2
+  - "layer1.1.conv1"     # First layer second block conv1
+  - "layer1.1.conv2"     # First layer second block conv2
   - "layer2.0.conv1"     # Second layer first block conv1
   - "layer2.0.conv2"     # Second layer first block conv2
   - "layer3.0.conv1"     # Third layer first block conv1
@@ -59,4 +61,13 @@ force_cpu_for_large_metric_ops: true
 cnn_rq_aggregation_op: "mean"
 exclude_classification_layer: true
 
+# Enable pruning experiments to generate plots
+do_pruning_experiments: true
+pruning_strategies: ["magnitude", "alignment", "random"]
+pruning_amounts: [0.1, 0.3, 0.5, 0.7, 0.9]
+pruning_selection_mode: "low"
 
+# Visualization settings
+generate_plots: true
+plot_format: "png"
+plot_dpi: 300
