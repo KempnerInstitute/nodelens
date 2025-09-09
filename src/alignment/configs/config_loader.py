@@ -108,6 +108,11 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config['description'] = nested_config.get('description', '')
     flat_config['tags'] = nested_config.get('tags', [])
     
+    # Map other top-level fields
+    flat_config['pretrained'] = nested_config.get('pretrained', False)
+    if 'tracked_layers' in nested_config:
+        flat_config['tracked_layers'] = nested_config['tracked_layers']
+    
     # Map dataset configuration
     if 'dataset' in nested_config:
         dataset = nested_config['dataset']
@@ -119,16 +124,19 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config['num_workers'] = dataset.get('num_workers', 4)
         flat_config['dataset_config'] = {k: v for k, v in dataset.items() 
                                         if k not in ['dataset_name', 'data_path', 'batch_size', 'num_workers']}
+    else:
+        # Handle flat structure where dataset fields are at top level
+        dataset_name = nested_config.get('dataset_name', 'MNIST')
+        flat_config['dataset_name'] = dataset_name.lower()  # Lowercase for consistency
+        flat_config['data_path'] = nested_config.get('data_path')
+        flat_config['batch_size'] = nested_config.get('batch_size', 128)
+        flat_config['num_workers'] = nested_config.get('num_workers', 4)
+        flat_config['dataset_config'] = nested_config.get('dataset_config', {})
     
     # Map model configuration
     if 'model' in nested_config:
         model = nested_config['model']
         model_name = model.get('model_name', 'MLP')
-        
-        # Clean up model name (remove prefixes like "torchvision_")
-        if model_name.startswith('torchvision_'):
-            model_name = model_name.replace('torchvision_', '')
-        
         flat_config['model_name'] = model_name
         flat_config['model_config'] = {}
         
@@ -151,6 +159,31 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config['model_config']['dropout_rate'] = model['dropout_rate']
         if 'alignment_layers' in model:
             flat_config['tracked_layers'] = list(model['alignment_layers'].keys()) if isinstance(model['alignment_layers'], dict) else model['alignment_layers']
+    else:
+        # Handle flat structure where model_name is at top level
+        model_name = nested_config.get('model_name', 'MLP')
+        flat_config['model_name'] = model_name
+        flat_config['model_config'] = nested_config.get('model_config', {})
+        
+        # Handle different model types from flat structure
+        if 'mlp_params' in nested_config:
+            flat_config['model_config'].update(nested_config['mlp_params'])
+        elif 'cnn2p2_params' in nested_config:
+            flat_config['model_config'].update(nested_config['cnn2p2_params'])
+        elif 'external_params' in nested_config:
+            # For torchvision models
+            external = nested_config['external_params']
+            if external.get('source') == 'torchvision':
+                flat_config['model_name'] = external.get('name_or_path', 'resnet18')
+                flat_config['pretrained'] = external.get('pretrained', False)
+        
+        # Add common model params from flat structure
+        if 'output_dim' in nested_config:
+            flat_config['model_config']['output_dim'] = nested_config['output_dim']
+        if 'dropout_rate' in nested_config:
+            flat_config['model_config']['dropout_rate'] = nested_config['dropout_rate']
+        if 'alignment_layers' in nested_config:
+            flat_config['tracked_layers'] = list(nested_config['alignment_layers'].keys()) if isinstance(nested_config['alignment_layers'], dict) else nested_config['alignment_layers']
     
     # Map training configuration
     if 'training' in nested_config:
@@ -184,6 +217,24 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map other settings
     flat_config['device'] = nested_config.get('device', 'cuda')
     flat_config['seed'] = nested_config.get('seed', 42)
+    
+    # Map top-level analysis flags
+    flat_config['do_pruning_experiments'] = nested_config.get('do_pruning_experiments', False)
+    flat_config['do_dropout_analysis'] = nested_config.get('do_dropout_analysis', False)
+    flat_config['do_eigenfeature_analysis'] = nested_config.get('do_eigenfeature_analysis', False)
+    
+    # Map pruning configuration
+    flat_config['pruning_strategies'] = nested_config.get('pruning_strategies', ['magnitude', 'random'])
+    flat_config['pruning_amounts'] = nested_config.get('pruning_amounts', [0.1, 0.3, 0.5, 0.7, 0.9])
+    flat_config['pruning_selection_mode'] = nested_config.get('pruning_selection_mode', 'low')
+    flat_config['fine_tune_after_pruning'] = nested_config.get('fine_tune_after_pruning', True)
+    flat_config['fine_tune_epochs'] = nested_config.get('fine_tune_epochs', 5)
+    flat_config['pruning_alignment_metric'] = nested_config.get('pruning_alignment_metric', 'rayleigh_quotient')
+    
+    # Map visualization settings
+    flat_config['generate_plots'] = nested_config.get('generate_plots', True)
+    flat_config['plot_format'] = nested_config.get('plot_format', 'png')
+    flat_config['plot_dpi'] = nested_config.get('plot_dpi', 300)
     
     # Map checkpointing
     if 'checkpointing' in nested_config:
