@@ -1,0 +1,43 @@
+experiment:
+  name: "alexnet_alignment_analysis"
+  seed: 42
+  device: "cuda"
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+
+model:
+  name: "torchvision_model"
+  model_name: "alexnet"
+  pretrained: true
+
+wrapper:
+  name: "model_wrapper"
+  tracked_layers:
+    - "features.0"  # conv1
+    - "features.3"  # conv2
+    - "features.6"  # conv3
+    - "features.8"  # conv4
+    - "features.10" # conv5
+    - "classifier.1" # fc6
+    - "classifier.4" # fc7
+    - "classifier.6" # fc8
+
+alignment:
+  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+analysis:
+  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.6]
+  selection_modes: ["low"]
+  alignment_metric: "rayleigh_quotient"
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 3
+
+

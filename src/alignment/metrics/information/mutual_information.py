@@ -14,7 +14,7 @@ from ...core.registry import register_metric
 logger = logging.getLogger(__name__)
 
 
-@register_metric("mutual_information_gaussian", aliases=["mi_gaussian", "mi_0"])
+@register_metric("mutual_information_gaussian", aliases=["mi_gaussian", "mi_0", "mutual_information"])
 class MutualInformationGaussian(BaseMetric):
     """
     Mutual Information metric assuming Gaussian distributions.
@@ -117,36 +117,34 @@ class MutualInformationGaussian(BaseMetric):
             logger.warning(f"MI_gaussian: Reference batch size mismatch")
             return torch.zeros(num_neurons, device=outputs.device, dtype=outputs.dtype)
         
-        # Compute MI for each neuron
-        mi_scores = torch.zeros(num_neurons, device=outputs.device)
-        
-        for i in range(num_neurons):
-            neuron_out = outputs[:, i]
-            
-            # Average MI across all reference dimensions
-            mi_sum = 0.0
-            valid_refs = 0
-            
-            for k in range(ref_data.shape[1]):
-                ref_k = ref_data[:, k]
-                
-                # Compute correlation
-                combined = torch.stack([neuron_out, ref_k], dim=1)
-                if self._should_use_cpu(combined):
-                    combined = combined.cpu()
-                
-                cov_matrix = torch.cov(combined.T)
-                var_neuron = cov_matrix[0, 0]
-                var_ref = cov_matrix[1, 1]
-                
-                if var_neuron > 1e-12 and var_ref > 1e-12:
-                    rho_sq = (cov_matrix[0, 1] ** 2) / (var_neuron * var_ref)
-                    rho_sq = torch.clamp(rho_sq, 0, 0.999999)
-                    mi_sum += -0.5 * torch.log(1.0 - rho_sq)
-                    valid_refs += 1
-            
-            if valid_refs > 0:
-                mi_scores[i] = mi_sum / valid_refs
+        # Vectorized MI computation across neurons and reference dims
+        # Standardize outputs and references along batch dimension
+        eps = 1e-12
+        out_mean = outputs.mean(dim=0, keepdim=True)
+        out_std = outputs.std(dim=0, keepdim=True)
+        out_std = torch.where(out_std > eps, out_std, torch.ones_like(out_std))
+        z_outputs = (outputs - out_mean) / out_std  # [B, N]
+
+        ref_mean = ref_data.mean(dim=0, keepdim=True)
+        ref_std = ref_data.std(dim=0, keepdim=True)
+        ref_std = torch.where(ref_std > eps, ref_std, torch.ones_like(ref_std))
+        z_refs = (ref_data - ref_mean) / ref_std  # [B, K]
+
+        # Compute correlation matrix between outputs and refs: [N, K]
+        # corr = (z_outputs^T @ z_refs) / (B-1)
+        denom = (batch_size - 1)
+        if self._should_use_cpu(z_outputs, z_refs):
+            z_outputs = z_outputs.cpu()
+            z_refs = z_refs.cpu()
+        corr = (z_outputs.T @ z_refs) / max(1, denom)
+
+        # rho^2 and MI per neuron per ref
+        rho_sq = torch.clamp(corr.pow(2), 0.0, 0.999999)
+        mi_per_ref = -0.5 * torch.log(1.0 - rho_sq)
+
+        # Average over reference dims
+        mi_scores = mi_per_ref.mean(dim=1)
+        mi_scores = mi_scores.to(outputs.device)
         
         return torch.nan_to_num(mi_scores)
 
@@ -270,12 +268,12 @@ class MutualInformationBinning(BaseMetric):
                 p_x = np.sum(joint_p, axis=1)
                 p_y = np.sum(joint_p, axis=0)
                 
-                # Compute MI
+                # Compute MI (in nats; use natural logarithm)
                 mi_val = 0.0
                 for xi in range(self.bins):
                     for yi in range(self.bins):
                         if joint_p[xi, yi] > 1e-12 and p_x[xi] > 1e-12 and p_y[yi] > 1e-12:
-                            mi_val += joint_p[xi, yi] * np.log2(
+                            mi_val += joint_p[xi, yi] * np.log(
                                 joint_p[xi, yi] / (p_x[xi] * p_y[yi])
                             )
                 

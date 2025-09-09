@@ -1,0 +1,64 @@
+# Ultra-Fast Parallel Pruning Configuration
+# Maximum parallelization across networks, pruning levels, and evaluations
+
+experiment_name: "ultra_fast_pruning"
+
+# Core settings
+seed: 42
+device: "cuda"
+
+# Model
+model:
+  name: "mlp"
+  hidden_sizes: [512, 256, 128, 64, 32, 16]
+  activation: "relu"
+
+# Dataset
+dataset:
+  name: "mnist"
+  batch_size: 1024  # Larger batch size for better GPU utilization
+  num_workers: 8     # More workers for faster data loading
+  pin_memory: true
+  persistent_workers: true
+
+# Training - keep short for testing
+training:
+  epochs: 5
+  optimizer: "adam"
+  learning_rate: 0.001
+
+# Alignment
+alignment:
+  metrics: ["rayleigh_quotient"]
+
+# Pruning - optimized for parallel execution
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  selection_modes: ["low", "high", "random"]
+  
+  # Key optimization: NO FINE-TUNING for maximum speed
+  fine_tune: false
+  
+  # Use structured pruning for faster evaluation
+  structured_pruning: true
+
+# Multi-network configuration - CRITICAL FOR PARALLELIZATION
+num_networks: 10
+
+# Enable tensorized training for speed
+use_tensorized_training: true
+
+# Aggregate results across networks
+aggregate_metrics: true
+
+# Memory optimization
+empty_cache_frequency: 10  # Clear GPU cache every N batches
+
+# Visualization
+visualization:
+  enabled: true
+
+# Optional: Limit evaluation to subset for even faster results
+# eval_batches: 10  # Only evaluate on 10 batches instead of full dataset 

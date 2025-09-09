@@ -437,50 +437,53 @@ class GlobalAlignmentPruning(AlignmentPruning):
             # Prune neurons with lowest alignment
             _, sorted_indices = torch.sort(global_scores)
             prune_indices = sorted_indices[:k]
-        else:  # 'high' mode
+        elif self.config.pruning_mode == 'high':
             # Prune neurons with highest alignment
             _, sorted_indices = torch.sort(global_scores, descending=True)
             prune_indices = sorted_indices[:k]
+        elif self.config.pruning_mode == 'random':
+            # Randomly prune k neurons globally
+            prune_indices = torch.randperm(global_scores.numel())[:k]
+        else:
+            raise ValueError(f"Unknown pruning_mode: {self.config.pruning_mode}")
         
-        # Convert global indices to per-layer masks
+        # Convert global indices to per-layer masks using prefix sums (efficient)
         masks = {}
-        global_idx = 0
-        
+        prefix_counts = []
+        running = 0
         for layer in layer_info:
+            prefix_counts.append(running)
+            running += layer['num_neurons']
+        prefix_counts.append(running)
+
+        # For each layer, select indices that fall into its range
+        for layer_idx, layer in enumerate(layer_info):
+            start = prefix_counts[layer_idx]
+            end = prefix_counts[layer_idx + 1]
+            in_layer_mask = (prune_indices >= start) & (prune_indices < end)
+            layer_global = prune_indices[in_layer_mask]
+            local_indices = (layer_global - start).to(torch.long)
+
             num_neurons = layer['num_neurons']
-            
-            # Find which neurons in this layer to prune
             layer_prune_mask = torch.zeros(num_neurons, dtype=torch.bool)
-            
-            # Check which global indices fall in this layer's range
-            layer_range_start = global_idx
-            layer_range_end = global_idx + num_neurons
-            
-            for idx in prune_indices:
-                if layer_range_start <= idx < layer_range_end:
-                    local_idx = idx - layer_range_start
-                    layer_prune_mask[local_idx] = True
-            
-            # Create weight mask (True = keep, False = prune)
+            if local_indices.numel() > 0:
+                layer_prune_mask[local_indices] = True
+
             keep_mask = ~layer_prune_mask
-            
-            # Expand mask to weight dimensions
             weights = layer['module'].weight
-            if len(weights.shape) == 2:  # Linear
+            if len(weights.shape) == 2:
                 mask = keep_mask.unsqueeze(1).expand_as(weights).float()
-            else:  # Conv
+            else:
                 mask = keep_mask.view(-1, 1, 1, 1).expand_as(weights).float()
-            
-            # Apply pruning
+
             self.apply_pruning(layer['module'], mask)
             masks[layer['name']] = mask
-            
-            # Log layer statistics
+
             pruned_neurons = layer_prune_mask.sum().item()
-            logger.info(f"Layer {layer['name']}: pruned {pruned_neurons}/{num_neurons} neurons "
-                       f"({pruned_neurons/num_neurons*100:.1f}%)")
-            
-            global_idx += num_neurons
+            logger.info(
+                f"Layer {layer['name']}: pruned {pruned_neurons}/{num_neurons} neurons "
+                f"({pruned_neurons/num_neurons*100:.1f}%)"
+            )
         
         # Log global statistics
         total_neurons = sum(layer['num_neurons'] for layer in layer_info)

@@ -64,20 +64,6 @@ def create_experiment_config(unified_config):
     from alignment.experiments.base import ExperimentConfig
     from alignment.experiments.general_alignment import GeneralAlignmentConfig
     
-    experiment_type = unified_config.get('experiment_type', 'alignment_analysis')
-    
-    # Map experiment types to what the script expects
-    experiment_type_mapping = {
-        'general_alignment': 'standard_pruning',  # Map general_alignment to standard_pruning
-        'standard_pruning': 'standard_pruning',
-        'progressive_dropout': 'progressive_dropout',
-        'alignment_analysis': 'alignment_analysis',
-        'layer_isolated_pruning': 'layer_isolated_pruning',
-        'cascading_layer_pruning': 'cascading_layer_pruning'
-    }
-    
-    mapped_experiment_type = experiment_type_mapping.get(experiment_type, experiment_type)
-    
     # Extract model config and handle different naming conventions
     model_config = unified_config.get('model', {})
     model_name = model_config.get('name', model_config.get('architecture', 'mlp'))
@@ -91,7 +77,7 @@ def create_experiment_config(unified_config):
     else:
         dataset_name = dataset_config.get('name', dataset_config.get('dataset', 'mnist'))
     
-    # Build base parameters for all experiment types
+    # Build base parameters common to all experiment types
     base_params = {
         'name': unified_config.get('experiment_name', 'unified_experiment'),
         'seed': unified_config.get('seed', 42),
@@ -101,10 +87,6 @@ def create_experiment_config(unified_config):
         'batch_size': dataset_config.get('batch_size', unified_config.get('data', {}).get('batch_size', 128)),
         'num_workers': dataset_config.get('num_workers', unified_config.get('data', {}).get('num_workers', 4)),
         'metrics': unified_config.get('alignment', {}).get('metrics', unified_config.get('analysis', {}).get('metrics', ['rayleigh_quotient'])),
-        'num_networks': unified_config.get('num_networks', 1),
-        'aggregate_metrics': unified_config.get('aggregate_metrics', True),
-        'save_individual_networks': unified_config.get('save_individual_networks', False),
-        'save_checkpoints': unified_config.get('save_checkpoints', False),
     }
     
     # Build model config with proper parameter names
@@ -142,18 +124,48 @@ def create_experiment_config(unified_config):
             base_params['learning_rate'] = training_config.get('learning_rate', 0.001)
             base_params['optimizer'] = training_config.get('optimizer', 'adam')
     
-    # Create the appropriate config type based on experiment
-    if mapped_experiment_type in ['standard_pruning', 'progressive_dropout', 'alignment_analysis']:
-        # Create GeneralAlignmentConfig for general experiments
-        config = GeneralAlignmentConfig(**base_params)
+    # Infer experiment type based on enabled blocks
+    pruning_cfg = unified_config.get('pruning', {})
+    dropout_cfg = unified_config.get('dropout', {})
+    
+    pruning_enabled = pruning_cfg.get('enabled', False)
+    cascading_scope = pruning_cfg.get('scope', 'layer') == 'cascading'
+    dropout_enabled = dropout_cfg.get('enabled', False)
+    
+    # Determine if we need specialized experiment types or GeneralAlignmentConfig
+    if cascading_scope and pruning_enabled:
+        # For cascading layer pruning, use base ExperimentConfig
+        config = ExperimentConfig(**base_params)
+        inferred_type = 'cascading_layer_pruning'
+    elif pruning_cfg.get('scope') == 'layer_isolated' and pruning_enabled:
+        # For layer isolated pruning, use base ExperimentConfig
+        config = ExperimentConfig(**base_params)
+        inferred_type = 'layer_isolated_pruning'
+    else:
+        # For standard experiments, use GeneralAlignmentConfig
+        # Add GeneralAlignmentConfig-specific parameters
+        general_params = base_params.copy()
+        general_params['num_networks'] = unified_config.get('num_networks', 1)
+        general_params['aggregate_metrics'] = unified_config.get('aggregate_metrics', True)
+        general_params['save_individual_networks'] = unified_config.get('save_individual_networks', False)
+        general_params['save_checkpoints'] = unified_config.get('save_checkpoints', False)
         
-        # Set GeneralAlignmentConfig specific fields
+        config = GeneralAlignmentConfig(**general_params)
+        
+        # Set flags based on enabled blocks
         config.do_train = training_config.get('epochs', training_config.get('do_train', 0)) > 0
-        config.do_dropout_analysis = mapped_experiment_type == 'progressive_dropout'
-        config.do_pruning_experiments = mapped_experiment_type == 'standard_pruning' or unified_config.get('pruning', {}).get('enabled', False)
+        config.do_dropout_analysis = dropout_enabled
+        config.do_pruning_experiments = pruning_enabled
         
-        # CRITICAL FIX: Ensure plot generation is enabled
-        # Check multiple possible locations for plot configuration
+        # Determine inferred type for logging
+        if pruning_enabled:
+            inferred_type = 'standard_pruning'
+        elif dropout_enabled:
+            inferred_type = 'progressive_dropout'
+        else:
+            inferred_type = 'alignment_analysis'
+        
+        # Handle plot generation
         visualization_config = unified_config.get('visualization', {})
         output_config = unified_config.get('output', {})
         analysis_config = unified_config.get('analysis', {})
@@ -170,13 +182,8 @@ def create_experiment_config(unified_config):
         config.generate_plots = generate_plots
         logger.info(f"Plot generation enabled: {config.generate_plots}")
         
-        # Pruning specific - handle our new clean structure
-        pruning_cfg = unified_config.get('pruning', {})
-        
-        # Check if pruning is enabled
-        if pruning_cfg.get('enabled', False):
-            config.do_pruning_experiments = True
-            
+        # Pruning specific configuration
+        if pruning_enabled:
             # Get algorithms
             algorithms = pruning_cfg.get('algorithms', ['magnitude'])
             config.pruning_strategies = algorithms if isinstance(algorithms, list) else [algorithms]
@@ -185,7 +192,7 @@ def create_experiment_config(unified_config):
             sparsity_levels = pruning_cfg.get('sparsity_levels', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
             config.pruning_amounts = sparsity_levels
             
-            # Get selection modes (note the plural form)
+            # Get selection modes
             selection_modes = pruning_cfg.get('selection_modes', pruning_cfg.get('selection_mode', ['low']))
             config.pruning_selection_mode = selection_modes if isinstance(selection_modes, list) else [selection_modes]
             
@@ -202,26 +209,32 @@ def create_experiment_config(unified_config):
             config.pruning_alignment_metric = pruning_cfg.get('alignment_metric', 'rayleigh_quotient')
             config.pruning_hybrid_alpha = pruning_cfg.get('hybrid_alpha', 0.5)
             
+            # Ultra-parallel evaluation settings
+            config.use_ultra_parallel_eval = pruning_cfg.get('use_ultra_parallel_eval', False)
+            config.eval_batches = pruning_cfg.get('eval_batches', None)
+            
             logger.info(f"Pruning enabled: algorithms={config.pruning_strategies}, levels={config.pruning_amounts}, modes={config.pruning_selection_mode}")
+            logger.info(f"Ultra-parallel eval: {config.use_ultra_parallel_eval}, eval_batches: {config.eval_batches}")
         
-        # Legacy support for pruning_analysis and network_compression blocks
-        pruning_analysis = unified_config.get('pruning_analysis', {})
-        network_compression = unified_config.get('network_compression', {})
-    else:
-        # Create base ExperimentConfig for other experiment types
-        config = ExperimentConfig(**base_params)
+        # Dropout specific configuration
+        if dropout_enabled:
+            config.dropout_rates = dropout_cfg.get('rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+            logger.info(f"Dropout enabled: rates={config.dropout_rates}")
+    
+    # Common configuration for all experiment types
+    if not isinstance(config, GeneralAlignmentConfig):
         # Ensure plot generation is enabled for other experiment types too
         visualization_config = unified_config.get('visualization', {})
         output_config = unified_config.get('output', {})
         config.generate_plots = visualization_config.get('generate_plots', output_config.get('generate_plots', True))
     
-    # Add additional attributes for compatibility with specialized experiments
+    # Add additional attributes for compatibility
     config.training_config = training_config
     config.train_model = config.training_config.get('epochs', 0) > 0
     config.alignment_metrics = config.metrics
-    config.apply_pruning = True
+    config.apply_pruning = pruning_enabled
     
-    # Get pruning configuration with our new clean structure
+    # Legacy support for pruning_analysis and network_compression blocks
     pruning_analysis = unified_config.get('pruning_analysis', {})
     network_compression = unified_config.get('network_compression', {})
     
@@ -233,28 +246,31 @@ def create_experiment_config(unified_config):
         active_pruning_config = network_compression
         config.pruning_strategy = active_pruning_config.get('algorithms', ['magnitude'])[0]
     else:
-        # Fallback to empty config
-        active_pruning_config = {}
-        config.pruning_strategy = 'magnitude'
+        # Fallback to pruning config or empty
+        active_pruning_config = pruning_cfg if pruning_enabled else {}
+        config.pruning_strategy = pruning_cfg.get('algorithms', ['magnitude'])[0] if pruning_enabled else 'magnitude'
     
     config.pruning_config = active_pruning_config
     config.analysis_config = unified_config.get('visualization', unified_config.get('analysis', {}))
     config.eval_model = True
     config.cnn_mode = model_config.get('cnn_mode', 'unfold')
-    # Set dropout rates based on our new structure
-    if pruning_analysis.get('enabled', False):
+    
+    # Set dropout rates (handle multiple sources)
+    if hasattr(config, 'dropout_rates'):
+        # Already set for GeneralAlignmentConfig
+        pass
+    elif pruning_analysis.get('enabled', False):
         config.dropout_rates = pruning_analysis.get('dropout_rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
     else:
-        config.dropout_rates = unified_config.get('dropout', {}).get('rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+        config.dropout_rates = dropout_cfg.get('rates', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
     
-    # Handle selection modes (which importance values to prune)
-    # Support both single value and list from our new structure
+    # Handle selection modes for compatibility
     if pruning_analysis.get('enabled', False):
         selection_mode = pruning_analysis.get('selection_strategies', ['low'])
     elif network_compression.get('enabled', False):
         selection_mode = [network_compression.get('selection_strategy', 'low')]
     else:
-        selection_mode = ['low']
+        selection_mode = pruning_cfg.get('selection_modes', ['low']) if pruning_enabled else ['low']
     
     config.pruning_modes = selection_mode if isinstance(selection_mode, list) else [selection_mode]
     
@@ -263,6 +279,10 @@ def create_experiment_config(unified_config):
     
     # Note: Output directories are now set in main() after creating timestamped folders
     config.plot_dpi = unified_config.get('visualization', {}).get('plot_dpi', unified_config.get('output', {}).get('plot_dpi', 300))
+    
+    # Log the inferred experiment type
+    logger.info(f"Inferred experiment type: {inferred_type} based on config blocks")
+    config._inferred_experiment_type = inferred_type  # Store for later use
     
     return config
 
@@ -339,53 +359,14 @@ def main():
     print(f"Configuration: {args.config}")
     print(f"Output directory: {output_dir}")
     print(f"Device: {config.device}")
-    # ------------------------------------------------------------------
-    # Infer experiment_type automatically if the user did not specify it
-    # Priority:
-    #   1. cascading pruning  -> 'cascading_layer_pruning'
-    #   2. standard pruning   -> 'standard_pruning'
-    #   3. progressive dropout-> 'progressive_dropout'
-    #   4. default            -> 'alignment_analysis'
-    # ------------------------------------------------------------------
-    if 'experiment_type' in unified_config:
-        experiment_type = unified_config['experiment_type']
-    else:
-        pruning_cfg = unified_config.get('pruning', {})
-        dropout_cfg = unified_config.get('dropout', {})
-
-        pruning_enabled  = pruning_cfg.get('enabled', False)
-        cascading_scope  = pruning_cfg.get('scope', 'layer') == 'cascading'
-        dropout_enabled  = dropout_cfg.get('enabled', False)
-
-        if cascading_scope and pruning_enabled:
-            experiment_type = 'cascading_layer_pruning'
-        elif pruning_enabled:
-            experiment_type = 'standard_pruning'
-        elif dropout_enabled:
-            experiment_type = 'progressive_dropout'
-        else:
-            experiment_type = 'alignment_analysis'
-# ------------------------------------------------------------------
     print(f"Plot generation: {getattr(config, 'generate_plots', True)}")
     print(f"Plots directory: {plots_dir}")
     print(f"{'='*60}\n")
     
-    # Create experiment based on type
-    experiment_type = unified_config.get('experiment_type', 'alignment_analysis')
+    # Use the inferred experiment type from config
+    experiment_type = getattr(config, '_inferred_experiment_type', 'alignment_analysis')
     
-    # Map experiment types
-    experiment_type_mapping = {
-        'general_alignment': 'standard_pruning',
-        'standard_pruning': 'standard_pruning',
-        'progressive_dropout': 'progressive_dropout',
-        'alignment_analysis': 'alignment_analysis',
-        'layer_isolated_pruning': 'layer_isolated_pruning',
-        'cascading_layer_pruning': 'cascading_layer_pruning'
-    }
-    
-    mapped_experiment_type = experiment_type_mapping.get(experiment_type, experiment_type)
-    
-    logger.info(f"Running {experiment_type} experiment (mapped to {mapped_experiment_type})")
+    logger.info(f"Running {experiment_type} experiment")
     
     # DEBUGGING: Check pruning configuration before creating experiment
     pruning_analysis = unified_config.get('pruning_analysis', {})
@@ -406,14 +387,15 @@ def main():
     
     logger.info("=== END PRUNING DEBUG ===")
     
-    if mapped_experiment_type in ['standard_pruning', 'progressive_dropout', 'alignment_analysis']:
+    # Create experiment based on inferred type
+    if experiment_type in ['standard_pruning', 'progressive_dropout', 'alignment_analysis']:
         experiment = GeneralAlignmentExperiment(config)
-    elif mapped_experiment_type == 'layer_isolated_pruning':
+    elif experiment_type == 'layer_isolated_pruning':
         experiment = LayerIsolatedPruningExperiment(config)
-    elif mapped_experiment_type == 'cascading_layer_pruning':
+    elif experiment_type == 'cascading_layer_pruning':
         experiment = CascadingLayerPruningExperiment(config)
     else:
-        raise ValueError(f"Unknown experiment type: {mapped_experiment_type}")
+        raise ValueError(f"Unknown experiment type: {experiment_type}")
     
     # DEBUGGING: Log configuration state before running
     logger.info(f"Final config state:")
@@ -489,7 +471,7 @@ def main():
         f.write(f"Experiment: {experiment_name}\n")
         f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Configuration: {args.config}\n")
-        f.write(f"Experiment Type: {experiment_type}\n")
+        f.write(f"Experiment Type: {experiment_type} (inferred from config blocks)\n")
         f.write(f"Plot Generation: {getattr(config, 'generate_plots', True)}\n")
         f.write("=" * 50 + "\n\n")
         

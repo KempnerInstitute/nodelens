@@ -364,7 +364,7 @@ class BaseExperiment(CoreBaseExperiment):
                         scores = metric.compute(
                             inputs=layer_inputs,
                             weights=layer_weights,
-                            outputs=activations.get(f"{layer_name}_output")
+                            outputs=activations.get(f"{layer_name}_output") or activations.get(layer_name)
                         )
                     else:
                         scores = metric.compute(

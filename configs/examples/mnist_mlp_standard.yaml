@@ -3,7 +3,7 @@
 
 experiment_name: "mnist_mlp_standard_pruning"
 experiment_type: "standard_pruning"
-device: "cuda"
+device: "cpu"
 seed: 42
 
 # Dataset
@@ -16,11 +16,9 @@ dataset:
 # Model
 model:
   name: "mlp"
+  hidden_sizes: [512, 256, 128]
+  activation: "relu"
   output_dim: 10
-  mlp_config:
-    input_dim: 784
-    hidden_dims: [512, 256, 128]
-    activation: "relu"
 
 # Training
 training:
@@ -34,11 +32,15 @@ alignment:
   metrics:
     - "rayleigh_quotient"
 
-# Pruning
+# Pruning - updated to include alignment and multiple modes
 pruning:
-  algorithms: ["magnitude"]
-  scope: "global"
+  enabled: true
+  algorithms: ["magnitude", "alignment"]
+  alignment_metric: "rayleigh_quotient"
+  alignment_structured_pruning: true
+  scope: "layer"
   sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  selection_modes: ["low", "high", "random"]
   fine_tune_after_pruning: true
   fine_tune_epochs: 5
 
@@ -46,5 +48,6 @@ pruning:
 visualization:
   generate_plots: true
   plot_types:
+    - "pruning_results"
     - "weight_distribution"
     - "layer_importance" 

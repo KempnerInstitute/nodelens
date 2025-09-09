@@ -87,7 +87,10 @@ class BaseModelWrapper(BaseModel):
             if self.track_outputs and output is not None:
                 if isinstance(output, tuple):
                     output = output[0]
-                self._activation_cache[layer_name] = output.detach()
+                # Store under both legacy and explicit output keys for compatibility
+                out = output.detach()
+                self._activation_cache[layer_name] = out
+                self._activation_cache[f"{layer_name}_output"] = out
         
         return hook
     

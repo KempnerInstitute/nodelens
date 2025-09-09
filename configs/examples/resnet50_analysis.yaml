@@ -1,0 +1,34 @@
+experiment_name: "resnet50_alignment_analysis"
+seed: 42
+device: "cuda"
+pretrained: true
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+
+model:
+  name: "resnet50"
+  cnn_mode: "unfold"
+
+## Note: tracked_layers in a 'wrapper' block are ignored by the unified loader.
+## The framework will auto-track layers with weights. If you need specific layers,
+## set them via a top-level 'tracked_layers' list supported by ExperimentConfig.
+
+alignment:
+  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+analysis:
+  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.5]
+  selection_modes: ["low"]
+  alignment_metric: "rayleigh_quotient"
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 3
+
+

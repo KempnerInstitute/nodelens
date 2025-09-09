@@ -177,9 +177,16 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
         for layer_name, scores in layer_scores.items():
             # Handle scalar scores (0-d tensor)
             if scores.dim() == 0:
-                logger.warning(f"Scores for layer {layer_name} is a scalar, creating single-neuron mask")
-                for strategy in masks:
-                    masks[strategy][layer_name] = torch.ones(1, dtype=torch.bool)
+                logger.warning(f"Scores for layer {layer_name} is a scalar; using probabilistic dropout when rate > 0")
+                keep_mask_scalar = True
+                if dropout_rate > 0:
+                    # Drop the single neuron with probability equal to dropout_rate
+                    keep_mask_scalar = torch.rand(1).item() > dropout_rate
+                keep_mask_tensor = torch.tensor([keep_mask_scalar], dtype=torch.bool)
+                # low/high identical for single neuron; random follows same probabilistic rule
+                masks["low"][layer_name] = keep_mask_tensor.clone()
+                masks["high"][layer_name] = keep_mask_tensor.clone()
+                masks["random"][layer_name] = keep_mask_tensor.clone()
                 continue
             
             # Get number of neurons and ensure scores is 1D

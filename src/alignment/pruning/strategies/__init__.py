@@ -22,6 +22,8 @@ from .parallel import (
     TensorizedPruning,
     AsyncParallelPruning,
 )
+from .parallel_batch import ParallelBatchPruning
+
 from .alignment_based import (
     AlignmentPruning,
     HybridPruning,
@@ -49,6 +51,8 @@ __all__ = [
     'ParallelModePruning',
     'TensorizedPruning',
     'AsyncParallelPruning',
+    'ParallelBatchPruning',
+
     
     # Alignment-based
     'AlignmentPruning',

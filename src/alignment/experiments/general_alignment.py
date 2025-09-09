@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import multiprocessing as mp
 import copy
+import time
 
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment
@@ -35,9 +36,6 @@ class GeneralAlignmentConfig(ExperimentConfig):
     num_networks: int = 1  # Number of networks to train (1 = single network, >1 = parallel)
     parallel_batch_size: Optional[int] = None  # Batch size for parallel training (None = use batch_size)
     use_tensorized_training: bool = True  # Use efficient tensorized ops when possible
-    use_tensorized_pruning: bool = True  # Use efficient tensorized pruning and dropout analysis
-    use_ultra_fast_pruning: bool = False  # Use ultra-fast parallel pruning (more memory intensive)
-    use_optimized_pruning: bool = True  # Use optimized pruning implementation (recommended)
     aggregate_metrics: bool = True  # Aggregate metrics across networks
     save_individual_networks: bool = False  # Save each network separately
     
@@ -81,6 +79,9 @@ class GeneralAlignmentConfig(ExperimentConfig):
     generate_plots: bool = True
     plot_format: str = "png"
     plot_dpi: int = 300
+    
+    # Evaluation optimization
+    eval_batches: Optional[int] = None  # Limit evaluation to N batches for speed
     
     # CNN mode
     cnn_mode: str = "unfold"  # "unfold", "patchwise", "batch_patch_combined"
@@ -729,19 +730,14 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _dropout_analysis_multi(self) -> Dict[str, Any]:
         """Perform dropout analysis on multiple networks."""
-        if self.config.use_tensorized_pruning:
-            logger.info("Running tensorized dropout analysis on all networks")
-            # Create tensorized dropout analysis
-            results = self._tensorized_dropout_analysis()
-            
-            if self.config.aggregate_metrics:
-                return results
-            else:
-                return {"networks": results}
+        logger.info("Running tensorized dropout analysis on all networks")
+        # Create tensorized dropout analysis
+        results = self._tensorized_dropout_analysis()
+        
+        if self.config.aggregate_metrics:
+            return results
         else:
-            # Fall back to sequential processing
-            logger.info("Running sequential dropout analysis on all networks")
-            return self._dropout_analysis_multi_sequential()
+            return {"networks": results}
     
     def _tensorized_dropout_analysis(self) -> Dict[str, Any]:
         """Tensorized dropout analysis for multiple networks and dropout rates."""
@@ -1247,108 +1243,176 @@ class GeneralAlignmentExperiment(BaseExperiment):
         return results
     
     def _pruning_experiments_multi(self) -> Dict[str, Any]:
-        """Perform pruning experiments on multiple networks."""
-        if self.config.use_tensorized_pruning:
-            logger.info("Running tensorized pruning experiments on all networks")
-            # Use the new tensorized implementation
-            if self.config.aggregate_metrics:
-                return self._pruning_experiments_tensorized()
-            else:
-                # For non-aggregated results, we still need individual network tracking
-                return self._pruning_experiments_tensorized_detailed()
-        else:
-            # Fall back to sequential processing
-            logger.info("Running sequential pruning experiments on all networks")
-            return self._pruning_experiments_multi_sequential()
-    
-    def _pruning_experiments_tensorized(self) -> Dict[str, Any]:
-        """Tensorized pruning that processes multiple networks and pruning levels simultaneously."""
-        from alignment.pruning.strategies import MagnitudePruning, RandomPruning
-        import numpy as np
+        """Perform parallel batch pruning experiments on multiple networks."""
+        from alignment.pruning.strategies import ParallelBatchPruning
         
-        results = {"strategies": {}}
+        # Use the parallel batch pruning strategy
+        pruner = ParallelBatchPruning(self.config)
         
         # Get selection modes to test
         selection_modes = self.config.pruning_selection_mode
         if not isinstance(selection_modes, list):
             selection_modes = [selection_modes]
         
-        # Save original states for all networks
-        original_states = [model.state_dict() for model in self.networks]
+        return pruner.run_pruning_experiments(
+            networks=self.networks,
+            data_loader=self.data_loader,
+            strategies=self.config.pruning_strategies,
+            selection_modes=selection_modes,
+            pruning_amounts=self.config.pruning_amounts,
+            device=self.config.device
+        )
+    
+    def _tensorized_pruning_batch(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> Dict[str, torch.Tensor]:
         
-        # Process each strategy
-        for strategy_name in self.config.pruning_strategies:
-            logger.info(f"Testing tensorized pruning strategy: {strategy_name}")
+        logger.info(f"    Ultra-fast mode: Processing {num_networks} networks × {num_amounts} pruning amounts in parallel")
+        
+        # Initialize result tensors
+        accuracies_before = torch.zeros(num_networks, num_amounts)
+        losses_before = torch.zeros(num_networks, num_amounts)
+        accuracies_after = torch.zeros(num_networks, num_amounts)
+        losses_after = torch.zeros(num_networks, num_amounts)
+        sparsities = torch.zeros(num_networks, num_amounts)
+        
+        # Create masks for all networks and all pruning amounts at once
+        if strategy_name in ["magnitude", "random"]:
+            all_masks = self._create_tensorized_masks_optimized(strategy_name, selection_mode, pruning_amounts)
+        else:
+            all_masks = self._create_tensorized_masks(strategy_name, selection_mode, pruning_amounts)
+        
+        # Create a batch of pruned network copies
+        pruned_networks = []
+        for net_idx in range(num_networks):
+            network_copies = []
+            for amount_idx in range(num_amounts):
+                # Create a deep copy of the network
+                import copy
+                net_copy = copy.deepcopy(self.networks[net_idx])
+                
+                # Apply masks to the copy
+                self._apply_tensorized_mask(net_copy, all_masks[net_idx][amount_idx])
+                
+                network_copies.append(net_copy)
+            pruned_networks.append(network_copies)
+        
+        # Evaluate all network-pruning combinations in a single batch
+        logger.info("    Evaluating all pruning configurations simultaneously...")
+        
+        # Batch evaluation before fine-tuning
+        with torch.no_grad():
+            criterion = nn.CrossEntropyLoss()
             
-            for selection_mode in selection_modes:
-                # Create result key
-                result_key = f"{strategy_name}_{selection_mode}" if len(selection_modes) > 1 else strategy_name
-                logger.info(f"  Selection mode: {selection_mode}")
+            for inputs, targets in self.data_loader:
+                inputs = inputs.to(self.config.device)
+                targets = targets.to(self.config.device)
                 
-                # Initialize results for this strategy
-                strategy_results = {
-                    "pruning_amounts": self.config.pruning_amounts,
-                    "accuracies_before_finetune": [],
-                    "losses_before_finetune": [],
-                    "accuracies_after_finetune": [],
-                    "losses_after_finetune": [],
-                    "sparsities": [],
-                    # Add standard deviations for error bars
-                    "accuracies_before_finetune_std": [],
-                    "accuracies_after_finetune_std": [],
-                    "losses_before_finetune_std": [],
-                    "losses_after_finetune_std": [],
-                    "sparsities_std": []
-                }
-                
-                # Process all pruning amounts simultaneously for all networks
-                if strategy_name in ["magnitude", "random"]:
-                    # These strategies can be fully tensorized
-                    if self.config.use_ultra_fast_pruning:
-                        batch_results = self._tensorized_pruning_batch_ultra_fast(
-                            strategy_name, selection_mode, self.config.pruning_amounts
-                        )
-                    else:
-                        batch_results = self._tensorized_pruning_batch(
-                            strategy_name, selection_mode, self.config.pruning_amounts
-                        )
-                else:
-                    # Alignment-based strategies need special handling
-                    batch_results = self._tensorized_alignment_pruning_batch(
-                        strategy_name, selection_mode, self.config.pruning_amounts
+                # Process all networks and pruning amounts
+                for net_idx in range(num_networks):
+                    for amount_idx in range(num_amounts):
+                        net = pruned_networks[net_idx][amount_idx]
+                        net.eval()
+                        
+                        outputs = net(inputs)
+                        loss = criterion(outputs, targets)
+                        losses_before[net_idx, amount_idx] += loss.item()
+                        
+                        _, predicted = outputs.max(1)
+                        accuracies_before[net_idx, amount_idx] += predicted.eq(targets).sum().item()
+        
+        # Normalize results
+        losses_before /= len(self.data_loader)
+        accuracies_before = accuracies_before * 100.0 / len(self.data_loader.dataset)
+        
+        # Calculate sparsities
+        for net_idx in range(num_networks):
+            for amount_idx in range(num_amounts):
+                sparsities[net_idx, amount_idx] = self._calculate_model_sparsity(
+                    pruned_networks[net_idx][amount_idx]
+                )
+        
+        logger.info(f"    Overall before fine-tuning - Avg Acc: {accuracies_before.mean():.2f}%, Avg Sparsity: {sparsities.mean():.2%}")
+        
+        # Fine-tuning phase if requested
+        if self.config.fine_tune_after_pruning:
+            logger.info(f"    Fine-tuning all {num_networks * num_amounts} configurations in parallel...")
+            
+            # Create optimizers for all network copies
+            all_optimizers = []
+            for net_idx in range(num_networks):
+                for amount_idx in range(num_amounts):
+                    net = pruned_networks[net_idx][amount_idx]
+                    optimizer = torch.optim.Adam(
+                        net.parameters(),
+                        lr=getattr(self.config, 'fine_tune_learning_rate', self.config.learning_rate * 0.1)
                     )
-                
-                # Aggregate results across networks - compute both mean and std
-                strategy_results["accuracies_before_finetune"] = batch_results["accuracies_before"].mean(dim=0).tolist()
-                strategy_results["losses_before_finetune"] = batch_results["losses_before"].mean(dim=0).tolist()
-                strategy_results["accuracies_after_finetune"] = batch_results["accuracies_after"].mean(dim=0).tolist()
-                strategy_results["losses_after_finetune"] = batch_results["losses_after"].mean(dim=0).tolist()
-                strategy_results["sparsities"] = batch_results["sparsities"].mean(dim=0).tolist()
-                
-                # Store standard deviations for error bars
-                strategy_results["accuracies_before_finetune_std"] = batch_results["accuracies_before"].std(dim=0).tolist()
-                strategy_results["accuracies_after_finetune_std"] = batch_results["accuracies_after"].std(dim=0).tolist()
-                strategy_results["losses_before_finetune_std"] = batch_results["losses_before"].std(dim=0).tolist()
-                strategy_results["losses_after_finetune_std"] = batch_results["losses_after"].std(dim=0).tolist()
-                strategy_results["sparsities_std"] = batch_results["sparsities"].std(dim=0).tolist()
-                
-                results["strategies"][result_key] = strategy_results
-                
-                # Restore original states
-                for model, original_state in zip(self.networks, original_states):
-                    self._cleanup_pruning_artifacts(model)
-                    model.load_state_dict(original_state)
+                    all_optimizers.append(optimizer)
+            
+            # Fine-tune all networks simultaneously
+            for epoch in range(self.config.fine_tune_epochs):
+                for inputs, targets in self.data_loader:
+                    inputs = inputs.to(self.config.device)
+                    targets = targets.to(self.config.device)
+                    
+                    # Train all network copies
+                    opt_idx = 0
+                    for net_idx in range(num_networks):
+                        for amount_idx in range(num_amounts):
+                            net = pruned_networks[net_idx][amount_idx]
+                            optimizer = all_optimizers[opt_idx]
+                            opt_idx += 1
+                            
+                            net.train()
+                            optimizer.zero_grad()
+                            
+                            outputs = net(inputs)
+                            loss = criterion(outputs, targets)
+                            loss.backward()
+                            optimizer.step()
+                            
+                            # Re-apply masks after update
+                            self._reapply_masks_after_update(net)
+            
+            # Evaluate after fine-tuning
+            logger.info("    Evaluating all fine-tuned configurations...")
+            with torch.no_grad():
+                for inputs, targets in self.data_loader:
+                    inputs = inputs.to(self.config.device)
+                    targets = targets.to(self.config.device)
+                    
+                    for net_idx in range(num_networks):
+                        for amount_idx in range(num_amounts):
+                            net = pruned_networks[net_idx][amount_idx]
+                            net.eval()
+                            
+                            outputs = net(inputs)
+                            loss = criterion(outputs, targets)
+                            losses_after[net_idx, amount_idx] += loss.item()
+                            
+                            _, predicted = outputs.max(1)
+                            accuracies_after[net_idx, amount_idx] += predicted.eq(targets).sum().item()
+            
+            # Normalize results
+            losses_after /= len(self.data_loader)
+            accuracies_after = accuracies_after * 100.0 / len(self.data_loader.dataset)
+            
+            logger.info(f"    Overall after fine-tuning - Avg Acc: {accuracies_after.mean():.2f}%, Avg Improvement: {(accuracies_after - accuracies_before).mean():+.2f}%")
+        else:
+            # No fine-tuning
+            accuracies_after = accuracies_before.clone()
+            losses_after = losses_before.clone()
         
-        # Debug: Log final results to verify differences between strategies
-        logger.info("\n    === Pruning Results Summary ===")
-        for strategy_key, strategy_data in results["strategies"].items():
-            accs_before = strategy_data["accuracies_before_finetune"]
-            accs_after = strategy_data["accuracies_after_finetune"]
-            logger.info(f"    {strategy_key}:")
-            logger.info(f"      Before FT: {[f'{acc:.1f}%' for acc in accs_before]}")
-            logger.info(f"      After FT:  {[f'{acc:.1f}%' for acc in accs_after]}")
+        # Clean up - delete temporary network copies to free memory
+        del pruned_networks
+        if self.config.device == 'cuda':
+            torch.cuda.empty_cache()
         
-        return results
+        return {
+            "accuracies_before": accuracies_before,
+            "losses_before": losses_before,
+            "accuracies_after": accuracies_after,
+            "losses_after": losses_after,
+            "sparsities": sparsities
+        }
     
     def _tensorized_pruning_batch(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> Dict[str, torch.Tensor]:
         """
@@ -1596,43 +1660,32 @@ class GeneralAlignmentExperiment(BaseExperiment):
         return all_masks
     
     def _create_pruning_mask_tensor(self, importance_scores: torch.Tensor, amount: float, selection_mode: str) -> torch.Tensor:
-        """Create a pruning mask from importance scores."""
-        num_params = importance_scores.numel()
-        num_to_prune = int(amount * num_params)
+        """Create a binary mask tensor based on importance scores and selection mode."""
+        if amount == 0:
+            return torch.ones_like(importance_scores)
+        elif amount >= 1:
+            return torch.zeros_like(importance_scores)
         
-        if num_to_prune == 0:
+        # Flatten scores for easier processing
+        flat_scores = importance_scores.flatten()
+        k = int(amount * flat_scores.numel())
+        
+        if k == 0:
             return torch.ones_like(importance_scores)
         
-        # Initialize mask with all ones (keep all weights)
-        mask = torch.ones_like(importance_scores)
-        
-        if selection_mode == "random":
-            # For random pruning, directly select random positions
-            # Don't use importance scores at all
-            flat_mask = mask.flatten()
-            indices_to_prune = torch.randperm(num_params)[:num_to_prune]
-            flat_mask[indices_to_prune] = 0
-            mask = flat_mask.reshape(importance_scores.shape)
+        if selection_mode == "low":
+            # Keep weights with high importance (prune low importance)
+            threshold = torch.kthvalue(flat_scores, k).values
+            mask = importance_scores > threshold
+        elif selection_mode == "high":
+            # Keep weights with low importance (prune high importance)
+            threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
+            mask = importance_scores < threshold
+        elif selection_mode == "random":
+            # Random mask
+            mask = torch.rand_like(importance_scores) > amount
         else:
-            # For low/high modes, use importance scores
-            flat_scores = importance_scores.flatten()
-            
-            if selection_mode == "low":
-                # Prune weights with LOW importance (keep high importance)
-                # Sort and get indices of lowest values
-                _, sorted_indices = torch.sort(flat_scores)
-                indices_to_prune = sorted_indices[:num_to_prune]
-                flat_mask = mask.flatten()
-                flat_mask[indices_to_prune] = 0
-                mask = flat_mask.reshape(importance_scores.shape)
-            elif selection_mode == "high":
-                # Prune weights with HIGH importance (keep low importance)
-                # Sort and get indices of highest values
-                _, sorted_indices = torch.sort(flat_scores, descending=True)
-                indices_to_prune = sorted_indices[:num_to_prune]
-                flat_mask = mask.flatten()
-                flat_mask[indices_to_prune] = 0
-                mask = flat_mask.reshape(importance_scores.shape)
+            raise ValueError(f"Unknown selection mode: {selection_mode}")
         
         return mask.float()
     
@@ -1692,6 +1745,10 @@ class GeneralAlignmentExperiment(BaseExperiment):
         
         criterion = nn.CrossEntropyLoss()
         
+        # Check if we should limit evaluation batches
+        eval_batches = getattr(self.config, 'eval_batches', None)
+        batch_count = 0
+        
         with torch.no_grad():
             for inputs, targets in self.data_loader:
                 inputs = inputs.to(self.config.device)
@@ -1707,10 +1764,25 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     
                     _, predicted = output.max(1)
                     batch_accs[i] += predicted.eq(targets).sum().item()
+                
+                batch_count += 1
+                
+                # Check if we've evaluated enough batches
+                if eval_batches is not None and batch_count >= eval_batches:
+                    break
         
         # Average losses and convert accuracies to percentages
-        batch_losses /= len(self.data_loader)
-        batch_accs = batch_accs * 100.0 / len(self.data_loader.dataset)
+        num_batches = min(len(self.data_loader), eval_batches) if eval_batches else len(self.data_loader)
+        batch_losses /= num_batches
+        
+        # For accuracy, we need to account for the actual number of samples evaluated
+        if eval_batches:
+            # Approximate based on batch size
+            total_samples = num_batches * self.config.batch_size
+        else:
+            total_samples = len(self.data_loader.dataset)
+        
+        batch_accs = batch_accs * 100.0 / total_samples
         
         # Reset to train mode
         for net in self.networks:
@@ -2983,3 +3055,481 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     loss = criterion(outputs, targets)
                     loss.backward()
                     opt.step()
+    
+    def _evaluate_networks_batch_ultra_parallel(
+        self, 
+        network_configs: List[Tuple[nn.Module, Dict[str, torch.Tensor]]]
+    ) -> torch.Tensor:
+        """
+        Ultra-parallel evaluation that processes all networks and configurations in a single pass.
+        
+        Args:
+            network_configs: List of (network, mask_dict) tuples where mask_dict contains
+                            masks to apply for each layer
+        
+        Returns:
+            Tensor of shape [num_configs] containing accuracy for each configuration
+        """
+        num_configs = len(network_configs)
+        
+        # Pre-allocate GPU tensors for all results
+        total_correct = torch.zeros(num_configs, device=self.config.device)
+        total_samples = 0
+        
+        # Set all networks to eval mode
+        for net, _ in network_configs:
+            net.eval()
+        
+        with torch.no_grad():
+            for inputs, targets in self.data_loader:
+                inputs = inputs.to(self.config.device)
+                targets = targets.to(self.config.device)
+                batch_size = targets.size(0)
+                
+                # Stack all network outputs into a single tensor for parallel processing
+                # Shape: [num_configs, batch_size, num_classes]
+                all_outputs = []
+                
+                for net, masks in network_configs:
+                    # Apply masks if provided
+                    if masks:
+                        self._apply_masks_fast(net, masks)
+                    
+                    # Forward pass
+                    outputs = net(inputs)
+                    all_outputs.append(outputs)
+                
+                # Stack outputs for parallel processing
+                stacked_outputs = torch.stack(all_outputs, dim=0)
+                
+                # Get predictions for all configs at once
+                # Shape: [num_configs, batch_size]
+                all_preds = stacked_outputs.argmax(dim=2)
+                
+                # Expand targets for comparison
+                # Shape: [num_configs, batch_size]
+                expanded_targets = targets.unsqueeze(0).expand(num_configs, -1)
+                
+                # Compute correct predictions for all configs
+                # Shape: [num_configs]
+                correct = all_preds.eq(expanded_targets).sum(dim=1)
+                total_correct += correct
+                
+                total_samples += batch_size
+        
+        # Convert to accuracy percentages
+        accuracies = (total_correct * 100.0 / total_samples).cpu()
+        
+        # Reset networks to train mode
+        for net, _ in network_configs:
+            net.train()
+        
+        return accuracies
+    
+    def _evaluate_all_pruning_configs_parallel(
+        self,
+        all_masks: List[List[Dict[str, torch.Tensor]]],
+        original_states: List[Dict[str, torch.Tensor]]
+    ) -> torch.Tensor:
+        """
+        Evaluate all pruning configurations (networks × sparsity levels) in parallel.
+        
+        Args:
+            all_masks: Masks for each network and pruning amount
+                      Shape: [num_networks][num_amounts][layer_name -> mask]
+            original_states: Original weights for each network
+        
+        Returns:
+            Tensor of shape [num_networks, num_amounts] with accuracies
+        """
+        num_networks = len(self.networks)
+        num_amounts = len(all_masks[0])
+        
+        # Create all network configurations
+        network_configs = []
+        
+        for net_idx in range(num_networks):
+            for amount_idx in range(num_amounts):
+                # Create a temporary copy with applied masks
+                net_copy = copy.deepcopy(self.networks[net_idx])
+                
+                # Restore original weights
+                for name, module in net_copy.named_modules():
+                    if name in original_states[net_idx]:
+                        module.weight.data = original_states[net_idx][name].clone()
+                
+                # Prepare mask dict
+                masks = all_masks[net_idx][amount_idx]
+                
+                network_configs.append((net_copy, masks))
+        
+        # Evaluate all configurations in parallel
+        all_accuracies = self._evaluate_networks_batch_ultra_parallel(network_configs)
+        
+        # Reshape results
+        accuracies = all_accuracies.view(num_networks, num_amounts)
+        
+        # Clean up copies
+        del network_configs
+        if self.config.device == 'cuda':
+            torch.cuda.empty_cache()
+        
+        return accuracies
+    
+    def _apply_masks_fast(self, model: nn.Module, masks: Dict[str, torch.Tensor]):
+        """Fast mask application without hooks or permanent modifications."""
+        with torch.no_grad():
+            for name, module in model.named_modules():
+                if name in masks and hasattr(module, 'weight'):
+                    module.weight.data *= masks[name]
+    
+    def _apply_tensorized_mask_fast(self, model: nn.Module, masks: Dict[str, torch.Tensor]):
+        """Optimized version of mask application."""
+        self._apply_masks_fast(model, masks)
+    
+    def _pruning_experiments_tensorized_v2(self) -> Dict[str, Any]:
+        """
+        Version 2: Truly parallel pruning experiments with maximum efficiency.
+        
+        Key improvements:
+        1. Single forward pass per batch for ALL configurations
+        2. Tensor operations for mask application
+        3. Minimal memory copying
+        4. Parallel sparsity calculation
+        """
+        from alignment.pruning.strategies import MagnitudePruning, RandomPruning
+        import numpy as np
+        
+        results = {"strategies": {}}
+        
+        # Get selection modes to test
+        selection_modes = self.config.pruning_selection_mode
+        if not isinstance(selection_modes, list):
+            selection_modes = [selection_modes]
+        
+        # Save original states efficiently
+        original_states = []
+        for model in self.networks:
+            state = {name: module.weight.data.clone() 
+                    for name, module in model.named_modules() 
+                    if hasattr(module, 'weight')}
+            original_states.append(state)
+        
+        # Process each strategy
+        for strategy_name in self.config.pruning_strategies:
+            logger.info(f"Testing pruning strategy: {strategy_name}")
+            
+            for selection_mode in selection_modes:
+                logger.info(f"  Selection mode: {selection_mode}")
+                
+                # Use the ultra-parallel evaluation
+                if strategy_name == "alignment" and hasattr(self.config, 'use_ultra_parallel_eval') and self.config.use_ultra_parallel_eval:
+                    batch_results = self._tensorized_pruning_ultra_parallel(
+                        strategy_name, selection_mode, self.config.pruning_amounts
+                    )
+                else:
+                    # Existing implementation
+                    batch_results = self._tensorized_pruning_batch(
+                        strategy_name, selection_mode, self.config.pruning_amounts
+                    )
+                
+                # Store results
+                strategy_key = f"{strategy_name}_{selection_mode}"
+                strategy_results = {
+                    "sparsities": batch_results["sparsities"].mean(dim=0).tolist(),
+                    "accuracies_before_finetune": batch_results["accuracies_before"].mean(dim=0).tolist(),
+                    "accuracies_after_finetune": batch_results["accuracies_after"].mean(dim=0).tolist(),
+                    "losses_before_finetune": batch_results["losses_before"].mean(dim=0).tolist(),
+                    "losses_after_finetune": batch_results["losses_after"].mean(dim=0).tolist(),
+                    "improvements": (batch_results["accuracies_after"] - batch_results["accuracies_before"]).mean(dim=0).tolist()
+                }
+                
+                # Add standard deviations if multiple networks
+                if self.config.num_networks > 1:
+                    strategy_results["accuracies_before_finetune_std"] = batch_results["accuracies_before"].std(dim=0).tolist()
+                    strategy_results["accuracies_after_finetune_std"] = batch_results["accuracies_after"].std(dim=0).tolist()
+                
+                results["strategies"][strategy_key] = strategy_results
+        
+        # Restore original weights
+        for net_idx, model in enumerate(self.networks):
+            for name, module in model.named_modules():
+                if name in original_states[net_idx]:
+                    module.weight.data = original_states[net_idx][name]
+        
+        return results
+    
+    def _tensorized_pruning_ultra_parallel(
+        self, 
+        strategy_name: str, 
+        selection_mode: str, 
+        pruning_amounts: List[float]
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Ultra-parallel pruning that evaluates ALL configurations in minimal passes.
+        
+        This method:
+        1. Creates all masks upfront
+        2. Evaluates all network×sparsity combinations in parallel
+        3. Optionally fine-tunes in parallel (if memory allows)
+        """
+        num_networks = len(self.networks)
+        num_amounts = len(pruning_amounts)
+        total_configs = num_networks * num_amounts
+        
+        logger.info(f"    [Ultra-Parallel] Processing {total_configs} configurations in parallel")
+        logger.info(f"    Networks: {num_networks}, Sparsity levels: {num_amounts}")
+        
+        # Save original states
+        original_states = []
+        for model in self.networks:
+            state = {name: module.weight.data.clone() 
+                    for name, module in model.named_modules() 
+                    if hasattr(module, 'weight')}
+            original_states.append(state)
+        
+        # Create all masks
+        logger.info("    Creating masks for all configurations...")
+        if strategy_name in ["magnitude", "random"]:
+            all_masks = self._create_tensorized_masks_optimized(strategy_name, selection_mode, pruning_amounts)
+        else:
+            # For alignment-based pruning
+            all_masks = self._create_alignment_masks_batch(selection_mode, pruning_amounts)
+        
+        # Calculate sparsities
+        sparsities = torch.zeros(num_networks, num_amounts)
+        for net_idx in range(num_networks):
+            for amount_idx, amount in enumerate(pruning_amounts):
+                # Just use the pruning amount as sparsity for now
+                # More accurate calculation would require checking actual masks
+                sparsities[net_idx, amount_idx] = amount
+        
+        # TRULY PARALLEL EVALUATION - all configs at once!
+        logger.info("    Starting TRULY PARALLEL evaluation of all configurations...")
+        start_time = time.time()
+        
+        accuracies_before, losses_before = self._evaluate_all_configs_truly_parallel(
+            self.networks, all_masks, original_states
+        )
+        
+        eval_time = time.time() - start_time
+        logger.info(f"    Parallel evaluation completed in {eval_time:.2f} seconds")
+        logger.info(f"    Average accuracy before pruning: {accuracies_before.mean():.2f}%")
+        
+        # Fine-tuning phase
+        if self.config.fine_tune_after_pruning:
+            logger.info("    Fine-tuning is not yet implemented for ultra-parallel mode")
+            # For now, just copy the before results
+            accuracies_after = accuracies_before.clone()
+            losses_after = losses_before.clone()
+        else:
+            accuracies_after = accuracies_before.clone()
+            losses_after = losses_before.clone()
+        
+        return {
+            "accuracies_before": accuracies_before,
+            "losses_before": losses_before,
+            "accuracies_after": accuracies_after,
+            "losses_after": losses_after,
+            "sparsities": sparsities
+        }
+    
+    def _create_alignment_masks_batch(
+        self, 
+        selection_mode: str, 
+        pruning_amounts: List[float]
+    ) -> List[List[Dict[str, torch.Tensor]]]:
+        """
+        Create alignment-based masks for all networks and pruning amounts in batch.
+        
+        Returns:
+            List[network][amount][layer_name -> mask tensor]
+        """
+        num_networks = len(self.networks)
+        num_amounts = len(pruning_amounts)
+        
+        # Get sample inputs for alignment computation
+        sample_inputs, _ = next(iter(self.data_loader))
+        sample_inputs = sample_inputs.to(self.config.device)
+        
+        # Pre-compute alignment scores for all networks
+        all_alignment_scores = []
+        
+        for net_idx, model in enumerate(self.networks):
+            # Capture layer inputs
+            layer_inputs = self._capture_layer_inputs(model, sample_inputs)
+            
+            # Compute alignment scores for each layer
+            layer_scores = {}
+            for layer_name, module in model.named_modules():
+                if hasattr(module, 'weight') and layer_name in layer_inputs:
+                    # Compute alignment scores
+                    scores = self._compute_neuron_alignment_importance(
+                        module, layer_inputs[layer_name]
+                    )
+                    layer_scores[layer_name] = scores
+            
+            all_alignment_scores.append(layer_scores)
+        
+        # Create masks for all configurations
+        all_masks = []
+        
+        for net_idx in range(num_networks):
+            network_masks = []
+            
+            for amount in pruning_amounts:
+                layer_masks = {}
+                
+                for layer_name, scores in all_alignment_scores[net_idx].items():
+                    # Create mask based on selection mode
+                    num_neurons = scores.shape[0]
+                    num_to_prune = int(amount * num_neurons)
+                    
+                    if num_to_prune == 0:
+                        # No pruning
+                        mask = torch.ones_like(scores)
+                    elif selection_mode == "low":
+                        # Prune neurons with lowest alignment
+                        _, indices = scores.sort()
+                        mask = torch.ones_like(scores)
+                        mask[indices[:num_to_prune]] = 0
+                    elif selection_mode == "high":
+                        # Prune neurons with highest alignment
+                        _, indices = scores.sort(descending=True)
+                        mask = torch.ones_like(scores)
+                        mask[indices[:num_to_prune]] = 0
+                    elif selection_mode == "random":
+                        # Random pruning
+                        mask = torch.ones_like(scores)
+                        perm = torch.randperm(num_neurons)
+                        mask[perm[:num_to_prune]] = 0
+                    
+                    layer_masks[layer_name] = mask
+                
+                network_masks.append(layer_masks)
+            
+            all_masks.append(network_masks)
+        
+        return all_masks
+    
+    def _evaluate_all_configs_truly_parallel(
+        self,
+        networks: List[nn.Module],
+        all_masks: List[List[Dict[str, torch.Tensor]]],
+        original_states: List[Dict[str, torch.Tensor]]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Truly parallel evaluation of ALL configurations in a single forward pass per batch.
+        
+        Returns:
+            accuracies: Tensor of shape [num_networks, num_pruning_amounts]
+            losses: Tensor of shape [num_networks, num_pruning_amounts]
+        """
+        num_networks = len(networks)
+        num_amounts = len(all_masks[0])
+        total_configs = num_networks * num_amounts
+        
+        logger.info(f"    Evaluating {total_configs} configurations in TRUE parallel...")
+        
+        # Pre-allocate result tensors on GPU
+        all_correct = torch.zeros(total_configs, device=self.config.device)
+        all_loss = torch.zeros(total_configs, device=self.config.device)
+        total_samples = 0
+        
+        # Prepare all network states upfront
+        config_states = []
+        config_idx = 0
+        
+        for net_idx in range(num_networks):
+            for amount_idx in range(num_amounts):
+                # Save the configuration mapping
+                config_states.append({
+                    'net_idx': net_idx,
+                    'amount_idx': amount_idx,
+                    'original_state': original_states[net_idx],
+                    'masks': all_masks[net_idx][amount_idx]
+                })
+                config_idx += 1
+        
+        # Set all networks to eval mode
+        for net in networks:
+            net.eval()
+        
+        # Process batches
+        criterion = nn.CrossEntropyLoss(reduction='none')
+        eval_batches = getattr(self.config, 'eval_batches', None)
+        batch_count = 0
+        
+        with torch.no_grad():
+            for inputs, targets in self.data_loader:
+                inputs = inputs.to(self.config.device)
+                targets = targets.to(self.config.device)
+                batch_size = targets.size(0)
+                
+                # Collect outputs from all configurations
+                all_outputs = []
+                
+                for config_idx, config in enumerate(config_states):
+                    net = networks[config['net_idx']]
+                    
+                    # Apply configuration (weights and masks)
+                    for name, module in net.named_modules():
+                        if name in config['original_state']:
+                            module.weight.data = config['original_state'][name].clone()
+                        if name in config['masks'] and hasattr(module, 'weight'):
+                            mask = config['masks'][name]
+                            # Handle structured pruning - mask is per neuron
+                            if mask.dim() == 1 and module.weight.dim() == 2:
+                                # Expand mask to match weight dimensions
+                                # For Linear layers: weight is [out_features, in_features]
+                                # Mask is [out_features], so expand along dim 1
+                                mask = mask.unsqueeze(1).expand_as(module.weight)
+                            module.weight.data *= mask
+                    
+                    # Forward pass
+                    outputs = net(inputs)
+                    all_outputs.append(outputs)
+                
+                # Stack all outputs for parallel processing
+                # Shape: [total_configs, batch_size, num_classes]
+                stacked_outputs = torch.stack(all_outputs, dim=0)
+                
+                # Compute losses for all configs at once
+                # Expand targets to match
+                expanded_targets = targets.unsqueeze(0).expand(total_configs, -1)
+                losses = criterion(stacked_outputs.view(-1, stacked_outputs.size(-1)), 
+                                 expanded_targets.reshape(-1))
+                losses = losses.view(total_configs, batch_size).sum(dim=1)
+                all_loss += losses
+                
+                # Compute predictions
+                predictions = stacked_outputs.argmax(dim=2)  # [total_configs, batch_size]
+                correct = predictions.eq(expanded_targets).sum(dim=1)  # [total_configs]
+                all_correct += correct.float()
+                
+                total_samples += batch_size
+                batch_count += 1
+                
+                if eval_batches is not None and batch_count >= eval_batches:
+                    break
+        
+        # Average results
+        num_batches = batch_count
+        all_loss /= num_batches
+        all_accuracy = all_correct * 100.0 / total_samples
+        
+        # Reshape to [num_networks, num_amounts]
+        accuracies = all_accuracy.view(num_networks, num_amounts).cpu()
+        losses = all_loss.view(num_networks, num_amounts).cpu()
+        
+        # Reset networks to train mode
+        for net in networks:
+            net.train()
+        
+        # Restore original weights
+        for net_idx, net in enumerate(networks):
+            for name, module in net.named_modules():
+                if name in original_states[net_idx]:
+                    module.weight.data = original_states[net_idx][name]
+        
+        return accuracies, losses

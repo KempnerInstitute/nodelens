@@ -17,6 +17,7 @@ from .architectures.standard_models import (
     SimpleConvNet,
     create_model,
 )
+from . import hub  # registers torchvision/timm/huggingface model loaders
 
 # Register standard models
 from ..core.registry import register_model
@@ -36,4 +37,5 @@ __all__ = [
     'CNN2P2',
     'SimpleConvNet',
     'create_model',
+    'hub',
 ] 

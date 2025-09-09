@@ -7,9 +7,11 @@ from ..core.registry import METRIC_REGISTRY
 # Import all metric modules to register them
 from . import rayleigh
 from . import information
+from .information import pairwise_gaussian  # Ensure registration side-effects
 from . import similarity
 from . import spectral
 from . import task_specific
+from .information import gaussian_pid  # Register gaussian PID synergy
 
 
 def get_metric(name: str):

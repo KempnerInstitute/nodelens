@@ -25,9 +25,6 @@ parallel_batch_size: null  # Default: null
 
 # Use efficient tensorized operations when possible
 use_tensorized_training: true  # Default: true
-use_tensorized_pruning: true   # Default: true
-use_ultra_fast_pruning: false  # Default: false (more memory intensive)
-use_optimized_pruning: true    # Default: true (recommended)
 
 # Aggregate metrics across networks
 aggregate_metrics: true  # Default: true
@@ -215,7 +212,7 @@ pruning:
   scope: "layer"  # Default: "layer"
   
   # Fine-tuning after pruning
-  fine_tune: true       # Whether to fine-tune after pruning
+  fine_tune: false       # Whether to fine-tune after pruning
   fine_tune_epochs: 10  # Number of fine-tuning epochs
   
   # Alignment-based pruning options

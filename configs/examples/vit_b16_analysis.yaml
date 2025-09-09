@@ -1,0 +1,41 @@
+experiment:
+  name: "vit_b16_alignment_analysis"
+  seed: 42
+  device: "cuda"
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+
+model:
+  name: "timm_model"
+  model_name: "vit_base_patch16_224"
+  pretrained: true
+
+wrapper:
+  name: "transformer_wrapper"
+  tracked_layers:
+    - "blocks.0.attn"
+    - "blocks.0.mlp"
+    - "blocks.6.attn"
+    - "blocks.6.mlp"
+    - "blocks.11.attn"
+    - "blocks.11.mlp"
+
+alignment:
+  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+analysis:
+  metrics: ["rayleigh_quotient", "mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.5]
+  selection_modes: ["low"]
+  alignment_metric: "rayleigh_quotient"
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 3
+
+

@@ -36,6 +36,7 @@ class RayleighQuotient(BaseMetric):
         relative: bool = True,
         min_samples: int = 2,
         scale_by_norm: bool = False,
+        class_conditioned_targets: Optional[torch.Tensor] = None,
         **config: Any
     ):
         """
@@ -51,6 +52,8 @@ class RayleighQuotient(BaseMetric):
         self.relative = relative
         self.min_samples = min_samples
         self.scale_by_norm = scale_by_norm
+        # Optional: class-conditioned covariance support (targets provided at compute time preferred)
+        self._cc_targets = class_conditioned_targets
     
     @property
     def requires_inputs(self) -> bool:
@@ -69,6 +72,7 @@ class RayleighQuotient(BaseMetric):
         inputs: Optional[torch.Tensor] = None,
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
+        targets: Optional[torch.Tensor] = None,
         **kwargs: Any
     ) -> torch.Tensor:
         """
@@ -126,9 +130,34 @@ class RayleighQuotient(BaseMetric):
             inputs = inputs.cpu()
             weights = weights.cpu()
         
-        # Compute covariance matrix
-        inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
-        cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
+        # Optionally compute class-conditioned covariance and average
+        use_class_cond = targets is not None or self._cc_targets is not None
+        if use_class_cond:
+            tgt = targets if targets is not None else self._cc_targets
+            if tgt.ndim > 1:
+                tgt = tgt.squeeze()
+            classes = torch.unique(tgt)
+            cov = torch.zeros(input_features, input_features, device=inputs.device, dtype=inputs.dtype)
+            total_weight = 0.0
+            for c in classes:
+                mask = (tgt == c)
+                if mask.sum() < self.min_samples:
+                    continue
+                Xc = inputs[mask]
+                Xc_centered = Xc - Xc.mean(dim=0, keepdim=True)
+                cov_c = (Xc_centered.T @ Xc_centered) / max(1, (Xc.shape[0] - 1))
+                weight_c = float(mask.sum())
+                cov += cov_c * weight_c
+                total_weight += weight_c
+            if total_weight > 0:
+                cov = cov / total_weight
+            else:
+                inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
+                cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
+        else:
+            # Compute covariance matrix
+            inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
+            cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
         
         # Scale covariance by norm if requested
         if self.scale_by_norm:
