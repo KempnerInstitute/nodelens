@@ -1,295 +1,301 @@
 Pruning Guide
 =============
 
-The alignment framework provides comprehensive pruning capabilities for neural networks,
-including magnitude-based, gradient-based, random, and parallel pruning strategies.
+This guide covers the pruning capabilities in the alignment framework, including different strategies and experiment types.
 
-Basic Usage
------------
+Overview
+--------
 
-Simple pruning example:
+The framework provides comprehensive pruning capabilities:
 
-.. code-block:: python
+- **Multiple Pruning Strategies**: Magnitude, gradient, random, and alignment-based
+- **Structured and Unstructured Pruning**: Support for both approaches
+- **Various Experiment Types**: Global, layer-wise, cascading, and eigenvector-based
 
-    from alignment.pruning import get_pruning_strategy, PruningConfig
-    
-    # Basic magnitude pruning
-    strategy = get_pruning_strategy('magnitude')
-    mask = strategy.prune(model.fc1, amount=0.5)
-    
-    # With configuration
-    config = PruningConfig(amount=0.7, structured=True)
-    strategy = get_pruning_strategy('magnitude', config=config)
+Pruning Strategies
+------------------
 
-Pruning Modes
--------------
+The framework includes several pruning strategies in ``alignment.pruning.strategies``:
 
-The framework now supports different pruning modes:
+Magnitude-based Pruning
+^^^^^^^^^^^^^^^^^^^^^^^
 
-- **low**: Prune weights with the lowest importance scores (default)
-- **high**: Prune weights with the highest importance scores
-- **random**: Prune weights randomly
+Prunes weights or neurons based on their magnitude:
 
 .. code-block:: python
 
-    from alignment.pruning import PruningConfig
     from alignment.pruning.strategies import MagnitudePruning
     
-    # Prune low-magnitude weights (default)
-    config_low = PruningConfig(amount=0.5, pruning_mode='low')
-    strategy_low = MagnitudePruning(config_low)
-    
-    # Prune high-magnitude weights
-    config_high = PruningConfig(amount=0.5, pruning_mode='high')
-    strategy_high = MagnitudePruning(config_high)
+    strategy = MagnitudePruning()
+    masks = strategy.compute_masks(model, pruning_ratio=0.5)
 
-Available Strategies
---------------------
+Gradient-based Pruning
+^^^^^^^^^^^^^^^^^^^^^^
 
-Magnitude-based Strategies
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-- **MagnitudePruning**: Basic magnitude-based pruning
-- **IterativeMagnitudePruning**: Gradual pruning with fine-tuning
-- **GlobalMagnitudePruning**: Global pruning across all layers
+Uses gradient information to determine importance:
 
 .. code-block:: python
 
-    # Iterative pruning with fine-tuning
-    from alignment.pruning.strategies import IterativeMagnitudePruning
+    from alignment.pruning.strategies import GradientPruning
     
-    config = PruningConfig(
-        amount=0.9,
-        iterations=10,
-        fine_tune_epochs=5
-    )
-    strategy = IterativeMagnitudePruning(config)
-    results = strategy.iterative_prune(model, dataloader, optimizer, criterion)
+    strategy = GradientPruning()
+    masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
 
-Gradient-based Strategies
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Random Pruning
+^^^^^^^^^^^^^^
 
-- **GradientPruning**: Prune based on gradient magnitudes
-- **FisherPruning**: Use Fisher information for importance
-- **MomentumPruning**: Consider gradient momentum
+Baseline strategy that randomly prunes connections:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import FisherPruning
+    from alignment.pruning.strategies import RandomPruning
     
-    strategy = FisherPruning()
-    # Requires inputs to compute gradients
-    mask = strategy.prune(model.fc1, inputs=sample_batch)
+    strategy = RandomPruning(seed=42)
+    masks = strategy.compute_masks(model, pruning_ratio=0.5)
 
-Random Strategies
-~~~~~~~~~~~~~~~~~
+Alignment-based Pruning
+^^^^^^^^^^^^^^^^^^^^^^^
 
-- **RandomPruning**: Uniform random pruning
-- **LayerwiseRandomPruning**: Layer-specific random pruning
-- **BernoulliPruning**: Probabilistic pruning
-
-Parallel Pruning Strategies
----------------------------
-
-The framework provides several strategies for applying multiple pruning modes simultaneously:
-
-ParallelModePruning
-~~~~~~~~~~~~~~~~~~~
-
-Apply multiple pruning modes in parallel and analyze their effects:
+Uses alignment metrics to guide pruning decisions:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import ParallelModePruning
+    from alignment.pruning.strategies import AlignmentPruning
     
-    # Apply low, high, and random pruning simultaneously
-    strategy = ParallelModePruning(
-        modes=['low', 'high', 'random'],
-        base_strategy='magnitude'
-    )
-    
-    result = strategy.prune_parallel(layer, amount=0.5)
-    
-    # Access individual masks
-    low_mask = result.masks['low']
-    high_mask = result.masks['high']
-    random_mask = result.masks['random']
-    
-    # Analyze sparsity
-    for mode, sparsity in result.sparsities.items():
-        print(f"{mode}: {sparsity:.2%} sparse")
-    
-    # Combine masks
-    combined_union = strategy.combine_masks(result.masks, method='union')
-    combined_intersection = strategy.combine_masks(result.masks, method='intersection')
-    combined_majority = strategy.combine_masks(result.masks, method='majority')
-
-TensorizedPruning
-~~~~~~~~~~~~~~~~~
-
-Efficient GPU-optimized computation of multiple pruning configurations:
-
-.. code-block:: python
-
-    from alignment.pruning.strategies import TensorizedPruning
-    
-    strategy = TensorizedPruning()
-    
-    # Compute pruning tensor: [num_modes, num_amounts, *weight_shape]
-    pruning_tensor = strategy.compute_pruning_tensor(
-        layer,
-        modes=['low', 'high', 'random'],
-        amounts=[0.1, 0.3, 0.5, 0.7, 0.9]
-    )
-    
-    # Analyze pruning patterns
-    analysis = strategy.analyze_pruning_patterns(pruning_tensor)
-    print("Sparsity progression:", analysis['sparsity_progression'])
-    print("Mode overlap:", analysis['mode_overlap'])
-
-AsyncParallelPruning
-~~~~~~~~~~~~~~~~~~~~
-
-Prune multiple modules in parallel using CPU cores:
-
-.. code-block:: python
-
-    from alignment.pruning.strategies import AsyncParallelPruning
-    
-    strategy = AsyncParallelPruning()
-    
-    # Prune multiple layers with different amounts
-    modules = [model.layer1, model.layer2, model.layer3]
-    results = strategy.prune_modules_parallel(
-        modules,
-        amounts=[0.5, 0.6, 0.7],
-        modes=['low', 'high'],
-        max_workers=4
-    )
-    
-    # Each result contains masks for all modes
-    for i, layer_results in enumerate(results):
-        print(f"Layer {i}:")
-        for mode, mask in layer_results.items():
-            sparsity = (mask == 0).float().mean()
-            print(f"  {mode}: {sparsity:.2%} sparse")
-
-Advanced Usage
---------------
-
-Structured Pruning
-~~~~~~~~~~~~~~~~~~
-
-Remove entire channels or filters:
-
-.. code-block:: python
-
-    config = PruningConfig(
-        amount=0.5,
-        structured=True
-    )
-    strategy = get_pruning_strategy('magnitude', config=config)
-    mask = strategy.prune(conv_layer)
-
-Custom Pruning Strategy
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Create your own pruning strategy:
-
-.. code-block:: python
-
-    from alignment.pruning.base import BasePruningStrategy
-    
-    class MyCustomPruning(BasePruningStrategy):
-        def compute_importance_scores(self, module, inputs=None, **kwargs):
-            # Your custom importance computation
-            return module.weight.abs() * custom_metric
+    strategy = AlignmentPruning(metric="rayleigh_quotient")
+    masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
 
 Pruning Experiments
 -------------------
 
-The framework includes pre-built experiments:
+Global Pruning
+^^^^^^^^^^^^^^
+
+Applies the same pruning rate across all layers:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import (
-        ProgressiveDropoutExperiment,
-        LayerIsolatedPruningExperiment
+    from alignment.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
+    
+    config = GlobalDropoutConfig(
+        experiment_name="global_pruning_mnist",
+        dataset_name="mnist",
+        model_name="mlp",
+        hidden_sizes=[128, 64],
+        dropout_rates=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
+        dropout_structure="magnitude"
     )
     
-    # Progressive dropout experiment
-    experiment = ProgressiveDropoutExperiment(
-        model=model,
-        dataset='cifar10',
-        pruning_rates=[0.1, 0.3, 0.5, 0.7, 0.9]
-    )
+    experiment = GlobalDropoutExperiment(config)
     results = experiment.run()
+
+Layer-wise Pruning
+^^^^^^^^^^^^^^^^^^
+
+Analyzes the effect of pruning individual layers:
+
+.. code-block:: python
+
+    from alignment.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
+    
+    config = LayerIsolatedConfig(
+        experiment_name="layer_analysis",
+        dataset_name="mnist",
+        model_name="mlp",
+        pruning_ratios=[0.1, 0.3, 0.5, 0.7, 0.9],
+        pruning_strategy="magnitude",
+        layers_to_prune=["fc1", "fc2"]  # Specific layers
+    )
+    
+    experiment = LayerIsolatedPruningExperiment(config)
+    results = experiment.run()
+
+Cascading Pruning
+^^^^^^^^^^^^^^^^^
+
+Progressive pruning that cascades through network layers:
+
+.. code-block:: python
+
+    from alignment.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
+    
+    config = CascadingConfig(
+        experiment_name="cascading_analysis",
+        dataset_name="mnist",
+        model_name="mlp",
+        cascade_direction="forward",
+        base_pruning_ratio=0.2,
+        cascade_factor=1.5  # Increase pruning by 50% each layer
+    )
+    
+    experiment = CascadingLayerPruningExperiment(config)
+    results = experiment.run()
+
+Eigenvector-based Pruning
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Uses spectral analysis for pruning:
+
+.. code-block:: python
+
+    from alignment.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
+    
+    config = EigenvectorConfig(
+        experiment_name="eigenvector_pruning",
+        dataset_name="mnist",
+        model_name="mlp",
+        num_components=10,
+        component_selection="top",  # or "bottom"
+        pruning_ratios=[0.1, 0.3, 0.5]
+    )
+    
+    experiment = EigenvectorDropoutExperiment(config)
+    results = experiment.run()
+
+Structured vs Unstructured Pruning
+-----------------------------------
+
+Unstructured Pruning
+^^^^^^^^^^^^^^^^^^^^
+
+Removes individual weights/connections:
+
+.. code-block:: python
+
+    config = GlobalDropoutConfig(
+        structured_pruning=False,  # Default
+        pruning_strategy="magnitude"
+    )
+
+- **Pros**: Fine-grained control, potentially higher accuracy retention
+- **Cons**: Requires sparse matrix support for speedup
+
+Structured Pruning
+^^^^^^^^^^^^^^^^^^
+
+Removes entire neurons/channels/filters:
+
+.. code-block:: python
+
+    config = GlobalDropoutConfig(
+        structured_pruning=True,
+        pruning_strategy="magnitude",
+        structure_type="neuron"  # or "channel", "filter"
+    )
+
+- **Pros**: Direct speedup, hardware-friendly
+- **Cons**: Coarser granularity, potentially more accuracy loss
+
+Analyzing Pruning Results
+-------------------------
+
+The experiments return comprehensive results:
+
+.. code-block:: python
+
+    results = experiment.run()
+    
+    # Pruning performance
+    for ratio in results['pruning_ratios']:
+        metrics = results['pruning_results'][ratio]
+        print(f"Pruning {ratio*100}%:")
+        print(f"  Accuracy: {metrics['accuracy']:.2f}%")
+        print(f"  Remaining params: {metrics['remaining_params']}")
+    
+    # Layer-wise analysis (for layer-wise experiments)
+    if 'layer_results' in results:
+        for layer, data in results['layer_results'].items():
+            print(f"\nLayer {layer}:")
+            print(f"  Sensitivity: {data['sensitivity']}")
+            print(f"  Optimal pruning: {data['optimal_ratio']}")
 
 Visualization
 -------------
 
-Visualize pruning patterns:
+The framework automatically generates pruning analysis plots:
+
+- Accuracy vs pruning ratio curves
+- Layer sensitivity heatmaps
+- Parameter reduction charts
+- Alignment metric evolution
+
+Custom Pruning Strategies
+-------------------------
+
+Implement custom strategies by extending the base class:
 
 .. code-block:: python
 
-    import matplotlib.pyplot as plt
-    from alignment.analysis.visualization import PruningVisualizer
+    from alignment.pruning.strategies import BasePruningStrategy
     
-    visualizer = PruningVisualizer()
-    
-    # Compare different pruning modes
-    fig = visualizer.compare_pruning_modes(
-        model,
-        modes=['low', 'high', 'random'],
-        amount=0.5
-    )
-    
-    # Show sparsity heatmap
-    fig = visualizer.sparsity_heatmap(pruned_model)
+    class MyCustomPruning(BasePruningStrategy):
+        def compute_importance_scores(self, model, dataloader=None):
+            """Compute importance scores for each parameter."""
+            scores = {}
+            for name, param in model.named_parameters():
+                if 'weight' in name:
+                    # Your custom importance calculation
+                    scores[name] = custom_importance(param)
+            return scores
+        
+        def create_masks(self, scores, pruning_ratio):
+            """Create binary masks from scores."""
+            masks = {}
+            for name, score in scores.items():
+                threshold = torch.quantile(score.flatten(), pruning_ratio)
+                masks[name] = score > threshold
+            return masks
 
 Best Practices
 --------------
 
-1. **Start with small pruning amounts**: Begin with 10-30% pruning and increase gradually
-2. **Use iterative pruning**: For high sparsity (>70%), use iterative pruning with fine-tuning
-3. **Monitor performance**: Track accuracy degradation during pruning
-4. **Compare strategies**: Use parallel pruning to compare different approaches
-5. **Consider structured pruning**: For deployment, structured pruning may be more efficient
+1. **Start Conservative**: Begin with small pruning ratios (10-30%)
+2. **Fine-tune After Pruning**: Allow the model to adapt after pruning
+3. **Compare Strategies**: Test multiple strategies on your specific task
+4. **Monitor Multiple Metrics**: Don't just track accuracy
+5. **Consider Hardware**: Choose structured/unstructured based on deployment
 
-Example: Complete Pruning Pipeline
-----------------------------------
+Common Pitfalls
+---------------
+
+1. **Pruning Too Aggressively**: Gradual pruning often works better
+2. **Ignoring Layer Sensitivity**: Some layers are more critical
+3. **Not Fine-tuning**: Models often recover performance with fine-tuning
+4. **Wrong Granularity**: Match pruning type to hardware constraints
+
+Advanced Topics
+---------------
+
+Iterative Pruning
+^^^^^^^^^^^^^^^^^
+
+Prune in multiple rounds:
 
 .. code-block:: python
 
-    import torch
-    from alignment.pruning import PruningConfig
-    from alignment.pruning.strategies import ParallelModePruning
-    from alignment.training import Trainer
-    
-    # 1. Setup
-    model = load_model()
-    config = PruningConfig(amount=0.8, iterations=5)
-    
-    # 2. Compare pruning modes
-    strategy = ParallelModePruning(config=config)
-    result = strategy.prune_parallel(model.backbone)
-    
-    # 3. Select best mode based on validation
-    best_mode = evaluate_modes(result.masks, val_loader)
-    
-    # 4. Apply selected pruning
-    model.backbone.weight.data *= result.masks[best_mode]
-    
-    # 5. Fine-tune
-    trainer = Trainer(model, train_loader, val_loader)
-    trainer.fine_tune(epochs=10)
-    
-    # 6. Make pruning permanent
-    strategy.remove_pruning(model.backbone)
+    config = GlobalDropoutConfig(
+        iterative_pruning=True,
+        pruning_schedule=[0.2, 0.4, 0.6],  # Cumulative
+        fine_tune_epochs=5  # Between rounds
+    )
+
+Dynamic Pruning
+^^^^^^^^^^^^^^^
+
+Adjust pruning during training:
+
+.. code-block:: python
+
+    config = GlobalDropoutConfig(
+        dynamic_pruning=True,
+        initial_sparsity=0.0,
+        final_sparsity=0.9,
+        pruning_frequency=100  # Steps
+    )
 
 See Also
 --------
 
-- :doc:`/api/pruning` - Complete API reference
-- :doc:`experiments` - Using pruning in experiments
-- ``examples/pruning_parallel_demo.py`` - Parallel pruning demonstration 
+- :doc:`experiments` - Overview of experiment types
+- :doc:`metrics` - Alignment metrics for pruning
+- :doc:`configuration` - Detailed configuration options 
