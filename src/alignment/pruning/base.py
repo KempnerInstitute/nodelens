@@ -77,8 +77,8 @@ class BasePruningStrategy(ABC):
             importance_scores: Tensor of importance scores
             amount: Fraction to prune (overrides config if provided)
             structured: Whether to do structured pruning (overrides config)
-            dim: Dimension for structured pruning
-            pruning_mode: 'low' to prune low values, 'high' to prune high values
+            dim: Dimension for structured pruning (default: 0 for output dimension)
+            pruning_mode: 'low' to prune low values, 'high' to prune high values, 'random' for random
             
         Returns:
             Binary mask tensor (1 = keep, 0 = prune)
@@ -87,7 +87,11 @@ class BasePruningStrategy(ABC):
         structured = structured if structured is not None else self.config.structured
         pruning_mode = pruning_mode if pruning_mode is not None else self.config.pruning_mode
         
-        if structured and dim is not None:
+        if structured:
+            # Default to dimension 0 (output dimension) for structured pruning
+            if dim is None:
+                dim = 0
+                
             # Aggregate importance scores along non-pruned dimensions
             dims_to_reduce = list(range(importance_scores.ndim))
             dims_to_reduce.pop(dim)
@@ -97,12 +101,17 @@ class BasePruningStrategy(ABC):
             else:
                 aggregated_scores = importance_scores.abs()
             
-            # Get threshold
+            # Get number of structures to prune
             k = int(amount * aggregated_scores.numel())
             if k == 0:
                 return torch.ones_like(importance_scores)
             
-            if pruning_mode == 'low':
+            if pruning_mode == 'random':
+                # Random selection of structures
+                indices = torch.randperm(aggregated_scores.numel(), device=aggregated_scores.device)[:k]
+                mask = torch.ones(aggregated_scores.numel(), dtype=torch.bool, device=aggregated_scores.device)
+                mask[indices] = False
+            elif pruning_mode == 'low':
                 threshold = aggregated_scores.flatten().kthvalue(k).values
                 mask = aggregated_scores > threshold
             else:  # pruning_mode == 'high'
@@ -121,7 +130,10 @@ class BasePruningStrategy(ABC):
             if k == 0:
                 return torch.ones_like(importance_scores)
             
-            if pruning_mode == 'low':
+            if pruning_mode == 'random':
+                # Random selection of weights
+                mask = torch.rand_like(importance_scores) > amount
+            elif pruning_mode == 'low':
                 threshold = importance_flat.kthvalue(k).values
                 mask = importance_scores > threshold
             else:  # pruning_mode == 'high'
@@ -147,24 +159,42 @@ class BasePruningStrategy(ABC):
         if not hasattr(module, 'weight'):
             raise ValueError(f"Module {module} does not have a weight parameter")
         
-        # Apply mask to weights
-        module.weight.data *= mask
-        
         if not make_permanent:
+            # Store original weights BEFORE applying mask
+            if not hasattr(module, '_original_weight'):
+                module.register_buffer('_original_weight', module.weight.data.clone())
+            
             # Register mask as buffer for forward passes
             module.register_buffer('weight_mask', mask)
             
+            # Apply mask to weights
+            module.weight.data *= mask
+            
             # Hook to apply mask during forward pass
             def apply_mask_hook(mod, inputs):
-                mod.weight.data *= mod.weight_mask
+                # Apply mask to original weights to maintain pruning
+                mod.weight.data = mod._original_weight * mod.weight_mask
                 return inputs
             
-            # Remove old hook if exists
+            # Hook to mask gradients during backward pass
+            # Capture the mask in the closure to avoid attribute access issues
+            weight_mask = module.weight_mask
+            def mask_gradient_hook(grad):
+                # Mask gradients to prevent updates to pruned weights
+                return grad * weight_mask
+            
+            # Remove old hooks if exist
             if hasattr(module, '_pruning_hook'):
                 module._pruning_hook.remove()
+            if hasattr(module, '_gradient_hook_handle'):
+                module._gradient_hook_handle.remove()
             
-            # Register new hook
+            # Register hooks
             module._pruning_hook = module.register_forward_pre_hook(apply_mask_hook)
+            module._gradient_hook_handle = module.weight.register_hook(mask_gradient_hook)
+        else:
+            # Apply mask permanently
+            module.weight.data *= mask
     
     def remove_pruning(self, module: nn.Module):
         """
@@ -175,14 +205,22 @@ class BasePruningStrategy(ABC):
         """
         if hasattr(module, 'weight_mask'):
             # Apply mask permanently
-            module.weight.data *= module.weight_mask
+            if hasattr(module, '_original_weight'):
+                module.weight.data = module._original_weight * module.weight_mask
+                delattr(module, '_original_weight')
+            else:
+                module.weight.data *= module.weight_mask
             # Remove mask buffer
             delattr(module, 'weight_mask')
         
-        # Remove hook
+        # Remove hooks
         if hasattr(module, '_pruning_hook'):
             module._pruning_hook.remove()
             delattr(module, '_pruning_hook')
+        
+        if hasattr(module, '_gradient_hook_handle'):
+            module._gradient_hook_handle.remove()
+            delattr(module, '_gradient_hook_handle')
     
     def get_sparsity(self, module: nn.Module) -> float:
         """
