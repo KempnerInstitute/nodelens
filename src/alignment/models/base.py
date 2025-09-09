@@ -87,7 +87,10 @@ class BaseModelWrapper(BaseModel):
             if self.track_outputs and output is not None:
                 if isinstance(output, tuple):
                     output = output[0]
-                self._activation_cache[layer_name] = output.detach()
+                # Store under both legacy and explicit output keys for compatibility
+                out = output.detach()
+                self._activation_cache[layer_name] = out
+                self._activation_cache[f"{layer_name}_output"] = out
         
         return hook
     
@@ -138,7 +141,7 @@ class BaseModelWrapper(BaseModel):
         Basic activation preprocessing.
         
         For advanced preprocessing (CNN modes, attention, etc.),
-        use the preprocessing module: alignment.preprocessing.preprocess_layer_activations
+        use the data processing module: alignment.data.processing.preprocess_layer_activations
         
         Args:
             activations: Raw activations from hooks
@@ -154,7 +157,7 @@ class BaseModelWrapper(BaseModel):
         for name, activation in activations.items():
             if mode == "flatten" and activation.ndim > 2:
                 # Simple flattening to [batch_size, features]
-                processed[name] = activation.reshape(activation.shape[0], -1)
+                    processed[name] = activation.reshape(activation.shape[0], -1)
             else:
                 processed[name] = activation
         

@@ -1,21 +1,50 @@
 """
-Experiments module for the alignment framework.
+Experiments module for alignment analysis.
 
-This module provides experiment runners and utilities for
-conducting alignment analysis experiments.
+This module provides various experiments for analyzing neural network alignment,
+including general alignment analysis, multi-network experiments, and utilities.
 """
 
-from alignment.experiments.base import BaseExperiment, ExperimentConfig
-from alignment.experiments.runner import ExperimentRunner
-from alignment.experiments.general_alignment import GeneralAlignmentExperiment, GeneralAlignmentConfig
-from alignment.experiments.parallel_pruning_experiment import ParallelPruningExperiment, ParallelExperimentConfig
+from .base import BaseExperiment, ExperimentConfig
+from .general_alignment import GeneralAlignmentExperiment, GeneralAlignmentConfig
+
+# Configuration components
+from .config_components import (
+    TrainingConfig,
+    PruningConfig,
+    EvaluationConfig,
+    CNNConfig,
+    MultiNetworkConfig,
+    create_config_from_dict,
+    create_backward_compatible_config
+)
+
+# Training utilities
+from .training_utils import (
+    create_experiment_trainer,
+    train_with_metrics,
+    evaluate_with_metrics,
+    convert_training_history
+)
 
 __all__ = [
+    # Base classes
     'BaseExperiment',
     'ExperimentConfig',
-    'ExperimentRunner',
+    # Main experiments
     'GeneralAlignmentExperiment',
     'GeneralAlignmentConfig',
-    'ParallelPruningExperiment',
-    'ParallelExperimentConfig',
+    # Configuration components
+    'TrainingConfig',
+    'PruningConfig',
+    'EvaluationConfig',
+    'CNNConfig',
+    'MultiNetworkConfig',
+    'create_config_from_dict',
+    'create_backward_compatible_config',
+    # Training utilities
+    'create_experiment_trainer',
+    'train_with_metrics',
+    'evaluate_with_metrics',
+    'convert_training_history',
 ] 
