@@ -1,184 +1,148 @@
-# Neural Network Alignment Analysis Framework
+# Alignment Analysis Framework
 
-A comprehensive framework for analyzing neural network alignment through various metrics and pruning strategies.
+A comprehensive framework for analyzing neural network alignment, pruning, and information-theoretic properties.
 
 ## Features
 
-- **36+ Alignment Metrics**: Rayleigh quotient, mutual information, spectral analysis, and more
-- **Advanced Pruning**: Multiple strategies with low/high/random modes and parallel execution
-- **Comprehensive Experiments**: Fully configurable system supporting all models and datasets
-- **Automatic Analysis**: Built-in visualization and reporting tools
-- **GPU Optimized**: Efficient implementations with automatic memory management
+- Alignment Analysis: Measure how neural representations align with data and task structure
+- Pruning Experiments: Test various pruning strategies and their effects on model performance  
+- Multi-Network Analysis: Train and analyze multiple networks in parallel
+- 30+ Metrics: Rayleigh quotient, mutual information, spectral metrics, and more
+- Extensible Design: Easy to add custom metrics and strategies
 
 ## Installation
 
+### Prerequisites
+- Python 3.8+
+- CUDA-compatible GPU (recommended)
+- Git
+
+### Setup
 ```bash
 # Clone the repository
-git clone https://github.com/KempnerInstitute/alignment.git
+git clone <repository-url>
 cd alignment
+
+# Create conda environment
+conda env create -f environment.yml
+conda activate networkAlignmentAnalysis
 
 # Install in development mode
 pip install -e .
-
-# Or install with all dependencies
-pip install -e .[all]
 ```
 
 ## Quick Start
 
-### Basic Example
+### Using Configuration Files (Recommended)
+```bash
+# Run ResNet-18 experiment on CIFAR-10
+python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml --device cuda
 
+# Run comprehensive analysis
+python scripts/run_experiment.py --config configs/examples/resnet50_analysis.yaml --device cuda
+```
+
+### Using Python API
 ```python
-from alignment import ModelWrapper, get_metric
-import torch
+from alignment.configs.config_loader import load_config
+from alignment.experiments import GeneralAlignmentExperiment
 
-# Create and wrap a model
-model = torch.nn.Sequential(
-    torch.nn.Linear(784, 256),
-    torch.nn.ReLU(),
-    torch.nn.Linear(256, 10)
-)
-wrapped_model = ModelWrapper(model)
+# Load configuration
+config = load_config('configs/examples/resnet18_analysis.yaml')
 
-# Compute alignment metric
-metric = get_metric("rayleigh_quotient")()
-inputs = torch.randn(100, 784)
-outputs, activations = wrapped_model.forward_with_activations(inputs)
-scores = metric.compute(inputs=activations["0_input"], weights=model[0].weight)
+# Run experiment
+experiment = GeneralAlignmentExperiment(config)
+results = experiment.run()
 ```
 
-### Running Examples
+## Supported Models
 
+### Vision Models (via torchvision/timm)
+- ResNet (18, 34, 50, 101, 152)
+- VGG (11, 13, 16, 19)
+- AlexNet
+- EfficientNet (B0-B7)
+- Vision Transformers (ViT, DeiT)
+- MobileNet, DenseNet
+
+### Custom Models
+- Multi-layer Perceptrons (MLP)
+- Convolutional Neural Networks (CNN)
+- Custom architectures via model registry
+
+## Datasets
+
+- MNIST, Fashion-MNIST
+- CIFAR-10, CIFAR-100
+- ImageNet
+- Custom datasets via dataset registry
+
+## Documentation
+
+Build documentation locally:
 ```bash
-# Quick introduction (1 minute)
-python examples/quick_demo.py
-
-# Complete workflow with training and analysis (5-10 minutes)
-python examples/standard_alignment_experiment.py
-
-# Comprehensive experiment with full configuration
-python examples/comprehensive_alignment_experiment.py --config configs/quick_test_config.yaml
+cd docs
+make html
 ```
 
-## Available Examples
-
-1. **`quick_demo.py`** - Minimal introduction to the framework
-2. **`standard_alignment_experiment.py`** - Complete experiment workflow
-3. **`pruning_strategies_demo.py`** - Advanced pruning features
-4. **`pruning_visualization_demo.py`** - Visualization capabilities
-5. **`comprehensive_alignment_experiment.py`** - Full framework demo with YAML configuration
-
-## Comprehensive Experiments
-
-The framework provides a unified experiment system through YAML configuration:
-
-```yaml
-# Example configuration
-name: "my_experiment"
-model_name: "resnet18"
-dataset_name: "cifar10"
-
-training_config:
-  epochs: 20
-  batch_size: 128
-  learning_rate: 0.001
-
-alignment_metrics:
-  - "rayleigh_quotient"
-  - "mutual_information_gaussian"
-  - "spectral_gap"
-
-pruning_strategy: "magnitude"
-pruning_config:
-  amount: 0.5
-```
-
-Run with:
-```bash
-python examples/comprehensive_alignment_experiment.py --config my_config.yaml
-```
-
-## Available Metrics
-
-The framework includes 36+ metrics organized by type:
-
-### Rayleigh Quotient Based
-- `rayleigh_quotient` (aliases: `rq`, `RQ`)
-- `delta_alignment`
-- `normalized_delta_alignment`
-
-### Information Theoretic
-- `mutual_information_gaussian` (aliases: `mi_gaussian`, `mi_0`)
-- `mutual_information_binning` (aliases: `mi_binning`, `mi_1`)
-- `average_redundancy`, `node_redundancy`, `layer_redundancy`
-- `total_correlation`, `interaction_information`
-
-### Similarity Metrics
-- `weight_cosine_similarity`
-- `activation_cosine_similarity`
-- `weight_activation_alignment`
-
-### Spectral Metrics
-- `spectral_gap`, `eigenvalue_alignment`
-- `spectral_clustering`, `eigenvalue_entropy`
-
-See the [documentation](https://kempnerinstitute.github.io/alignment/) for the complete list.
+View at: `docs/build/html/index.html`
 
 ## Project Structure
 
 ```
 alignment/
-├── src/alignment/
-│   ├── core/           # Base classes and protocols
-│   ├── models/         # Model wrappers and architectures
-│   ├── metrics/        # Alignment metrics
-│   ├── pruning/        # Pruning strategies
-│   ├── experiments/    # Experiment framework
-│   ├── data/           # Dataset handling
-│   ├── training/       # Training utilities
-│   ├── analysis/       # Analysis and visualization
-│   └── infrastructure/ # Runtime support (distributed, storage, config)
-├── examples/           # Example scripts
-├── configs/            # Configuration files
-├── tests/              # Unit and integration tests
-└── docs/               # Documentation
+├── src/alignment/        # Main package
+│   ├── core/            # Core functionality and registry
+│   ├── models/          # Model architectures and loaders
+│   ├── metrics/         # Alignment metrics (30+ implementations)
+│   ├── pruning/         # Pruning strategies and experiments
+│   ├── experiments/     # Experiment framework
+│   ├── data/            # Dataset handling
+│   ├── analysis/        # Result analysis and visualization
+│   └── configs/         # Configuration management
+├── configs/             # Configuration templates and examples
+├── examples/            # Example scripts
+├── scripts/             # Experiment runner scripts
+├── tests/               # Unit and integration tests
+└── docs/                # Documentation source
 ```
 
-## Documentation
+## Usage Examples
 
-Full documentation is available at: https://kempnerinstitute.github.io/alignment/
+### Basic Alignment Analysis
+```bash
+# Simple MLP on MNIST
+python scripts/run_experiment.py --config configs/examples/mnist_mlp_standard.yaml
 
-Key documentation:
-- [Getting Started Guide](docs/source/user_guide/getting_started.md)
-- [Metrics Reference](docs/source/METRICS_REFERENCE.md)
-- [Pruning Strategies](docs/source/user_guide/pruning.md)
-- [API Reference](https://kempnerinstitute.github.io/alignment/api/)
+# Vision model analysis
+python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml
+```
+
+### Custom Configuration
+1. Copy a template: `cp configs/template_basic.yaml configs/my_experiment.yaml`
+2. Edit the configuration file
+3. Run: `python scripts/run_experiment.py --config configs/my_experiment.yaml`
+
+## Results and Outputs
+
+Experiments generate:
+- Training logs and metrics
+- Alignment analysis results
+- Pruning performance comparisons
+- Professional visualizations (PNG plots)
+- Comprehensive experiment reports
+
+Results are saved in timestamped directories: `results/experiment_name_YYYYMMDD_HHMMSS/`
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+1. Fork the repository
+2. Create a feature branch
+3. Make changes with tests
+4. Submit a pull request
 
-## Citation
-
-If you use this framework in your research, please cite:
-
-```bibtex
-@software{alignment2024,
-  title={Neural Network Alignment Analysis Framework},
-  author={Kempner Institute},
-  year={2024},
-  url={https://github.com/KempnerInstitute/alignment}
-}
-```
+See `docs/source/contributing.rst` for detailed guidelines.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-This framework was developed at the Kempner Institute for the Study of Natural and Artificial Intelligence at Harvard University.
-
-
-
-
+See LICENSE file for details.
