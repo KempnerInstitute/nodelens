@@ -1,338 +1,299 @@
 Experiments Guide
 =================
 
-This guide covers how to run and configure experiments in the alignment framework.
+This guide covers the different types of experiments available in the alignment framework.
 
 Overview
 --------
 
-The framework provides several built-in experiments for studying neural network pruning and alignment:
+The framework provides several experiment types for analyzing neural network alignment and pruning:
 
-- **Progressive Dropout**: Gradually increases dropout during training
-- **Eigenvector-based Pruning**: Prunes based on eigenvector analysis
-- **Layer-wise Pruning**: Isolates pruning effects to specific layers
-- **Cascading Pruning**: Sequentially prunes layers
+1. **General Alignment Experiment** - Comprehensive alignment analysis with multi-network support
+2. **Layer-wise Pruning Experiments** - Analyze pruning effects on individual layers
+3. **Global Pruning Experiments** - Apply uniform pruning across all layers
+4. **Cascading Pruning Experiments** - Progressive pruning through network layers
+5. **Eigenvector-based Pruning** - Use spectral properties for pruning decisions
 
-Progressive Dropout Experiment
-------------------------------
-
-Progressive dropout gradually increases the dropout rate during training, allowing the network to adapt to increasing sparsity.
-
-Basic Usage
-~~~~~~~~~~~
-
-.. code-block:: python
-
-   from alignment.experiments.progressive_dropout import ProgressiveDropoutExperiment
-   from alignment.experiments.base import ExperimentConfig
-
-   # Configure experiment
-   config = ExperimentConfig(
-       experiment_name="progressive_dropout_test",
-       model_name="resnet18",
-       dataset="cifar10",
-       
-       # Progressive dropout specific
-       initial_dropout=0.0,
-       final_dropout=0.9,
-       warmup_epochs=10,
-       increase_epochs=40,
-       
-       # Training parameters
-       epochs=100,
-       batch_size=128,
-       learning_rate=0.1
-   )
-
-   # Create and run experiment
-   experiment = ProgressiveDropoutExperiment(config)
-   results = experiment.run()
-
-Results Structure
-~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   {
-       'dropout_fractions': [0.0, 0.1, 0.2, ...],
-       'accuracies': {
-           'strategy_name': [acc1, acc2, ...],
-           ...
-       },
-       'metrics': {
-           'layer_name': {
-               'metric_name': scores,
-               ...
-           }
-       }
-   }
-
-Pruning Strategies
-~~~~~~~~~~~~~~~~~~
-
-The experiment supports multiple pruning strategies:
-
-- **magnitude**: Prune neurons with smallest weight magnitudes
-- **gradient**: Prune based on gradient information
-- **random**: Random pruning (baseline)
-- **metric-based**: Use alignment metrics (RQ, MI) for pruning
-
-Eigenvector-based Dropout
--------------------------
-
-This experiment uses eigenvector analysis to determine which neurons to drop based on their alignment with principal components.
-
-Configuration
-~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from alignment.experiments.eigenvector import EigenvectorDropoutExperiment
-
-   config = ExperimentConfig(
-       experiment_name="eigenvector_pruning",
-       
-       # Eigenvector specific
-       drop_percentage=0.5,
-       eigenvector_threshold=0.1,
-       use_magnitude_weighting=True,
-       
-       # Metrics to track
-       metrics=["rayleigh_quotient", "mutual_information"],
-       save_frequency=10
-   )
-
-   experiment = EigenvectorDropoutExperiment(config)
-   results = experiment.run()
-
-Key Parameters
-~~~~~~~~~~~~~~
-
-- ``drop_percentage``: Percentage of neurons to drop
-- ``eigenvector_threshold``: Threshold for eigenvector analysis
-- ``use_magnitude_weighting``: Whether to use magnitude weighting
-
-Layer-isolated Pruning
-----------------------
-
-This experiment applies pruning to specific layers while keeping others intact, useful for studying layer-specific effects.
-
-Usage
-~~~~~
-
-.. code-block:: python
-
-   from alignment.experiments.layer_isolated import LayerIsolatedPruningExperiment
-
-   config = ExperimentConfig(
-       experiment_name="layer_isolation_study",
-       
-       # Layer isolation settings
-       target_layers=["layer1.0.conv1", "layer2.0.conv1"],
-       pruning_rates=[0.3, 0.5, 0.7],
-       isolation_mode="sequential",  # or "parallel"
-       
-       # Pruning strategy
-       pruning_method="magnitude",
-       fine_tune_epochs=10
-   )
-
-   experiment = LayerIsolatedPruningExperiment(config)
-   results = experiment.run()
-
-Results Analysis
-~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   # Analyze layer sensitivity
-   layer_results = results['layer_results']
-   for layer_name, layer_data in layer_results.items():
-       print(f"\nLayer: {layer_name}")
-       for pct, acc in zip(layer_data['pruning_percentages'], 
-                          layer_data['accuracies']):
-           print(f"  {pct*100}% pruned: {acc:.2f}% accuracy")
-
-Cascading Layer Pruning
------------------------
-
-Cascading pruning sequentially prunes layers, studying how pruning propagates through the network.
-
-Configuration
-~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from alignment.experiments.cascading import CascadingLayerPruningExperiment
-
-   config = ExperimentConfig(
-       experiment_name="cascading_pruning",
-       
-       # Cascading specific
-       layer_order=["conv1", "conv2", "fc1"],  # Order of pruning
-       cascade_threshold=0.01,  # Min activation threshold
-       pruning_per_layer=0.3,
-       
-       # Analysis options
-       track_information_flow=True,
-       save_intermediate_models=True
-   )
-
-   experiment = CascadingLayerPruningExperiment(config)
-   results = experiment.run()
-
-Running Multiple Experiments
+General Alignment Experiment
 ----------------------------
 
-Using ExperimentRunner
-~~~~~~~~~~~~~~~~~~~~~~
+The main experiment class that supports:
+
+- Training single or multiple networks
+- Computing alignment metrics during and after training
+- Applying various pruning strategies
+- Comprehensive analysis and visualization
 
 .. code-block:: python
 
-   from alignment.experiments.runner import ExperimentRunner
-   from alignment.experiments.base import ExperimentConfig
+    from alignment.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
 
-   # Define multiple configurations
-   configs = [
-       ExperimentConfig(
-           experiment_name="exp1",
-           experiment_type="progressive_dropout",
-           initial_dropout=0.0,
-           final_dropout=0.5
-       ),
-       ExperimentConfig(
-           experiment_name="exp2", 
-           experiment_type="eigenvector",
-           drop_percentage=0.3
-       )
-   ]
+    config = GeneralAlignmentConfig(
+        experiment_name="mnist_alignment",
+        dataset_name="mnist",
+        model_name="mlp",
+        hidden_sizes=[128, 64],
+        num_epochs=10,
+        compute_alignment=True,
+        alignment_metrics=["rayleigh_quotient", "mutual_information_gaussian"]
+    )
 
-   # Run all experiments
-   runner = ExperimentRunner(
-       configs=configs,
-       parallel=True,  # Run in parallel
-       num_workers=4
-   )
+    experiment = GeneralAlignmentExperiment(config)
+    results = experiment.run()
 
-   all_results = runner.run_all()
+Multi-Network Analysis
+^^^^^^^^^^^^^^^^^^^^^^
+
+Train and analyze multiple networks in parallel:
+
+.. code-block:: python
+
+    config = GeneralAlignmentConfig(
+        experiment_name="multi_network_study",
+        num_networks=5,  # Train 5 networks
+        dataset_name="mnist",
+        model_name="cnn",
+        num_epochs=20,
+        compute_alignment=True
+    )
+
+    experiment = GeneralAlignmentExperiment(config)
+    results = experiment.run()
+
+    # Results include statistics across all networks
+    print(f"Mean accuracy: {results['mean_accuracy']}")
+    print(f"Std accuracy: {results['std_accuracy']}")
+
+Pruning Experiments
+-------------------
+
+Layer-wise Pruning
+^^^^^^^^^^^^^^^^^^
+
+Analyze the effect of pruning individual layers:
+
+.. code-block:: python
+
+    from alignment.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
+
+    config = LayerIsolatedConfig(
+        experiment_name="layer_analysis",
+        dataset_name="mnist",
+        model_name="mlp",
+        hidden_sizes=[128, 64],
+        pruning_ratios=[0.1, 0.3, 0.5, 0.7, 0.9],
+        pruning_strategy="magnitude"
+    )
+
+    experiment = LayerIsolatedPruningExperiment(config)
+    results = experiment.run()
+
+Global Pruning
+^^^^^^^^^^^^^^
+
+Apply the same pruning rate across all layers:
+
+.. code-block:: python
+
+    from alignment.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
+
+    config = GlobalDropoutConfig(
+        experiment_name="global_pruning",
+        dataset_name="cifar10",
+        model_name="resnet18",
+        dropout_rates=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
+        dropout_structure="magnitude"  # or "random", "gradient"
+    )
+
+    experiment = GlobalDropoutExperiment(config)
+    results = experiment.run()
+
+Cascading Layer Pruning
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Progressive pruning that cascades through the network:
+
+.. code-block:: python
+
+    from alignment.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
+
+    config = CascadingConfig(
+        experiment_name="cascading_analysis",
+        dataset_name="mnist",
+        model_name="mlp",
+        cascade_direction="forward",  # or "backward"
+        pruning_ratios=[0.1, 0.2, 0.3, 0.4, 0.5]
+    )
+
+    experiment = CascadingLayerPruningExperiment(config)
+    results = experiment.run()
+
+Eigenvector-based Pruning
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Use eigendecomposition for pruning decisions:
+
+.. code-block:: python
+
+    from alignment.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
+
+    config = EigenvectorConfig(
+        experiment_name="eigenvector_pruning",
+        dataset_name="mnist",
+        model_name="mlp",
+        num_components=10,  # Number of eigenvectors to keep
+        pruning_ratios=[0.1, 0.3, 0.5, 0.7]
+    )
+
+    experiment = EigenvectorDropoutExperiment(config)
+    results = experiment.run()
 
 Configuration Options
 ---------------------
 
-Essential Parameters
-~~~~~~~~~~~~~~~~~~~~
+Common configuration parameters across experiments:
 
-- ``experiment_name``: Experiment identifier
-- ``experiment_type``: Type of experiment
-- ``model_name``: Model architecture to use
-- ``dataset``: Dataset for evaluation
-- ``device``: Computing device (cuda/cpu)
-- ``seed``: Random seed for reproducibility
+**Model Configuration:**
 
-Model Configuration
-~~~~~~~~~~~~~~~~~~~
+- ``model_name``: "mlp", "cnn", "resnet18", etc.
+- ``hidden_sizes``: List of hidden layer sizes (for MLP)
+- ``activation``: Activation function ("relu", "tanh", etc.)
+
+**Training Configuration:**
+
+- ``num_epochs``: Number of training epochs
+- ``batch_size``: Batch size for training
+- ``learning_rate``: Learning rate
+- ``optimizer``: Optimizer type ("adam", "sgd", etc.)
+
+**Alignment Configuration:**
+
+- ``compute_alignment``: Whether to compute alignment metrics
+- ``alignment_metrics``: List of metrics to compute
+- ``alignment_layers``: Which layers to analyze
+
+**Pruning Configuration:**
+
+- ``pruning_strategy``: "magnitude", "gradient", "random", "alignment"
+- ``pruning_ratios``: List of pruning ratios to test
+- ``structured_pruning``: Whether to use structured pruning
+
+Running Experiments
+-------------------
+
+From Configuration Files
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: bash
+
+    python scripts/run_experiment.py --config configs/my_experiment.yaml
+
+From Python
+^^^^^^^^^^^
 
 .. code-block:: python
 
-   model_config = {
-       "hidden_dims": [300, 200, 100],  # For MLP
-       "conv_channels": [32, 64],       # For CNN
-       "dropout_rate": 0.5,
-       "activation": "relu"
-   }
+    from alignment.experiments import create_experiment_from_config
+    import yaml
 
-Training Configuration
-~~~~~~~~~~~~~~~~~~~~~~
+    # Load configuration
+    with open("configs/my_experiment.yaml", "r") as f:
+        config_dict = yaml.safe_load(f)
+    
+    # Create and run experiment
+    experiment = create_experiment_from_config(config_dict)
+    results = experiment.run()
 
-.. code-block:: python
-
-   training_config = {
-       "epochs": 10,
-       "learning_rate": 0.001,
-       "optimizer": "adam",
-       "train_before_dropout": True
-   }
-
-Metric Configuration
-~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   metric_configs = {
-       "rayleigh_quotient": {
-           "scale_by_norm": False,
-           "aggregation_op": "mean"
-       },
-       "mutual_information": {
-           "estimation_method": "gaussian"
-       }
-   }
-
-Advanced Features
+Analyzing Results
 -----------------
 
-Custom Pruning Functions
-~~~~~~~~~~~~~~~~~~~~~~~~
+All experiments return a results dictionary containing:
+
+- Training metrics (loss, accuracy over time)
+- Final model performance
+- Alignment metrics (if computed)
+- Pruning analysis (for pruning experiments)
+- Visualizations and plots
 
 .. code-block:: python
 
-   def custom_pruning_fn(weights, scores, pruning_fraction):
-       """Custom pruning logic"""
-       threshold = torch.quantile(scores, pruning_fraction)
-       mask = scores > threshold
-       return weights * mask.unsqueeze(1)
+    # Access results
+    results = experiment.run()
+    
+    # Training history
+    train_loss = results['training_history']['train_loss']
+    val_accuracy = results['training_history']['val_accuracy']
+    
+    # Alignment metrics
+    if 'alignment_metrics' in results:
+        rq_scores = results['alignment_metrics']['rayleigh_quotient']
+        mi_scores = results['alignment_metrics']['mutual_information']
+    
+    # Pruning results
+    if 'pruning_results' in results:
+        for ratio, metrics in results['pruning_results'].items():
+            print(f"Pruning {ratio}: Accuracy = {metrics['accuracy']}")
 
-   config.custom_pruning_fn = custom_pruning_fn
+Visualization
+-------------
 
-Callbacks
-~~~~~~~~~
+The framework automatically generates visualizations:
 
-.. code-block:: python
+- Training curves
+- Alignment metric evolution
+- Pruning performance plots
+- Layer-wise analysis
 
-   def on_pruning_step(experiment, step, metrics):
-       """Called after each pruning step"""
-       print(f"Step {step}: {metrics}")
-
-   config.callbacks = [on_pruning_step]
-
-Checkpointing
-~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   config.checkpoint_interval = 1000  # Save every 1000 steps
-   config.checkpoint_dir = "./checkpoints"
-   config.save_best = True  # Save best performing model
+Plots are saved to the experiment output directory and can be customized through configuration.
 
 Best Practices
 --------------
 
-1. **Start with Small Models**: Test configurations on small models first
-2. **Use Appropriate Batch Sizes**: Balance memory usage and training stability
-3. **Set Random Seeds**: Ensure reproducibility across runs
-4. **Monitor Metrics**: Track multiple metrics for comprehensive analysis
-5. **Save Intermediate Results**: Enable checkpointing for long experiments
+1. **Start Small**: Test with small models and datasets first
+2. **Use Checkpointing**: Enable model checkpointing for long experiments
+3. **Monitor Memory**: Some alignment metrics are memory-intensive
+4. **Reproducibility**: Always set seeds for reproducible results
+5. **Incremental Analysis**: Start with few pruning ratios, then refine
 
-Troubleshooting
----------------
+Advanced Features
+-----------------
 
-Out of Memory Errors
-~~~~~~~~~~~~~~~~~~~~
+Custom Metrics
+^^^^^^^^^^^^^^
 
-- Reduce batch size
-- Use gradient accumulation
-- Enable CPU offloading for large models
+Add custom alignment metrics:
 
-Slow Experiments
-~~~~~~~~~~~~~~~~
+.. code-block:: python
 
-- Use GPU acceleration
-- Reduce number of pruning steps
-- Enable parallel data loading
+    from alignment.metrics import register_metric
 
-Inconsistent Results
-~~~~~~~~~~~~~~~~~~~~
+    @register_metric("my_custom_metric")
+    def my_metric(model, dataloader, device):
+        # Implement your metric
+        return metric_value
 
-- Set fixed random seeds
-- Disable non-deterministic operations
-- Verify data loading consistency 
+Custom Pruning Strategies
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Implement custom pruning strategies:
+
+.. code-block:: python
+
+    from alignment.pruning.strategies import BasePruningStrategy
+
+    class MyPruningStrategy(BasePruningStrategy):
+        def compute_importance_scores(self, model, dataloader):
+            # Implement importance scoring
+            return scores
+
+Parallel Execution
+^^^^^^^^^^^^^^^^^^
+
+For multi-network experiments, parallel execution is automatic when ``num_networks > 1``.
+
+See Also
+--------
+
+- :doc:`configuration` - Detailed configuration options
+- :doc:`metrics` - Available alignment metrics
+- :doc:`pruning` - Pruning strategies and concepts 

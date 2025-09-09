@@ -3,8 +3,10 @@ Analysis utilities for alignment experiments.
 
 This module provides tools for:
 - Aggregating experiment results
-- Generating reports
-- Visualizing metrics
+- Generating reports in multiple formats
+- Creating visualizations
+
+The module has been simplified to provide unified interfaces for common tasks.
 """
 
 # Aggregation
@@ -14,20 +16,16 @@ from .aggregation import (
     LayerAggregator,
 )
 
-# Reporting
-from .reporting import (
-    HTMLReporter,
-    MarkdownReporter,
-    JSONReporter,
+# Unified Reporting
+from .unified_reporter import (
+    UnifiedReporter,
+    generate_quick_report,
 )
 
-# Visualization
-from .visualization import (
-    MetricVisualizer,
-    LayerVisualizer,
-    ComparisonVisualizer,
-    AlignmentVisualizer,
-    PruningVisualizer,
+# Unified Visualization
+from .visualization.unified_visualizer import (
+    UnifiedVisualizer,
+    plot_quick_summary,
 )
 
 __all__ = [
@@ -36,13 +34,9 @@ __all__ = [
     'MetricAggregator',
     'LayerAggregator',
     # Reporting
-    'HTMLReporter',
-    'MarkdownReporter',
-    'JSONReporter',
+    'UnifiedReporter',
+    'generate_quick_report',
     # Visualization
-    'MetricVisualizer',
-    'LayerVisualizer',
-    'ComparisonVisualizer',
-    'AlignmentVisualizer',
-    'PruningVisualizer',
+    'UnifiedVisualizer',
+    'plot_quick_summary',
 ] 
