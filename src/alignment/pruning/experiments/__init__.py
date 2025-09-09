@@ -1,18 +1,19 @@
 """
-Pruning experiments for analyzing the effects of different pruning strategies.
-
-This module contains various experiments that apply pruning techniques
-and analyze their impact on model alignment and performance.
+Pruning experiments for alignment analysis.
 """
 
-from .progressive import ProgressiveDropoutExperiment
-from .cascading_layer import CascadingLayerPruningExperiment
-from .layer_wise import LayerIsolatedPruningExperiment
-from .eigenvector_based import EigenvectorDropoutExperiment
+from .eigenvector_based import EigenvectorDropoutExperiment, EigenvectorConfig
+from .cascading_layer import CascadingLayerPruningExperiment, CascadingConfig
+from .layer_wise import LayerIsolatedPruningExperiment, LayerIsolatedConfig
+from .global_pruning import GlobalDropoutExperiment, GlobalDropoutConfig
 
 __all__ = [
-    'ProgressiveDropoutExperiment',
-    'CascadingLayerPruningExperiment',
-    'LayerIsolatedPruningExperiment',
     'EigenvectorDropoutExperiment',
+    'EigenvectorConfig',
+    'CascadingLayerPruningExperiment',
+    'CascadingConfig',
+    'LayerIsolatedPruningExperiment',
+    'LayerIsolatedConfig',
+    'GlobalDropoutExperiment',
+    'GlobalDropoutConfig',
 ] 

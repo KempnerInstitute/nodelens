@@ -60,6 +60,9 @@ class RandomPruning(BasePruningStrategy):
         """
         Compute random importance scores.
         
+        For structured pruning, generates neuron-level scores.
+        For unstructured pruning, generates weight-level scores.
+        
         Args:
             module: Module to compute scores for
             inputs: Not used
@@ -71,8 +74,29 @@ class RandomPruning(BasePruningStrategy):
         if not hasattr(module, 'weight'):
             raise ValueError(f"Module {module} does not have weights")
         
-        # Generate random importance scores
-        return torch.rand_like(module.weight.data)
+        weights = module.weight.data
+        
+        # For structured pruning, generate neuron-level scores
+        if self.config.structured:
+            if len(weights.shape) == 2:  # Linear layer
+                # Generate random score for each output neuron
+                neuron_scores = torch.rand(weights.shape[0], device=weights.device)
+                # Expand to weight dimensions (same score for all weights in a neuron)
+                importance_scores = neuron_scores.unsqueeze(1).expand_as(weights)
+            elif len(weights.shape) >= 3:  # Conv layer
+                # Generate random score for each output channel
+                channel_scores = torch.rand(weights.shape[0], device=weights.device)
+                # Expand to weight dimensions
+                shape = [weights.shape[0]] + [1] * (len(weights.shape) - 1)
+                importance_scores = channel_scores.view(shape).expand_as(weights)
+            else:
+                # Fallback to weight-level for unknown shapes
+                importance_scores = torch.rand_like(weights)
+        else:
+            # For unstructured pruning, generate weight-level random scores
+            importance_scores = torch.rand_like(weights)
+        
+        return importance_scores
 
 
 class LayerwiseRandomPruning(RandomPruning):
