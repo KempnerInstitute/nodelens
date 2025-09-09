@@ -182,3 +182,17 @@ cython_debug/
 # Datasets
 /data/
 *.tar.gz
+
+# Datasets
+/data/
+*.tar.gz
+*.zip
+*.7z
+*.npz
+*.pt
+*.pth
+*.bin
+results/**
+checkpoints/**
+logs/**
+
