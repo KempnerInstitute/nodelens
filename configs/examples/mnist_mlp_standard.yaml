@@ -1,0 +1,53 @@
+# Standard Pruning on MNIST with MLP
+# This configuration demonstrates basic magnitude-based pruning
+
+experiment_name: "mnist_mlp_standard_pruning"
+experiment_type: "standard_pruning"
+device: "cpu"
+seed: 42
+
+# Dataset
+dataset:
+  name: "mnist"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+
+# Model
+model:
+  name: "mlp"
+  hidden_sizes: [512, 256, 128]
+  activation: "relu"
+  output_dim: 10
+
+# Training
+training:
+  epochs: 10
+  optimizer: "adam"
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+# Metrics
+alignment:
+  metrics:
+    - "rayleigh_quotient"
+
+# Pruning - updated to include alignment and multiple modes
+pruning:
+  enabled: true
+  algorithms: ["magnitude", "alignment"]
+  alignment_metric: "rayleigh_quotient"
+  alignment_structured_pruning: true
+  scope: "layer"
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  selection_modes: ["low", "high", "random"]
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 5
+
+# Visualization
+visualization:
+  generate_plots: true
+  plot_types:
+    - "pruning_results"
+    - "weight_distribution"
+    - "layer_importance" 

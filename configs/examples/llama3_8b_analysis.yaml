@@ -1,0 +1,52 @@
+experiment:
+  name: "llama3_8b_alignment_analysis"
+  seed: 42
+  device: "cuda"
+
+dataset:
+  name: "dummy_text"
+  data_path: null
+  batch_size: 2
+  num_workers: 0
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Meta-Llama-3-8B-Instruct"
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+
+wrapper:
+  name: "transformer_wrapper"
+  tracked_layers:
+    - "model.layers.0.self_attn"
+    - "model.layers.0.mlp"
+    - "model.layers.15.self_attn"
+    - "model.layers.15.mlp"
+    - "model.layers.30.self_attn"
+    - "model.layers.30.mlp"
+
+metrics:
+  # Alignment metrics block (runner reads from alignment/analysis)
+  # Leave here for documentation; duplicated below under alignment
+  metrics: ["mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+  metric_configs:
+    gaussian_pid_synergy_mmi:
+      sample_pairs: 16
+    pairwise_redundancy_gaussian:
+      sample_pairs: 16
+
+analysis:
+  notes: "Run small batches due to memory. Provide tokenized inputs externally."
+
+alignment:
+  metrics: ["mutual_information_gaussian", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+
+pruning:
+  enabled: false
+  algorithms: ["alignment"]
+  sparsity_levels: [0.2]
+  selection_modes: ["low"]
+  alignment_metric: "rayleigh_quotient"
+
+

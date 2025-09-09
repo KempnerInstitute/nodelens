@@ -1,0 +1,62 @@
+# ResNet-50 Analysis Configuration
+# Fixed configuration for torchvision ResNet-50 experiments
+name: "resnet50_alignment_analysis"
+description: "ResNet-50 alignment analysis with pruning experiments"
+tags: ["resnet50", "torchvision", "alignment", "pruning"]
+
+# Experiment settings
+seed: 42
+device: "cuda"
+
+# Dataset configuration
+dataset_name: "cifar10"
+data_path: "./data"
+batch_size: 128
+num_workers: 4
+dataset_config:
+  download: true
+  normalize: true
+  augmentation: true  # ResNet benefits from data augmentation
+
+# Model configuration - Using torchvision_model loader
+model_name: "torchvision_model"
+model_config:
+  model_name: "resnet50"
+  pretrained: true
+  num_classes: 10  # CIFAR-10 classes
+pretrained: true
+
+# Training configuration
+train_before_dropout: true
+training_epochs: 15
+learning_rate: 0.0001  # Lower LR for pretrained model fine-tuning
+optimizer: "adam"
+
+# Metrics configuration
+metrics: ["rayleigh_quotient", "mutual_information_gaussian"]
+metric_configs:
+  rayleigh_quotient:
+    scale_by_norm: false
+  mutual_information_gaussian:
+    bins: 50
+
+# Layer tracking - ResNet-50 key layers
+tracked_layers:
+  - "conv1"              # Initial 7x7 conv
+  - "layer1.0.conv1"     # First residual block conv1
+  - "layer1.0.conv2"     # First residual block conv2
+  - "layer2.0.conv1"     # Second layer first block conv1
+  - "layer2.0.conv2"     # Second layer first block conv2
+  - "layer3.0.conv1"     # Third layer first block conv1
+  - "layer3.0.conv2"     # Third layer first block conv2
+  - "layer4.0.conv1"     # Fourth layer first block conv1
+  - "layer4.0.conv2"     # Fourth layer first block conv2
+  - "fc"                 # Final classification layer
+
+# CNN-specific settings
+scale_by_norm: false
+force_cpu_for_large_metric_ops: true
+cnn_rq_aggregation_op: "mean"
+exclude_classification_layer: true
+
+
