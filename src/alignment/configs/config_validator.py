@@ -24,22 +24,31 @@ def validate_config(config_dict: Dict[str, Any]) -> List[str]:
     if 'name' not in config_dict:
         errors.append("Missing required field: 'name'")
     
-    # Model validation
+    # Model validation (dynamic from registry if available)
     if 'model_name' in config_dict:
-        valid_models = ['mlp', 'cnn2p2', 'resnet18', 'resnet50']
+        try:
+            from alignment.core.registry import MODEL_REGISTRY
+            valid_models = MODEL_REGISTRY.list()
+        except Exception:
+            valid_models = ['mlp', 'cnn2p2', 'resnet18', 'resnet50']
         if config_dict['model_name'] not in valid_models:
             errors.append(f"Invalid model_name: {config_dict['model_name']}. Must be one of {valid_models}")
     
-    # Dataset validation
+    # Dataset validation (dynamic)
     if 'dataset_name' in config_dict:
-        valid_datasets = ['mnist', 'cifar10', 'cifar100', 'imagenet']
+        try:
+            from alignment.core.registry import DATASET_REGISTRY
+            valid_datasets = DATASET_REGISTRY.list()
+        except Exception:
+            valid_datasets = ['mnist', 'cifar10', 'cifar100', 'imagenet']
         if config_dict['dataset_name'] not in valid_datasets:
             errors.append(f"Invalid dataset_name: {config_dict['dataset_name']}. Must be one of {valid_datasets}")
     
     # Device validation
     if 'device' in config_dict:
-        if not config_dict['device'].startswith(('cuda', 'cpu')):
-            errors.append(f"Invalid device: {config_dict['device']}. Must be 'cpu' or 'cuda[:N]'")
+        dev = str(config_dict['device'])
+        if not (dev == 'cpu' or dev.startswith('cuda')):
+            errors.append(f"Invalid device: {dev}. Must be 'cpu' or 'cuda[:N]'")
     
     # Numeric validations
     numeric_fields = {
@@ -63,12 +72,13 @@ def validate_config(config_dict: Dict[str, Any]) -> List[str]:
         if not isinstance(config_dict['metrics'], list):
             errors.append("'metrics' must be a list")
         else:
-            valid_metrics = [
-                'rayleigh_quotient', 'mutual_information', 'partial_information_decomposition',
-                'cka', 'cca', 'procrustes', 'shared_information'
-            ]
+            try:
+                from alignment.core.registry import METRIC_REGISTRY
+                valid_metrics = METRIC_REGISTRY.list()
+            except Exception:
+                valid_metrics = []
             for metric in config_dict['metrics']:
-                if metric not in valid_metrics:
+                if valid_metrics and metric not in valid_metrics:
                     errors.append(f"Invalid metric: {metric}. Must be one of {valid_metrics}")
     
     # Dropout fractions validation
@@ -97,7 +107,7 @@ def validate_experiment_config(config_dict: Dict[str, Any], experiment_type: str
     errors = validate_config(config_dict)
     
     # Experiment-specific validations
-    if experiment_type == 'progressive_dropout':
+    if experiment_type in ['progressive_dropout', 'global_dropout']:
         if 'dropout_fractions' not in config_dict:
             errors.append("Progressive dropout requires 'dropout_fractions'")
     

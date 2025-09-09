@@ -5,8 +5,12 @@ Vision task-specific alignment metrics.
 import torch
 import torch.nn.functional as F
 from typing import Optional, Dict, Any, Tuple
+import logging
 from ...core.registry import register_metric
 from ...core.base import BaseMetric
+
+
+logger = logging.getLogger(__name__)
 
 
 @register_metric("vision_task_alignment")
@@ -28,7 +32,8 @@ class VisionTaskAlignment(BaseMetric):
         alignment_type: str = "spatial_coherence",
         image_size: Tuple[int, int] = (224, 224),
         patch_size: int = 16,
-        n_orientations: int = 8
+        n_orientations: int = 8,
+        require_real_data: bool = False
     ):
         """
         Initialize vision task alignment metric.
@@ -48,6 +53,7 @@ class VisionTaskAlignment(BaseMetric):
         self.image_size = image_size
         self.patch_size = patch_size
         self.n_orientations = n_orientations
+        self.require_real_data = require_real_data
     
     def compute(
         self,
@@ -84,6 +90,7 @@ class VisionTaskAlignment(BaseMetric):
             else:
                 # Already flattened
                 outputs = inputs @ weights.T
+        device = outputs.device
         
         n_neurons = weights.shape[0]
         alignment_scores = torch.zeros(n_neurons, device=outputs.device)
@@ -91,9 +98,19 @@ class VisionTaskAlignment(BaseMetric):
         if self.alignment_type == "spatial_coherence":
             # Measure spatial coherence of neuron activations
             if outputs.dim() == 2:
-                # Reshape to spatial format if flattened
+                # Expect flattened spatial maps concatenated per neuron: [B, n_neurons * H * W]
+                total_features = outputs.shape[1]
+                if total_features % n_neurons != 0:
+                    raise ValueError(
+                        f"Cannot infer spatial dims: features={total_features} not divisible by neurons={n_neurons}"
+                    )
+                spatial_area = total_features // n_neurons
+                spatial_size = int(spatial_area ** 0.5)
+                if spatial_size * spatial_size != spatial_area:
+                    raise ValueError(
+                        f"Non-square spatial area inferred: area={spatial_area}. Provide conv outputs or proper preprocessing."
+                    )
                 batch_size = outputs.shape[0]
-                spatial_size = int((outputs.shape[1] / n_neurons) ** 0.5)
                 outputs = outputs.reshape(batch_size, n_neurons, spatial_size, spatial_size)
             elif outputs.dim() == 4:
                 # Already in spatial format
@@ -131,14 +148,15 @@ class VisionTaskAlignment(BaseMetric):
         elif self.alignment_type == "edge_detection":
             # Measure alignment with edge detection filters
             # Create Sobel-like edge detection kernels
-            device = outputs.device
             
             # Horizontal and vertical edge kernels
             kernel_h = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32, device=device)
             kernel_v = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32, device=device)
             
             if images is None:
-                # Generate synthetic images with edges
+                if self.require_real_data:
+                    raise ValueError("VisionTaskAlignment(edge_detection) requires images but none were provided.")
+                logger.warning("images not provided; generating synthetic edge patterns for alignment computation")
                 images = self._generate_edge_patterns(outputs.shape[0], device)
             
             # Compute edge responses in images
@@ -180,7 +198,9 @@ class VisionTaskAlignment(BaseMetric):
         elif self.alignment_type == "texture_response":
             # Measure response to texture patterns
             if feature_maps is None:
-                # Generate synthetic texture patterns
+                if self.require_real_data:
+                    raise ValueError("VisionTaskAlignment(texture_response) requires feature_maps but none were provided.")
+                logger.warning("feature_maps not provided; generating synthetic texture patterns for alignment computation")
                 feature_maps = self._generate_texture_patterns(outputs.shape[0], n_neurons, device)
             
             # Compute texture energy for different frequencies
@@ -212,6 +232,9 @@ class VisionTaskAlignment(BaseMetric):
         elif self.alignment_type == "object_selectivity":
             # Measure object-specific selectivity
             if labels is None:
+                if self.require_real_data:
+                    raise ValueError("VisionTaskAlignment(object_selectivity) requires labels but none were provided.")
+                logger.warning("labels not provided; generating synthetic labels for alignment computation")
                 # Create synthetic object labels
                 n_objects = 10
                 labels = torch.randint(0, n_objects, (outputs.shape[0],), device=device)

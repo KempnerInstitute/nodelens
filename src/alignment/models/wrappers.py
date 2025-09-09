@@ -63,7 +63,7 @@ class ModelWrapper(BaseModelWrapper):
     
     def forward_with_activations(
         self,
-        inputs: torch.Tensor,
+        inputs: Any,
         preprocess: bool = True
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
@@ -77,7 +77,11 @@ class ModelWrapper(BaseModelWrapper):
             Tuple of (model outputs, activation dictionary)
         """
         self._activation_cache.clear()
-        outputs = self.forward(inputs)
+        # Support both tensor and dict inputs (for HF models)
+        if isinstance(inputs, dict):
+            outputs = self.forward(**inputs)
+        else:
+            outputs = self.forward(inputs)
         
         # Get activations
         activations = self._activation_cache.copy()

@@ -34,7 +34,8 @@ class GaussianMIAnalytic(BaseMetric):
         expansion_order: int = 2,
         noise_std: float = 0.1,
         regularization: float = 1e-6,
-        per_neuron: bool = True
+        per_neuron: bool = True,
+        use_entropy_edgeworth: bool = True
     ):
         """
         Initialize Gaussian MI metric with expansion.
@@ -50,6 +51,7 @@ class GaussianMIAnalytic(BaseMetric):
         self.noise_std = noise_std
         self.regularization = regularization
         self.per_neuron = per_neuron
+        self.use_entropy_edgeworth = use_entropy_edgeworth
     
     def _compute_cumulants(self, data: torch.Tensor, max_order: int = 4) -> Dict[int, torch.Tensor]:
         """
@@ -80,6 +82,27 @@ class GaussianMIAnalytic(BaseMetric):
             cumulants[4] = fourth_moment - 3 * cumulants[2] ** 2
         
         return cumulants
+
+    def _univariate_entropy_edgeworth(self, data: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        """
+        Differential entropy of near-Gaussian scalar variable using exact first corrections:
+          h(X) ≈ 0.5 * log(2π e σ^2) - (γ1^2)/12 - (γ2^2)/48
+        where γ1 is skewness, γ2 is excess kurtosis.
+        data: [B]
+        Returns scalar entropy in nats.
+        """
+        x = data
+        x = x - x.mean()
+        var = torch.clamp(x.var(unbiased=True), min=eps)
+        std = torch.sqrt(var)
+        if std <= eps:
+            return 0.5 * torch.log(2 * torch.pi * torch.e * torch.clamp(var, min=eps))
+        z = x / std
+        gamma1 = torch.mean(z ** 3)
+        gamma2 = torch.mean(z ** 4) - 3.0  # excess kurtosis
+        h_gauss = 0.5 * torch.log(2 * torch.pi * torch.e * var)
+        corr = - (gamma1 ** 2) / 12.0 - (gamma2 ** 2) / 48.0
+        return h_gauss + corr
     
     def _gaussian_mi(
         self, 
@@ -254,19 +277,26 @@ class GaussianMIAnalytic(BaseMetric):
                 cov_y = (y_centered.T @ y_centered) / (batch_size - 1)
                 cov_xy = (inputs_centered.T @ y_centered) / (batch_size - 1)
                 
-                # Gaussian MI
+                # Gaussian MI baseline
                 mi_gaussian = self._gaussian_mi(cov_x, cov_y, cov_xy)
-                
-                # Add corrections if requested
-                if self.expansion_order > 0:
-                    cumulants_y = self._compute_cumulants(y, self.expansion_order + 2)
-                    # For single output, cov_xy is a vector [input_dim, 1], need scalar correlation
-                    # Use the norm of the covariance vector as a measure of overall correlation
-                    cov_xy_scalar = torch.norm(cov_xy)
-                    correction = self._edgeworth_correction(
-                        cumulants_x, cumulants_y, cov_xy_scalar, self.expansion_order
-                    )
-                    mi_scores[i] = mi_gaussian + correction
+
+                if self.expansion_order > 0 and self.use_entropy_edgeworth:
+                    # Compute MI via entropy difference with Edgeworth entropy corrections (univariate)
+                    # Fit linear regression to get residual r = y - E[y|X]
+                    # Using population-style coefficients from sample covariances: beta = Σ_x^{-1} cov_xy
+                    try:
+                        beta = torch.linalg.solve(cov_x + self.regularization * torch.eye(cov_x.shape[0], device=cov_x.device), cov_xy).squeeze()
+                    except RuntimeError:
+                        beta = torch.linalg.pinv(cov_x) @ cov_xy
+                        beta = beta.squeeze()
+                    y_hat_centered = inputs_centered @ beta
+                    r_centered = y_centered.squeeze() - y_hat_centered
+
+                    # Entropy corrections for y and residual r
+                    h_y = self._univariate_entropy_edgeworth(y_centered.squeeze())
+                    h_r = self._univariate_entropy_edgeworth(r_centered)
+                    mi_edge = torch.clamp(h_y - h_r, min=0.0)
+                    mi_scores[i] = mi_edge
                 else:
                     mi_scores[i] = mi_gaussian
             
