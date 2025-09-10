@@ -11,10 +11,10 @@ Requirements
 Installation Methods
 --------------------
 
-From Source (Recommended for Development)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+From Source
+~~~~~~~~~~~~
 
-Clone the repository and install in development mode:
+Clone the repository and install:
 
 .. code-block:: bash
 
@@ -34,8 +34,8 @@ Install with additional dependencies for specific features:
    # Install with visualization support
    pip install -e ".[viz]"
 
-   # Install with development tools
-   pip install -e ".[dev]"
+   # Install with all optional dependencies
+   pip install -e ".[all]"
 
    # Install with documentation building tools
    pip install -e ".[docs]"

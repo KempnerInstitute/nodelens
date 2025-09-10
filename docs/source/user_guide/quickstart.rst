@@ -19,7 +19,7 @@ Basic Installation
    git clone https://github.com/KempnerInstitute/alignment.git
    cd alignment
    
-   # Install in development mode
+   # Install the package
    pip install -e .
 
 Full Installation
@@ -32,7 +32,7 @@ Full Installation
    
    # Or install specific extras
    pip install -e .[viz]      # Visualization tools
-   pip install -e .[dev]      # Development tools
+   pip install -e .[all]      # All optional dependencies
    pip install -e .[docs]     # Documentation building
 
 Your First Experiment
