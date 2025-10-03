@@ -7,6 +7,7 @@ including general alignment analysis, multi-network experiments, and utilities.
 
 from .base import BaseExperiment, ExperimentConfig
 from .general_alignment import GeneralAlignmentExperiment, GeneralAlignmentConfig
+from .llm_experiments import LLMAlignmentExperiment
 
 # Configuration components
 from .config_components import (
@@ -34,6 +35,7 @@ __all__ = [
     # Main experiments
     'GeneralAlignmentExperiment',
     'GeneralAlignmentConfig',
+    'LLMAlignmentExperiment',
     # Configuration components
     'TrainingConfig',
     'PruningConfig',

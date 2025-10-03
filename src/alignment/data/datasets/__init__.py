@@ -13,6 +13,13 @@ from alignment.data.datasets.unified_dataset import (
     DATASET_CONFIGS,
 )
 
+from alignment.data.datasets.text_datasets import (
+    TextDataset,
+    WikiTextDataset,
+    C4Dataset,
+    load_text_dataset,
+)
+
 # Import for backward compatibility - these are now created dynamically
 # but we import them to make them available at module level
 from alignment.core.registry import DATASET_REGISTRY
@@ -84,4 +91,9 @@ __all__ = [
     'CIFAR100Dataset',
     'ImageNetDataset',
     'SVHNDataset',
+    # Text datasets for LLMs
+    'TextDataset',
+    'WikiTextDataset',
+    'C4Dataset',
+    'load_text_dataset',
 ] 
