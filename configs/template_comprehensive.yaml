@@ -161,8 +161,17 @@ alignment:
   frequency: 1                   # Measure every N epochs
   
   # Alignment metrics to compute
-  # Options: "rayleigh_quotient", "spectral_gap", "gradient_alignment", 
-  #          "weight_alignment", "activation_alignment"
+  # Geometric/Alignment-based:
+  #   - "rayleigh_quotient": Neuron-input alignment (default, recommended)
+  #   - "spectral_alignment": Spectral decomposition-based alignment
+  #   - "weight_cosine_similarity": Similarity between weight vectors
+  # Information-theoretic:
+  #   - "mutual_information_gaussian": Gaussian approximation of MI
+  #   - "pairwise_redundancy_gaussian": Pairwise neuron redundancy
+  # Activation-based (for LLMs):
+  #   - "activation_norm": L2 norm of activations (standard LLM pruning)
+  #   - "activation_mean": Mean activation magnitude
+  #   - "activation_variance": Activation variance
   metrics: ["rayleigh_quotient"]
   
   # Metric-specific configurations
@@ -217,7 +226,12 @@ pruning:
   fine_tune_epochs: 10  # Number of fine-tuning epochs
   
   # Alignment-based pruning options
-  alignment_metric: "rayleigh_quotient"  # Metric for alignment-based pruning
+  # Metric to use for computing neuron importance:
+  #   - "rayleigh_quotient": Geometric alignment (recommended for general use)
+  #   - "activation_norm": L2 norm of activations (standard for LLM pruning)
+  #   - "mutual_information_gaussian": Information-theoretic importance
+  #   - "weight_cosine_similarity": Weight-based similarity
+  alignment_metric: "rayleigh_quotient"  # Default metric
   structured_pruning: true               # Use structured pruning for alignment
   
   # Hybrid pruning options

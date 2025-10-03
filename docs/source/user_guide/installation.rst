@@ -4,101 +4,71 @@ Installation Guide
 Requirements
 ------------
 
-- Python 3.8 or higher
-- PyTorch 1.9 or higher
-- CUDA toolkit (optional, for GPU support)
+- Python 3.8+
+- PyTorch 1.9+
+- CUDA toolkit (recommended for GPU support)
 
-Installation Methods
---------------------
+Installation
+------------
 
-From Source
-~~~~~~~~~~~~
+Using Conda (Recommended)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Clone the repository and install:
+Create and activate the conda environment:
 
 .. code-block:: bash
 
-   git clone https://github.com/KempnerInstitute/alignment.git
+   git clone <repository-url>
+   cd alignment
+   
+   conda env create -f environment.yml
+   conda activate alignment
+   
+   pip install -e .
+
+Using Pip
+~~~~~~~~~
+
+Install directly from source:
+
+.. code-block:: bash
+
+   git clone <repository-url>
    cd alignment
    pip install -e .
 
-This installs the package in editable mode, allowing you to modify the code and see changes immediately.
+Verification
+------------
 
-Installing with Extras
-~~~~~~~~~~~~~~~~~~~~~~
-
-Install with additional dependencies for specific features:
-
-.. code-block:: bash
-
-   # Install with visualization support
-   pip install -e ".[viz]"
-
-   # Install with all optional dependencies
-   pip install -e ".[all]"
-
-   # Install with documentation building tools
-   pip install -e ".[docs]"
-
-   # Install everything
-   pip install -e ".[all]"
-
-From Git Repository
-~~~~~~~~~~~~~~~~~~~
-
-Install directly from the repository:
-
-.. code-block:: bash
-
-   pip install git+https://github.com/KempnerInstitute/alignment.git
-
-Verifying Installation
-----------------------
-
-Test that the installation was successful:
+Test the installation:
 
 .. code-block:: python
 
    import alignment
-   from alignment.core import ModelWrapper
    from alignment.metrics import METRIC_REGISTRY
-
+   
    # List available metrics
    print(METRIC_REGISTRY.list())
 
-Common Issues
--------------
+GPU Support
+-----------
 
-CUDA/GPU Issues
-~~~~~~~~~~~~~~~
+To use GPU acceleration, ensure PyTorch is installed with CUDA support:
 
-If you encounter CUDA-related errors:
+.. code-block:: bash
 
-1. Ensure PyTorch is installed with CUDA support:
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
-   .. code-block:: bash
+Verify CUDA availability:
 
-      pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+.. code-block:: python
 
-2. Verify CUDA availability:
-
-   .. code-block:: python
-
-      import torch
-      print(torch.cuda.is_available())
-
-Import Errors
-~~~~~~~~~~~~~
-
-If you get import errors:
-
-1. Ensure you're in the correct environment
-2. Check that the package is installed: ``pip list | grep alignment``
-3. Verify Python path includes the installation directory
+   import torch
+   print(torch.cuda.is_available())
 
 Next Steps
 ----------
 
-- See the :doc:`quickstart` for basic usage
-- Check out :doc:`/examples/index` for comprehensive demos
-- Read the :doc:`/api/index` for detailed documentation 
+- See :doc:`quickstart` for basic usage
+- Check :doc:`/examples/index` for examples
+- Read :doc:`/api/index` for API documentation

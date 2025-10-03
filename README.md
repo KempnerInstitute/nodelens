@@ -1,147 +1,162 @@
 # Alignment Analysis Framework
 
-A comprehensive framework for analyzing neural network alignment, pruning, and information-theoretic properties.
+A framework for analyzing neural network alignment, pruning strategies, and information-theoretic properties.
 
-## Features
+## Overview
 
-- Alignment Analysis: Measure how neural representations align with data and task structure
-- Pruning Experiments: Test various pruning strategies and their effects on model performance  
-- Multi-Network Analysis: Train and analyze multiple networks in parallel
-- 30+ Metrics: Rayleigh quotient, mutual information, spectral metrics, and more
-- Extensible Design: Easy to add custom metrics and strategies
+This framework provides tools for:
+- Computing alignment metrics between neural representations and task structure
+- Implementing and testing pruning strategies
+- Training and analyzing multiple networks
+- Evaluating model performance across various metrics
 
 ## Installation
 
-### Prerequisites
+### Requirements
 - Python 3.8+
 - CUDA-compatible GPU (recommended)
-- Git
 
 ### Setup
+
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd alignment
 
-# Create conda environment
 conda env create -f environment.yml
-conda activate networkAlignmentAnalysis
+conda activate alignment
 
-# Install in development mode
 pip install -e .
 ```
 
 ## Quick Start
 
-### Using Configuration Files (Recommended)
-```bash
-# Run ResNet-18 experiment on CIFAR-10
-python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml --device cuda
+Run an experiment using a configuration file:
 
-# Run comprehensive analysis
-python scripts/run_experiment.py --config configs/examples/resnet50_analysis.yaml --device cuda
+```bash
+python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml
 ```
 
-### Using Python API
+Or use the Python API:
+
 ```python
 from alignment.configs.config_loader import load_config
 from alignment.experiments import GeneralAlignmentExperiment
 
-# Load configuration
 config = load_config('configs/examples/resnet18_analysis.yaml')
-
-# Run experiment
 experiment = GeneralAlignmentExperiment(config)
 results = experiment.run()
 ```
 
 ## Supported Models
 
-### Vision Models (via torchvision/timm)
+**Vision Models:**
 - ResNet (18, 34, 50, 101, 152)
 - VGG (11, 13, 16, 19)
-- AlexNet
 - EfficientNet (B0-B7)
 - Vision Transformers (ViT, DeiT)
-- MobileNet, DenseNet
+- AlexNet, MobileNet, DenseNet
 
-### Custom Models
-- Multi-layer Perceptrons (MLP)
-- Convolutional Neural Networks (CNN)
-- Custom architectures via model registry
+**Custom Models:**
+- Multi-layer Perceptrons
+- Convolutional Neural Networks
+- Custom architectures via registry
+
+**Language Models:**
+- HuggingFace Causal LM (GPT, LLaMA, Mistral)
 
 ## Datasets
 
+Supported datasets include:
 - MNIST, Fashion-MNIST
 - CIFAR-10, CIFAR-100
 - ImageNet
-- Custom datasets via dataset registry
+- WikiText, C4 (for language models)
+- Custom datasets via registry
 
-## Documentation
+## Configuration
 
-Build documentation locally:
-```bash
-cd docs
-make html
+Experiments are configured via YAML files. Example:
+
+```yaml
+experiment:
+  name: "my_experiment"
+  seed: 42
+
+model:
+  name: "resnet18"
+  pretrained: true
+
+dataset:
+  name: "cifar10"
+  batch_size: 128
+
+alignment:
+  metrics: ["rayleigh_quotient", "mutual_information_gaussian"]
+
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.2, 0.5]
 ```
 
-View at: `docs/build/html/index.html`
+See `configs/examples/` for complete examples.
 
 ## Project Structure
 
 ```
 alignment/
-├── src/alignment/        # Main package
-│   ├── core/            # Core functionality and registry
-│   ├── models/          # Model architectures and loaders
-│   ├── metrics/         # Alignment metrics (30+ implementations)
-│   ├── pruning/         # Pruning strategies and experiments
+├── src/alignment/
+│   ├── core/            # Registry and base classes
+│   ├── models/          # Model loaders and wrappers
+│   ├── metrics/         # Alignment metrics
+│   ├── pruning/         # Pruning strategies
 │   ├── experiments/     # Experiment framework
 │   ├── data/            # Dataset handling
-│   ├── analysis/        # Result analysis and visualization
 │   └── configs/         # Configuration management
-├── configs/             # Configuration templates and examples
+├── configs/             # Configuration files
 ├── examples/            # Example scripts
-├── scripts/             # Experiment runner scripts
-├── tests/               # Unit and integration tests
-└── docs/                # Documentation source
+├── scripts/             # Experiment runners
+├── tests/               # Tests
+└── docs/                # Documentation
 ```
 
-## Usage Examples
+## Available Metrics
 
-### Basic Alignment Analysis
+The framework implements over 30 alignment metrics, including:
+- Rayleigh Quotient
+- Mutual Information (various estimators)
+- Spectral Alignment
+- Cosine Similarity
+- Partial Information Decomposition (PID)
+- Task-specific metrics
+
+## Pruning Strategies
+
+Supported pruning approaches:
+- Magnitude-based pruning
+- Gradient-based pruning
+- Alignment-based pruning
+- Random pruning (baseline)
+- Structured and unstructured pruning
+
+## Documentation
+
+Build the documentation:
+
 ```bash
-# Simple MLP on MNIST
-python scripts/run_experiment.py --config configs/examples/mnist_mlp_standard.yaml
-
-# Vision model analysis
-python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml
+cd docs
+make html
 ```
 
-### Custom Configuration
-1. Copy a template: `cp configs/template_basic.yaml configs/my_experiment.yaml`
-2. Edit the configuration file
-3. Run: `python scripts/run_experiment.py --config configs/my_experiment.yaml`
+View at `docs/build/html/index.html`.
 
-## Results and Outputs
+## Testing
 
-Experiments generate:
-- Training logs and metrics
-- Alignment analysis results
-- Pruning performance comparisons
-- Professional visualizations (PNG plots)
-- Comprehensive experiment reports
+Run tests:
 
-Results are saved in timestamped directories: `results/experiment_name_YYYYMMDD_HHMMSS/`
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes with tests
-4. Submit a pull request
-
-See `docs/source/contributing.rst` for detailed guidelines.
+```bash
+pytest tests/
+```
 
 ## License
 

@@ -1,0 +1,187 @@
+# Train MLP on MNIST and prune using alignment metrics
+# Comprehensive configuration with high-resolution sparsity testing
+
+# ==============================================================================
+# EXPERIMENT IDENTIFICATION
+# ==============================================================================
+experiment_name: "mnist_alignment_pruning"
+description: "MLP trained on MNIST with alignment-based pruning at multiple sparsity levels"
+tags: ["mnist", "mlp", "alignment", "pruning"]
+seed: 42
+device: "cpu"
+
+# ==============================================================================
+# MULTI-NETWORK CONFIGURATION
+# ==============================================================================
+num_networks: 1
+aggregate_metrics: true
+save_individual_networks: false
+
+# ==============================================================================
+# MODEL CONFIGURATION
+# ==============================================================================
+model:
+  name: "mlp"
+  hidden_sizes: [512, 256, 128]
+  activation: "relu"
+  dropout_rate: 0.0
+  output_dim: 10
+
+# ==============================================================================
+# DATASET CONFIGURATION
+# ==============================================================================
+dataset:
+  name: "mnist"
+  data_path: "./data"
+  batch_size: 1024
+  num_workers: 8
+  pin_memory: false
+  drop_last: false
+  normalize: true
+  augment: false
+  download: true
+
+# ==============================================================================
+# TRAINING CONFIGURATION
+# ==============================================================================
+training:
+  do_train: true
+  epochs: 50
+  
+  optimizer: "adam"
+  learning_rate: 0.01
+  weight_decay: 0.00001
+  
+  scheduler: "cosine"
+  scheduler_config:
+    T_max: 500
+    eta_min: 0.00001
+  
+  gradient_clip_val: null
+  early_stopping_patience: null
+  
+  save_checkpoints: false
+  checkpoint_interval: 50
+  save_best: true
+
+# ==============================================================================
+# ALIGNMENT MEASUREMENT CONFIGURATION
+# ==============================================================================
+alignment:
+  measure_during_training: false
+  frequency: 10
+  
+  metrics:
+    - "rayleigh_quotient"
+  
+  metric_configs:
+    rayleigh_quotient:
+      scale_by_norm: false
+      force_cpu_for_large_ops: true
+      aggregation_op: "mean"
+  
+  tracked_layers: null
+  exclude_classification_layer: true
+  measure_expected_distribution: true
+  distribution_bins: 50
+
+# ==============================================================================
+# PRUNING EXPERIMENTS CONFIGURATION
+# ==============================================================================
+pruning:
+  enabled: true
+  
+  # Pruning algorithms to test
+  algorithms: ["alignment", "magnitude", "random"]
+  
+  # High-resolution sparsity levels (0% to 95% in 5% increments)
+  sparsity_levels: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 
+                    0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+  
+  # Test all selection modes: prune low-importance, high-importance, and random
+  selection_modes: ["low", "high", "random"]
+  
+  # Pruning scope
+  scope: "layer"
+  
+  # Fine-tuning after pruning
+  fine_tune_after_pruning: true
+  fine_tune_epochs: 10
+  
+  # Alignment-specific options
+  alignment_metric: "rayleigh_quotient"
+  structured_pruning: true
+  
+  # Hybrid pruning options
+  hybrid_alpha: 0.5
+
+# ==============================================================================
+# DROPOUT ANALYSIS CONFIGURATION
+# ==============================================================================
+dropout:
+  enabled: false
+  rates: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+  mode: "scaled"
+  pruning_mode: "global"
+
+# ==============================================================================
+# EIGENFEATURE ANALYSIS CONFIGURATION
+# ==============================================================================
+eigenfeature:
+  enabled: true
+  num_eigenfeatures: 10
+  layers: null
+
+# ==============================================================================
+# CNN CONFIGURATION
+# ==============================================================================
+cnn:
+  mode: "unfold"
+
+# ==============================================================================
+# VISUALIZATION CONFIGURATION
+# ==============================================================================
+visualization:
+  enabled: true
+  format: "png"
+  dpi: 300
+  
+  plot_types:
+    - "training_curves"
+    - "alignment_evolution"
+    - "pruning_results"
+    - "weight_distributions"
+  
+  style: "seaborn"
+  figsize: [10, 6]
+  save_intermediate: false
+
+# ==============================================================================
+# RESULTS AND LOGGING CONFIGURATION
+# ==============================================================================
+results:
+  save_intermediate: true
+  save_networks: false
+  format: "json"
+  compress: false
+
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_file: "experiment.log"
+  console: true
+  
+  wandb:
+    enabled: false
+  
+  tensorboard:
+    enabled: false
+
+# ==============================================================================
+# ADVANCED OPTIONS
+# ==============================================================================
+advanced:
+  deterministic: true
+  benchmark: false
+  debug_mode: false
+  profile: false

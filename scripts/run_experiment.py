@@ -10,7 +10,7 @@ A single entry point for all alignment experiments that can handle:
 - Any experiment type (standard, progressive, layer-wise, etc.)
 
 Usage:
-    python scripts/run_experiment.py --config configs/unified_config.yaml python scripts/run_experiment.py --config configs/unified_config.yaml
+    python scripts/run_experiment.py --config configs/unified_config.yaml
 """
 
 import argparse
@@ -372,23 +372,6 @@ def main():
     
     logger.info(f"Running {experiment_type} experiment")
     
-    # DEBUGGING: Check pruning configuration before creating experiment
-    # Note: Using proper config object now instead of unified_config dict
-    
-    logger.info("=== PRUNING CONFIGURATION DEBUG ===")
-    logger.info(f"pruning_analysis.enabled: False")
-    logger.info(f"network_compression.enabled: False")
-    logger.info(f"config.do_pruning_experiments: {getattr(config, 'do_pruning_experiments', 'NOT SET')}")
-    logger.info(f"config.generate_plots: {getattr(config, 'generate_plots', 'NOT SET')}")
-    
-    if hasattr(config, 'pruning_strategies'):
-        logger.info(f"config.pruning_strategies: {config.pruning_strategies}")
-    if hasattr(config, 'pruning_amounts'):
-        logger.info(f"config.pruning_amounts: {config.pruning_amounts}")
-    if hasattr(config, 'pruning_selection_mode'):
-        logger.info(f"config.pruning_selection_mode: {config.pruning_selection_mode}")
-    
-    logger.info("=== END PRUNING DEBUG ===")
     
     # Create experiment based on inferred type
     if experiment_type in ['standard_pruning', 'progressive_dropout', 'alignment_analysis']:
@@ -400,55 +383,9 @@ def main():
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
     
-    # DEBUGGING: Log configuration state before running
-    logger.info(f"Final config state:")
-    logger.info(f"  - generate_plots: {getattr(config, 'generate_plots', 'NOT SET')}")
-    logger.info(f"  - do_pruning_experiments: {getattr(config, 'do_pruning_experiments', 'NOT SET')}")
-    logger.info(f"  - log_dir: {config.log_dir}")
-    logger.info(f"  - plots_dir exists: {plots_dir.exists()}")
-    
-    # DEBUGGING: Check if the experiment object has the right configuration
-    if hasattr(experiment, 'config'):
-        exp_config = experiment.config
-        logger.info(f"Experiment object config:")
-        logger.info(f"  - generate_plots: {getattr(exp_config, 'generate_plots', 'NOT SET')}")
-        logger.info(f"  - do_pruning_experiments: {getattr(exp_config, 'do_pruning_experiments', 'NOT SET')}")
-        logger.info(f"  - log_dir: {getattr(exp_config, 'log_dir', 'NOT SET')}")
-        
-        # Check if pruning methods exist
-        if hasattr(experiment, 'run_pruning_experiments'):
-            logger.info("  - run_pruning_experiments method exists")
-        else:
-            logger.warning("  - run_pruning_experiments method MISSING")
-            
-        if hasattr(experiment, 'visualize_pruning_results'):
-            logger.info("  - visualize_pruning_results method exists")
-        else:
-            logger.warning("  - visualize_pruning_results method MISSING")
     
     # Run experiment
     results = experiment.run()
-    
-    # DEBUGGING: Check if plots were actually created and log detailed info
-    plots_created = list(plots_dir.glob('*.png')) + list(plots_dir.glob('*.pdf')) + list(plots_dir.glob('*.jpg'))
-    logger.info(f"Plots created after experiment: {len(plots_created)} files")
-    for plot_file in plots_created:
-        logger.info(f"  - {plot_file.name} (size: {plot_file.stat().st_size} bytes)")
-    
-    # DEBUGGING: Check if pruning results exist in the results
-    if 'pruning_results' in results:
-        logger.info("Pruning results found in experiment results")
-        pruning_results = results['pruning_results']
-        if isinstance(pruning_results, dict):
-            logger.info(f"Pruning results keys: {list(pruning_results.keys())}")
-            if 'strategies' in pruning_results:
-                strategies = pruning_results['strategies']
-                logger.info(f"Pruning strategies in results: {list(strategies.keys()) if isinstance(strategies, dict) else strategies}")
-        else:
-            logger.info(f"Pruning results type: {type(pruning_results)}")
-    else:
-        logger.warning("NO pruning results found in experiment results")
-        logger.info(f"Available result keys: {list(results.keys()) if isinstance(results, dict) else 'Results not a dict'}")
     
     # Save results with timestamp
     results_file = output_dir / f'results_{timestamp}.json'

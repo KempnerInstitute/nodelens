@@ -429,12 +429,3 @@ class LLMAlignmentExperiment(BaseExperiment):
                     }
         
         return results
-
-
-# Register experiment type
-try:
-    from ..core.registry import register_experiment
-    register_experiment("llm_alignment", LLMAlignmentExperiment)
-except ImportError:
-    pass
-

@@ -117,13 +117,17 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     if 'dataset' in nested_config:
         dataset = nested_config['dataset']
         # Normalize dataset name
-        dataset_name = dataset.get('dataset_name', 'MNIST')
+        dataset_name = dataset.get('name', dataset.get('dataset_name', 'MNIST'))
         flat_config['dataset_name'] = dataset_name.lower()  # Lowercase for consistency
         flat_config['data_path'] = dataset.get('data_path')
         flat_config['batch_size'] = dataset.get('batch_size', 128)
         flat_config['num_workers'] = dataset.get('num_workers', 4)
+        
+        # Filter out DataLoader-specific parameters (not Dataset parameters)
+        dataloader_params = ['batch_size', 'num_workers', 'pin_memory', 'drop_last', 
+                             'persistent_workers', 'prefetch_factor', 'name', 'dataset_name', 'data_path']
         flat_config['dataset_config'] = {k: v for k, v in dataset.items() 
-                                        if k not in ['dataset_name', 'data_path', 'batch_size', 'num_workers']}
+                                        if k not in dataloader_params}
     else:
         # Handle flat structure where dataset fields are at top level
         dataset_name = nested_config.get('dataset_name', 'MNIST')
@@ -136,7 +140,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map model configuration
     if 'model' in nested_config:
         model = nested_config['model']
-        model_name = model.get('model_name', 'MLP')
+        model_name = model.get('name', model.get('model_name', 'mlp'))
         flat_config['model_name'] = model_name
         flat_config['model_config'] = {}
         
@@ -161,7 +165,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config['tracked_layers'] = list(model['alignment_layers'].keys()) if isinstance(model['alignment_layers'], dict) else model['alignment_layers']
     else:
         # Handle flat structure where model_name is at top level
-        model_name = nested_config.get('model_name', 'MLP')
+        model_name = nested_config.get('model_name', 'mlp')
         flat_config['model_name'] = model_name
         flat_config['model_config'] = nested_config.get('model_config', {})
         
@@ -218,18 +222,21 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config['device'] = nested_config.get('device', 'cuda')
     flat_config['seed'] = nested_config.get('seed', 42)
     
+    # Map pruning configuration (check both top-level and nested 'pruning' block)
+    pruning_block = nested_config.get('pruning', {})
+    
     # Map top-level analysis flags
-    flat_config['do_pruning_experiments'] = nested_config.get('do_pruning_experiments', False)
-    flat_config['do_dropout_analysis'] = nested_config.get('do_dropout_analysis', False)
+    flat_config['do_pruning_experiments'] = pruning_block.get('enabled', nested_config.get('do_pruning_experiments', False))
+    flat_config['do_dropout_analysis'] = nested_config.get('dropout', {}).get('enabled', nested_config.get('do_dropout_analysis', False))
     flat_config['do_eigenfeature_analysis'] = nested_config.get('do_eigenfeature_analysis', False)
     
-    # Map pruning configuration
-    flat_config['pruning_strategies'] = nested_config.get('pruning_strategies', ['magnitude', 'random'])
-    flat_config['pruning_amounts'] = nested_config.get('pruning_amounts', [0.1, 0.3, 0.5, 0.7, 0.9])
-    flat_config['pruning_selection_mode'] = nested_config.get('pruning_selection_mode', 'low')
-    flat_config['fine_tune_after_pruning'] = nested_config.get('fine_tune_after_pruning', True)
-    flat_config['fine_tune_epochs'] = nested_config.get('fine_tune_epochs', 5)
-    flat_config['pruning_alignment_metric'] = nested_config.get('pruning_alignment_metric', 'rayleigh_quotient')
+    # Map pruning parameters (prioritize nested pruning block, fallback to top-level)
+    flat_config['pruning_strategies'] = pruning_block.get('algorithms', nested_config.get('pruning_strategies', ['magnitude', 'random']))
+    flat_config['pruning_amounts'] = pruning_block.get('sparsity_levels', nested_config.get('pruning_amounts', [0.1, 0.3, 0.5, 0.7, 0.9]))
+    flat_config['pruning_selection_mode'] = pruning_block.get('selection_modes', [nested_config.get('pruning_selection_mode', 'low')])[0]
+    flat_config['fine_tune_after_pruning'] = pruning_block.get('fine_tune_after_pruning', nested_config.get('fine_tune_after_pruning', True))
+    flat_config['fine_tune_epochs'] = pruning_block.get('fine_tune_epochs', nested_config.get('fine_tune_epochs', 5))
+    flat_config['pruning_alignment_metric'] = pruning_block.get('alignment_metric', nested_config.get('pruning_alignment_metric', 'rayleigh_quotient'))
     
     # Map visualization settings
     flat_config['generate_plots'] = nested_config.get('generate_plots', True)

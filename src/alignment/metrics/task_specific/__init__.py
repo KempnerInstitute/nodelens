@@ -8,6 +8,14 @@ from .general import (
     ClassSelectivity
 )
 
+# Activation-based importance
+from .activation_magnitude import (
+    ActivationL2Norm,
+    ActivationMean,
+    ActivationNorm,
+    ActivationVariance
+)
+
 # Domain-specific metrics
 from .classification import ClassificationAlignment
 from .language_model import LanguageModelAlignment
@@ -20,6 +28,11 @@ __all__ = [
     'FeatureImportance',
     'RepresentationQuality',
     'ClassSelectivity',
+    # Activation-based
+    'ActivationL2Norm',
+    'ActivationMean',
+    'ActivationNorm',
+    'ActivationVariance',
     # Domain-specific
     'ClassificationAlignment',
     'LanguageModelAlignment',
