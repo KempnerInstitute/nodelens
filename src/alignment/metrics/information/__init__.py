@@ -16,6 +16,8 @@ from .pid import (
 from .conditional_mutual_information import ConditionalMutualInformation
 from .mi_projection import MIProjectionVsMeanInput
 from .gaussian_mi import GaussianMIAnalytic
+from .pairwise_gaussian import PairwiseRedundancyGaussian
+from .synergy_mmi import SynergyGaussianMMI
 
 # Import higher-order metrics if available
 try:
@@ -36,6 +38,9 @@ __all__ = [
     'GaussianMIAnalytic',
     # Redundancy
     'AverageRedundancy',
+    'PairwiseRedundancyGaussian',
+    # Synergy
+    'SynergyGaussianMMI',
     # PID
     'SharedInformation',
     'UniqueInformationX',

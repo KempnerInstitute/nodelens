@@ -1,86 +1,89 @@
-# Alignment Analysis Framework
+# Alignment Framework
 
-A framework for analyzing neural network alignment, pruning strategies, and information-theoretic properties.
+Neural Network Alignment Analysis & Intelligent Pruning
 
-## Overview
+A research framework for analyzing neural networks through information-theoretic metrics and performing redundancy-aware pruning.
 
-This framework provides tools for:
-- Computing alignment metrics between neural representations and task structure
-- Implementing and testing pruning strategies
-- Training and analyzing multiple networks
-- Evaluating model performance across various metrics
+---
+
+## Features
+
+- Alignment metrics (Rayleigh Quotient, class-conditioned RQ, mutual information)
+- Information-theoretic analysis (redundancy, synergy, PID)
+- 16 pruning strategies (magnitude, gradient-based, redundancy-aware)
+- Architecture support (MLPs, CNNs, Transformers, LLMs)
+- Data loading (vision datasets, text datasets for LLMs)
+- Evaluation (classification accuracy, language model perplexity)
+- Visualization (publication-quality plots and reports)
+
+---
 
 ## Installation
 
-### Requirements
-- Python 3.8+
-- CUDA-compatible GPU (recommended)
-
-### Setup
-
 ```bash
-git clone <repository-url>
+git clone https://github.com/KempnerInstitute/alignment.git
 cd alignment
-
 conda env create -f environment.yml
 conda activate alignment
-
 pip install -e .
 ```
 
+See [docs/installation.md](docs/installation.md) for details.
+
+---
+
 ## Quick Start
 
-Run an experiment using a configuration file:
-
-```bash
-python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml
-```
-
-Or use the Python API:
+### Basic Analysis
 
 ```python
-from alignment.configs.config_loader import load_config
-from alignment.experiments import GeneralAlignmentExperiment
+from alignment import ModelWrapper, get_metric
 
-config = load_config('configs/examples/resnet18_analysis.yaml')
-experiment = GeneralAlignmentExperiment(config)
-results = experiment.run()
+wrapper = ModelWrapper(model)
+rq = get_metric('rayleigh_quotient')
+
+outputs, acts = wrapper.forward_with_activations(inputs)
+weights = wrapper.get_layer_weights()
+
+scores = rq.compute(acts['layer_input'], weights['layer'])
 ```
 
-## Supported Models
+### Run from Config
 
-**Vision Models:**
-- ResNet (18, 34, 50, 101, 152)
-- VGG (11, 13, 16, 19)
-- EfficientNet (B0-B7)
-- Vision Transformers (ViT, DeiT)
-- AlexNet, MobileNet, DenseNet
+```bash
+# MNIST analysis
+python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
-**Custom Models:**
-- Multi-layer Perceptrons
-- Convolutional Neural Networks
-- Custom architectures via registry
+# ResNet pruning
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 
-**Language Models:**
-- HuggingFace Causal LM (GPT, LLaMA, Mistral)
+# LLaMA-3 scoring
+python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
+```
 
-## Datasets
+---
 
-Supported datasets include:
-- MNIST, Fashion-MNIST
-- CIFAR-10, CIFAR-100
-- ImageNet
-- WikiText, C4 (for language models)
-- Custom datasets via registry
+## Documentation
+
+- [Installation](docs/installation.md)
+- [User Guide](docs/user_guide.md)
+- [API Reference](docs/api_reference.md)
+- [Quick Reference](docs/quick_reference.md)
+- [Changelog](docs/changelog.md)
+
+Build full documentation: `cd docs && make html`
+
+---
 
 ## Configuration
 
-Experiments are configured via YAML files. Example:
+All experiments configured via YAML files. See `configs/template.yaml` for complete parameter reference.
+
+Example:
 
 ```yaml
 experiment:
   name: "my_experiment"
-  seed: 42
 
 model:
   name: "resnet18"
@@ -90,74 +93,37 @@ dataset:
   name: "cifar10"
   batch_size: 128
 
-alignment:
-  metrics: ["rayleigh_quotient", "mutual_information_gaussian"]
+metrics:
+  enabled: ['rayleigh_quotient']
 
 pruning:
   enabled: true
-  algorithms: ["alignment"]
-  sparsity_levels: [0.2, 0.5]
+  strategy: 'ultimate'
+  target_sparsity: 0.7
 ```
 
-See `configs/examples/` for complete examples.
+---
 
-## Project Structure
+## Examples
 
-```
-alignment/
-├── src/alignment/
-│   ├── core/            # Registry and base classes
-│   ├── models/          # Model loaders and wrappers
-│   ├── metrics/         # Alignment metrics
-│   ├── pruning/         # Pruning strategies
-│   ├── experiments/     # Experiment framework
-│   ├── data/            # Dataset handling
-│   └── configs/         # Configuration management
-├── configs/             # Configuration files
-├── examples/            # Example scripts
-├── scripts/             # Experiment runners
-├── tests/               # Tests
-└── docs/                # Documentation
-```
-
-## Available Metrics
-
-The framework implements over 30 alignment metrics, including:
-- Rayleigh Quotient
-- Mutual Information (various estimators)
-- Spectral Alignment
-- Cosine Similarity
-- Partial Information Decomposition (PID)
-- Task-specific metrics
-
-## Pruning Strategies
-
-Supported pruning approaches:
-- Magnitude-based pruning
-- Gradient-based pruning
-- Alignment-based pruning
-- Random pruning (baseline)
-- Structured and unstructured pruning
-
-## Documentation
-
-Build the documentation:
+Python examples in `examples/` directory:
 
 ```bash
-cd docs
-make html
+python examples/07_mnist_intelligent_pruning.py
+python examples/08_llama_ffn_pruning.py
+python examples/09_attention_neuron_vs_head_pruning.py
 ```
 
-View at `docs/build/html/index.html`.
+---
 
 ## Testing
-
-Run tests:
 
 ```bash
 pytest tests/
 ```
 
+---
+
 ## License
 
-See LICENSE file for details.
+See LICENSE file.

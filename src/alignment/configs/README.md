@@ -1,51 +1,32 @@
-# Configuration System
+# Configuration Module
 
-YAML-based configuration system for reproducible experiments.
+Python utilities for loading and validating configuration files.
 
-## Quick Start
+## Note
 
-```yaml
-# Basic configuration
-name: "my_experiment"
-model_name: "mlp"
-dataset_name: "mnist"
-metrics: ["rayleigh_quotient"]
-dropout_fractions: [0.0, 0.2, 0.4, 0.6, 0.8]
-```
+Configuration YAML files are located in the top-level `configs/` directory, not here.
 
-## Templates
+This module contains only Python code for:
+- Loading YAML configuration files (`config_loader.py`)
+- Validating configuration parameters (`config_validator.py`)
+- Utility functions for config manipulation
 
-Use provided templates as starting points:
-- `templates/mnist_mlp.yaml` - Basic MLP on MNIST
-- `templates/cifar10_cnn.yaml` - CNN on CIFAR-10
-- `simplified_config.yaml` - Minimal configuration
-- `clean_config.yaml` - Well-organized example
-
-## Components
-
-Configuration supports composable components from `config_components.py`:
-- `ModelConfig` - Model architecture settings
-- `DataConfig` - Dataset and preprocessing
-- `TrainingConfig` - Training parameters
-- `MetricConfig` - Alignment metrics configuration
+---
 
 ## Usage
 
 ```python
-from alignment.experiments import GeneralAlignmentExperiment
+from alignment.configs import load_config
 
-# From YAML file
-experiment = GeneralAlignmentExperiment.from_yaml("config.yaml")
-results = experiment.run()
-
-# Command line overrides
-python run_experiment.py config.yaml --device cuda:1 --batch-size 256
+config = load_config('configs/examples/resnet_pruning.yaml')
 ```
 
-## Environment Variables
+---
 
-Use environment variables with defaults:
-```yaml
-data_path: ${DATA_PATH:./data}
-device: ${DEVICE:cuda}
-``` 
+## Configuration Files
+
+See `../../configs/` directory for:
+- `template.yaml` - Complete parameter reference
+- `examples/` - Ready-to-use example configs
+
+See `../../configs/README.md` for configuration documentation.

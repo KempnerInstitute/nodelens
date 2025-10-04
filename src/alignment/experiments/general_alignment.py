@@ -24,6 +24,7 @@ from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
+from alignment.services import ActivationCaptureService, MaskOperations
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,14 @@ class GeneralAlignmentConfig(ExperimentConfig):
 class GeneralAlignmentExperiment(BaseExperiment):
     """
     Comprehensive alignment experiment with multiple analysis types.
+    
+    REFACTORED (v0.2.0): Now uses services to eliminate redundancy:
+    - MaskOperations for mask creation (replaces _create_pruning_mask_tensor logic)
+    - preprocess_layer_activations for preprocessing (unified approach)
+    - Can optionally use ActivationCaptureService for future enhancements
+    
+    NOTE: For new experiments, consider using MasterPruningOrchestrator which
+    provides a cleaner API with all modern features.
     
     This experiment can:
     1. Train networks from scratch or use pretrained
@@ -597,10 +606,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
         return avg_loss, avg_accuracy
     
     def _measure_alignment(self) -> Dict[str, Dict[str, List[float]]]:
-        """Measure alignment metrics for all layers."""
+        """
+        Measure alignment metrics for all layers.
+        
+        REFACTORED (v0.2.0): Now uses ActivationCaptureService for cleaner code.
+        """
         if self.is_multi_network:
             # Use first network as representative for alignment measurement
-            # (all networks should have similar alignment patterns)
             model_to_use = self.networks[0]
             wrapped_model_to_use = self.wrapped_networks[0]
         else:
@@ -613,36 +625,52 @@ class GeneralAlignmentExperiment(BaseExperiment):
         inputs, _ = next(iter(self.data_loader))
         inputs = inputs.to(self.config.device)
         
-        # Forward pass with activation tracking
-        _, activations = wrapped_model_to_use.forward_with_activations(inputs)
-        
-        # Get weights
-        weights = wrapped_model_to_use.get_layer_weights()
-        
-        # Preprocess activations based on CNN mode
-        from alignment.data.processing import preprocess_layer_activations
-        layer_modules = dict(wrapped_model_to_use._model.named_modules())
-        
-        # Collect inputs for preprocessing
-        inputs_to_process = {}
-        for layer_name in wrapped_model_to_use.tracked_layers:
-            layer_input = activations.get(f"{layer_name}_input")
-            if layer_input is not None:
-                inputs_to_process[f"{layer_name}_input"] = layer_input
-        
-        # Preprocess all inputs
-        preprocessed = preprocess_layer_activations(
-            inputs_to_process,
-            layer_modules,
-            mode=self.config.cnn_mode
-        )
-        
-        # Extract preprocessed inputs
-        preprocessed_inputs = {}
-        for layer_name in wrapped_model_to_use.tracked_layers:
-            key = f"{layer_name}_input"
-            if key in preprocessed:
-                preprocessed_inputs[layer_name] = preprocessed[key]
+        # REFACTORED: Use ActivationCaptureService (eliminates redundancy)
+        try:
+            capture_service = ActivationCaptureService(
+                wrapped_model_to_use,
+                default_mode=self.config.cnn_mode
+            )
+            
+            # Capture and preprocess in one call
+            activation_data = capture_service.capture(
+                inputs,
+                layers=wrapped_model_to_use.tracked_layers,
+                include_weights=True,
+                preprocess=True
+            )
+            
+            # Use captured data
+            preprocessed_inputs = activation_data.inputs
+            weights = activation_data.weights
+            
+        except Exception as e:
+            # Fallback to manual approach if service fails
+            logger.warning(f"ActivationCaptureService failed ({e}), using manual capture")
+            
+            # Manual capture (legacy)
+            _, activations = wrapped_model_to_use.forward_with_activations(inputs)
+            weights = wrapped_model_to_use.get_layer_weights()
+            
+            # Manual preprocessing
+            from alignment.data.processing import preprocess_layer_activations
+            layer_modules = dict(wrapped_model_to_use._model.named_modules())
+            
+            inputs_to_process = {
+                f"{layer_name}_input": activations.get(f"{layer_name}_input")
+                for layer_name in wrapped_model_to_use.tracked_layers
+                if activations.get(f"{layer_name}_input") is not None
+            }
+            
+            preprocessed = preprocess_layer_activations(
+                inputs_to_process, layer_modules, mode=self.config.cnn_mode
+            )
+            
+            preprocessed_inputs = {
+                layer_name: preprocessed[f"{layer_name}_input"]
+                for layer_name in wrapped_model_to_use.tracked_layers
+                if f"{layer_name}_input" in preprocessed
+            }
         
         # Compute each metric
         for method in self.config.alignment_methods:
@@ -1660,32 +1688,26 @@ class GeneralAlignmentExperiment(BaseExperiment):
         return all_masks
     
     def _create_pruning_mask_tensor(self, importance_scores: torch.Tensor, amount: float, selection_mode: str) -> torch.Tensor:
-        """Create a binary mask tensor based on importance scores and selection mode."""
-        if amount == 0:
-            return torch.ones_like(importance_scores)
-        elif amount >= 1:
-            return torch.zeros_like(importance_scores)
+        """
+        Create a binary mask tensor based on importance scores and selection mode.
         
-        # Flatten scores for easier processing
-        flat_scores = importance_scores.flatten()
-        k = int(amount * flat_scores.numel())
-        
-        if k == 0:
-            return torch.ones_like(importance_scores)
-        
-        if selection_mode == "low":
-            # Keep weights with high importance (prune low importance)
-            threshold = torch.kthvalue(flat_scores, k).values
-            mask = importance_scores > threshold
-        elif selection_mode == "high":
-            # Keep weights with low importance (prune high importance)
-            threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
-            mask = importance_scores < threshold
-        elif selection_mode == "random":
-            # Random mask
-            mask = torch.rand_like(importance_scores) > amount
+        REFACTORED (v0.2.0): Now uses MaskOperations service to eliminate redundancy.
+        """
+        # Use MaskOperations service instead of duplicate logic
+        if importance_scores.ndim == 1:
+            # Structured mask (per-neuron/channel)
+            mask = MaskOperations.create_structured_mask(
+                importance_scores,
+                amount=amount,
+                mode=selection_mode
+            )
         else:
-            raise ValueError(f"Unknown selection mode: {selection_mode}")
+            # Unstructured mask (per-weight)
+            mask = MaskOperations.create_unstructured_mask(
+                importance_scores,
+                amount=amount,
+                mode=selection_mode
+            )
         
         return mask.float()
     

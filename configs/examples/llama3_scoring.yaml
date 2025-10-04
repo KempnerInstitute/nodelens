@@ -1,0 +1,53 @@
+# LLaMA-3 Per-Neuron Scoring Example
+# Compute importance scores for LLaMA-3 FFN neurons
+
+experiment:
+  name: "llama3_ffn_scoring"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_scoring"
+
+model:
+  name: "meta-llama/Meta-Llama-3-8B"  # HuggingFace model ID
+  pretrained: true
+  tracked_layers: null  # Auto-detect all Linear layers in FFN/attention
+
+dataset:
+  name: "wikitext"  # Options: 'wikitext', 'c4'
+  data_path: "./data"
+  batch_size: 4  # Small batch for LLMs
+  num_workers: 2
+  max_length: 512  # Sequence length
+
+metrics:
+  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian']
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+  
+  pairwise_redundancy_gaussian:
+    mode: 'output_based'  # ESSENTIAL for LLMs (30x faster)
+    num_pairs: 20  # Sample 20 partners per neuron
+    sampling_strategy: 'random'
+    aggregation: 'mean'
+
+layer_config:
+  transformer:
+    track_qkv: true  # Track Q/K/V projections
+    track_per_head: false  # Set true for per-head analysis
+    aggregation: 'sequence_mean'  # Average over sequence dimension
+
+advanced:
+  use_hook_manager: true
+  covariance_method: 'ledoit_wolf'  # Stable for small batches
+
+analysis:
+  save_scores: true  # Save per-neuron scores for each layer
+  generate_plots: true
+
+# Expected output:
+# - Per-neuron scores for all 11,008 FFN neurons per layer
+# - Q/K/V projection scores (4,096 neurons each)
+# - Redundancy analysis showing neuron overlap
+

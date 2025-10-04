@@ -239,10 +239,10 @@ class ExperimentRunner:
             
             if success:
                 successful += 1
-                status = "✓ SUCCESS"
+                status = "[SUCCESS]"
             else:
                 failed += 1
-                status = "✗ FAILED"
+                status = "[FAILED]"
             
             total_time += duration
             

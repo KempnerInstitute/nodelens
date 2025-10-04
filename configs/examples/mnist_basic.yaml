@@ -1,0 +1,36 @@
+# MNIST Basic Analysis
+# Simple RQ analysis on MNIST
+
+experiment:
+  name: "mnist_rq_analysis"
+  seed: 42
+  device: "cuda"
+
+model:
+  name: "mlp"  # Simple MLP
+  pretrained: false
+  model_params:
+    hidden_dims: [128, 64]
+    activation: 'relu'
+
+dataset:
+  name: "mnist"
+  batch_size: 128
+
+metrics:
+  enabled: ['rayleigh_quotient']
+  rayleigh_quotient:
+    relative: true
+
+training:
+  enabled: true
+  epochs: 10
+  learning_rate: 0.001
+  optimizer: 'adam'
+
+analysis:
+  save_scores: true
+
+# Minimal config for quick testing
+# Run: python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+
