@@ -4,34 +4,38 @@ Neural Network Alignment Analysis & Intelligent Pruning
 
 ---
 
-## Overview
+## Getting Started
 
-The alignment framework provides tools for:
-
-- Computing alignment metrics (Rayleigh Quotient, mutual information)
-- Analyzing neuron redundancy and synergy
-- Performing structured pruning with multiple strategies
-- Training with alignment tracking
-- Evaluating model performance
+- [Installation Guide](installation.md) - Setup and dependencies
+- [Usage Guide](usage.md) - How to run experiments with YAML configs
+- [User Guide](user_guide.md) - Complete usage documentation
 
 ---
 
-## Documentation
-
-### Getting Started
-
-- [Installation Guide](installation.md) - Setup and dependencies
-- [User Guide](user_guide.md) - Complete usage documentation
-
-### Reference
+## Reference
 
 - [API Reference](api_reference.md) - Class and method documentation
 - [Quick Reference](quick_reference.md) - Code examples and patterns
-- [Configuration Guide](../configs/template_master_v2.yaml) - All configuration options
+- [Configuration Reference](../configs/template.yaml) - All parameters with options
 
-### Version Information
+---
+
+## Version Information
 
 - [Changelog](changelog.md) - Release notes and version history
+
+---
+
+## Examples
+
+Working example configurations:
+
+- `configs/examples/mnist_basic.yaml` - Simple MNIST analysis
+- `configs/examples/resnet_pruning.yaml` - ResNet pruning on CIFAR-10
+- `configs/examples/llama3_scoring.yaml` - LLaMA-3 per-neuron scoring
+- `configs/examples/llama3_pruning.yaml` - LLaMA-3 pruning
+
+Run: `python scripts/run_experiment.py --config [path]`
 
 ---
 
@@ -51,22 +55,10 @@ scores = rq.compute(acts['layer_input'], weights['layer'])
 
 ---
 
-## Examples
-
-See `examples/` directory for complete workflows.
-
----
-
-## Building Documentation
+## Building HTML Documentation
 
 ```bash
 cd docs
 make html
 # Open build/html/index.html
 ```
-
----
-
-## License
-
-See LICENSE file in repository root.

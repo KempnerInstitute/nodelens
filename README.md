@@ -34,7 +34,20 @@ See [docs/installation.md](docs/installation.md) for details.
 
 ## Quick Start
 
-### Basic Analysis
+### Run from Config File
+
+```bash
+# MNIST analysis
+python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+
+# ResNet pruning on CIFAR-10
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+
+# LLaMA-3 per-neuron scoring
+python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
+```
+
+### Python API
 
 ```python
 from alignment import ModelWrapper, get_metric
@@ -48,65 +61,36 @@ weights = wrapper.get_layer_weights()
 scores = rq.compute(acts['layer_input'], weights['layer'])
 ```
 
-### Run from Config
-
-```bash
-# MNIST analysis
-python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
-
-# ResNet pruning
-python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
-
-# LLaMA-3 scoring
-python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
-```
-
 ---
 
 ## Documentation
 
-- [Installation](docs/installation.md)
-- [User Guide](docs/user_guide.md)
-- [API Reference](docs/api_reference.md)
-- [Quick Reference](docs/quick_reference.md)
-- [Changelog](docs/changelog.md)
+- [Installation](docs/installation.md) - Setup guide
+- [Usage](docs/usage.md) - Running experiments with YAML configs
+- [User Guide](docs/user_guide.md) - Complete guide
+- [API Reference](docs/api_reference.md) - API documentation
+- [Quick Reference](docs/quick_reference.md) - Code examples
+- [Changelog](docs/changelog.md) - Version history
 
-Build full documentation: `cd docs && make html`
+Full documentation: [docs/README.md](docs/README.md)
 
 ---
 
 ## Configuration
 
-All experiments configured via YAML files. See `configs/template.yaml` for complete parameter reference.
+All experiments configured via YAML. See `configs/template.yaml` for complete parameter reference.
 
-Example:
-
-```yaml
-experiment:
-  name: "my_experiment"
-
-model:
-  name: "resnet18"
-  pretrained: true
-
-dataset:
-  name: "cifar10"
-  batch_size: 128
-
-metrics:
-  enabled: ['rayleigh_quotient']
-
-pruning:
-  enabled: true
-  strategy: 'ultimate'
-  target_sparsity: 0.7
-```
+Example configs in `configs/examples/`:
+- `mnist_basic.yaml` - Simple analysis
+- `resnet_pruning.yaml` - Vision model pruning
+- `llama3_scoring.yaml` - LLM neuron importance
+- `llama3_pruning.yaml` - LLM pruning
 
 ---
 
 ## Examples
 
-Python examples in `examples/` directory:
+Python code examples in `examples/`:
 
 ```bash
 python examples/07_mnist_intelligent_pruning.py
