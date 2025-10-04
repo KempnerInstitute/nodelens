@@ -16,7 +16,7 @@ from pathlib import Path
 import logging
 
 from .base import BaseExperiment
-from ..models.wrappers_transformer import TransformerWrapper
+from ..models.transformers import TransformerWrapperEnhanced as TransformerWrapper
 from ..metrics import get_metric
 from ..pruning import AlignmentPruning, PruningConfig
 from ..training.base import BaseTrainer

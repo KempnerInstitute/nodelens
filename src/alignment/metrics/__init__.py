@@ -14,17 +14,18 @@ from . import task_specific
 from .information import gaussian_pid  # Register gaussian PID synergy
 
 
-def get_metric(name: str):
+def get_metric(name: str, **kwargs):
     """
-    Get a metric class by name.
+    Get a metric instance by name.
     
     Args:
         name: Name of the metric
+        **kwargs: Parameters to pass to metric constructor
         
     Returns:
-        Metric class (not instance)
+        Instantiated metric object
     """
-    return METRIC_REGISTRY.get(name)
+    return METRIC_REGISTRY.create(name, **kwargs)
 
 
 def list_metrics():

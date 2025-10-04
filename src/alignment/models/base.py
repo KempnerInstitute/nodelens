@@ -299,7 +299,8 @@ class BaseModelWrapper(BaseModel):
     def forward_with_activations(
         self,
         inputs: torch.Tensor,
-        layers: Optional[List[str]] = None
+        layers: Optional[List[str]] = None,
+        **kwargs  # Allow additional kwargs for compatibility
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Forward pass with automatic activation capture using HookManager.
@@ -307,6 +308,7 @@ class BaseModelWrapper(BaseModel):
         Args:
             inputs: Input tensor
             layers: Layers to capture (None = all tracked layers)
+            **kwargs: Additional arguments (for compatibility)
             
         Returns:
             Tuple of (model_output, activations_dict)

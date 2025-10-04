@@ -11,6 +11,10 @@ from .wrappers import (
     AlignmentNetwork,
     ActivationTracker,
 )
+from .transformers import (
+    TransformerWrapperEnhanced,
+    LLaMAWrapper,
+)
 from .architectures.standard_models import (
     MLP,
     CNN2P2,
@@ -33,6 +37,8 @@ __all__ = [
     'ModelWrapper',
     'AlignmentNetwork',
     'ActivationTracker',
+    'TransformerWrapperEnhanced',
+    'LLaMAWrapper',
     'MLP',
     'CNN2P2',
     'SimpleConvNet',
