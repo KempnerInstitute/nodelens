@@ -1,0 +1,66 @@
+experiment: alignment_stats
+results_path: results # <-- Add path to where results to be saved/loaded
+no_save: False
+just_plot: False
+save_networks: False
+show_params: False
+show_all: False
+device: cuda
+use_timestamp: False
+#timestamp: # The timestamp of previous experiment to plot.
+
+dataset:
+  name: MNIST
+  path: /n/holylabs/LABS/kempner_dev/Users/hsafaai/Code/alignment/data
+
+model:
+  name: MLP
+  dropout: 0
+  alignment_layers: null # Specify the layers participating in alignment - for all layers use null | exp for MLP: {"layerInput.0": null, "layerHidden.0.1": "layerHidden.0.0", "layerHidden.1.1": "layerHidden.1.0"}
+  
+training:
+  batch_size: 1024
+  epochs: 3
+  replicates: 3
+  name: Adam
+  lr: 1e-3
+  weight_decay: 0
+  
+alignment:
+  do_alignment: True
+  frequency: 1
+  methods: ["RQ"]
+  measure_expected: False
+  bins: 50
+  cnn_mode: "unfold"  # Options for CNN alignment processing:
+                     # "unfold" - Reshapes conv layer features into (-1, features) with batch and patches together (default)
+                     # "patchwise" - Computes alignment per-patch, with special processing in patchwise_alignment
+                     # "batch_patch_combined" - Standardized approach that combines batch and patch dimensions
+                     # Differences between modes:
+                     # - "unfold" is the classic approach with flexible reshaping options
+                     # - "patchwise" preserves patch structure for specialized calculations
+                     # - "batch_patch_combined" ensures consistent dimensionality across frameworks --> original method
+  scale_by_norm: False # If True, scales covariance matrices by their norm before computing RQ
+                        # Similar to the "similarity" option in original codebase
+checkpointing:
+  use_prev: False
+  save_checkpoints: False
+  frequency: 1
+  use_wandb: True
+  
+extra:
+  num_drops: 40
+  dropout_pruning_mode: "global_joint"  # Options: 
+                                  # "global_joint" - Prune X% of nodes across all layers based on their global alignment ranking
+                                  #            This distributes pruning across layers proportional to where the 
+                                  #            highest/lowest alignment nodes are located. Some layers may have more
+                                  #            neurons pruned than others, preserving the global ranking of importance.
+                                  # "layer_wise" - Prune exactly X% from each layer and apply pruning to all layers at once
+                                  #            This shows the effect of pruning all layers simultaneously with fixed proportions
+                                  # "layer_isolated" - Prune X% from only one layer at a time
+                                  #            This creates multiple figures (one per layer) showing isolated effects
+  dropout_mode: "scaled"  # Options for how targeted dropout is applied to neurons:
+                          # "scaled" - Zeroes neurons and applies scaling to maintain signal magnitude (default)
+                          # "unscaled" - Zeroes neurons but doesn't apply compensation scaling
+  exclude_classification_layer: True  # If True, excludes the classification layer from pruning (always true in original codebase)
+                                      

@@ -1,77 +1,41 @@
-name: Build and Deploy Documentation
+name: Documentation
 
 on:
   push:
-    branches: [ develop ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ develop ]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-# Use a unique concurrency group to avoid conflicts
-concurrency:
-  group: "sphinx-docs-${{ github.workflow }}-${{ github.ref }}"
-  cancel-in-progress: true
+    branches: [ main, develop ]
 
 jobs:
-  build-docs:
-    name: Build Sphinx Documentation
+  docs:
     runs-on: ubuntu-latest
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
+    - uses: actions/checkout@v4
+    
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
-        
+        python-version: '3.10'
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .[docs]
-        # Also install the main package dependencies
-        pip install -e .
-        
+        pip install -r requirements.txt
+        pip install sphinx sphinx-rtd-theme sphinx-autodoc-typehints
+    
     - name: Build documentation
       run: |
-        echo "Starting documentation build..."
-        cd docs
-        echo "Current directory: $(pwd)"
-        echo "Contents of source directory:"
-        ls -la source/
-        make clean
-        echo "Building Sphinx documentation..."
-        sphinx-build -b html source build/html
-        echo "Creating .nojekyll file..."
-        touch build/html/.nojekyll
-        echo "Documentation build complete!"
-        echo "Contents of build directory:"
-        ls -la build/html/
-        
-    - name: Setup Pages
-      if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-      uses: actions/configure-pages@v5
-      
-    - name: Upload artifact
-      if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-      uses: actions/upload-pages-artifact@v3
+        cd docs/
+        sphinx-build -b html . _build/html
+    
+    - name: Check for broken links
+      run: |
+        pip install linkchecker
+        linkchecker docs/_build/html/ --check-extern
+    
+    - name: Upload documentation
+      uses: actions/upload-artifact@v3
       with:
-        path: './docs/build/html'
-
-  deploy-docs:
-    name: Deploy to GitHub Pages
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    needs: build-docs
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4 
+        name: documentation
+        path: docs/_build/html/
