@@ -5,7 +5,7 @@ A comprehensive framework for analyzing neural network representations
 through information-theoretic metrics and alignment measures.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Core functionality
 from .core.base import BaseMetric
@@ -23,6 +23,15 @@ from .pruning import PruningConfig, get_pruning_strategy
 
 # Experiment tracking
 from .experiments.tracking import create_tracker
+
+# Services (NEW in v0.2.0)
+from .services import (
+    ActivationCaptureService,
+    ActivationData,
+    NodeScoringService,
+    CompositeScores,
+    MaskOperations,
+)
 
 # Visualization
 try:
@@ -43,6 +52,13 @@ __all__ = [
     
     # Data processing
     "BatchMetricProcessor",
+    
+    # Services (NEW in v0.2.0)
+    "ActivationCaptureService",
+    "ActivationData",
+    "NodeScoringService",
+    "CompositeScores",
+    "MaskOperations",
     
     # Pruning
     "PruningConfig",

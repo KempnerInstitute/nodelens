@@ -5,7 +5,7 @@ This metric measures how well neural network weights align with the
 principal components of their input activations.
 """
 
-from typing import Optional, Any
+from typing import Optional, Any, Union, Dict
 import torch
 import logging
 
@@ -37,6 +37,7 @@ class RayleighQuotient(BaseMetric):
         min_samples: int = 2,
         scale_by_norm: bool = False,
         class_conditioned_targets: Optional[torch.Tensor] = None,
+        regularization: float = 1e-6,
         **config: Any
     ):
         """
@@ -46,12 +47,14 @@ class RayleighQuotient(BaseMetric):
             relative: Whether to normalize by trace(C) for relative alignment
             min_samples: Minimum samples required for covariance computation
             scale_by_norm: Whether to scale covariance by its Frobenius norm
+            regularization: Small value added to diagonal for numerical stability (default: 1e-6)
             **config: Additional configuration parameters
         """
         super().__init__(**config)
         self.relative = relative
         self.min_samples = min_samples
         self.scale_by_norm = scale_by_norm
+        self.regularization = regularization
         # Optional: class-conditioned covariance support (targets provided at compute time preferred)
         self._cc_targets = class_conditioned_targets
     
@@ -159,6 +162,12 @@ class RayleighQuotient(BaseMetric):
             inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
             cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
         
+        # Add regularization to diagonal for numerical stability
+        if self.regularization > 0:
+            cov = cov + self.regularization * torch.eye(
+                input_features, device=cov.device, dtype=cov.dtype
+            )
+        
         # Scale covariance by norm if requested
         if self.scale_by_norm:
             cov_norm = torch.norm(cov, p='fro')
@@ -195,6 +204,130 @@ class RayleighQuotient(BaseMetric):
         rq_values = torch.nan_to_num(rq_values, nan=0.0, posinf=0.0, neginf=0.0)
         
         return rq_values
+    
+    def compute_class_conditioned(
+        self,
+        inputs: torch.Tensor,
+        weights: torch.Tensor,
+        targets: torch.Tensor,
+        return_delta_rq: bool = False,
+        **kwargs: Any
+    ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Compute class-conditioned Rayleigh Quotient.
+        
+        For each class c, computes RQ using class-specific covariance Σ_{X|y=c},
+        then returns the average across classes weighted by class frequency.
+        
+        Optionally also computes ΔRQ = RQ(unconditional) - E[RQ(class-conditioned)],
+        which measures how much alignment varies across classes.
+        
+        Args:
+            inputs: Input activations [batch_size, input_features]
+            weights: Layer weights [output_features, input_features]
+            targets: Class labels [batch_size]
+            return_delta_rq: If True, also return ΔRQ
+            **kwargs: Additional parameters
+            
+        Returns:
+            If return_delta_rq=False: class-conditioned RQ [output_features]
+            If return_delta_rq=True: dict with keys 'rq_uncond', 'rq_cond', 'delta_rq'
+        """
+        # Flatten if needed
+        if inputs.ndim > 2:
+            inputs = inputs.reshape(inputs.shape[0], -1)
+        if weights.ndim > 2:
+            weights = weights.reshape(weights.shape[0], -1)
+        
+        # Ensure targets are 1D
+        if targets.ndim > 1:
+            targets = targets.squeeze()
+        
+        batch_size, input_features = inputs.shape
+        output_features, weight_features = weights.shape
+        
+        # Check compatibility
+        if input_features != weight_features:
+            min_dim = min(input_features, weight_features)
+            inputs = inputs[:, :min_dim]
+            weights = weights[:, :min_dim]
+            input_features = min_dim
+        
+        device = weights.device
+        
+        # Get unique classes
+        classes = torch.unique(targets)
+        
+        # Compute class-conditioned RQ (weighted average)
+        rq_cond_sum = torch.zeros(output_features, device=device)
+        total_weight = 0.0
+        
+        for c in classes:
+            mask = (targets == c)
+            n_c = mask.sum()
+            
+            if n_c < self.min_samples:
+                logger.warning(f"Class {c}: only {n_c} samples, skipping")
+                continue
+            
+            # Extract class data
+            inputs_c = inputs[mask]
+            
+            # Compute class-specific covariance
+            inputs_c_centered = inputs_c - inputs_c.mean(dim=0, keepdim=True)
+            cov_c = (inputs_c_centered.T @ inputs_c_centered) / max(1, n_c - 1)
+            
+            # Add regularization
+            if self.regularization > 0:
+                cov_c = cov_c + self.regularization * torch.eye(
+                    input_features, device=device, dtype=cov_c.dtype
+                )
+            
+            # Compute RQ for this class
+            wc = torch.matmul(weights, cov_c)
+            numerator_c = torch.sum(wc * weights, dim=1)
+            denominator_c = torch.sum(weights * weights, dim=1)
+            
+            eps = 1e-12
+            rq_c = torch.zeros_like(numerator_c)
+            valid_mask = denominator_c > eps
+            rq_c[valid_mask] = numerator_c[valid_mask] / denominator_c[valid_mask]
+            
+            # Normalize by trace if relative
+            if self.relative:
+                trace_c = torch.trace(cov_c)
+                if trace_c > eps:
+                    rq_c = rq_c / trace_c
+            
+            # Weighted sum
+            weight_c = n_c.float()
+            rq_cond_sum += rq_c * weight_c
+            total_weight += weight_c
+        
+        # Average across classes
+        if total_weight > 0:
+            rq_cond = rq_cond_sum / total_weight
+        else:
+            logger.warning("No valid classes found, returning zeros")
+            rq_cond = torch.zeros(output_features, device=device)
+        
+        # Clean up numerical issues
+        rq_cond = torch.nan_to_num(rq_cond, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        if not return_delta_rq:
+            return rq_cond
+        
+        # Also compute unconditional RQ
+        rq_uncond = self.compute(inputs=inputs, weights=weights, **kwargs)
+        
+        # Compute ΔRQ
+        delta_rq = rq_uncond - rq_cond
+        
+        return {
+            'rq_uncond': rq_uncond,
+            'rq_cond': rq_cond,
+            'delta_rq': delta_rq
+        }
     
     def _compute_patchwise(
         self,

@@ -12,6 +12,14 @@ from collections import OrderedDict
 import logging
 
 from alignment.core.base import BaseModel
+from .hooks import HookManager
+
+# Conditional import for layer detector (graceful fallback)
+try:
+    from alignment.core.layer_detector import detect_trackable_layers
+    HAS_LAYER_DETECTOR = True
+except ImportError:
+    HAS_LAYER_DETECTOR = False
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +57,9 @@ class BaseModelWrapper(BaseModel):
         self.track_outputs = track_outputs
         self.flatten_activations = flatten_activations
         
+        # Initialize HookManager for automatic lifecycle management
+        self.hook_manager = HookManager()
+        
         # Auto-discover trackable layers if not specified
         if not self._tracked_layers:  # Check if empty list instead of None
             self._tracked_layers = self._discover_layers()
@@ -61,17 +72,32 @@ class BaseModelWrapper(BaseModel):
         """
         Auto-discover layers that can be tracked for alignment.
         
+        Uses generic LayerDetector for model-agnostic detection.
+        
         Returns:
             List of layer names suitable for tracking
         """
-        trackable_layers = []
-        trackable_types = (nn.Linear, nn.Conv2d, nn.Conv1d)
-        
-        for name, module in self._model.named_modules():
-            if isinstance(module, trackable_types):
-                # Skip layers without learnable parameters
-                if hasattr(module, 'weight') and module.weight is not None:
-                    trackable_layers.append(name)
+        if HAS_LAYER_DETECTOR:
+            # Use generic detector (model-agnostic)
+            trackable_layers = detect_trackable_layers(
+                self._model,
+                min_neurons=1
+            )
+            
+            logger.info(f"Used generic LayerDetector (model-agnostic)")
+            
+        else:
+            # Fallback to simple type-based detection
+            logger.warning("LayerDetector not available, using simple detection")
+            
+            trackable_layers = []
+            trackable_types = (nn.Linear, nn.Conv2d, nn.Conv1d)
+            
+            for name, module in self._model.named_modules():
+                if isinstance(module, trackable_types):
+                    # Skip layers without learnable parameters
+                    if hasattr(module, 'weight') and module.weight is not None:
+                        trackable_layers.append(name)
         
         return trackable_layers
     
@@ -268,4 +294,67 @@ class BaseModelWrapper(BaseModel):
                 module = dict(self._model.named_modules()).get(layer_name)
                 if module is not None:
                     module.weight.data = original_weight
-            delattr(self, '_original_weights') 
+            delattr(self, '_original_weights')
+    
+    def forward_with_activations(
+        self,
+        inputs: torch.Tensor,
+        layers: Optional[List[str]] = None,
+        **kwargs  # Allow additional kwargs for compatibility
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Forward pass with automatic activation capture using HookManager.
+        
+        Args:
+            inputs: Input tensor
+            layers: Layers to capture (None = all tracked layers)
+            **kwargs: Additional arguments (for compatibility)
+            
+        Returns:
+            Tuple of (model_output, activations_dict)
+            
+        Example:
+            >>> outputs, acts = wrapper.forward_with_activations(x)
+            >>> conv1_input = acts['conv1_input']
+            >>> conv1_output = acts['conv1_output']
+        """
+        layers = layers or self._tracked_layers
+        
+        # Use HookManager's context manager for automatic cleanup
+        with self.hook_manager.temporary_hooks(
+            self._model, 
+            layers,
+            track_inputs=self.track_inputs,
+            track_outputs=self.track_outputs
+        ) as activations:
+            outputs = self._model(inputs)
+        
+        # activations are automatically cleaned up after context
+        return outputs, activations.copy()
+    
+    def capture_activations_safe(
+        self,
+        inputs: torch.Tensor,
+        layers: Optional[List[str]] = None
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Safely capture activations with guaranteed cleanup.
+        
+        This is a convenience method that just returns activations
+        without model outputs.
+        
+        Args:
+            inputs: Input tensor
+            layers: Layers to capture
+            
+        Returns:
+            Dictionary of activations
+        """
+        _, activations = self.forward_with_activations(inputs, layers)
+        return activations
+    
+    def __del__(self):
+        """Ensure HookManager cleanup on object destruction."""
+        if hasattr(self, 'hook_manager'):
+            self.hook_manager.cleanup()
+        super().__del__() 

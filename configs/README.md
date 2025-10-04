@@ -1,62 +1,70 @@
-# Configuration Files
+# Configuration Guide
 
-This directory contains configuration templates and examples for alignment experiments.
+All experiments are configured via YAML files.
 
-## Templates
+---
 
-### Core Templates
-- `template_comprehensive.yaml` - Complete reference with ALL available parameters
-- `template_basic.yaml` - Basic configuration for simple experiments  
-- `template_minimal.yaml` - Minimal configuration with essential parameters only
+## Template
 
-### Usage
-Copy a template and modify for your needs:
-```bash
-cp configs/template_basic.yaml configs/my_experiment.yaml
-# Edit my_experiment.yaml
-python scripts/run_experiment.py --config configs/my_experiment.yaml
-```
+`template.yaml` - Complete template with all available parameters documented inline.
+
+---
 
 ## Examples
 
-The `examples/` subdirectory contains ready-to-run configurations for specific use cases:
+Compact, ready-to-use configurations:
+
+### LLaMA-3
+
+- `examples/llama3_scoring.yaml` - Compute per-neuron importance scores
+- `examples/llama3_pruning.yaml` - Redundancy-aware pruning
 
 ### Vision Models
-- `resnet18_analysis.yaml` - ResNet-18 on CIFAR-10 (lightweight, fast)
-- `resnet50_analysis.yaml` - ResNet-50 on CIFAR-10 (standard benchmark)
-- `alexnet_analysis.yaml` - AlexNet on CIFAR-10 (classic architecture)
-- `vgg16_analysis.yaml` - VGG-16 on CIFAR-10 (deep convolutional)
-- `efficientnet_b0_analysis.yaml` - EfficientNet-B0 (modern efficient)
-- `vit_b16_analysis.yaml` - Vision Transformer (attention-based)
 
-### Master Reference
-- `vision_networks_master.yaml` - Complete example showing how to configure all supported models
-- `master_config.yaml` - Comprehensive configuration with all options documented
+- `examples/resnet_pruning.yaml` - ResNet-18 pruning with dependency handling
+- `examples/mnist_basic.yaml` - Simple MNIST analysis
 
-### Simple Models
-- `mnist_mlp_standard.yaml` - Basic MLP on MNIST for testing
+---
 
-## Quick Start
+## Usage
 
-### For Vision Models
+Run any experiment:
+
 ```bash
-# Fast experiment with ResNet-18
-python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml --device cuda
-
-# Comprehensive analysis with ResNet-50  
-python scripts/run_experiment.py --config configs/examples/resnet50_analysis.yaml --device cuda
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 ```
 
-### For Custom Experiments
-1. Start with a template: `cp configs/template_basic.yaml configs/my_config.yaml`
-2. Modify the model, dataset, and experiment parameters
+Override parameters:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/examples/resnet_pruning.yaml \
+  --device cuda:1 \
+  --batch-size 64 \
+  --target-sparsity 0.5
+```
+
+---
+
+## Creating Custom Configs
+
+1. Copy template: `cp configs/template.yaml configs/my_config.yaml`
+2. Modify parameters (all options documented inline)
 3. Run: `python scripts/run_experiment.py --config configs/my_config.yaml`
 
-## Configuration Structure
+---
 
-All configurations support:
-- **Models**: MLP, CNN, ResNet, VGG, EfficientNet, Vision Transformers
-- **Datasets**: MNIST, CIFAR-10/100, ImageNet
-- **Metrics**: 30+ alignment and similarity metrics
-- **Pruning**: Magnitude, alignment-based, random, hybrid strategies
-- **Visualization**: Professional plots and analysis reports
+## Parameter Categories
+
+- `experiment`: Name, seed, device, output directory
+- `model`: Architecture, pretrained, layers to track
+- `dataset`: Data source, batch size, preprocessing
+- `metrics`: Which metrics to compute and their parameters
+- `training`: Training parameters (if training from scratch)
+- `pruning`: Pruning strategy, distribution, scoring method
+- `layer_config`: Architecture-specific settings (CNN, transformer)
+- `analysis`: Analysis options (class-conditioned, save options)
+- `visualization`: Plot generation settings
+- `advanced`: Backend, parallelization, optimization options
+
+See `template.yaml` for complete parameter documentation.

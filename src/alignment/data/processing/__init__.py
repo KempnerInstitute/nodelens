@@ -15,6 +15,10 @@ from .layers import (
     preprocess_layer_activations,
     get_preprocessor,
 )
+from .covariance import (
+    CovarianceEstimator,
+    estimate_covariance,
+)
 
 __all__ = [
     "BatchMetricProcessor",
@@ -24,4 +28,6 @@ __all__ = [
     "AttentionPreprocessor",
     "preprocess_layer_activations",
     "get_preprocessor",
+    "CovarianceEstimator",
+    "estimate_covariance",
 ] 

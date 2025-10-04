@@ -1,148 +1,125 @@
-# Alignment Analysis Framework
+# Alignment Framework
 
-A comprehensive framework for analyzing neural network alignment, pruning, and information-theoretic properties.
+Neural network alignment analysis and intelligent pruning framework.
 
-## Features
+---
 
-- Alignment Analysis: Measure how neural representations align with data and task structure
-- Pruning Experiments: Test various pruning strategies and their effects on model performance  
-- Multi-Network Analysis: Train and analyze multiple networks in parallel
-- 30+ Metrics: Rayleigh quotient, mutual information, spectral metrics, and more
-- Extensible Design: Easy to add custom metrics and strategies
+## Overview
+
+This framework provides tools for analyzing neural networks through information-theoretic metrics and performing redundancy-aware pruning and quantization.
+
+**Key capabilities:**
+- Alignment metrics (Rayleigh Quotient, class-conditioned RQ, mutual information)
+- Information-theoretic analysis (redundancy, synergy, PID)
+- Pruning strategies (16 methods including magnitude, gradient-based, redundancy-aware)
+- Quantization (INT8, INT4, mixed-precision with alignment-guided bit allocation)
+- Architecture support (MLPs, CNNs, Transformers, LLMs)
+- Data loading (vision and text datasets)
+- Evaluation (classification accuracy, perplexity for language models)
+- Visualization (plots and reports)
+
+---
 
 ## Installation
 
-### Prerequisites
-- Python 3.8+
-- CUDA-compatible GPU (recommended)
-- Git
-
-### Setup
 ```bash
-# Clone the repository
-git clone <repository-url>
+git clone https://github.com/KempnerInstitute/alignment.git
 cd alignment
-
-# Create conda environment
 conda env create -f environment.yml
-conda activate networkAlignmentAnalysis
-
-# Install in development mode
+conda activate alignment
 pip install -e .
 ```
 
-## Quick Start
+Details: [docs/installation.md](docs/installation.md)
 
-### Using Configuration Files (Recommended)
+---
+
+## Usage
+
+### Command Line
+
 ```bash
-# Run ResNet-18 experiment on CIFAR-10
-python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml --device cuda
-
-# Run comprehensive analysis
-python scripts/run_experiment.py --config configs/examples/resnet50_analysis.yaml --device cuda
+python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
+python scripts/run_experiment.py --config configs/examples/llama3_quantization.yaml
 ```
 
-### Using Python API
+### Python API
+
 ```python
-from alignment.configs.config_loader import load_config
-from alignment.experiments import GeneralAlignmentExperiment
+from alignment import ModelWrapper, get_metric
 
-# Load configuration
-config = load_config('configs/examples/resnet18_analysis.yaml')
+wrapper = ModelWrapper(model)
+rq = get_metric('rayleigh_quotient')
 
-# Run experiment
-experiment = GeneralAlignmentExperiment(config)
-results = experiment.run()
+outputs, acts = wrapper.forward_with_activations(inputs)
+weights = wrapper.get_layer_weights()
+
+scores = rq.compute(acts['layer_input'], weights['layer'])
 ```
 
-## Supported Models
+### Quantization
 
-### Vision Models (via torchvision/timm)
-- ResNet (18, 34, 50, 101, 152)
-- VGG (11, 13, 16, 19)
-- AlexNet
-- EfficientNet (B0-B7)
-- Vision Transformers (ViT, DeiT)
-- MobileNet, DenseNet
+```python
+from alignment.quantization import quantize_model, find_optimal_bit_allocation
 
-### Custom Models
-- Multi-layer Perceptrons (MLP)
-- Convolutional Neural Networks (CNN)
-- Custom architectures via model registry
+# INT8 quantization
+results = quantize_model(model, precision='int8')
 
-## Datasets
+# Mixed precision using alignment scores
+layer_importance = {layer: rq_scores[layer].mean() for layer in layers}
+bit_allocation = find_optimal_bit_allocation(model, layer_importance, target_avg_bits=6.0)
+```
 
-- MNIST, Fashion-MNIST
-- CIFAR-10, CIFAR-100
-- ImageNet
-- Custom datasets via dataset registry
+---
 
 ## Documentation
 
-Build documentation locally:
+- [Installation](docs/installation.md) - Setup and dependencies
+- [Usage Guide](docs/usage.md) - Running experiments
+- [User Guide](docs/user_guide.md) - Complete documentation
+- [API Reference](docs/api_reference.md) - API details
+- [Quick Reference](docs/quick_reference.md) - Code examples
+- [Changelog](docs/changelog.md) - Version history
+
+Full documentation: [docs/README.md](docs/README.md)
+
+---
+
+## Configuration
+
+Experiments are configured via YAML files. See `configs/template.yaml` for all parameters.
+
+Available examples in `configs/examples/`:
+- mnist_basic.yaml
+- resnet_pruning.yaml
+- llama3_scoring.yaml
+- llama3_pruning.yaml
+- llama3_quantization.yaml
+
+---
+
+## Code Examples
+
+Python examples in `examples/` directory:
+
 ```bash
-cd docs
-make html
+python examples/07_mnist_intelligent_pruning.py
+python examples/08_llama_ffn_pruning.py
+python examples/09_attention_neuron_vs_head_pruning.py
 ```
 
-View at: `docs/build/html/index.html`
+---
 
-## Project Structure
+## Testing
 
-```
-alignment/
-├── src/alignment/        # Main package
-│   ├── core/            # Core functionality and registry
-│   ├── models/          # Model architectures and loaders
-│   ├── metrics/         # Alignment metrics (30+ implementations)
-│   ├── pruning/         # Pruning strategies and experiments
-│   ├── experiments/     # Experiment framework
-│   ├── data/            # Dataset handling
-│   ├── analysis/        # Result analysis and visualization
-│   └── configs/         # Configuration management
-├── configs/             # Configuration templates and examples
-├── examples/            # Example scripts
-├── scripts/             # Experiment runner scripts
-├── tests/               # Unit and integration tests
-└── docs/                # Documentation source
-```
-
-## Usage Examples
-
-### Basic Alignment Analysis
 ```bash
-# Simple MLP on MNIST
-python scripts/run_experiment.py --config configs/examples/mnist_mlp_standard.yaml
-
-# Vision model analysis
-python scripts/run_experiment.py --config configs/examples/resnet18_analysis.yaml
+pytest tests/
 ```
 
-### Custom Configuration
-1. Copy a template: `cp configs/template_basic.yaml configs/my_experiment.yaml`
-2. Edit the configuration file
-3. Run: `python scripts/run_experiment.py --config configs/my_experiment.yaml`
-
-## Results and Outputs
-
-Experiments generate:
-- Training logs and metrics
-- Alignment analysis results
-- Pruning performance comparisons
-- Professional visualizations (PNG plots)
-- Comprehensive experiment reports
-
-Results are saved in timestamped directories: `results/experiment_name_YYYYMMDD_HHMMSS/`
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes with tests
-4. Submit a pull request
-
-See `docs/source/contributing.rst` for detailed guidelines.
+---
 
 ## License
 
-See LICENSE file for details.
+See LICENSE file.

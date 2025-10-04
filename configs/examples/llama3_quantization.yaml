@@ -1,0 +1,86 @@
+# LLaMA-3 Quantization Analysis
+# Study quantization effects using alignment metrics
+
+experiment:
+  name: "llama3_quantization_study"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_quantization"
+
+model:
+  name: "meta-llama/Meta-Llama-3-8B"
+  pretrained: true
+  tracked_layers: null  # Auto-detect FFN layers
+  torch_dtype: "float32"  # Start with full precision
+  device_map: "auto"
+
+dataset:
+  name: "wikitext"
+  split: "test"
+  data_path: "./data"
+  batch_size: 4
+  num_workers: 2
+  max_length: 512
+  max_samples: 100
+
+metrics:
+  enabled: ['rayleigh_quotient']  # Compute importance before quantization
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+quantization:
+  enabled: true
+  
+  # Quantization precision to test
+  precision_levels: ['int8', 'int4', 'mixed']  # Options: 'int8', 'int4', 'fp16', 'mixed'
+  
+  # INT8 configuration
+  int8:
+    per_channel: true  # Per-channel vs per-tensor
+    symmetric: true  # Symmetric vs asymmetric
+  
+  # INT4 configuration
+  int4:
+    block_size: 128  # Block size for group quantization
+  
+  # Mixed precision configuration
+  mixed:
+    target_avg_bits: 6.0  # Average bits across model
+    min_bits: 4  # Minimum per layer
+    max_bits: 8  # Maximum per layer
+    use_importance_scores: true  # Base allocation on RQ scores
+  
+  # Analysis options
+  analyze_sensitivity: true  # Measure per-layer sensitivity to quantization
+  compute_quantization_error: true  # Compute MSE, MAE, SNR
+  
+evaluation:
+  task: 'language_modeling'
+  metrics: ['perplexity', 'loss']
+  pre_quantization: true  # Baseline before quantization
+  post_quantization: true  # After each precision level
+
+analysis:
+  # Study quantization effects on neuron importance
+  recompute_scores_after_quantization: true  # Does RQ change after quantization?
+  compare_importance_preservation: true  # Are important neurons still important?
+  save_quantization_stats: true
+
+visualization:
+  enabled: true
+  plots:
+    - 'quantization_performance'  # Perplexity vs precision
+    - 'layer_sensitivity'  # Which layers are sensitive
+    - 'bit_allocation'  # Mixed-precision allocation
+    - 'importance_preservation'  # RQ before vs after quantization
+
+# Research questions:
+# 1. Which FFN neurons are most sensitive to quantization?
+# 2. Can we use RQ scores to guide bit allocation?
+# 3. How does quantization affect neuron redundancy?
+# 4. Combined pruning + quantization compression?
+
+# Run: python scripts/run_experiment.py --config configs/examples/llama3_quantization.yaml
+

@@ -1,0 +1,76 @@
+# ResNet-18 Redundancy-Aware Pruning
+# Complete pruning workflow with dependency handling
+
+experiment:
+  name: "resnet18_pruning"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/resnet18_pruning"
+
+model:
+  name: "resnet18"
+  pretrained: true
+  tracked_layers: null  # Auto-detect all conv and linear layers
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+  augmentation: false  # No augmentation for evaluation
+
+metrics:
+  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian', 'synergy_gaussian_mmi']
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+  
+  pairwise_redundancy_gaussian:
+    mode: 'output_based'  # Fast for medium models
+    num_pairs: 10
+  
+  synergy_gaussian_mmi:
+    num_pairs: 10
+
+pruning:
+  enabled: true
+  strategy: 'ultimate'  # Best performance: multi-stage with adaptive amounts
+  target_sparsity: 0.7  # Remove 70% of parameters
+  distribution: 'adaptive_sensitivity'  # Protect sensitive layers
+  scoring: 'composite'  # Redundancy-aware
+  direction: 'low'
+  structured: true  # Channel-level pruning
+  dependency_aware: true  # Critical for ResNet (handles skip connections)
+  
+  fine_tune:
+    enabled: true
+    epochs: 20
+    learning_rate: 0.0001
+  
+  composite_weights:
+    alpha_mi: 0.0
+    beta_synergy: 0.3
+    gamma_redundancy: 0.4
+    delta_rq: 0.3
+
+layer_config:
+  cnn_mode: 'unfold'  # Options: 'unfold', 'patchwise', 'channel_variance'
+
+analysis:
+  class_conditioned: true  # Compute class-conditioned RQ (ΔRQ)
+  save_scores: true
+  generate_plots: true
+
+visualization:
+  enabled: true
+  format: 'png'
+  dpi: 300
+
+evaluation:
+  task: 'classification'
+  metrics: ['accuracy', 'loss']
+
+# Expected: ~5-6% accuracy drop at 70% sparsity (vs ~10% for magnitude)
+# Run: python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+
