@@ -14,6 +14,13 @@ import logging
 from alignment.core.base import BaseModel
 from .hooks import HookManager
 
+# Conditional import for layer detector (graceful fallback)
+try:
+    from alignment.core.layer_detector import detect_trackable_layers
+    HAS_LAYER_DETECTOR = True
+except ImportError:
+    HAS_LAYER_DETECTOR = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,10 +77,8 @@ class BaseModelWrapper(BaseModel):
         Returns:
             List of layer names suitable for tracking
         """
-        try:
-            # Try using generic detector (v0.2.0+)
-            from ..core.layer_detector import detect_trackable_layers
-            
+        if HAS_LAYER_DETECTOR:
+            # Use generic detector (model-agnostic)
             trackable_layers = detect_trackable_layers(
                 self._model,
                 min_neurons=1
@@ -81,7 +86,7 @@ class BaseModelWrapper(BaseModel):
             
             logger.info(f"Used generic LayerDetector (model-agnostic)")
             
-        except ImportError:
+        else:
             # Fallback to simple type-based detection
             logger.warning("LayerDetector not available, using simple detection")
             

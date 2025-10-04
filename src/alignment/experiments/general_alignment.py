@@ -25,6 +25,9 @@ from alignment.core.registry import register_experiment
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
 from alignment.services import ActivationCaptureService, MaskOperations
+from alignment.pruning.strategies import MagnitudePruning, RandomPruning, ParallelBatchPruning
+from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
+from alignment.data.processing import preprocess_layer_activations
 
 logger = logging.getLogger(__name__)
 
@@ -936,8 +939,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
     def _pruning_experiments_single(self) -> Dict[str, Any]:
         """Perform pruning experiments on a single network."""
         # Import pruning utilities
-        from alignment.pruning.strategies import MagnitudePruning
-        from alignment.pruning.base import PruningConfig
+        # Imports moved to top of file
         
         results = {
             "strategies": {},
@@ -1272,7 +1274,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _pruning_experiments_multi(self) -> Dict[str, Any]:
         """Perform parallel batch pruning experiments on multiple networks."""
-        from alignment.pruning.strategies import ParallelBatchPruning
+        # Import moved to top
         
         # Use the parallel batch pruning strategy
         pruner = ParallelBatchPruning(self.config)
@@ -2586,7 +2588,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _aggregate_dropout_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Aggregate dropout results from multiple networks (fallback for compatibility)."""
-        import numpy as np
+        # Import moved to top
         
         if not results:
             return {
@@ -2675,7 +2677,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
     
     def _aggregate_pruning_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Aggregate pruning results from multiple networks."""
-        import numpy as np
+        # Import moved to top
         
         # Get structure from first result
         aggregated = {
@@ -3219,8 +3221,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         3. Minimal memory copying
         4. Parallel sparsity calculation
         """
-        from alignment.pruning.strategies import MagnitudePruning, RandomPruning
-        import numpy as np
+        # Imports moved to top
         
         results = {"strategies": {}}
         
