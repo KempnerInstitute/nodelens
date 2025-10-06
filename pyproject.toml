@@ -15,6 +15,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "numpy",
     "torch",
+    "torchvision",
     "omegaconf",
     "seaborn",
     "matplotlib",

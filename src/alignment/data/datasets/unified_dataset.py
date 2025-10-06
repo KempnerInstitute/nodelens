@@ -21,81 +21,81 @@ logger = logging.getLogger(__name__)
 
 # Dataset configurations
 DATASET_CONFIGS = {
-    "mnist": {
-        "dataset_class": datasets.MNIST,
-        "mean": 0.1307,
-        "std": 0.3081,
-        "num_classes": 10,
-        "input_shape": (1, 28, 28),
-        "class_names": [str(i) for i in range(10)],
-        "augmentation": {"rotation": 10, "translate": (0.1, 0.1), "scale": (0.9, 1.1)},
-    },
-    "fashion_mnist": {
-        "dataset_class": datasets.FashionMNIST,
-        "mean": 0.2860,
-        "std": 0.3530,
-        "num_classes": 10,
-        "input_shape": (1, 28, 28),
-        "class_names": ["T-shirt/top", "Trouser", "Pullover", "Dress", "Coat", "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"],
-        "augmentation": {"rotation": 10, "translate": (0.1, 0.1), "scale": (0.9, 1.1)},
-    },
-    "cifar10": {
-        "dataset_class": datasets.CIFAR10,
-        "mean": [0.4914, 0.4822, 0.4465],
-        "std": [0.2470, 0.2435, 0.2616],
-        "num_classes": 10,
-        "input_shape": (3, 32, 32),
-        "class_names": ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"],
-        "augmentation": {
-            "crop": 32,
-            "padding": 4,
-            "horizontal_flip": True,
-            "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
+        "mnist": {
+            "dataset_class": datasets.MNIST,
+            "mean": 0.1307,
+            "std": 0.3081,
+            "num_classes": 10,
+            "input_shape": (1, 28, 28),
+            "class_names": [str(i) for i in range(10)],
+            "augmentation": {"rotation": 10, "translate": (0.1, 0.1), "scale": (0.9, 1.1)},
         },
-    },
-    "cifar100": {
-        "dataset_class": datasets.CIFAR100,
-        "mean": [0.5071, 0.4865, 0.4409],
-        "std": [0.2673, 0.2564, 0.2762],
-        "num_classes": 100,
-        "input_shape": (3, 32, 32),
-        "augmentation": {
-            "crop": 32,
-            "padding": 4,
-            "horizontal_flip": True,
-            "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
-            "rotation": 15,
+        "fashion_mnist": {
+            "dataset_class": datasets.FashionMNIST,
+            "mean": 0.2860,
+            "std": 0.3530,
+            "num_classes": 10,
+            "input_shape": (1, 28, 28),
+            "class_names": ["T-shirt/top", "Trouser", "Pullover", "Dress", "Coat", "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"],
+            "augmentation": {"rotation": 10, "translate": (0.1, 0.1), "scale": (0.9, 1.1)},
         },
-    },
-    "imagenet": {
-        "dataset_class": datasets.ImageNet,
-        "mean": [0.485, 0.456, 0.406],
-        "std": [0.229, 0.224, 0.225],
-        "num_classes": 1000,
-        "input_shape": (3, 224, 224),
-        "augmentation": {
-            "random_resized_crop": 224,
-            "horizontal_flip": True,
-            "color_jitter": {"brightness": 0.4, "contrast": 0.4, "saturation": 0.4, "hue": 0.1},
+        "cifar10": {
+            "dataset_class": datasets.CIFAR10,
+            "mean": [0.4914, 0.4822, 0.4465],
+            "std": [0.2470, 0.2435, 0.2616],
+            "num_classes": 10,
+            "input_shape": (3, 32, 32),
+            "class_names": ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"],
+            "augmentation": {
+                "crop": 32,
+                "padding": 4,
+                "horizontal_flip": True,
+                "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
+            },
         },
-        "val_transforms": {"resize": 256, "center_crop": 224},
-    },
-    "svhn": {
-        "dataset_class": datasets.SVHN,
-        "mean": [0.4377, 0.4438, 0.4728],
-        "std": [0.1980, 0.2010, 0.1970],
-        "num_classes": 10,
-        "input_shape": (3, 32, 32),
-        "class_names": [str(i) for i in range(10)],
-        "split_arg": "split",  # SVHN uses 'split' instead of 'train'
-        "augmentation": {
-            "crop": 32,
-            "padding": 4,
-            "horizontal_flip": False,  # Numbers shouldn't be flipped
-            "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
+        "cifar100": {
+            "dataset_class": datasets.CIFAR100,
+            "mean": [0.5071, 0.4865, 0.4409],
+            "std": [0.2673, 0.2564, 0.2762],
+            "num_classes": 100,
+            "input_shape": (3, 32, 32),
+            "augmentation": {
+                "crop": 32,
+                "padding": 4,
+                "horizontal_flip": True,
+                "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
+                "rotation": 15,
+            },
         },
-    },
-}
+        "imagenet": {
+            "dataset_class": datasets.ImageNet,
+            "mean": [0.485, 0.456, 0.406],
+            "std": [0.229, 0.224, 0.225],
+            "num_classes": 1000,
+            "input_shape": (3, 224, 224),
+            "augmentation": {
+                "random_resized_crop": 224,
+                "horizontal_flip": True,
+                "color_jitter": {"brightness": 0.4, "contrast": 0.4, "saturation": 0.4, "hue": 0.1},
+            },
+            "val_transforms": {"resize": 256, "center_crop": 224},
+        },
+        "svhn": {
+            "dataset_class": datasets.SVHN,
+            "mean": [0.4377, 0.4438, 0.4728],
+            "std": [0.1980, 0.2010, 0.1970],
+            "num_classes": 10,
+            "input_shape": (3, 32, 32),
+            "class_names": [str(i) for i in range(10)],
+            "split_arg": "split",  # SVHN uses 'split' instead of 'train'
+            "augmentation": {
+                "crop": 32,
+                "padding": 4,
+                "horizontal_flip": False,  # Numbers shouldn't be flipped
+                "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
+            },
+        },
+    }
 
 
 @register_dataset("unified")
