@@ -24,8 +24,7 @@ jobs:
     
     - name: Update requirements
       run: |
-        pip-compile requirements.in --upgrade
-        pip-compile requirements-dev.in --upgrade
+        pip-compile requirements.in --upgrade --output-file requirements.txt
     
     - name: Create Pull Request
       uses: peter-evans/create-pull-request@v5
