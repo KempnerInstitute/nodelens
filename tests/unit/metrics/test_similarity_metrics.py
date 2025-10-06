@@ -2,7 +2,6 @@
 Unit tests for similarity metrics.
 """
 
-import numpy as np
 import pytest
 import torch
 

@@ -368,7 +368,7 @@ def load_config_with_overrides(
                 # Convert value to appropriate type
                 try:
                     value = eval(value)
-                except:
+                except Exception:
                     pass  # Keep as string
 
                 # Handle nested keys (e.g., "model.hidden_dims=[300,200]")

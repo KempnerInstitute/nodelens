@@ -2,22 +2,14 @@
 Unit tests for experiment classes.
 """
 
-import tempfile
-from pathlib import Path
 
-import pytest
-import torch
 
 from alignment.experiments import (
-    BaseExperiment,
-    CNNConfig,
-    EvaluationConfig,
     ExperimentConfig,
     GeneralAlignmentConfig,
     GeneralAlignmentExperiment,
     PruningConfig,
     TrainingConfig,
-    create_config_from_dict,
 )
 
 

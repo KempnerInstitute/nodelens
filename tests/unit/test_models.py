@@ -9,8 +9,6 @@ import torch.nn as nn
 from alignment.models.architectures.standard_models import (
     CNN2P2,
     MLP,
-    ResNetBlock,
-    SimpleConvNet,
 )
 
 

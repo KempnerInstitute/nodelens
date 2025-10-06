@@ -2,7 +2,6 @@
 Unit tests for information-theoretic metrics.
 """
 
-import numpy as np
 import pytest
 import torch
 

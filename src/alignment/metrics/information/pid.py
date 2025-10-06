@@ -18,9 +18,6 @@ logger = logging.getLogger(__name__)
 
 # Try to import the BROJA 2PID module
 try:
-    import os
-    import sys
-
     # Add the external module to path if needed
     from ...external.BROJA_2PID import BROJA_2PID
 

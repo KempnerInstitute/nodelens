@@ -7,9 +7,7 @@ proving that the implementations match theoretical predictions.
 
 import pytest
 import torch
-import torch.nn as nn
 
-from alignment.metrics import get_metric
 from alignment.metrics.information.pairwise_gaussian import PairwiseRedundancyGaussian
 from alignment.metrics.information.synergy_mmi import SynergyGaussianMMI
 from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
@@ -453,7 +451,7 @@ class TestScaleInvariance:
         # ΔRQ should be invariant
         assert torch.allclose(results1["delta_rq"], results2["delta_rq"], rtol=1e-3), "ΔRQ should be invariant to scaling"
 
-        print(f"✓ ΔRQ scale-invariant")
+        print("✓ ΔRQ scale-invariant")
 
 
 def run_all_validation_tests():

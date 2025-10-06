@@ -21,11 +21,11 @@ class TestMaskOperations:
 
         # Should keep highest scores: [0.5, 0.9, 0.7]
         # Should prune: [0.1, 0.3]
-        assert mask[0] == False  # 0.1
-        assert mask[1] == True  # 0.5
-        assert mask[2] == False  # 0.3
-        assert mask[3] == True  # 0.9
-        assert mask[4] == True  # 0.7
+        assert not mask[0]  # 0.1
+        assert mask[1]  # 0.5
+        assert not mask[2]  # 0.3
+        assert mask[3]  # 0.9
+        assert mask[4]  # 0.7
 
     def test_create_structured_mask_high(self):
         """Test structured mask creation with high mode."""
@@ -36,8 +36,8 @@ class TestMaskOperations:
         assert mask.sum() == 3
 
         # Should keep lowest scores
-        assert mask[3] == False  # 0.9 (highest)
-        assert mask[4] == False  # 0.7
+        assert not mask[3]  # 0.9 (highest)
+        assert not mask[4]  # 0.7
 
     def test_create_structured_mask_random(self):
         """Test random structured mask."""

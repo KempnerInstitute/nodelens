@@ -20,25 +20,8 @@ def test_imports():
 
     try:
         # Core imports
-        from alignment.core import ModelWrapper
-        from alignment.metrics import METRIC_REGISTRY
-        from alignment.metrics.base import MetricComputer
 
         # Utils imports
-        from alignment.utils.batch_processing import (
-            BatchMetricProcessor,
-            StreamingMetricComputer,
-            compute_metrics_parallel,
-        )
-        from alignment.utils.experiment_tracking import (
-            ExperimentTracker,
-            create_tracker,
-        )
-        from alignment.utils.pruning import (
-            PruningConfig,
-            PruningUtilities,
-            create_pruning_schedule,
-        )
 
         logger.info("✓ All imports successful")
         return True

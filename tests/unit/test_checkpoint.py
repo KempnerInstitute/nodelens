@@ -4,7 +4,6 @@ Unit tests for checkpoint utilities.
 
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 import torch

@@ -108,10 +108,10 @@ class LayerDetector:
 
         # Filter by requested roles
         if include_roles:
-            all_layers = [l for l in all_layers if l.role in include_roles]
+            all_layers = [layer for layer in all_layers if layer.role in include_roles]
 
         # Filter by trackable
-        all_layers = [l for l in all_layers if l.is_trackable]
+        all_layers = [layer for layer in all_layers if layer.is_trackable]
 
         logger.info(f"Detected {len(all_layers)} trackable layers")
 
@@ -269,7 +269,7 @@ class LayerDetector:
     def get_layers_by_role(self, model: nn.Module, role: str) -> List[LayerInfo]:
         """Get all layers matching a specific role."""
         all_layers = self.detect_all_layers(model)
-        return [l for l in all_layers if l.role == role]
+        return [layer for layer in all_layers if layer.role == role]
 
 
 def detect_trackable_layers(model: nn.Module, min_neurons: int = 1, roles: Optional[List[str]] = None) -> List[str]:
@@ -286,4 +286,4 @@ def detect_trackable_layers(model: nn.Module, min_neurons: int = 1, roles: Optio
     """
     detector = LayerDetector(min_neurons=min_neurons)
     layers = detector.detect_all_layers(model, include_roles=roles)
-    return [l.name for l in layers]
+    return [layer.name for layer in layers]

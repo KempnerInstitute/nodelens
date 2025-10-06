@@ -50,10 +50,10 @@ class UnifiedVisualizer:
         # Set style
         try:
             plt.style.use(style)
-        except:
+        except Exception:
             try:
                 plt.style.use("seaborn-v0_8-darkgrid")
-            except:
+            except Exception:
                 plt.style.use("default")
 
         self.figsize = figsize

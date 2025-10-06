@@ -279,7 +279,7 @@ class PruningDistributionManager:
         if eval_fn:
             try:
                 adaptive = self._adaptive_sensitivity_distribution(model, layer_names, eval_fn)
-            except:
+            except Exception:
                 adaptive = uniform
         else:
             adaptive = uniform
