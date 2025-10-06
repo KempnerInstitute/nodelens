@@ -12,13 +12,24 @@ import torch.utils.data
 # Import for backward compatibility - these are now created dynamically
 # but we import them to make them available at module level
 from alignment.core.registry import DATASET_REGISTRY
-from alignment.data.datasets.text_datasets import (
-    C4Dataset,
-    TextDataset,
-    WikiTextDataset,
-    load_text_dataset,
-)
 from alignment.data.datasets.unified_dataset import DATASET_CONFIGS, UnifiedDataset
+
+# Try to import text datasets (optional - requires additional dependencies)
+try:
+    from alignment.data.datasets.text_datasets import (
+        C4Dataset,
+        TextDataset,
+        WikiTextDataset,
+        load_text_dataset,
+    )
+
+    HAS_TEXT_DATASETS = True
+except ImportError:
+    HAS_TEXT_DATASETS = False
+    TextDataset = None
+    WikiTextDataset = None
+    C4Dataset = None
+    load_text_dataset = None
 
 # Get dynamically created dataset classes
 MNISTDataset = DATASET_REGISTRY.get("mnist")
@@ -78,18 +89,24 @@ def get_dataset(
 
 
 __all__ = [
-    'UnifiedDataset',
-    'DATASET_CONFIGS',
-    'get_dataset',
-    'MNISTDataset',
-    'FashionMNISTDataset',
-    'CIFAR10Dataset', 
-    'CIFAR100Dataset',
-    'ImageNetDataset',
-    'SVHNDataset',
-    # Text datasets for LLMs
-    'TextDataset',
-    'WikiTextDataset',
-    'C4Dataset',
-    'load_text_dataset',
-] 
+    "UnifiedDataset",
+    "DATASET_CONFIGS",
+    "get_dataset",
+    "MNISTDataset",
+    "FashionMNISTDataset",
+    "CIFAR10Dataset",
+    "CIFAR100Dataset",
+    "ImageNetDataset",
+    "SVHNDataset",
+]
+
+# Add text datasets to exports if available
+if HAS_TEXT_DATASETS:
+    __all__.extend(
+        [
+            "TextDataset",
+            "WikiTextDataset",
+            "C4Dataset",
+            "load_text_dataset",
+        ]
+    ) 
