@@ -245,8 +245,7 @@ class UnifiedReporter:
     <h1>{self.title}</h1>
     <div class="metadata">
         <strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}<br>
-        <strong>Version:</strong> {self.metadata.get('version', '1.0')}
-"""
+        <strong>Version:</strong> {self.metadata.get('version', '1.0')}"""
 
         # Add custom metadata
         for key, value in self.metadata.items():

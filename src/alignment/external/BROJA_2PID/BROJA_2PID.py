@@ -211,7 +211,7 @@ class Solve_w_ECOS:
         # Permission to use and modify under Apache License version 2.0
         self.marg_yz = None # for cond[]mutinf computation below
 
-        if self.verbose != None:
+        if self.verbose is not None:
             self.ecos_kwargs["verbose"] = self.verbose
 
         solution = ecos.solve(self.c, self.G,self.h, self.dims,  self.A,self.b, **self.ecos_kwargs)
@@ -229,7 +229,7 @@ class Solve_w_ECOS:
     #^ solve()
 
     def provide_marginals(self):
-        if self.marg_yz == None:
+        if self.marg_yz is None:
             self.marg_yz = dict()
             self.marg_y  = defaultdict(lambda: 0.)
             self.marg_z  = defaultdict(lambda: 0.)
@@ -560,7 +560,7 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
 
     ecos_keep_solver_obj = False
     if 'keep_solver_object' in solver_args.keys():
-        if solver_args['keep_solver_object']==True: ecos_keep_solver_obj = True
+        if solver_args['keep_solver_object'] is True: ecos_keep_solver_obj = True
         del solver_args['keep_solver_object']
 
     solver.ecos_kwargs = solver_args

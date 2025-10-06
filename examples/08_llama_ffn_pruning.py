@@ -16,6 +16,7 @@ LLaMA-3 FFN Structure:
     Forward: down_proj(SiLU(gate_proj(x)) * up_proj(x))
 """
 
+from typing import List
 
 import torch
 import torch.nn as nn

@@ -287,10 +287,12 @@ class MaskOperations:
 
         if mode == 'low':
             threshold = torch.topk(all_scores_cat, num_to_keep, largest=True)[0][-1]
-            threshold_fn = lambda s: s >= threshold
+            def threshold_fn(s):
+                return s >= threshold
         elif mode == 'high':
             threshold = torch.topk(all_scores_cat, num_to_keep, largest=False)[0][-1]
-            threshold_fn = lambda s: s <= threshold
+            def threshold_fn(s):
+                return s <= threshold
         else:
             raise ValueError(f"Global thresholding not supported for mode: {mode}")
 

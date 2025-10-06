@@ -10,7 +10,7 @@ Speeds up pruning by parallelizing across:
 import copy
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
