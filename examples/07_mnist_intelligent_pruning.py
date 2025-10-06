@@ -1,13 +1,11 @@
 """
-Complete Example: Intelligent Pruning on MNIST
+MNIST Intelligent Pruning Example
 
-This script demonstrates the full workflow:
-1. Train a simple model on MNIST
-2. Compute redundancy-aware composite scores
-3. Prune using multiple strategies
+Demonstrates complete workflow:
+1. Train MLP on MNIST
+2. Compute composite importance scores
+3. Apply pruning with different strategies
 4. Compare results
-
-This is a practical, runnable example showing real improvements.
 """
 
 import torch
@@ -28,9 +26,8 @@ from alignment.services import (
 from alignment.metrics import get_metric
 
 
-# Simple MLP for MNIST
 class SimpleMLP(nn.Module):
-    """Simple MLP: 784 -> 128 -> 64 -> 10"""
+    """MLP: 784 -> 128 -> 64 -> 10"""
     def __init__(self):
         super().__init__()
         self.fc1 = nn.Linear(784, 128)
@@ -48,7 +45,7 @@ class SimpleMLP(nn.Module):
 
 
 def train_model(model, train_loader, epochs=5, device='cpu'):
-    """Quick training."""
+    """Train model."""
     model.train()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     criterion = nn.CrossEntropyLoss()
@@ -98,12 +95,7 @@ def evaluate(model, test_loader, device='cpu'):
 
 
 def prune_model(model, wrapper, pruning_method, pruning_amount, val_loader, device='cpu'):
-    """
-    Prune model using specified method.
-    
-    Args:
-        pruning_method: 'random', 'magnitude', 'rq', or 'composite'
-    """
+    """Prune model using specified method."""
     print(f"\nPruning with {pruning_method} (amount={pruning_amount:.1%})...")
     
     # Get a batch for metric computation
@@ -300,25 +292,7 @@ def main():
     best_method = min(results.keys(), key=lambda m: results[m]['drop'])
     print(f"\n✓ Best method: {best_method} (smallest accuracy drop: {results[best_method]['drop']:.2f}%)")
     
-    # Expected outcome
-    print("\n" + "=" * 80)
-    print("EXPECTED OUTCOME")
-    print("=" * 80)
-    print("""
-Redundancy-aware pruning (composite) should outperform others because:
-• Preserves high-synergy neuron pairs (complementary information)
-• Removes high-redundancy neurons (overlapping information)
-• Uses task-relevance when targets available (ΔRQ)
-
-Expected ranking (best to worst):
-1. Composite (redundancy-aware) - Smallest drop
-2. RQ (alignment-aware)
-3. Magnitude
-4. Random - Largest drop
-
-If composite matches or beats magnitude with same drop, that's a success!
-At higher sparsity (70-90%), the gap should be even larger (+3-5% better).
-    """)
+    print("\nComposite pruning considers redundancy and synergy in addition to alignment.")
     
     # Save results
     output_dir = Path('results/mnist_intelligent_pruning')
