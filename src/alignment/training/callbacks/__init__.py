@@ -2,10 +2,7 @@
 Training callbacks for the alignment framework.
 """
 
-from .alignment_callback import (
-    AlignmentMetricsCallback,
-    create_alignment_callback
-)
+from .alignment_callback import AlignmentMetricsCallback, create_alignment_callback
 
 __all__ = [
     'AlignmentMetricsCallback',

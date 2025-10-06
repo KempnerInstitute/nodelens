@@ -13,13 +13,14 @@ Works with:
 - Custom transformer implementations
 """
 
-from typing import Dict, List, Optional, Any, Tuple
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
 import torch.nn as nn
-import logging
 
-from .base import BaseModelWrapper
 from ..core.registry import register_model
+from .base import BaseModelWrapper
 
 logger = logging.getLogger(__name__)
 

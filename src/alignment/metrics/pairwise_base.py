@@ -10,10 +10,11 @@ Examples:
 - Correlation: How correlated is neuron i with others?
 """
 
-from abc import abstractmethod
-from typing import Optional, Any, Literal
-import torch
 import logging
+from abc import abstractmethod
+from typing import Any, Literal, Optional
+
+import torch
 
 from ..core.base import BaseMetric
 
@@ -23,18 +24,18 @@ logger = logging.getLogger(__name__)
 class PairwiseMetric(BaseMetric):
     """
     Base class for pairwise metrics.
-    
+
     Pairwise metrics compute relationships between neuron pairs (i, j),
     then aggregate to per-neuron scores.
-    
+
     Workflow:
     1. Compute pairwise values: R[i,j] for all pairs
     2. Aggregate to single-neuron: score[i] = aggregate(R[i, :])
-    
+
     Subclasses implement:
     - compute_pairwise(): Returns [N, N] matrix
     - aggregate_pairwise(): Converts matrix to [N] scores
-    
+
     Example:
         >>> class MyPairwiseMetric(PairwiseMetric):
         ...     def compute_pairwise(self, outputs):
@@ -45,7 +46,7 @@ class PairwiseMetric(BaseMetric):
         >>> scores = metric.compute(outputs=outputs)
         >>> # Returns [N] - one score per neuron
     """
-    
+
     def __init__(
         self,
         aggregation: Literal['mean', 'median', 'max', 'sum'] = 'mean',
@@ -56,7 +57,7 @@ class PairwiseMetric(BaseMetric):
     ):
         """
         Initialize pairwise metric.
-        
+
         Args:
             aggregation: How to aggregate pairwise values to single-neuron scores
                 - 'mean': Average over partners (default)
@@ -76,7 +77,7 @@ class PairwiseMetric(BaseMetric):
         self.exclude_diagonal = exclude_diagonal
         self.sampling_strategy = sampling_strategy
         self.num_pairs = num_pairs
-    
+
     @abstractmethod
     def compute_pairwise(
         self,
@@ -87,62 +88,62 @@ class PairwiseMetric(BaseMetric):
     ) -> torch.Tensor:
         """
         Compute pairwise relationships between all neurons.
-        
+
         Args:
             inputs: Input activations
             weights: Layer weights
             outputs: Layer outputs
             **kwargs: Additional arguments
-            
+
         Returns:
             Pairwise matrix [N, N] where entry [i,j] is relationship between neurons i and j
         """
         pass
-    
+
     def aggregate_pairwise(
         self,
         pairwise_matrix: torch.Tensor
     ) -> torch.Tensor:
         """
         Aggregate pairwise matrix to per-neuron scores.
-        
+
         Args:
             pairwise_matrix: [N, N] pairwise relationships
-            
+
         Returns:
             Per-neuron scores [N]
         """
         N = pairwise_matrix.shape[0]
-        
+
         # Exclude diagonal if requested
         if self.exclude_diagonal:
             # Create mask
             mask = ~torch.eye(N, dtype=torch.bool, device=pairwise_matrix.device)
-            
+
             if self.aggregation == 'mean':
                 # Average over non-diagonal
                 row_sums = (pairwise_matrix * mask.float()).sum(dim=1)
                 scores = row_sums / max(1, N - 1)
-            
+
             elif self.aggregation == 'median':
                 scores = torch.zeros(N, device=pairwise_matrix.device)
                 for i in range(N):
                     # Get non-diagonal values for row i
                     values = pairwise_matrix[i, mask[i]]
                     scores[i] = values.median()
-            
+
             elif self.aggregation == 'max':
                 scores = torch.zeros(N, device=pairwise_matrix.device)
                 for i in range(N):
                     values = pairwise_matrix[i, mask[i]]
                     scores[i] = values.max()
-            
+
             elif self.aggregation == 'sum':
                 scores = (pairwise_matrix * mask.float()).sum(dim=1)
-            
+
             else:
                 raise ValueError(f"Unknown aggregation: {self.aggregation}")
-        
+
         else:
             # Include diagonal
             if self.aggregation == 'mean':
@@ -155,9 +156,9 @@ class PairwiseMetric(BaseMetric):
                 scores = pairwise_matrix.sum(dim=1)
             else:
                 raise ValueError(f"Unknown aggregation: {self.aggregation}")
-        
+
         return scores
-    
+
     def compute(
         self,
         inputs: Optional[torch.Tensor] = None,
@@ -168,28 +169,28 @@ class PairwiseMetric(BaseMetric):
     ) -> torch.Tensor:
         """
         Compute per-neuron scores from pairwise relationships.
-        
+
         Args:
             inputs: Input activations
             weights: Layer weights
             outputs: Layer outputs
             return_matrix: If True, return full [N, N] matrix instead of aggregated [N]
             **kwargs: Additional arguments
-            
+
         Returns:
             Per-neuron scores [N] or pairwise matrix [N, N] if return_matrix=True
         """
         # Compute pairwise matrix
         pairwise_matrix = self.compute_pairwise(inputs, weights, outputs, **kwargs)
-        
+
         if return_matrix:
             return pairwise_matrix
-        
+
         # Aggregate to per-neuron scores
         scores = self.aggregate_pairwise(pairwise_matrix)
-        
+
         return scores
-    
+
     def compute_for_subset(
         self,
         neuron_indices: torch.Tensor,
@@ -200,12 +201,12 @@ class PairwiseMetric(BaseMetric):
     ) -> torch.Tensor:
         """
         Compute scores for a subset of neurons (efficient for large layers).
-        
+
         Args:
             neuron_indices: Indices of neurons to score
             inputs, weights, outputs: As usual
             **kwargs: Additional arguments
-            
+
         Returns:
             Scores for specified neurons only
         """

@@ -2,10 +2,11 @@
 Checkpoint utilities for saving models with hooks.
 """
 
-import torch
 import logging
-from typing import Dict, Any, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ def save_checkpoint(
 ) -> None:
     """
     Save a checkpoint, handling models with hooks gracefully.
-    
+
     Args:
         model: The model to save
         optimizer: Optimizer state to save (optional)
@@ -33,13 +34,13 @@ def save_checkpoint(
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
     }
-    
+
     if optimizer is not None:
         checkpoint['optimizer_state_dict'] = optimizer.state_dict()
-    
+
     if additional_state is not None:
         checkpoint.update(additional_state)
-    
+
     if save_hooks:
         # Try to save the full model, but warn about hooks
         try:
@@ -47,7 +48,7 @@ def save_checkpoint(
             logger.warning("Saving full model with hooks. This may not be loadable.")
         except Exception as e:
             logger.warning(f"Failed to save full model: {e}. Saving state_dict only.")
-    
+
     try:
         torch.save(checkpoint, filepath)
         logger.info(f"Checkpoint saved to {filepath}")
@@ -64,21 +65,21 @@ def load_checkpoint(
 ) -> Dict[str, Any]:
     """
     Load a checkpoint, handling different checkpoint formats.
-    
+
     Args:
         filepath: Path to the checkpoint file
         model: Model to load state into (optional)
         optimizer: Optimizer to load state into (optional)
         map_location: Device mapping location
-        
+
     Returns:
         Dictionary containing the loaded checkpoint data
     """
     if not Path(filepath).exists():
         raise FileNotFoundError(f"Checkpoint not found: {filepath}")
-    
+
     checkpoint = torch.load(filepath, map_location=map_location)
-    
+
     # Load model state if model is provided
     if model is not None and 'model_state_dict' in checkpoint:
         try:
@@ -92,7 +93,7 @@ def load_checkpoint(
                 logger.warning("Model state loaded with strict=False")
             except Exception as e2:
                 logger.error(f"Failed to load model state even with strict=False: {e2}")
-    
+
     # Load optimizer state if optimizer is provided
     if optimizer is not None and 'optimizer_state_dict' in checkpoint:
         try:
@@ -100,7 +101,7 @@ def load_checkpoint(
             logger.info("Optimizer state loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load optimizer state: {e}")
-    
+
     return checkpoint
 
 
@@ -111,7 +112,7 @@ def save_model_for_inference(
 ) -> None:
     """
     Save a model for inference, optionally removing hooks.
-    
+
     Args:
         model: The model to save
         filepath: Path to save the model
@@ -124,11 +125,11 @@ def save_model_for_inference(
             if hasattr(module, '_forward_hooks') and len(module._forward_hooks) > 0:
                 hooks_backup[name] = dict(module._forward_hooks)
                 module._forward_hooks.clear()
-        
+
         # Save model without hooks
         torch.save(model.state_dict(), filepath)
         logger.info(f"Model saved for inference (hooks removed): {filepath}")
-        
+
         # Restore hooks
         for name, module in model.named_modules():
             if name in hooks_backup:
@@ -136,4 +137,4 @@ def save_model_for_inference(
     else:
         # Save model as is
         torch.save(model.state_dict(), filepath)
-        logger.info(f"Model saved for inference: {filepath}") 
+        logger.info(f"Model saved for inference: {filepath}")

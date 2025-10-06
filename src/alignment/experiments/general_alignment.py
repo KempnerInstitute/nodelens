@@ -9,25 +9,30 @@ This module implements a flexible experiment that can:
 - Generate comprehensive visualizations
 """
 
-from typing import Dict, List, Optional, Any, Tuple
-import torch
-import torch.nn as nn
-import numpy as np
+import copy
 import logging
+import multiprocessing as mp
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-import multiprocessing as mp
-import copy
-import time
+from typing import Any, Dict, List, Optional, Tuple
 
-from alignment.experiments.base import BaseExperiment, ExperimentConfig
+import numpy as np
+import torch
+import torch.nn as nn
+
 from alignment.core.registry import register_experiment
+from alignment.data.processing import preprocess_layer_activations
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
+from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
+from alignment.pruning.strategies import (
+    MagnitudePruning,
+    ParallelBatchPruning,
+    RandomPruning,
+)
 from alignment.services import ActivationCaptureService, MaskOperations
-from alignment.pruning.strategies import MagnitudePruning, RandomPruning, ParallelBatchPruning
-from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
-from alignment.data.processing import preprocess_layer_activations
 
 logger = logging.getLogger(__name__)
 
@@ -1010,12 +1015,19 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     
                     if strategy_name == "magnitude":
                         if pruning_config.global_pruning:
-                            from alignment.pruning.strategies import GlobalMagnitudePruning
+                            from alignment.pruning.strategies import (
+                                GlobalMagnitudePruning,
+                            )
                             strategy = GlobalMagnitudePruning(config=pruning_config)
                         else:
                             strategy = MagnitudePruning(config=pruning_config)
                     elif strategy_name == "alignment":
-                        from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning, CascadingAlignmentPruning
+                        from alignment.pruning.strategies import (
+                            AlignmentPruning,
+                            CascadingAlignmentPruning,
+                            GlobalAlignmentPruning,
+                        )
+
                         # Get the alignment metric from config (default to rayleigh_quotient)
                         alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
                         
@@ -1040,7 +1052,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     elif strategy_name == "cascading_alignment":
                         # Legacy cascading_alignment handling
                         logger.warning("'cascading_alignment' algorithm is deprecated. Use algorithms=['alignment'] with scope='cascading'")
-                        from alignment.pruning.strategies import CascadingAlignmentPruning
+                        from alignment.pruning.strategies import (
+                            CascadingAlignmentPruning,
+                        )
                         alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
                         pruning_config.structured = True
                         strategy = CascadingAlignmentPruning(
@@ -2284,9 +2298,10 @@ class GeneralAlignmentExperiment(BaseExperiment):
         
         # Pruning experiments - now enhanced with before/after comparisons
         if self.pruning_results and "strategies" in self.pruning_results:
-            from alignment.analysis.visualization import UnifiedVisualizer
             import matplotlib.pyplot as plt
-            
+
+            from alignment.analysis.visualization import UnifiedVisualizer
+
             # Group results by algorithm (for multi-selection mode comparison)
             algorithm_results = {}
             
@@ -2502,7 +2517,10 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 else:
                     return MagnitudePruning(config=pruning_config)
             elif strategy_name == "alignment":
-                from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning
+                from alignment.pruning.strategies import (
+                    AlignmentPruning,
+                    GlobalAlignmentPruning,
+                )
                 alignment_metric = getattr(self.config, 'pruning_alignment_metric', 'rayleigh_quotient')
                 
                 if self.config.pruning_scope == 'global':

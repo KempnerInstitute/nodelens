@@ -1,42 +1,36 @@
 """Computing infrastructure for the alignment framework."""
 
 from .distributed import (
-    DistributedConfig,
-    DistributedTrainer,
-    setup_distributed,
     cleanup_distributed,
-    is_main_process,
-    get_world_size,
     get_rank,
+    get_world_size,
+    is_distributed,
+    is_main_process,
+    setup_distributed,
 )
 
 # Import from optimized submodule
-from .optimized.gpu import (
-    GPUOptimizer,
-    optimize_gpu_memory,
-    get_gpu_memory_stats,
-)
+from .optimized.gpu import GPUAcceleratedMetrics
 from .optimized.jit import (
-    JITCompiler,
-    compile_model,
-    optimize_trace,
+    JITMutualInformation,
+    JITNodeCorrelation,
+    JITRayleighQuotient,
+    create_jit_metric,
 )
 
 __all__ = [
     # Distributed computing
-    'DistributedConfig',
-    'DistributedTrainer',
     'setup_distributed',
     'cleanup_distributed',
+    'is_distributed',
     'is_main_process',
     'get_world_size',
     'get_rank',
     # GPU optimization
-    'GPUOptimizer',
-    'optimize_gpu_memory',
-    'get_gpu_memory_stats',
+    'GPUAcceleratedMetrics',
     # JIT compilation
-    'JITCompiler',
-    'compile_model',
-    'optimize_trace',
-] 
+    'JITRayleighQuotient',
+    'JITMutualInformation',
+    'JITNodeCorrelation',
+    'create_jit_metric',
+]

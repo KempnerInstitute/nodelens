@@ -20,14 +20,14 @@
 # Please cite this paper when you use this software (cf. README.md)
 ##############################################################################################################
 
-import ecos
-from scipy import sparse
-import numpy as np
-from numpy import linalg as LA
-import math
-from collections import defaultdict
-import time 
 import logging
+import math
+import time
+from collections import defaultdict
+
+import ecos
+import numpy as np
+from scipy import sparse
 
 log = math.log2
 ln  = math.log
@@ -104,7 +104,7 @@ class Solve_w_ECOS:
         m = len(self.b_xy) + len(self.b_xz)
         n_vars = 3*n
         n_cons = n+m
-        
+
         #
         # Create the equations: Ax = b
         #
@@ -211,7 +211,7 @@ class Solve_w_ECOS:
         # Permission to use and modify under Apache License version 2.0
         self.marg_yz = None # for cond[]mutinf computation below
 
-        if self.verbose != None:
+        if self.verbose is not None:
             self.ecos_kwargs["verbose"] = self.verbose
 
         solution = ecos.solve(self.c, self.G,self.h, self.dims,  self.A,self.b, **self.ecos_kwargs)
@@ -229,7 +229,7 @@ class Solve_w_ECOS:
     #^ solve()
 
     def provide_marginals(self):
-        if self.marg_yz == None:
+        if self.marg_yz is None:
             self.marg_yz = dict()
             self.marg_y  = defaultdict(lambda: 0.)
             self.marg_z  = defaultdict(lambda: 0.)
@@ -258,7 +258,7 @@ class Solve_w_ECOS:
         mysum = 0.
         for x in self.X:
             for z in self.Z:
-                if not (x,z) in self.b_xz.keys(): continue
+                if (x,z) not in self.b_xz.keys(): continue
                 for y in self.Y:
                     if (x,y,z) in self.idx_of_trip.keys():
                         i = q_vidx(self.idx_of_trip[ (x,y,z) ])
@@ -277,7 +277,7 @@ class Solve_w_ECOS:
         mysum = 0.
         for x in self.X:
             for y in self.Y:
-                if not (x,y) in self.b_xy.keys(): continue
+                if (x,y) not in self.b_xy.keys(): continue
                 for z in self.Z:
                     if (x,y,z) in self.idx_of_trip.keys():
                         i = q_vidx(self.idx_of_trip[ (x,y,z) ])
@@ -295,7 +295,7 @@ class Solve_w_ECOS:
         for x in self.X:
             psum = 0.
             for y in self.Y:
-                if not (x,y) in self.b_xy:  continue
+                if (x,y) not in self.b_xy:  continue
                 for z in self.Z:
                     if (x,y,z) in pdf.keys():
                         psum += pdf[(x,y,z)]
@@ -344,7 +344,7 @@ class Solve_w_ECOS:
     def dual_value(self):
         return -np.dot(self.sol_lambda, self.b)
     #^ dual_value()
-    
+
     def check_feasibility(self): # returns pair (p,d) of primal/dual infeasibility (maxima)
         # Primal infeasiblility
         # ---------------------
@@ -381,7 +381,7 @@ class Solve_w_ECOS:
         #^ fox xz
 
         primal_infeasability = max(max_violation_of_eqn,max_q_negativity)
-        
+
         # Dual infeasiblility
         # -------------------
         idx_of_xy = dict()
@@ -403,14 +403,14 @@ class Solve_w_ECOS:
         #^ for
 
         dual_infeasability = 0.
-        
+
         # Compute mu_*yz
         # mu_xyz: dual variable of the coupling constraints
         mu_yz = defaultdict(lambda: 0.)
         for j,xyz in enumerate(self.trip_of_idx):
             x,y,z = xyz
             mu_yz[(y,z)] += self.sol_lambda[j]
-        
+
         for i,xyz in enumerate(self.trip_of_idx):
             x,y,z = xyz
 
@@ -427,7 +427,7 @@ class Solve_w_ECOS:
             )
         #^ for
 
-        
+
         # for i,xyz in enumerate(self.trip_of_idx):
         #     x,y,z = xyz
         #     mu_yz = 0.
@@ -441,7 +441,7 @@ class Solve_w_ECOS:
         #         u,v,w = uvw
         #         if v == y and w == z:
         #             mu_yz += self.sol_lambda[j]
-                    
+
         #     # Find the most violated dual ieq
         #     dual_infeasability = max( dual_infeasability, -self.sol_lambda[xy_idx]
         #                               - self.sol_lambda[xz_idx]
@@ -483,7 +483,7 @@ def I_Y(p):
         if r > 0 :
             marg_x[x] += r
             marg_y[y] += r
-    
+
     for xy,t in b_xy.items():
         x,y = xy
         if t > 0:  mysum += t * log( t / ( marg_x[x]*marg_y[y] ) )
@@ -501,7 +501,7 @@ def I_Z(p):
         if r > 0 :
             marg_x[x] += r
             marg_z[z] += r
-    
+
     for xz,t in b_xz.items():
         x,z = xz
         if t > 0:  mysum += t * log( t / ( marg_x[x]*marg_z[z] ) )
@@ -518,7 +518,7 @@ def I_YZ(p):
         if r > 0 :
             marg_x[x]      += r
             marg_yz[(y,z)] += r
-    
+
     for xyz,t in p.items():
         x,y,z = xyz
         if t > 0:  mysum += t * log( t / ( marg_x[x]*marg_yz[(y,z)] ) )
@@ -560,7 +560,7 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
 
     ecos_keep_solver_obj = False
     if 'keep_solver_object' in solver_args.keys():
-        if solver_args['keep_solver_object']==True: ecos_keep_solver_obj = True
+        if solver_args['keep_solver_object'] is True: ecos_keep_solver_obj = True
         del solver_args['keep_solver_object']
 
     solver.ecos_kwargs = solver_args
@@ -572,7 +572,7 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
         logger.info("BROJA_2PID: Starting solver...")
     if output > 1: # print("BROJA_2PID: Starting solver.")
         logger.debug("BROJA_2PID: Starting solver (verbose). Details to follow.") # Using debug for output > 1
-    
+
     retval = solver.solve()
     if retval != "success":
         # print("\\nCone Programming solver failed to find (near) optimal solution.\\nPlease report the input probability density function to abdullah.makkeh@gmail.com\\n")
@@ -611,10 +611,10 @@ def pid(pdf_dirty, cone_solver="ECOS", output=0, **solver_args):
     return_data["UIZ"] = ( condYmutinf                                     ) * bits
     return_data["CI"]  = ( condent - condent__orig                         ) * bits
 
-    itic = time.process_time() 
+    itic = time.process_time()
     primal_infeas,dual_infeas = solver.check_feasibility()
     itoc = time.process_time()
-    if output > 0: # print("Time to check optimiality conditions: ",itoc - itic,"secs") 
+    if output > 0: # print("Time to check optimiality conditions: ",itoc - itic,"secs")
         logger.info(f"BROJA_2PID: Time to check optimiality conditions: {itoc - itic:.4f} secs")
     return_data["Num_err"] = (primal_infeas, dual_infeas, max(-condent*ln(2) - dual_val, 0.0))
     return_data["Solver"] = "ECOS http://www.embotech.com/ECOS"

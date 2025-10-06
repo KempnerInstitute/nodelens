@@ -2,10 +2,11 @@
 Utility functions for integrating ExperimentTrainer into experiments.
 """
 
-from typing import Dict, Any, Optional, Union, List
+from dataclasses import asdict
+from typing import Any, Dict, List, Optional, Union
+
 import torch
 import torch.nn as nn
-from dataclasses import asdict
 
 from alignment.training import ExperimentTrainer, ExperimentTrainingConfig
 

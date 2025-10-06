@@ -1,63 +1,128 @@
 # Alignment Framework User Guide
 
-**Comprehensive guide to using the alignment framework for neural network analysis and pruning**
-
----
+Comprehensive guide to neural network alignment analysis and pruning.
 
 ## Table of Contents
 
 1. [Core Concepts](#core-concepts)
-2. [Computing Metrics](#computing-metrics)
-3. [Pruning Strategies](#pruning-strategies)
-4. [Architecture Support](#architecture-support)
-5. [Configuration](#configuration)
-6. [Advanced Features](#advanced-features)
-
----
+2. [Available Metrics](#available-metrics)
+3. [Computing Metrics](#computing-metrics)
+4. [Pruning Strategies](#pruning-strategies)
+5. [Architecture Support](#architecture-support)
+6. [Configuration](#configuration)
 
 ## Core Concepts
 
-### Rayleigh Quotient (RQ)
+### Alignment
 
-Measures how well neuron weights align with input principal components:
+Alignment measures how well neuron weights align with the structure of their input activations. The Rayleigh Quotient quantifies the proportion of input variance captured by each neuron's weight vector.
 
+For weight vector w and input covariance Σ:
 ```
 RQ(w) = (w^T Σ w) / (w^T w · tr(Σ))
 ```
 
-Higher RQ indicates better alignment with dominant input variance.
+Higher RQ values indicate the neuron aligns with dominant input variance directions.
 
-### Class-Conditioned RQ (ΔRQ)
+### Class-Conditioned Alignment
 
-Measures task-relevant alignment:
+Class-conditioned analysis compares alignment across different classes versus overall alignment. The difference (ΔRQ) indicates task-relevant alignment:
 
 ```
 ΔRQ = RQ(overall) - E[RQ(class-conditioned)]
 ```
 
-Positive ΔRQ indicates the neuron captures discriminative features.
+Positive ΔRQ means the neuron captures discriminative features between classes.
 
-### Redundancy
+### Information Theory
 
-Measures overlap between neuron pairs:
+The framework uses information-theoretic measures to quantify relationships between neurons:
 
-```
-R(i,j) = I(Y_i; Y_j) = -0.5 · log(1 - ρ²)
-```
+- **Mutual Information**: Shared information between two variables
+- **Redundancy**: Information overlap between neuron pairs
+- **Synergy**: Information that emerges only from joint neuron outputs
+- **Partial Information Decomposition (PID)**: Decomposes information into unique, redundant, and synergistic components
 
-High redundancy means neurons capture similar information.
+## Available Metrics
 
-### Synergy
+### Alignment Metrics
 
-Measures complementary information:
+**Rayleigh Quotient (RQ)**
+- Measures alignment with input covariance structure
+- Returns per-neuron scores indicating variance captured
+- Supports relative normalization and regularization
+- Works with linear, convolutional, and transformer layers
 
-```
-S(Z; Y_i, Y_j) = I(Z; Y_i, Y_j) - I(Z; Y_i) - I(Z; Y_j) + min(I(Z; Y_i), I(Z; Y_j))
-```
+**Class-Conditioned RQ**
+- Computes RQ separately for each class
+- Returns ΔRQ showing task-relevant alignment
+- Requires labeled data
 
-High synergy means neurons provide unique joint information.
+**Spectral Alignment**
+- Analyzes eigenvalue decomposition of weight-covariance product
+- Provides detailed spectral properties
 
----
+### Information-Theoretic Metrics
+
+**Mutual Information (MI)**
+- Gaussian MI using analytic formula: MI = -0.5 log(1 - ρ²)
+- Can compute MI between neuron outputs and targets
+- Supports both continuous and categorical targets
+
+**Pairwise Redundancy**
+- Computes redundancy between neuron pairs
+- Output-based mode for efficiency with large models
+- Covariance-based mode for precise estimates
+- Sampling strategies: random, nearest, or all pairs
+- Returns per-neuron average redundancy scores
+
+**Synergy (MMI)**
+- Measures complementary information from neuron pairs
+- Uses Minimum Mutual Information redundancy definition
+- Returns per-neuron synergy scores
+- Requires target labels
+
+**Partial Information Decomposition (PID)**
+- Decomposes information into unique, redundant, and synergistic parts
+- Shared information: overlap between two neurons
+- Unique information: contribution from single neurons
+- Synergistic information: emergent from joint outputs
+
+**Higher-Order Metrics**
+- Total correlation: generalization of MI to multiple variables
+- Interaction information: higher-order dependencies
+- Connected information: network-level measures
+
+### Gradient-Based Metrics
+
+**Gradient Alignment**
+- Compares gradient-based learning with local learning rules
+- Analyzes alignment between backpropagation and Hebbian-style updates
+- Useful for biologically-plausible learning analysis
+
+**Local Learning Rule Search**
+- Finds optimal local learning rules per neuron
+- Searches over combinations of pre/post-synaptic activity
+- Returns best-fit local rule for each neuron
+
+### Task-Specific Metrics
+
+**Classification Alignment**
+- Measures discriminative power for classification tasks
+- Analyzes separation of class representations
+
+**Vision Task Alignment**
+- Specialized for vision architectures
+- Analyzes feature selectivity patterns
+
+### Similarity Metrics
+
+**Centered Kernel Alignment (CKA)**
+- Compares representations between layers or models
+- Invariant to isotropic scaling
+
+**Canonical Correlation Analysis (CCA)**
+- Finds maximally correlated directions between representations
 
 ## Computing Metrics
 
@@ -66,13 +131,13 @@ High synergy means neurons provide unique joint information.
 ```python
 from alignment import ModelWrapper, get_metric
 
-# Wrap model
+# Wrap model to track layers
 wrapper = ModelWrapper(model, tracked_layers=['conv1', 'fc1'])
 
-# Get metric
+# Get metric instance
 rq_metric = get_metric('rayleigh_quotient')
 
-# Capture activations
+# Forward pass with activation capture
 outputs, acts = wrapper.forward_with_activations(inputs)
 weights = wrapper.get_layer_weights()
 
@@ -82,26 +147,6 @@ scores = rq_metric.compute(
     weights=weights['conv1']
 )
 ```
-
-### Available Metrics
-
-**Alignment:**
-- `rayleigh_quotient` - Standard RQ
-- `delta_alignment` - Change in alignment over training
-
-**Information-Theoretic:**
-- `gaussian_mi_analytic` - Mutual information (Gaussian approximation)
-- `pairwise_redundancy_gaussian` - Per-neuron redundancy
-- `synergy_gaussian_mmi` - Per-neuron synergy
-- `conditional_mutual_information` - Conditional MI
-
-**Gradient-Based:**
-- `gradient_alignment` - Alignment between local signal and backprop
-- `local_learning_rule_search` - Find optimal local rules per neuron
-
-**Task-Specific:**
-- `classification_alignment` - Classification-specific importance
-- `vision_task_alignment` - Vision-specific patterns
 
 ### Composite Scoring
 
@@ -113,7 +158,7 @@ from alignment.services import NodeScoringService
 scorer = NodeScoringService(
     metrics={
         'rq': get_metric('rayleigh_quotient'),
-        'redundancy': get_metric('pairwise_redundancy_gaussian', mode='output_based'),
+        'redundancy': get_metric('pairwise_redundancy_gaussian'),
         'synergy': get_metric('synergy_gaussian_mmi')
     },
     alpha_mi=0.0,
@@ -123,290 +168,375 @@ scorer = NodeScoringService(
 )
 
 scores = scorer.compute_composite_scores(inputs, weights, targets)
-# score = β·synergy - γ·redundancy + δ·log(RQ)
 ```
 
----
+The composite score combines: synergy (positive), redundancy (negative), and alignment.
 
 ## Pruning Strategies
 
-### Available Strategies
+### Overview
 
-**Basic:**
-- `magnitude` - L1/L2 norm
-- `random` - Random baseline
-- `gradient` - Gradient-based
-- `fisher` - Fisher information
+Pruning removes less important network parameters to reduce model size and computational cost. The framework provides multiple strategies based on different importance criteria.
 
-**Alignment-Based:**
-- `alignment` - RQ-based structured pruning
-- `global_alignment` - Global threshold across layers
-- `hybrid` - Magnitude + Alignment combination
+### Magnitude-Based Strategies
 
-**Advanced:**
-- `movement` - Prune weights moving toward zero (training-aware)
-- `adaptive` - Adaptive per-layer amounts based on sensitivity
-- `ultimate` - Multi-stage combining all best practices
+**MagnitudePruning**
+- Prunes weights with smallest absolute values
+- Fast and simple baseline
+- Works for unstructured and structured pruning
+- Applies L1 or L2 norm for importance scores
 
-**Novel:**
-- `composite` - Redundancy-aware (preserves synergistic neurons)
+**IterativeMagnitudePruning**
+- Applies magnitude pruning in multiple rounds
+- Allows network to recover between pruning steps
+- Typically achieves better accuracy than one-shot pruning
 
-### Distribution Across Layers
+**GlobalMagnitudePruning**
+- Applies single threshold across all layers
+- Natural adaptation to layer sensitivity
+- Some layers may be pruned more than others
 
-**Uniform:** Same percentage per layer
-```python
-# 70% removed from each layer
+### Gradient-Based Strategies
+
+**GradientPruning**
+- Uses gradient magnitude as importance signal
+- Can use gradient alone or gradient-weight product (Taylor approximation)
+- Requires backward pass to compute gradients
+
+**FisherPruning**
+- Uses Fisher information for importance
+- Accounts for both gradient and Hessian information
+- More accurate but computationally expensive
+
+**MomentumPruning**
+- Incorporates momentum in importance computation
+- Smooths importance over training iterations
+
+### Alignment-Based Strategies
+
+**AlignmentPruning**
+- Uses Rayleigh Quotient or other alignment metrics
+- Structured pruning (removes entire neurons/channels)
+- Considers input-weight relationships
+
+**GlobalAlignmentPruning**
+- Global threshold across layers based on alignment
+- Automatically handles layer-wise sensitivity
+
+**HybridPruning**
+- Combines magnitude and alignment scores
+- Balances simple magnitude with structural alignment
+
+**CascadingAlignmentPruning**
+- Prunes layers sequentially
+- Recomputes alignment after each layer
+- Accounts for pruning effects on downstream layers
+
+### Random Strategies
+
+**RandomPruning**
+- Prunes weights randomly
+- Baseline for comparison
+- Useful for ablation studies
+
+**LayerwiseRandomPruning**
+- Random pruning with per-layer amounts
+
+**BernoulliPruning**
+- Stochastic pruning with Bernoulli sampling
+
+### Parallel Strategies
+
+**ParallelModePruning**
+- Applies multiple pruning modes simultaneously (low/high/random)
+- Returns separate masks for each mode
+- Useful for comparing ablations
+
+**TensorizedPruning**
+- GPU-optimized parallel execution
+- Efficient for multiple strategies
+
+**AsyncParallelPruning**
+- Asynchronous parallel execution
+- For distributed pruning experiments
+
+### Advanced Strategies
+
+**MovementPruning**
+- Tracks weight movement during training
+- Prunes weights moving toward zero
+- Training-aware strategy
+
+**AdaptiveMovementPruning**
+- Adapts pruning amount per layer based on movement patterns
+
+### Pruning Distribution
+
+Distribution strategies determine how pruning is allocated across layers.
+
+**Uniform Distribution**
+- Same sparsity percentage for all layers
+- Simple and predictable
+- May not respect layer-specific sensitivity
+
+**Global Threshold**
+- Single importance threshold across all layers
+- Natural adaptation based on score distributions
+- Different layers pruned by different amounts
+
+**Adaptive Sensitivity**
+- Per-layer pruning amounts based on sensitivity analysis
+- Sensitive layers pruned less
+- Robust layers pruned more
+- Maintains target overall sparsity
+
+**Importance Weighted**
+- Allocates pruning inversely to layer importance
+- More important layers retain more parameters
+
+**Size Proportional**
+- Pruning amount scales with layer size
+- Larger layers can tolerate more pruning
+
+**Cascading**
+- Sequential layer-by-layer pruning
+- Recomputes scores after each layer
+
+### Pruning Modes
+
+**Low Mode** (default)
+- Prunes weights/neurons with lowest importance scores
+- Standard pruning approach
+
+**High Mode**
+- Prunes weights/neurons with highest importance scores
+- Used for ablation studies to test importance hypotheses
+
+**Random Mode**
+- Random pruning regardless of scores
+- Baseline for comparison
+
+### Structured vs Unstructured
+
+**Unstructured Pruning**
+- Prunes individual weights
+- Arbitrary sparsity patterns
+- Requires sparse tensor support for speedup
+
+**Structured Pruning**
+- Prunes entire neurons or channels
+- Maintains dense tensor operations
+- Immediate speedup without specialized hardware
+- Handles dependencies automatically
+
+### Using Configuration Files
+
+Specify pruning in YAML configuration:
+
+```yaml
+pruning:
+  enabled: true
+  strategy: 'composite'
+  target_sparsity: 0.7
+  distribution: 'adaptive_sensitivity'
+  scoring: 'rayleigh_quotient'
+  direction: 'low'
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 20
+    learning_rate: 0.0001
+  
+  composite_weights:
+    beta_synergy: 0.3
+    gamma_redundancy: 0.4
+    delta_rq: 0.3
 ```
 
-**Global Threshold:** Single threshold across all layers
-```python
-# Naturally varying amounts based on score distribution
+Then run:
+```bash
+python scripts/run_experiment.py --config configs/my_pruning.yaml
 ```
-
-**Adaptive Sensitivity:** Per-layer amounts based on importance
-```python
-# Sensitive layers: 50%
-# Robust layers: 85%
-# Overall: 70% average
-```
-
-### Using the Orchestrator
-
-```python
-from alignment.pruning.orchestrator import prune_with_all_options
-
-result = prune_with_all_options(
-    model,
-    target_sparsity=0.7,
-    
-    # Distribution: how to allocate across layers
-    # Options: 'uniform', 'global_threshold', 'adaptive_sensitivity',
-    #          'importance_weighted', 'cascading', 'size_proportional', 'hybrid'
-    distribution='adaptive_sensitivity',
-    
-    # Scoring: what importance metric
-    # Options: 'magnitude', 'rayleigh_quotient', 'composite', 'movement'
-    scoring='composite',
-    
-    # Direction: which neurons to remove
-    # Options: 'low' (remove unimportant), 'high' (ablation), 'random' (baseline)
-    direction='low',
-    
-    # Data
-    train_loader=train_loader,  # For fine-tuning
-    val_loader=val_loader,       # For evaluation
-    trainer_fn=train_function,   # Training function
-    eval_fn=eval_function,       # Evaluation function
-    
-    # Options
-    fine_tune_epochs=20
-)
-```
-
----
 
 ## Architecture Support
 
-### MLPs
+### Linear Layers (MLPs)
+
+For fully-connected layers, metrics compute per-neuron scores:
 
 ```python
-layer = model.fc1  # Linear(784, 256)
-scores = rq.compute(inputs, layer.weight)
-# [256] - one score per neuron
+layer = model.fc1  # Linear(in_features=784, out_features=256)
+scores = rq.compute(inputs, layer.weight)  # Returns [256]
 ```
 
-### CNNs
+Each neuron receives an importance score. Structured pruning removes entire neurons.
+
+### Convolutional Layers (CNNs)
+
+For convolutional layers, metrics operate on channels:
 
 ```python
-conv = model.conv1  # Conv2d(64, 128, 3, 3)
-scores = rq.compute(inputs, conv.weight)
-# [128] - one score per channel
-
-# Dependency-aware pruning automatically handles channel propagation
+conv = model.conv1  # Conv2d(in_channels=64, out_channels=128, kernel_size=3)
+scores = rq.compute(inputs, conv.weight)  # Returns [128]
 ```
 
-### Transformers & LLMs
+Each output channel receives a score. The framework handles:
+- Spatial weight dimensions automatically
+- Different conv modes: unfold, patchwise, channel variance
+- Dependency propagation between layers
+
+**CNN-Specific Modes:**
+- `unfold`: Unfolds spatial dimensions into feature vectors
+- `patchwise`: Treats each spatial location separately
+- `channel_variance`: Computes variance across spatial dimensions
+- `batch_patch_combined`: Combines batch and spatial statistics
+
+### Transformer Layers
+
+For transformer architectures, the framework supports:
+
+**Feed-Forward Networks (FFN)**
+```python
+ffn_layer = model.layers[0].mlp.up_proj
+scores = rq.compute(inputs, ffn_layer.weight)
+```
+
+Each FFN neuron receives a score. For LLaMA models, typical FFN dimensions are 11,008 neurons.
+
+**Attention Layers**
+```python
+# Per-head analysis
+wrapper = TransformerWrapper(model, track_per_head=True)
+
+# Per-neuron within attention projections
+q_proj = model.layers[0].self_attn.q_proj
+scores = rq.compute(inputs, q_proj.weight)
+```
+
+Can analyze:
+- Query, Key, Value projections separately
+- Per-head importance
+- Per-neuron importance within projections
+- Attention output projections
+
+**Aggregation Options:**
+- `sequence_mean`: Average over sequence length
+- `token_level`: Per-token analysis
+
+### Large Language Models
+
+The framework provides specialized wrappers for LLMs:
 
 ```python
 from alignment.models.transformer_enhanced import LLaMAWrapper
 
-wrapper = LLaMAWrapper(llama_model, track_ffn=True)
-
-# FFN neurons: up_proj has 11,008 neurons
-ffn_up = model.model.layers[0].mlp.up_proj
-scores = rq.compute(inputs, ffn_up.weight)
-# [11008] - one score per FFN neuron
-
-# Attention: Can analyze per-head or per-neuron
+wrapper = LLaMAWrapper(
+    llama_model,
+    track_ffn=True,
+    track_attention=True
+)
 ```
 
----
+Supports analysis and pruning of:
+- FFN intermediate layers (up_proj, down_proj)
+- Attention projections (q_proj, k_proj, v_proj, o_proj)
+- Layer-wise or model-wide analysis
 
 ## Configuration
 
-### Quick Start Config
+Experiments are configured using YAML files. The framework provides a template with all available options.
+
+### Basic Configuration
 
 ```yaml
-# configs/quickstart.yaml
 experiment:
-  name: "quickstart"
+  name: "my_experiment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results"
 
 model:
   name: "resnet18"
   pretrained: true
+  tracked_layers: null  # Auto-detect
 
 dataset:
   name: "cifar10"
+  data_path: "./data"
   batch_size: 128
 
 metrics:
   enabled: ['rayleigh_quotient']
 ```
 
-### Complete Options
+### Configuration Sections
 
-See `configs/template_master_v2.yaml` for all parameters with documentation.
+**experiment**
+- Experiment name, random seed, device selection
+- Output directory for results
 
-Key sections:
-- `experiment`: Name, seed, device, output
-- `model`: Architecture, pretrained, layers to track
-- `dataset`: Data source, batch size, augmentation
-- `metrics`: Which metrics to compute and their parameters
-- `pruning`: Strategy, distribution, scoring, fine-tuning
-- `training`: Training parameters, metric tracking
-- `advanced`: Backend selection, parallelization
+**model**
+- Model architecture name or path
+- Whether to use pretrained weights
+- Checkpoint path for custom models
+- Which layers to track for analysis
 
----
+**dataset**
+- Dataset name and path
+- Batch size and data loading workers
+- Data augmentation settings
 
-## Advanced Features
+**metrics**
+- List of metrics to compute
+- Per-metric configuration parameters
+- Regularization and sampling settings
 
-### Training-Time Metrics
+**pruning**
+- Pruning strategy and target sparsity
+- Distribution method across layers
+- Scoring method for importance
+- Structured vs unstructured
+- Fine-tuning configuration
 
-Track alignment evolution during training with zero overhead:
+**training**
+- Training parameters if training from scratch
+- Learning rate, optimizer, scheduler
+- Metric tracking during training
 
-```python
-from alignment.training.callbacks import AlignmentMetricsCallback
+**advanced**
+- Covariance computation methods
+- Hook management settings
+- Layer-specific configurations
 
-callback = AlignmentMetricsCallback(
-    metrics={'rq': get_metric('rayleigh_quotient')},
-    layers=['conv1', 'fc1'],
-    frequency=100  # Every 100 steps
-)
-
-# In training loop:
-for inputs, targets in train_loader:
-    outputs = model(inputs)
-    loss.backward()
-    optimizer.step()
-    
-    callback.on_batch_end(wrapper, inputs, targets, global_step)
-
-# Analyze evolution
-history = callback.get_history()
-```
-
-### Gradient-Based Local Learning
-
-Design bio-plausible learning rules:
-
-```python
-from alignment.metrics.gradient_based import LocalLearningRuleSearch
-
-searcher = LocalLearningRuleSearch()
-
-# After backward pass:
-best_rules = searcher.compute(
-    inputs, outputs,
-    gradients=layer.weight.grad
-)
-# Returns best local rule per neuron
-```
-
-### Pairwise Metrics
-
-Any pairwise metric can aggregate to single-neuron scores:
-
-```python
-redundancy = get_metric('pairwise_redundancy_gaussian',
-                       mode='output_based',  # Fast!
-                       num_pairs=10,         # Sample 10 partners
-                       aggregation='mean')   # How to aggregate
-
-scores = redundancy.compute(outputs=layer_outputs)
-# [N] - per-neuron redundancy
-
-# Or get full matrix:
-matrix = redundancy.compute(outputs, return_matrix=True)
-# [N, N] - all pairwise relationships
-```
-
-### Dependency-Aware Pruning
-
-Automatically handles inter-layer dependencies:
-
-```python
-from alignment.pruning.dependency_aware import prune_model_with_dependencies
-
-result = prune_model_with_dependencies(
-    model,
-    layer_scores={'conv1': scores1, 'conv2': scores2},
-    amount=0.5,
-    verbose=True
-)
-
-# Automatically propagates:
-# conv1.out_channels → conv2.in_channels
-# Maintains shape compatibility
-```
-
----
-
-## Performance
-
-### Computation Time
-
-| Model Scale | Per-Layer Time | Throughput |
-|-------------|----------------|------------|
-| Small (N=256) | ~28ms | 35 layers/sec |
-| Medium (N=1024) | ~105ms | 10 layers/sec |
-| Large (N=4096) | ~440ms | 2.3 layers/sec |
-
-### Speedup Techniques
-
-- **Output-based redundancy**: 30x faster for large models
-- **Shared computation**: 2-3x when computing multiple metrics
-- **Parallel strategies**: M strategies in ~1.3x time
-
----
+See `configs/template.yaml` for complete documentation of all parameters.
 
 ## Testing
 
+Run tests to verify installation and functionality:
+
 ```bash
-# Run all tests
+# All tests
 pytest tests/
 
-# Scientific correctness validation
-python tests/unit/metrics/test_scientific_correctness.py
+# Specific test modules
+pytest tests/unit/metrics/
+pytest tests/unit/pruning/
 
-# Specific module
-pytest tests/unit/services/
+# Scientific correctness validation
+pytest tests/unit/metrics/test_scientific_correctness.py
 ```
 
----
+## Examples
 
-## Contributing
+The `examples/` directory contains scripts demonstrating framework capabilities:
 
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new features
-4. Submit pull request
-
----
-
-## Support
-
-- **Documentation**: See guides in repository root
-- **Examples**: `examples/` directory
-- **Issues**: GitHub issues
-- **API Reference**: Run `cd docs && make html`
+- `01_quick_start.py` - Basic usage
+- `02_complete_experiment.py` - Full experiment workflow
+- `03_pruning_strategies.py` - Pruning strategy comparison
+- `06_redundancy_aware_pruning.py` - Information-theoretic pruning
+- `07_mnist_intelligent_pruning.py` - MNIST pruning example
+- `08_llama_ffn_pruning.py` - LLM feed-forward pruning
+- `09_attention_neuron_vs_head_pruning.py` - Attention layer analysis
 

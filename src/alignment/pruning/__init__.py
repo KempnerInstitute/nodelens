@@ -5,7 +5,7 @@ This module provides comprehensive pruning capabilities:
 
 Strategies:
 - Magnitude-based: MagnitudePruning, IterativeMagnitudePruning, GlobalMagnitudePruning
-- Gradient-based: GradientPruning, FisherPruning, MomentumPruning  
+- Gradient-based: GradientPruning, FisherPruning, MomentumPruning
 - Random: RandomPruning, LayerwiseRandomPruning, BernoulliPruning
 - Parallel: ParallelModePruning, TensorizedPruning, AsyncParallelPruning
 
@@ -16,51 +16,51 @@ Pruning Modes:
 
 Example:
     Basic pruning::
-    
+
         from alignment.pruning import get_pruning_strategy, PruningConfig
-        
+
         # Prune low-magnitude weights
         strategy = get_pruning_strategy('magnitude')
         mask = strategy.prune(layer, amount=0.5)
-        
+
         # Prune high-magnitude weights
         config = PruningConfig(amount=0.5, pruning_mode='high')
         strategy = get_pruning_strategy('magnitude', config=config)
-        
+
     Parallel pruning::
-    
+
         from alignment.pruning.strategies import ParallelModePruning
-        
+
         # Apply multiple modes simultaneously
         strategy = ParallelModePruning(modes=['low', 'high', 'random'])
         result = strategy.prune_parallel(layer, amount=0.5)
-        
+
         # Access individual masks
         low_mask = result.masks['low']
         high_mask = result.masks['high']
 """
 
-from typing import Optional, Union, Type
 import logging
+from typing import Optional, Type, Union
 
 from .base import BasePruningStrategy, IterativePruningStrategy, PruningConfig
 from .strategies import (
-    MagnitudePruning,
-    IterativeMagnitudePruning,
+    AlignmentPruning,
+    AsyncParallelPruning,
+    BernoulliPruning,
+    CascadingAlignmentPruning,
+    FisherPruning,
+    GlobalAlignmentPruning,
     GlobalMagnitudePruning,
     GradientPruning,
-    FisherPruning,
-    MomentumPruning,
-    RandomPruning,
-    LayerwiseRandomPruning,
-    BernoulliPruning,
-    ParallelModePruning,
-    TensorizedPruning,
-    AsyncParallelPruning,
-    AlignmentPruning,
     HybridPruning,
-    GlobalAlignmentPruning,
-    CascadingAlignmentPruning,
+    IterativeMagnitudePruning,
+    LayerwiseRandomPruning,
+    MagnitudePruning,
+    MomentumPruning,
+    ParallelModePruning,
+    RandomPruning,
+    TensorizedPruning,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,23 +71,23 @@ PRUNING_STRATEGIES = {
     'magnitude': MagnitudePruning,
     'iterative_magnitude': IterativeMagnitudePruning,
     'global_magnitude': GlobalMagnitudePruning,
-    
+
     # Gradient-based strategies
     'gradient': GradientPruning,
     'fisher': FisherPruning,
     'momentum': MomentumPruning,
-    
+
     # Alignment-based strategies
     'alignment': AlignmentPruning,
     'hybrid': HybridPruning,
     'global_alignment': GlobalAlignmentPruning,
     'cascading_alignment': CascadingAlignmentPruning,
-    
+
     # Random strategies (kept for backward compatibility)
     # Note: Consider using selection_mode='random' instead
     'random': RandomPruning,
     'bernoulli': BernoulliPruning,
-    
+
     # Parallel strategies
     'parallel_mode': ParallelModePruning,
     'tensorized': TensorizedPruning,
@@ -101,14 +101,14 @@ def get_pruning_strategy(
 ) -> BasePruningStrategy:
     """
     Get a pruning strategy by name.
-    
+
     Args:
         name: Name of the pruning strategy
         **kwargs: Additional arguments for the strategy
-        
+
     Returns:
         Initialized pruning strategy
-        
+
     Raises:
         ValueError: If strategy name is not found
     """
@@ -118,7 +118,7 @@ def get_pruning_strategy(
             f"Unknown pruning strategy: {name}. "
             f"Available strategies: {available}"
         )
-    
+
     strategy_class = PRUNING_STRATEGIES[name]
     return strategy_class(**kwargs)
 
@@ -133,34 +133,34 @@ __all__ = [
     'BasePruningStrategy',
     'IterativePruningStrategy',
     'PruningConfig',
-    
+
     # Magnitude strategies
     'MagnitudePruning',
     'IterativeMagnitudePruning',
     'GlobalMagnitudePruning',
-    
+
     # Gradient strategies
     'GradientPruning',
     'FisherPruning',
     'MomentumPruning',
-    
+
     # Alignment strategies
     'AlignmentPruning',
     'HybridPruning',
     'GlobalAlignmentPruning',
     'CascadingAlignmentPruning',
-    
+
     # Random strategies
     'RandomPruning',
     'LayerwiseRandomPruning',
     'BernoulliPruning',
-    
+
     # Parallel strategies
     'ParallelModePruning',
     'TensorizedPruning',
     'AsyncParallelPruning',
-    
+
     # Functions
     'get_pruning_strategy',
     'list_pruning_strategies',
-] 
+]

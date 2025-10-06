@@ -8,4 +8,4 @@ from .rq_alternative import RayleighQuotientAlternative
 __all__ = [
     'RayleighQuotient',
     'RayleighQuotientAlternative',
-] 
+]

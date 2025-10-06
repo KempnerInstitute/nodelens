@@ -1,45 +1,34 @@
 # Alignment Framework Documentation
 
-Neural Network Alignment Analysis & Intelligent Pruning
-
----
+Neural network alignment analysis and intelligent pruning.
 
 ## Getting Started
 
 - [Installation Guide](installation.md) - Setup and dependencies
-- [Usage Guide](usage.md) - How to run experiments with YAML configs
-- [User Guide](user_guide.md) - Complete usage documentation
-
----
+- [Usage Guide](usage.md) - Running experiments with configuration files
+- [User Guide](user_guide.md) - Comprehensive framework documentation
 
 ## Reference
 
-- [API Reference](api_reference.md) - Class and method documentation
-- [Quick Reference](quick_reference.md) - Code examples and patterns
-- [Configuration Reference](../configs/template.yaml) - All parameters with options
-
----
-
-## Version Information
-
-- [Changelog](changelog.md) - Release notes and version history
-
----
+- [API Reference](api_reference.md) - API documentation
+- [Quick Reference](quick_reference.md) - Code examples
+- [Configuration Template](../configs/template.yaml) - All configuration parameters
 
 ## Examples
 
-Working example configurations:
+Example configuration files in `configs/examples/`:
 
-- `configs/examples/mnist_basic.yaml` - Simple MNIST analysis
-- `configs/examples/resnet_pruning.yaml` - ResNet pruning on CIFAR-10
-- `configs/examples/llama3_scoring.yaml` - LLaMA-3 per-neuron scoring
-- `configs/examples/llama3_pruning.yaml` - LLaMA-3 pruning
+- `mnist_basic.yaml` - MLP analysis on MNIST
+- `resnet_pruning.yaml` - ResNet pruning on CIFAR-10
+- `llama3_scoring.yaml` - LLaMA scoring
+- `llama3_pruning.yaml` - LLaMA pruning
 
-Run: `python scripts/run_experiment.py --config [path]`
+Run experiments:
+```bash
+python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+```
 
----
-
-## Quick Example
+## Quick Start
 
 ```python
 from alignment import ModelWrapper, get_metric
@@ -53,9 +42,7 @@ weights = wrapper.get_layer_weights()
 scores = rq.compute(acts['layer_input'], weights['layer'])
 ```
 
----
-
-## Building HTML Documentation
+## Building Documentation
 
 ```bash
 cd docs

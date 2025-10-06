@@ -2,12 +2,12 @@
 Aggregation utilities for experiment analysis.
 """
 
-from .results import ResultAggregator
-from .metrics import MetricAggregator
 from .layers import LayerAggregator
+from .metrics import MetricAggregator
+from .results import ResultAggregator
 
 __all__ = [
     'ResultAggregator',
     'MetricAggregator',
     'LayerAggregator',
-] 
+]

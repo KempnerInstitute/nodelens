@@ -5,11 +5,12 @@ This module provides lifecycle-managed hooks that automatically clean up
 to prevent memory leaks.
 """
 
+import logging
 from contextlib import contextmanager
-from typing import List, Dict, Callable, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
+
 import torch
 import torch.nn as nn
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,9 @@ class PersistentHookManager(HookManager):
                         # Clear cache on new forward pass if enabled
                         if self.auto_clear_cache and f"{layer_name}_count" not in self.cache:
                             self.cache.clear()
+                        
+                        # Initialize count if not present
+                        if f"{layer_name}_count" not in self.cache:
                             self.cache[f"{layer_name}_count"] = 0
                         
                         if track_inputs and inp is not None:

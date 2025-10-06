@@ -5,13 +5,15 @@ This module extends the core base model with additional functionality
 specific to the models module.
 """
 
-from typing import Dict, List, Optional, Tuple, Any, Union
+import logging
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
-from collections import OrderedDict
-import logging
 
 from alignment.core.base import BaseModel
+
 from .hooks import HookManager
 
 # Conditional import for layer detector (graceful fallback)

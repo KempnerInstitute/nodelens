@@ -5,15 +5,16 @@ This module provides a single, flexible dataset class that can handle
 various dataset types without code duplication.
 """
 
-from typing import Optional, List, Callable, Tuple, Dict, Any, Union
+import logging
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
 import torch
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
-from pathlib import Path
-import logging
 
-from alignment.data.base import BaseDataset
 from alignment.core.registry import register_dataset
+from alignment.data.base import BaseDataset
 
 logger = logging.getLogger(__name__)
 

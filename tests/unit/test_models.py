@@ -73,7 +73,7 @@ class TestCNN2P2:
     
     def test_forward_pass(self):
         """Test forward pass."""
-        model = CNN2P2(output_dim=10, example_input_hw=[32, 32])
+        model = CNN2P2(in_channels=3, output_dim=10, example_input_hw=[32, 32])
         x = torch.randn(16, 3, 32, 32)
         output = model(x)
         

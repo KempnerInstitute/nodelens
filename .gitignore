@@ -1,3 +1,13 @@
+# Archive and draft directories
+_arxiv/
+drafts/
+
+# Backup files
+*.bak
+*.old
+*_old.*
+*_backup.*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

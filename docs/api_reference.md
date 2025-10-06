@@ -1,8 +1,6 @@
 # API Reference
 
-**Quick reference for alignment framework APIs**
-
----
+Quick reference for framework APIs.
 
 ## Core Classes
 
@@ -34,8 +32,6 @@ metric.requires_weights  # bool: needs layer weights
 metric.requires_outputs  # bool: needs layer outputs
 metric.compute(inputs, weights, outputs, **kwargs)  # Returns scores
 ```
-
----
 
 ## Metrics
 
@@ -101,8 +97,6 @@ alignment = grad_align.compute(
 )
 # Returns correlation between local signal and backprop
 ```
-
----
 
 ## Services
 
@@ -176,8 +170,6 @@ masks = MaskOperations.global_threshold_mask(
 )
 ```
 
----
-
 ## Pruning
 
 ### Quick Pruning
@@ -229,8 +221,6 @@ results = optimizer.compare_strategies_parallel(
 )
 ```
 
----
-
 ## Training
 
 ### Training Callback
@@ -252,8 +242,6 @@ callback.on_batch_end(wrapper, inputs, targets, step)
 # Get history:
 history = callback.get_history()
 ```
-
----
 
 ## Model Wrappers
 
@@ -301,8 +289,6 @@ wrapper.ffn_layers  # {'expansion': [...], 'contraction': [...]}
 wrapper.attention_layers  # {'q': [...], 'k': [...], 'v': [...]}
 ```
 
----
-
 ## Utility Functions
 
 ### Layer Detection
@@ -329,8 +315,6 @@ cov = estimate_covariance(
 )
 ```
 
----
-
 ## Configuration Parameters
 
 ### Metric Parameters
@@ -355,8 +339,6 @@ cov = estimate_covariance(
 **Scoring:** 'magnitude', 'rayleigh_quotient', 'composite', 'movement'
 
 **Direction:** 'low' (prune unimportant), 'high' (ablation), 'random' (baseline)
-
----
 
 ## Common Patterns
 
@@ -408,15 +390,11 @@ results = optimizer.compare_strategies_parallel(
 )
 ```
 
----
-
 ## Examples
 
 See `examples/` directory for complete workflows:
 
 - `07_mnist_intelligent_pruning.py` - End-to-end pruning
-- `08_llama_ffn_pruning.py` - LLM FFN analysis
-- `09_attention_neuron_vs_head_pruning.py` - Attention analysis
-
-Run: `python examples/07_mnist_intelligent_pruning.py`
+- `08_llama_ffn_pruning.py` - LLM feed-forward analysis
+- `09_attention_neuron_vs_head_pruning.py` - Attention layer analysis
 

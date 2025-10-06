@@ -5,16 +5,17 @@ This module provides the main model wrappers used for alignment analysis,
 including the general-purpose ModelWrapper and specialized wrappers.
 """
 
-from typing import Dict, List, Optional, Tuple, Any, Union, Callable
+import copy
+import logging
+from collections import OrderedDict
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from collections import OrderedDict
-import logging
-import copy
 
-from .base import BaseModelWrapper
 from ..core.registry import register_model
+from .base import BaseModelWrapper
 
 logger = logging.getLogger(__name__)
 

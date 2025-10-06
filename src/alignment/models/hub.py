@@ -14,8 +14,9 @@ Notes:
   - Returned objects are nn.Module compatible with our wrappers.
 """
 
-from typing import Optional, Any
 import logging
+from typing import Any, Optional
+
 import torch
 import torch.nn as nn
 

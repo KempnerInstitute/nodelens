@@ -2,24 +2,24 @@
 
 # Phase 3 metrics
 from .spectral_alignment import (
-    SpectralGapMetric,
     EigenvalueAlignmentMetric,
+    PowerIterationAlignment,
     SpectralClusteringAlignment,
-    PowerIterationAlignment
+    SpectralGapMetric,
 )
 
 # Classic spectral metrics
 from .spectral_classic import (
-    SpectralAlignment,
-    SpectralNormRatio,
     EigenvalueEntropy,
-    SpectralClusteringScore
+    SpectralAlignment,
+    SpectralClusteringScore,
+    SpectralNormRatio,
 )
 
 __all__ = [
     # Phase 3 metrics
     'SpectralGapMetric',
-    'EigenvalueAlignmentMetric', 
+    'EigenvalueAlignmentMetric',
     'SpectralClusteringAlignment',
     'PowerIterationAlignment',
     # Classic metrics
@@ -27,4 +27,4 @@ __all__ = [
     'SpectralNormRatio',
     'EigenvalueEntropy',
     'SpectralClusteringScore'
-] 
+]

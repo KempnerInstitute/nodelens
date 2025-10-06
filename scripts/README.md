@@ -1,21 +1,27 @@
-# Production Scripts
+# Scripts
 
-This directory contains production-ready scripts for running alignment experiments.
+Scripts for running experiments.
 
-## Scripts
+## Main Script
 
-### `run_experiment.py`
-The main experiment runner for the alignment framework. This is the primary tool for running research experiments with full configuration support.
+`run_experiment.py` - Experiment runner with YAML configuration support.
 
-**Usage:**
+Usage:
 ```bash
-# From repository root
-python scripts/run_experiment.py --config configs/unified_config.yaml
+python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 ```
 
-## Difference from Examples
+The script handles:
+- Model loading (pretrained or training from scratch)
+- Metric computation
+- Pruning with various strategies
+- Evaluation and visualization
 
-- **`examples/`**: Educational scripts for learning the framework
-- **`scripts/`**: Production tools for research experiments
+## Configuration
 
-The examples demonstrate concepts with hardcoded parameters for clarity, while the scripts here are fully configurable tools designed for actual research work. 
+Experiments are configured via YAML files. See `configs/template.yaml` for all parameters and `configs/examples/` for working examples.
+
+## Examples vs Scripts
+
+- `examples/` - Standalone demonstration scripts
+- `scripts/` - Configuration-based experiment runner 

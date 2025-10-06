@@ -8,9 +8,10 @@ We compute I terms under Gaussian assumptions from covariance estimates.
 Returns average synergy per neuron over sampled partners j.
 """
 
-from typing import Optional, Any
-import torch
 import logging
+from typing import Any, Optional
+
+import torch
 
 from ...core.base import BaseMetric
 from ...core.registry import register_metric
@@ -139,7 +140,6 @@ class GaussianPIDSynergyMMI(BaseMetric):
 
         # Compute synergy per i averaged over j in partners
         synergy = torch.zeros(N, device=device)
-        eps = 1e-12
         if d == 1:
             z = Z.view(B)
             for i in range(N):

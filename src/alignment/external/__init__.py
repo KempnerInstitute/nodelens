@@ -7,4 +7,4 @@ try:
     from .BROJA_2PID import BROJA_2PID
     __all__ = ['BROJA_2PID']
 except ImportError:
-    __all__ = [] 
+    __all__ = []

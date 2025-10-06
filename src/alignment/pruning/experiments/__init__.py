@@ -2,10 +2,10 @@
 Pruning experiments for alignment analysis.
 """
 
-from .eigenvector_based import EigenvectorDropoutExperiment, EigenvectorConfig
-from .cascading_layer import CascadingLayerPruningExperiment, CascadingConfig
-from .layer_wise import LayerIsolatedPruningExperiment, LayerIsolatedConfig
-from .global_pruning import GlobalDropoutExperiment, GlobalDropoutConfig
+from .cascading_layer import CascadingConfig, CascadingLayerPruningExperiment
+from .eigenvector_based import EigenvectorConfig, EigenvectorDropoutExperiment
+from .global_pruning import GlobalDropoutConfig, GlobalDropoutExperiment
+from .layer_wise import LayerIsolatedConfig, LayerIsolatedPruningExperiment
 
 __all__ = [
     'EigenvectorDropoutExperiment',
