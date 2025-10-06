@@ -20,15 +20,15 @@ register_model("simple_conv")(SimpleConvNet)
 register_model("simpleconvnet")(SimpleConvNet)
 
 __all__ = [
-    'BaseModelWrapper',
-    'ModelWrapper',
-    'AlignmentNetwork',
-    'ActivationTracker',
-    'TransformerWrapperEnhanced',
-    'LLaMAWrapper',
-    'MLP',
-    'CNN2P2',
-    'SimpleConvNet',
-    'create_model',
-    'hub',
-] 
+    "BaseModelWrapper",
+    "ModelWrapper",
+    "AlignmentNetwork",
+    "ActivationTracker",
+    "TransformerWrapperEnhanced",
+    "LLaMAWrapper",
+    "MLP",
+    "CNN2P2",
+    "SimpleConvNet",
+    "create_model",
+    "hub",
+]

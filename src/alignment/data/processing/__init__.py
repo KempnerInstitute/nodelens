@@ -20,11 +20,11 @@ from .layers import (
 __all__ = [
     "BatchMetricProcessor",
     "LayerPreprocessor",
-    "LinearPreprocessor", 
+    "LinearPreprocessor",
     "CNNPreprocessor",
     "AttentionPreprocessor",
     "preprocess_layer_activations",
     "get_preprocessor",
     "CovarianceEstimator",
     "estimate_covariance",
-] 
+]

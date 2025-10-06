@@ -22,14 +22,14 @@ except ImportError:
     pass  # Datasets will be implemented next
 
 __all__ = [
-    'BaseDataset',
-    'DatasetWrapper',
-    'create_data_loader',
-    'create_distributed_loader',
-    'DataLoaderConfig',
-    'get_dataset',
-    'MNISTDataset',
-    'CIFAR10Dataset',
-    'CIFAR100Dataset',
-    'ImageNetDataset',
-] 
+    "BaseDataset",
+    "DatasetWrapper",
+    "create_data_loader",
+    "create_distributed_loader",
+    "DataLoaderConfig",
+    "get_dataset",
+    "MNISTDataset",
+    "CIFAR10Dataset",
+    "CIFAR100Dataset",
+    "ImageNetDataset",
+]
