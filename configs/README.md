@@ -1,41 +1,31 @@
 # Configuration Guide
 
-All experiments are configured via YAML files.
-
----
+Experiments are configured using YAML files.
 
 ## Template
 
-`template.yaml` - Complete template with all available parameters documented inline.
+`template.yaml` - Complete template with all available parameters.
 
----
+## Example Configurations
 
-## Examples
+Ready-to-use configurations in `examples/`:
 
-Compact, ready-to-use configurations:
+**Vision Models**
+- `mnist_basic.yaml` - MLP analysis on MNIST
+- `resnet_pruning.yaml` - ResNet-18 pruning on CIFAR-10
 
-### LLaMA-3
-
-- `examples/llama3_scoring.yaml` - Compute per-neuron importance scores
-- `examples/llama3_pruning.yaml` - Redundancy-aware pruning
-
-### Vision Models
-
-- `examples/resnet_pruning.yaml` - ResNet-18 pruning with dependency handling
-- `examples/mnist_basic.yaml` - Simple MNIST analysis
-
----
+**LLaMA Models**
+- `llama3_scoring.yaml` - Compute importance scores
+- `llama3_pruning.yaml` - Apply pruning
 
 ## Usage
 
-Run any experiment:
-
+Run experiment:
 ```bash
 python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 ```
 
 Override parameters:
-
 ```bash
 python scripts/run_experiment.py \
   --config configs/examples/resnet_pruning.yaml \
@@ -44,27 +34,23 @@ python scripts/run_experiment.py \
   --target-sparsity 0.5
 ```
 
----
-
-## Creating Custom Configs
+## Creating Configurations
 
 1. Copy template: `cp configs/template.yaml configs/my_config.yaml`
-2. Modify parameters (all options documented inline)
+2. Edit parameters as needed
 3. Run: `python scripts/run_experiment.py --config configs/my_config.yaml`
 
----
+## Configuration Sections
 
-## Parameter Categories
+- `experiment` - Name, seed, device, output directory
+- `model` - Architecture, pretrained weights, layers to track
+- `dataset` - Data source, batch size, preprocessing
+- `metrics` - Metrics to compute and their parameters
+- `training` - Training parameters
+- `pruning` - Pruning strategy, distribution, scoring
+- `layer_config` - Architecture-specific settings
+- `analysis` - Analysis options
+- `visualization` - Plot settings
+- `advanced` - Backend and optimization options
 
-- `experiment`: Name, seed, device, output directory
-- `model`: Architecture, pretrained, layers to track
-- `dataset`: Data source, batch size, preprocessing
-- `metrics`: Which metrics to compute and their parameters
-- `training`: Training parameters (if training from scratch)
-- `pruning`: Pruning strategy, distribution, scoring method
-- `layer_config`: Architecture-specific settings (CNN, transformer)
-- `analysis`: Analysis options (class-conditioned, save options)
-- `visualization`: Plot generation settings
-- `advanced`: Backend, parallelization, optimization options
-
-See `template.yaml` for complete parameter documentation.
+See `template.yaml` for detailed parameter documentation.
