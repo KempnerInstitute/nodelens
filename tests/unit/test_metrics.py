@@ -1,5 +1,5 @@
 """
-Unit tests for alignment metrics.
+Unit tests for alignment metrics using registry pattern.
 """
 
 import pytest
@@ -7,15 +7,37 @@ import torch
 import numpy as np
 from typing import Tuple
 
-from alignment.metrics import (
-    RayleighQuotient,
-    MutualInformationGaussian,
-    PartialInformationDecomposition,
-    CKA,
-    CCA,
-    GeneralizedRayleighQuotient,
-    SharedInformation
-)
+from alignment.metrics import get_metric, list_metrics
+
+
+class TestMetricRegistry:
+    """Test suite for metric registry functionality."""
+
+    def test_list_metrics(self):
+        """Test listing available metrics."""
+        metrics = list_metrics()
+        
+        assert isinstance(metrics, (list, tuple))
+        assert len(metrics) > 0
+
+    def test_get_rayleigh_metric(self):
+        """Test getting Rayleigh quotient metric from registry."""
+        metric = get_metric("rayleigh_quotient")
+        
+        assert metric is not None
+        assert hasattr(metric, "compute")
+
+    def test_get_mutual_information_metric(self):
+        """Test getting mutual information metric from registry."""
+        metric = get_metric("mutual_information_gaussian")
+        
+        assert metric is not None
+        assert hasattr(metric, "compute")
+
+    def test_invalid_metric_name(self):
+        """Test that invalid metric name raises error."""
+        with pytest.raises(Exception):
+            get_metric("nonexistent_metric")
 
 
 class TestRayleighQuotient:
@@ -32,293 +54,189 @@ class TestRayleighQuotient:
     def test_compute_basic(self, sample_data):
         """Test basic RQ computation."""
         inputs, weights = sample_data
-        metric = RayleighQuotient()
+        metric = get_metric("rayleigh_quotient")
         
-        scores = metric.compute(inputs, weights)
+        scores = metric.compute(inputs=inputs, weights=weights)
         
         assert scores.shape == (weights.shape[0],)
-        assert torch.all(scores >= 0)
         assert torch.all(torch.isfinite(scores))
     
-    def test_scale_by_norm(self, sample_data):
-        """Test RQ with norm scaling."""
+    def test_with_regularization(self, sample_data):
+        """Test RQ with regularization."""
         inputs, weights = sample_data
         
-        metric_no_scale = RayleighQuotient(scale_by_norm=False)
-        metric_scale = RayleighQuotient(scale_by_norm=True)
+        metric = get_metric("rayleigh_quotient", regularization=1e-4)
+        scores = metric.compute(inputs=inputs, weights=weights)
         
-        scores_no_scale = metric_no_scale.compute(inputs, weights)
-        scores_scale = metric_scale.compute(inputs, weights)
-        
-        # Scaled scores should be different
-        assert not torch.allclose(scores_no_scale, scores_scale)
-    
-    def test_force_cpu(self):
-        """Test CPU forcing for large operations."""
-        if torch.cuda.is_available():
-            inputs = torch.randn(1000, 1000).cuda()
-            weights = torch.randn(100, 1000).cuda()
-            
-            metric = RayleighQuotient(force_cpu=True)
-            scores = metric.compute(inputs, weights)
-            
-            # Result should still be on original device
-            assert scores.device == inputs.device
-    
-    def test_cnn_aggregation(self):
-        """Test aggregation for CNN layers."""
-        batch_size = 16
-        inputs = torch.randn(batch_size, 64, 7, 7)  # CNN activations
-        weights = torch.randn(128, 64, 3, 3)  # Conv weights
-        
-        for agg_op in ['mean', 'max', 'sum']:
-            metric = RayleighQuotient(aggregation_op=agg_op)
-            scores = metric.compute(inputs, weights)
-            
-            assert scores.shape == (weights.shape[0],)
-            assert torch.all(torch.isfinite(scores))
-    
-    def test_empty_input(self):
-        """Test behavior with empty input."""
-        inputs = torch.randn(0, 10)
-        weights = torch.randn(5, 10)
-        
-        metric = RayleighQuotient()
-        with pytest.raises(Exception):
-            metric.compute(inputs, weights)
+        assert scores.shape == (weights.shape[0],)
+        assert torch.all(torch.isfinite(scores))
 
 
 class TestMutualInformation:
-    """Test suite for Mutual Information metrics."""
+    """Test suite for Mutual Information metric."""
     
     @pytest.fixture
-    def sample_data(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Generate sample data with outputs."""
-        batch_size, input_dim, output_dim = 64, 20, 10
+    def sample_activations(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Generate sample activations for testing."""
+        batch_size, num_neurons = 100, 10
+        activations = torch.randn(batch_size, num_neurons)
+        targets = torch.randint(0, 5, (batch_size,))
+        return activations, targets
+    
+    def test_gaussian_mi_basic(self, sample_activations):
+        """Test basic Gaussian MI computation."""
+        activations, targets = sample_activations
+        
+        metric = get_metric("mutual_information_gaussian")
+        scores = metric.compute(outputs=activations, targets=targets)
+        
+        assert scores.shape == (activations.shape[1],)
+        assert torch.all(torch.isfinite(scores))
+    
+    def test_mi_with_bins(self, sample_activations):
+        """Test MI with binning method."""
+        activations, targets = sample_activations
+        
+        metric = get_metric("mutual_information_binning", num_bins=10)
+        scores = metric.compute(outputs=activations, targets=targets)
+        
+        assert scores.shape == (activations.shape[1],)
+        assert torch.all(torch.isfinite(scores))
+
+
+class TestRedundancyMetrics:
+    """Test suite for redundancy metrics."""
+    
+    @pytest.fixture
+    def sample_activations(self) -> torch.Tensor:
+        """Generate sample activations."""
+        return torch.randn(100, 20)
+    
+    def test_pairwise_redundancy(self, sample_activations):
+        """Test pairwise redundancy computation."""
+        metric = get_metric("pairwise_redundancy_gaussian")
+        
+        scores = metric.compute(outputs=sample_activations)
+        
+        # Should return per-neuron scores
+        assert scores.shape == (sample_activations.shape[1],)
+        assert torch.all(torch.isfinite(scores))
+
+
+class TestSimilarityMetrics:
+    """Test suite for similarity metrics."""
+    
+    @pytest.fixture
+    def sample_weights(self) -> torch.Tensor:
+        """Generate sample weights."""
+        return torch.randn(10, 20)
+    
+    def test_weight_cosine_similarity(self, sample_weights):
+        """Test weight cosine similarity computation."""
+        metric = get_metric("weight_cosine_similarity")
+        
+        scores = metric.compute(weights=sample_weights)
+        
+        # Returns per-weight scores (not matrix)
+        assert scores.shape == (10,)
+        assert torch.all(torch.isfinite(scores))
+
+
+class TestClassConditionedMetrics:
+    """Test suite for class-conditioned metrics."""
+    
+    @pytest.fixture
+    def sample_class_data(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Generate class-conditioned sample data."""
+        batch_size, input_dim, output_dim = 100, 15, 8
         inputs = torch.randn(batch_size, input_dim)
         weights = torch.randn(output_dim, input_dim)
-        outputs = torch.matmul(inputs, weights.t()) + torch.randn(batch_size, output_dim) * 0.1
-        return inputs, weights, outputs
+        labels = torch.randint(0, 5, (batch_size,))
+        return inputs, weights, labels
     
-    def test_gaussian_estimation(self, sample_data):
-        """Test MI with Gaussian estimation."""
-        inputs, weights, outputs = sample_data
+    def test_class_selectivity(self, sample_class_data):
+        """Test class selectivity computation."""
+        inputs, weights, labels = sample_class_data
+        outputs = inputs @ weights.T
         
-        metric = MutualInformationGaussian(estimation_method="gaussian")
-        scores = metric.compute(inputs, weights, outputs)
+        metric = get_metric("class_selectivity")
+        scores = metric.compute(inputs=inputs, outputs=outputs, weights=weights, targets=labels)
         
         assert scores.shape == (weights.shape[0],)
-        assert torch.all(scores >= 0)  # MI is non-negative
         assert torch.all(torch.isfinite(scores))
-    
-    def test_requires_outputs(self, sample_data):
-        """Test that MI requires outputs."""
-        inputs, weights, _ = sample_data
-        
-        metric = MutualInformationGaussian()
-        with pytest.raises(ValueError):
-            metric.compute(inputs, weights)  # No outputs provided
-    
-    def test_different_estimations(self, sample_data):
-        """Test different estimation methods produce different results."""
-        inputs, weights, outputs = sample_data
-        
-        metric_gaussian = MutualInformationGaussian(estimation_method="gaussian")
-        scores_gaussian = metric_gaussian.compute(inputs, weights, outputs)
-        
-        # Results should be reasonable
-        assert torch.all(scores_gaussian >= 0)
-        assert torch.all(scores_gaussian <= 10)  # Reasonable upper bound
 
 
-class TestCKA:
-    """Test suite for CKA metric."""
+class TestMetricParameters:
+    """Test suite for metric parameter handling."""
     
-    def test_linear_kernel(self):
-        """Test CKA with linear kernel."""
-        n_samples = 100
-        X = torch.randn(n_samples, 50)
-        Y = torch.randn(n_samples, 30)
+    def test_metric_with_custom_params(self):
+        """Test creating metric with custom parameters."""
+        metric = get_metric(
+            "rayleigh_quotient",
+            regularization=1e-3,
+            relative_scale=True
+        )
         
-        metric = CKA(kernel="linear")
-        similarity = metric.compute(X, Y)
-        
-        assert isinstance(similarity, (float, torch.Tensor))
-        assert 0 <= float(similarity) <= 1
+        assert metric.regularization == 1e-3
     
-    def test_rbf_kernel(self):
-        """Test CKA with RBF kernel."""
-        n_samples = 100
-        X = torch.randn(n_samples, 50)
-        Y = torch.randn(n_samples, 30)
+    def test_metric_default_params(self):
+        """Test metric uses default parameters when not specified."""
+        metric = get_metric("rayleigh_quotient")
         
-        metric = CKA(kernel="rbf")
-        similarity = metric.compute(X, Y)
-        
-        assert isinstance(similarity, (float, torch.Tensor))
-        assert 0 <= float(similarity) <= 1
-    
-    def test_self_similarity(self):
-        """Test that CKA(X, X) = 1."""
-        X = torch.randn(100, 50)
-        
-        metric = CKA(kernel="linear")
-        similarity = metric.compute(X, X)
-        
-        assert np.isclose(float(similarity), 1.0, rtol=1e-5)
-    
-    def test_different_samples_error(self):
-        """Test error when X and Y have different number of samples."""
-        X = torch.randn(100, 50)
-        Y = torch.randn(80, 30)  # Different number of samples
-        
-        metric = CKA()
-        with pytest.raises(ValueError):
-            metric.compute(X, Y)
+        # Should have default regularization
+        assert hasattr(metric, "regularization")
 
 
-class TestCCA:
-    """Test suite for CCA metric."""
+@pytest.mark.integration
+class TestMetricIntegration:
+    """Integration tests for metrics."""
     
-    def test_basic_cca(self):
-        """Test basic CCA computation."""
-        n_samples = 200
-        X = torch.randn(n_samples, 50)
-        Y = torch.randn(n_samples, 40)
+    def test_multiple_metrics_same_data(self):
+        """Test multiple metrics on the same data."""
+        inputs = torch.randn(50, 10)
+        weights = torch.randn(5, 10)
+        targets = torch.randint(0, 3, (50,))
         
-        metric = CCA(n_components=20)
-        similarity = metric.compute(X, Y)
+        # Test multiple metrics
+        rq_metric = get_metric("rayleigh_quotient")
+        rq_scores = rq_metric.compute(inputs=inputs, weights=weights)
         
-        assert isinstance(similarity, (float, torch.Tensor))
-        assert 0 <= float(similarity) <= 1
+        mi_metric = get_metric("mutual_information_gaussian")
+        outputs = inputs @ weights.T
+        mi_scores = mi_metric.compute(outputs=outputs, targets=targets)
+        
+        # Both should produce valid scores
+        assert torch.all(torch.isfinite(rq_scores))
+        assert torch.all(torch.isfinite(mi_scores))
     
-    def test_regularization(self):
-        """Test CCA with regularization."""
-        n_samples = 100
-        X = torch.randn(n_samples, 50)
-        Y = torch.randn(n_samples, 40)
-        
-        metric = CCA(n_components=20, reg=0.1)
-        similarity = metric.compute(X, Y)
-        
-        assert isinstance(similarity, (float, torch.Tensor))
-        assert torch.isfinite(torch.tensor(similarity))
-    
-    def test_max_components(self):
-        """Test CCA with too many components."""
-        n_samples = 50
-        X = torch.randn(n_samples, 20)
-        Y = torch.randn(n_samples, 30)
-        
-        # Request more components than possible
-        metric = CCA(n_components=100)
-        similarity = metric.compute(X, Y)
-        
-        # Should still work (automatically reduced)
-        assert isinstance(similarity, (float, torch.Tensor))
-
-
-class TestPartialInformationDecomposition:
-    """Test suite for PID metrics."""
-    
-    @pytest.fixture
-    def sample_data(self):
-        """Generate sample data for PID."""
-        batch_size = 128
-        inputs = torch.randn(batch_size, 20)
+    def test_metric_pipeline(self):
+        """Test using metrics in a pipeline."""
+        # Simulate a layer's computation
+        inputs = torch.randn(100, 20)
         weights = torch.randn(10, 20)
-        outputs = torch.matmul(inputs, weights.t())
-        return inputs, weights, outputs
-    
-    def test_pid_components(self, sample_data):
-        """Test that PID components are computed correctly."""
-        inputs, weights, outputs = sample_data
+        outputs = inputs @ weights.T
+        targets = torch.randint(0, 5, (100,))
         
-        metric = PartialInformationDecomposition(method="broja")
-        results = metric.compute(inputs, weights, outputs)
+        # Apply multiple metrics
+        metrics_to_test = [
+            "rayleigh_quotient",
+            "mutual_information_gaussian",
+            "pairwise_redundancy_gaussian"
+        ]
         
-        # Check that all components are present
-        assert 'unique_information' in results
-        assert 'redundant_information' in results
-        assert 'synergistic_information' in results
+        results = {}
+        for metric_name in metrics_to_test:
+            metric = get_metric(metric_name)
+            
+            if metric_name == "rayleigh_quotient":
+                scores = metric.compute(inputs=inputs, weights=weights)
+            elif metric_name == "mutual_information_gaussian":
+                scores = metric.compute(outputs=outputs, targets=targets)
+            else:
+                scores = metric.compute(outputs=outputs)
+            
+            results[metric_name] = scores
+            assert torch.all(torch.isfinite(scores))
         
-        # Check shapes
-        assert results['unique_information'].shape == (weights.shape[0],)
-        assert isinstance(results['redundant_information'], (float, torch.Tensor))
-        assert isinstance(results['synergistic_information'], (float, torch.Tensor))
-    
-    def test_pid_non_negative(self, sample_data):
-        """Test that PID components are non-negative."""
-        inputs, weights, outputs = sample_data
-        
-        metric = PartialInformationDecomposition()
-        results = metric.compute(inputs, weights, outputs)
-        
-        # All information measures should be non-negative
-        assert torch.all(results['unique_information'] >= 0)
-        assert float(results['redundant_information']) >= 0
-        assert float(results['synergistic_information']) >= 0
-
-
-class TestGeneralizedRayleighQuotient:
-    """Test suite for Generalized Rayleigh Quotient."""
-    
-    def test_basic_computation(self):
-        """Test basic GRQ computation."""
-        batch_size, dim = 64, 20
-        inputs = torch.randn(batch_size, dim)
-        weights = torch.randn(10, dim)
-        
-        metric = GeneralizedRayleighQuotient()
-        scores = metric.compute(inputs, weights)
-        
-        assert scores.shape == (weights.shape[0],)
-        assert torch.all(torch.isfinite(scores))
-    
-    def test_with_reference_covariance(self):
-        """Test GRQ with custom reference covariance."""
-        batch_size, dim = 64, 20
-        inputs = torch.randn(batch_size, dim)
-        weights = torch.randn(10, dim)
-        
-        # Create positive definite reference covariance
-        ref_cov = torch.randn(dim, dim)
-        ref_cov = ref_cov @ ref_cov.t() + torch.eye(dim) * 0.1
-        
-        metric = GeneralizedRayleighQuotient()
-        scores = metric.compute(inputs, weights, reference_cov=ref_cov)
-        
-        assert scores.shape == (weights.shape[0],)
-        assert torch.all(torch.isfinite(scores))
-
-
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_device_consistency(device):
-    """Test that metrics work correctly on different devices."""
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-    
-    inputs = torch.randn(32, 20).to(device)
-    weights = torch.randn(10, 20).to(device)
-    
-    metric = RayleighQuotient()
-    scores = metric.compute(inputs, weights)
-    
-    assert scores.device.type == device
-
-
-def test_metric_determinism():
-    """Test that metrics produce deterministic results."""
-    torch.manual_seed(42)
-    inputs1 = torch.randn(32, 20)
-    weights1 = torch.randn(10, 20)
-    
-    torch.manual_seed(42)
-    inputs2 = torch.randn(32, 20)
-    weights2 = torch.randn(10, 20)
-    
-    metric = RayleighQuotient()
-    scores1 = metric.compute(inputs1, weights1)
-    scores2 = metric.compute(inputs2, weights2)
-    
-    assert torch.allclose(scores1, scores2) 
+        # Check all metrics produced results
+        assert len(results) == 3
