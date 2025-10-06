@@ -2,13 +2,14 @@ name: Code Quality
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, iss_CICL ]
   pull_request:
     branches: [ main, develop ]
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     
     steps:
     - uses: actions/checkout@v4

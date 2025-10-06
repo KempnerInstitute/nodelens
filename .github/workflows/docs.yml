@@ -2,13 +2,14 @@ name: Documentation
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, iss_CICL ]
   pull_request:
     branches: [ main, develop ]
 
 jobs:
   docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     
     steps:
     - uses: actions/checkout@v4
