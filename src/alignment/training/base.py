@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrainingConfig:
     """Configuration for training."""
+
     epochs: int = 10
     learning_rate: float = 0.001
     batch_size: int = 32
@@ -46,7 +47,7 @@ class BaseTrainer:
         model: nn.Module,
         config: Optional[TrainingConfig] = None,
         loss_fn: Optional[nn.Module] = None,
-        callbacks: Optional[List[Callable]] = None
+        callbacks: Optional[List[Callable]] = None,
     ):
         """
         Initialize trainer.
@@ -72,24 +73,17 @@ class BaseTrainer:
         # Training state
         self.current_epoch = 0
         self.global_step = 0
-        self.best_val_metric = float('inf')
+        self.best_val_metric = float("inf")
         self.patience_counter = 0
 
         # History
-        self.history = {
-            'train_loss': [],
-            'train_metrics': [],
-            'val_loss': [],
-            'val_metrics': [],
-            'epoch_times': [],
-            'learning_rates': []
-        }
+        self.history = {"train_loss": [], "train_metrics": [], "val_loss": [], "val_metrics": [], "epoch_times": [], "learning_rates": []}
 
     def train(
         self,
         train_loader: torch.utils.data.DataLoader,
         val_loader: Optional[torch.utils.data.DataLoader] = None,
-        metric_fn: Optional[Callable] = None
+        metric_fn: Optional[Callable] = None,
     ) -> Dict[str, List[float]]:
         """
         Train the model.
@@ -109,16 +103,12 @@ class BaseTrainer:
             epoch_start = time.time()
 
             # Training phase
-            train_loss, train_metrics = self._train_epoch(
-                train_loader, metric_fn
-            )
+            train_loss, train_metrics = self._train_epoch(train_loader, metric_fn)
 
             # Validation phase
             val_loss, val_metrics = 0.0, {}
             if val_loader and (epoch + 1) % self.config.eval_interval == 0:
-                val_loss, val_metrics = self._validate(
-                    val_loader, metric_fn
-                )
+                val_loss, val_metrics = self._validate(val_loader, metric_fn)
 
                 # Early stopping check
                 if self._should_stop_early(val_loss):
@@ -134,19 +124,15 @@ class BaseTrainer:
 
             # Record history
             epoch_time = time.time() - epoch_start
-            self.history['train_loss'].append(train_loss)
-            self.history['train_metrics'].append(train_metrics)
-            self.history['val_loss'].append(val_loss)
-            self.history['val_metrics'].append(val_metrics)
-            self.history['epoch_times'].append(epoch_time)
-            self.history['learning_rates'].append(
-                self.optimizer.param_groups[0]['lr']
-            )
+            self.history["train_loss"].append(train_loss)
+            self.history["train_metrics"].append(train_metrics)
+            self.history["val_loss"].append(val_loss)
+            self.history["val_metrics"].append(val_metrics)
+            self.history["epoch_times"].append(epoch_time)
+            self.history["learning_rates"].append(self.optimizer.param_groups[0]["lr"])
 
             # Log progress
-            self._log_epoch_progress(
-                epoch, train_loss, train_metrics, val_loss, val_metrics, epoch_time
-            )
+            self._log_epoch_progress(epoch, train_loss, train_metrics, val_loss, val_metrics, epoch_time)
 
             # Save checkpoint
             if self.config.checkpoint_dir and (epoch + 1) % self.config.eval_interval == 0:
@@ -158,11 +144,7 @@ class BaseTrainer:
 
         return self.history
 
-    def _train_epoch(
-        self,
-        train_loader: torch.utils.data.DataLoader,
-        metric_fn: Optional[Callable] = None
-    ) -> Tuple[float, Dict[str, float]]:
+    def _train_epoch(self, train_loader: torch.utils.data.DataLoader, metric_fn: Optional[Callable] = None) -> Tuple[float, Dict[str, float]]:
         """Train for one epoch."""
         self.model.train()
         total_loss = 0.0
@@ -181,10 +163,7 @@ class BaseTrainer:
 
             # Gradient clipping
             if self.config.gradient_clip_val:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.gradient_clip_val
-                )
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_val)
 
             self.optimizer.step()
 
@@ -196,10 +175,7 @@ class BaseTrainer:
 
             # Logging
             if batch_idx % self.config.log_interval == 0:
-                logger.debug(
-                    f"Epoch {self.current_epoch} [{batch_idx}/{len(train_loader)}] "
-                    f"Loss: {loss.item():.4f}"
-                )
+                logger.debug(f"Epoch {self.current_epoch} [{batch_idx}/{len(train_loader)}] " f"Loss: {loss.item():.4f}")
 
             self.global_step += 1
 
@@ -208,11 +184,7 @@ class BaseTrainer:
 
         return avg_loss, avg_metrics
 
-    def _validate(
-        self,
-        val_loader: torch.utils.data.DataLoader,
-        metric_fn: Optional[Callable] = None
-    ) -> Tuple[float, Dict[str, float]]:
+    def _validate(self, val_loader: torch.utils.data.DataLoader, metric_fn: Optional[Callable] = None) -> Tuple[float, Dict[str, float]]:
         """Validate the model."""
         self.model.eval()
         total_loss = 0.0
@@ -240,23 +212,11 @@ class BaseTrainer:
         optimizer_kwargs = self.config.optimizer_kwargs or {}
 
         if self.config.optimizer.lower() == "adam":
-            return optim.Adam(
-                self.model.parameters(),
-                lr=self.config.learning_rate,
-                **optimizer_kwargs
-            )
+            return optim.Adam(self.model.parameters(), lr=self.config.learning_rate, **optimizer_kwargs)
         elif self.config.optimizer.lower() == "sgd":
-            return optim.SGD(
-                self.model.parameters(),
-                lr=self.config.learning_rate,
-                **optimizer_kwargs
-            )
+            return optim.SGD(self.model.parameters(), lr=self.config.learning_rate, **optimizer_kwargs)
         elif self.config.optimizer.lower() == "adamw":
-            return optim.AdamW(
-                self.model.parameters(),
-                lr=self.config.learning_rate,
-                **optimizer_kwargs
-            )
+            return optim.AdamW(self.model.parameters(), lr=self.config.learning_rate, **optimizer_kwargs)
         else:
             raise ValueError(f"Unknown optimizer: {self.config.optimizer}")
 
@@ -268,21 +228,11 @@ class BaseTrainer:
         scheduler_kwargs = self.config.scheduler_kwargs or {}
 
         if self.config.scheduler.lower() == "cosine":
-            return optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer,
-                T_max=self.config.epochs,
-                **scheduler_kwargs
-            )
+            return optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.config.epochs, **scheduler_kwargs)
         elif self.config.scheduler.lower() == "plateau":
-            return optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer,
-                **scheduler_kwargs
-            )
+            return optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, **scheduler_kwargs)
         elif self.config.scheduler.lower() == "step":
-            return optim.lr_scheduler.StepLR(
-                self.optimizer,
-                **scheduler_kwargs
-            )
+            return optim.lr_scheduler.StepLR(self.optimizer, **scheduler_kwargs)
         else:
             raise ValueError(f"Unknown scheduler: {self.config.scheduler}")
 
@@ -312,13 +262,7 @@ class BaseTrainer:
         return avg_metrics
 
     def _log_epoch_progress(
-        self,
-        epoch: int,
-        train_loss: float,
-        train_metrics: Dict[str, float],
-        val_loss: float,
-        val_metrics: Dict[str, float],
-        epoch_time: float
+        self, epoch: int, train_loss: float, train_metrics: Dict[str, float], val_loss: float, val_metrics: Dict[str, float], epoch_time: float
     ):
         """Log training progress for an epoch."""
         log_msg = f"Epoch {epoch + 1}/{self.config.epochs} - "
@@ -343,13 +287,13 @@ class BaseTrainer:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         checkpoint = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
-            'history': self.history,
-            'config': self.config,
-            'best_val_metric': self.best_val_metric
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler else None,
+            "history": self.history,
+            "config": self.config,
+            "best_val_metric": self.best_val_metric,
         }
 
         checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch}.pt"

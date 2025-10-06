@@ -31,13 +31,7 @@ class DynamicScoreAggregator:
         ... )
     """
 
-    def __init__(
-        self,
-        weight_final: float = 0.4,
-        weight_trend: float = 0.2,
-        weight_loss_corr: float = 0.3,
-        weight_stability: float = 0.1
-    ):
+    def __init__(self, weight_final: float = 0.4, weight_trend: float = 0.2, weight_loss_corr: float = 0.3, weight_stability: float = 0.1):
         """
         Initialize dynamic score aggregator.
 
@@ -60,11 +54,7 @@ class DynamicScoreAggregator:
         self.weight_stability /= total
 
     def aggregate(
-        self,
-        score_history: Dict[str, Dict[str, List[float]]],
-        loss_history: List[float],
-        layer_name: str,
-        metric_name: str = 'rq'
+        self, score_history: Dict[str, Dict[str, List[float]]], loss_history: List[float], layer_name: str, metric_name: str = "rq"
     ) -> torch.Tensor:
         """
         Aggregate scores for a layer using training dynamics.
@@ -78,14 +68,14 @@ class DynamicScoreAggregator:
         Returns:
             Dynamic scores per neuron [num_neurons]
         """
-        if layer_name not in score_history['history']:
+        if layer_name not in score_history["history"]:
             raise ValueError(f"No history for layer {layer_name}")
 
-        if metric_name not in score_history['history'][layer_name]:
+        if metric_name not in score_history["history"][layer_name]:
             raise ValueError(f"No {metric_name} history for {layer_name}")
 
         # Get score evolution
-        scores_over_time = score_history['history'][layer_name][metric_name]
+        scores_over_time = score_history["history"][layer_name][metric_name]
         # This is list of scalar means - need per-neuron history
         # For now, work with what we have
 
@@ -94,18 +84,13 @@ class DynamicScoreAggregator:
         # where each is [num_neurons]
 
         # For now, provide framework for when per-neuron tracking is added
-        logger.warning(
-            "Current callback tracks scalar means. "
-            "For per-neuron dynamic scoring, need to track full tensors."
-        )
+        logger.warning("Current callback tracks scalar means. " "For per-neuron dynamic scoring, need to track full tensors.")
 
         # Return placeholder
         return torch.tensor(scores_over_time[-1])  # Final value
 
     def compute_loss_correlation(
-        self,
-        score_evolution: torch.Tensor,  # [num_steps, num_neurons]
-        loss_evolution: List[float]      # [num_steps]
+        self, score_evolution: torch.Tensor, loss_evolution: List[float]  # [num_steps, num_neurons]  # [num_steps]
     ) -> torch.Tensor:
         """
         Compute correlation between each neuron's score and training loss.
@@ -141,10 +126,7 @@ class DynamicScoreAggregator:
 
         return correlations
 
-    def compute_trend(
-        self,
-        score_evolution: torch.Tensor  # [num_steps, num_neurons]
-    ) -> torch.Tensor:
+    def compute_trend(self, score_evolution: torch.Tensor) -> torch.Tensor:  # [num_steps, num_neurons]
         """
         Compute trend (increasing/decreasing) for each neuron.
 
@@ -179,10 +161,7 @@ class DynamicScoreAggregator:
 
         return trends_fitted
 
-    def compute_stability(
-        self,
-        score_evolution: torch.Tensor  # [num_steps, num_neurons]
-    ) -> torch.Tensor:
+    def compute_stability(self, score_evolution: torch.Tensor) -> torch.Tensor:  # [num_steps, num_neurons]
         """
         Compute stability (inverse variance) for each neuron.
 
@@ -203,11 +182,7 @@ class DynamicScoreAggregator:
 
         return stability
 
-    def aggregate_full(
-        self,
-        score_evolution: torch.Tensor,  # [num_steps, num_neurons]
-        loss_evolution: List[float]
-    ) -> torch.Tensor:
+    def aggregate_full(self, score_evolution: torch.Tensor, loss_evolution: List[float]) -> torch.Tensor:  # [num_steps, num_neurons]
         """
         Full aggregation using all components.
 
@@ -235,10 +210,10 @@ class DynamicScoreAggregator:
 
         # Weighted combination
         dynamic_scores = (
-            self.weight_final * final_norm +
-            self.weight_trend * trend_norm +
-            self.weight_loss_corr * loss_corr_norm +
-            self.weight_stability * stability_norm
+            self.weight_final * final_norm
+            + self.weight_trend * trend_norm
+            + self.weight_loss_corr * loss_corr_norm
+            + self.weight_stability * stability_norm
         )
 
         return dynamic_scores
@@ -279,11 +254,7 @@ class TrainingAwareScoring:
 
 
 def compute_dynamic_importance(
-    score_history: Dict,
-    loss_history: List[float],
-    layer_name: str,
-    metric_name: str = 'rq',
-    aggregation_weights: Optional[Dict] = None
+    score_history: Dict, loss_history: List[float], layer_name: str, metric_name: str = "rq", aggregation_weights: Optional[Dict] = None
 ) -> torch.Tensor:
     """
     Convenience function for dynamic importance computation.
@@ -301,4 +272,3 @@ def compute_dynamic_importance(
     aggregator = DynamicScoreAggregator(**(aggregation_weights or {}))
 
     return aggregator.aggregate(score_history, loss_history, layer_name, metric_name)
-

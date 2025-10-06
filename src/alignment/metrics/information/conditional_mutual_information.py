@@ -46,7 +46,7 @@ class ConditionalMutualInformation(BaseMetric):
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
         target_outputs: Optional[torch.Tensor] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Compute conditional MI scores for each neuron.
@@ -105,19 +105,14 @@ class ConditionalMutualInformation(BaseMetric):
         else:
             return self._compute_binning(X, outputs, Z)
 
-    def _compute_gaussian(
-        self,
-        X: torch.Tensor,
-        Y: torch.Tensor,
-        Z: Optional[torch.Tensor]
-    ) -> torch.Tensor:
+    def _compute_gaussian(self, X: torch.Tensor, Y: torch.Tensor, Z: Optional[torch.Tensor]) -> torch.Tensor:
         """Compute CMI using Gaussian approximation."""
         num_neurons = Y.shape[1]
         cmi_scores = torch.zeros(num_neurons, device=Y.device)
 
         for i in range(num_neurons):
             # Current neuron output
-            y_i = Y[:, i:i+1]
+            y_i = Y[:, i : i + 1]
 
             # Reference signal
             if Z is not None:
@@ -174,12 +169,7 @@ class ConditionalMutualInformation(BaseMetric):
 
         return torch.nan_to_num(cmi_scores, nan=0.0)
 
-    def _compute_binning(
-        self,
-        X: torch.Tensor,
-        Y: torch.Tensor,
-        Z: Optional[torch.Tensor]
-    ) -> torch.Tensor:
+    def _compute_binning(self, X: torch.Tensor, Y: torch.Tensor, Z: Optional[torch.Tensor]) -> torch.Tensor:
         """Compute CMI using binning/discretization."""
         num_neurons = Y.shape[1]
         cmi_scores = torch.zeros(num_neurons, device=Y.device)
@@ -233,12 +223,7 @@ class ConditionalMutualInformation(BaseMetric):
         X_centered = X - X.mean(dim=0, keepdim=True)
         return torch.matmul(X_centered.T, X_centered) / (X.shape[0] - 1)
 
-    def _partial_correlation(
-        self,
-        Y: torch.Tensor,
-        Z: torch.Tensor,
-        X: torch.Tensor
-    ) -> torch.Tensor:
+    def _partial_correlation(self, Y: torch.Tensor, Z: torch.Tensor, X: torch.Tensor) -> torch.Tensor:
         """Compute partial correlation between Y and Z given X."""
         # Stack all variables
         all_vars = torch.cat([Y, Z, X], dim=1)
@@ -257,9 +242,9 @@ class ConditionalMutualInformation(BaseMetric):
         try:
             # Get relevant correlations
             r_yz = corr[0, 1]
-            r_yx = corr[0, 2:2+n_x]
-            r_zx = corr[1, 2:2+n_x]
-            R_xx = corr[2:2+n_x, 2:2+n_x]
+            r_yx = corr[0, 2 : 2 + n_x]
+            r_zx = corr[1, 2 : 2 + n_x]
+            R_xx = corr[2 : 2 + n_x, 2 : 2 + n_x]
 
             # Compute partial correlation
             if torch.linalg.matrix_rank(R_xx) == R_xx.shape[0]:
@@ -324,12 +309,7 @@ class ConditionalMutualInformation(BaseMetric):
 
         return mi / np.log(2)  # Convert to bits
 
-    def _mutual_information_3way(
-        self,
-        y: np.ndarray,
-        z: np.ndarray,
-        x: np.ndarray
-    ) -> float:
+    def _mutual_information_3way(self, y: np.ndarray, z: np.ndarray, x: np.ndarray) -> float:
         """Compute I(Y;Z,X) = I(Y;(Z,X)) treating (Z,X) as a joint variable."""
         # Create joint variable for (Z,X)
         zx_joint = z * self.bins + x  # Simple encoding

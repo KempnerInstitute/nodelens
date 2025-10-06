@@ -40,12 +40,7 @@ class SynergyGaussianMMI(BaseMetric):
         >>> print(synergy.shape)  # [num_neurons]
     """
 
-    def __init__(
-        self,
-        num_pairs: int = 10,
-        sampling_strategy: str = 'random',
-        **config: Any
-    ):
+    def __init__(self, num_pairs: int = 10, sampling_strategy: str = "random", **config: Any):
         """
         Initialize synergy metric.
 
@@ -76,7 +71,7 @@ class SynergyGaussianMMI(BaseMetric):
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
         targets: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute per-neuron synergy scores.
@@ -126,11 +121,7 @@ class SynergyGaussianMMI(BaseMetric):
             # Compute synergy with each partner
             synergy_values = []
             for j in partner_indices:
-                s = self._compute_pairwise_synergy(
-                    outputs[:, i],
-                    outputs[:, j],
-                    targets
-                )
+                s = self._compute_pairwise_synergy(outputs[:, i], outputs[:, j], targets)
                 synergy_values.append(s)
 
             # Average synergy with partners
@@ -139,12 +130,7 @@ class SynergyGaussianMMI(BaseMetric):
 
         return synergy
 
-    def _compute_pairwise_synergy(
-        self,
-        y_i: torch.Tensor,
-        y_j: torch.Tensor,
-        targets: torch.Tensor
-    ) -> torch.Tensor:
+    def _compute_pairwise_synergy(self, y_i: torch.Tensor, y_j: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
         Compute synergy between two neurons relative to target.
 
@@ -172,12 +158,7 @@ class SynergyGaussianMMI(BaseMetric):
 
         return synergy
 
-    def _gaussian_mi_categorical(
-        self,
-        y: torch.Tensor,
-        z: torch.Tensor,
-        eps: float = 1e-8
-    ) -> torch.Tensor:
+    def _gaussian_mi_categorical(self, y: torch.Tensor, z: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
         """
         Compute MI between continuous y and categorical z using Gaussian approximation.
 
@@ -200,7 +181,7 @@ class SynergyGaussianMMI(BaseMetric):
         conditional_entropy = 0.0
 
         for c in classes:
-            mask = (z == c)
+            mask = z == c
             n_c = mask.sum()
 
             if n_c < 2:
@@ -222,12 +203,7 @@ class SynergyGaussianMMI(BaseMetric):
 
         return mi
 
-    def _gaussian_mi_categorical_multivariate(
-        self,
-        y: torch.Tensor,
-        z: torch.Tensor,
-        eps: float = 1e-6
-    ) -> torch.Tensor:
+    def _gaussian_mi_categorical_multivariate(self, y: torch.Tensor, z: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         """
         Compute MI between multivariate continuous y and categorical z.
 
@@ -254,7 +230,7 @@ class SynergyGaussianMMI(BaseMetric):
         total_weight = 0.0
 
         for c in classes:
-            mask = (z == c)
+            mask = z == c
             n_c = mask.sum()
 
             if n_c < dim + 1:  # Need enough samples
@@ -290,11 +266,7 @@ class SynergyGaussianMMI(BaseMetric):
 
         return mi
 
-    def _sample_partners(
-        self,
-        neuron_idx: int,
-        num_neurons: int
-    ) -> torch.Tensor:
+    def _sample_partners(self, neuron_idx: int, num_neurons: int) -> torch.Tensor:
         """
         Sample partner neurons for synergy computation.
 
@@ -309,10 +281,10 @@ class SynergyGaussianMMI(BaseMetric):
         available = list(range(num_neurons))
         available.remove(neuron_idx)
 
-        if self.sampling_strategy == 'all':
+        if self.sampling_strategy == "all":
             return torch.tensor(available, dtype=torch.long)
 
-        elif self.sampling_strategy == 'random':
+        elif self.sampling_strategy == "random":
             num_to_sample = min(self.num_pairs, len(available))
             if num_to_sample == 0:
                 return torch.tensor([], dtype=torch.long)
@@ -320,7 +292,7 @@ class SynergyGaussianMMI(BaseMetric):
             indices = torch.randperm(len(available))[:num_to_sample]
             return torch.tensor([available[i] for i in indices], dtype=torch.long)
 
-        elif self.sampling_strategy == 'nearest':
+        elif self.sampling_strategy == "nearest":
             num_to_sample = min(self.num_pairs, len(available))
             if num_to_sample == 0:
                 return torch.tensor([], dtype=torch.long)
@@ -331,4 +303,3 @@ class SynergyGaussianMMI(BaseMetric):
 
         else:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
-

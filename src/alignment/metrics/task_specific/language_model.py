@@ -25,13 +25,7 @@ class LanguageModelAlignment(BaseMetric):
     requires_weights = True
     requires_outputs = False
 
-    def __init__(
-        self,
-        vocab_size: int,
-        alignment_type: str = "prediction_alignment",
-        context_window: int = 5,
-        semantic_dims: Optional[int] = None
-    ):
+    def __init__(self, vocab_size: int, alignment_type: str = "prediction_alignment", context_window: int = 5, semantic_dims: Optional[int] = None):
         """
         Initialize language model alignment metric.
 
@@ -58,7 +52,7 @@ class LanguageModelAlignment(BaseMetric):
         token_ids: Optional[torch.Tensor] = None,
         attention_weights: Optional[torch.Tensor] = None,
         embeddings: Optional[torch.Tensor] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Compute language model alignment scores.
@@ -105,15 +99,15 @@ class LanguageModelAlignment(BaseMetric):
 
                 # Compute cross-entropy loss per neuron
                 for i in range(n_neurons):
-                    neuron_contribution = current_outputs[:, :, i:i+1]
-                    neuron_logits = neuron_contribution @ projection[i:i+1, :]
+                    neuron_contribution = current_outputs[:, :, i : i + 1]
+                    neuron_logits = neuron_contribution @ projection[i : i + 1, :]
 
                     # Flatten for loss computation
                     neuron_logits_flat = neuron_logits.reshape(-1, self.vocab_size)
                     targets_flat = targets.reshape(-1)
 
                     # Cross-entropy loss
-                    loss = F.cross_entropy(neuron_logits_flat, targets_flat, reduction='mean')
+                    loss = F.cross_entropy(neuron_logits_flat, targets_flat, reduction="mean")
 
                     # Lower loss = better alignment
                     alignment_scores[i] = 1.0 / (1.0 + loss.item())
@@ -161,8 +155,8 @@ class LanguageModelAlignment(BaseMetric):
 
             # Measure coherence for each neuron
             for i in range(n_neurons):
-                neuron_outputs = outputs[:, :, i:i+1]  # [batch, seq, 1]
-                neuron_embeddings = neuron_outputs @ projection[i:i+1, :]  # [batch, seq, embed_dim]
+                neuron_outputs = outputs[:, :, i : i + 1]  # [batch, seq, 1]
+                neuron_embeddings = neuron_outputs @ projection[i : i + 1, :]  # [batch, seq, embed_dim]
 
                 # Cosine similarity with token embeddings
                 neuron_norm = F.normalize(neuron_embeddings, p=2, dim=-1)

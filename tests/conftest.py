@@ -2,11 +2,12 @@
 Pytest configuration and fixtures.
 """
 
-import pytest
-import torch
-import numpy as np
 import random
 from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +16,7 @@ def set_random_seeds():
     torch.manual_seed(42)
     np.random.seed(42)
     random.seed(42)
-    
+
     if torch.cuda.is_available():
         torch.cuda.manual_seed(42)
         torch.cuda.manual_seed_all(42)
@@ -55,29 +56,23 @@ def sample_cifar_data():
 def mock_dataloader(sample_mnist_data):
     """Create a mock dataloader for testing."""
     images, labels = sample_mnist_data
-    
+
     class MockDataLoader:
         def __init__(self):
             self.dataset = list(zip(images, labels))
-        
+
         def __iter__(self):
             return iter([self.dataset])
-        
+
         def __len__(self):
             return 1
-    
+
     return MockDataLoader()
 
 
 # Configure pytest markers
 def pytest_configure(config):
     """Configure custom pytest markers."""
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "gpu: marks tests that require GPU"
-    ) 
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "gpu: marks tests that require GPU")

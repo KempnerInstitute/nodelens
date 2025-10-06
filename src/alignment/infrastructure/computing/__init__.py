@@ -20,17 +20,17 @@ from .optimized.jit import (
 
 __all__ = [
     # Distributed computing
-    'setup_distributed',
-    'cleanup_distributed',
-    'is_distributed',
-    'is_main_process',
-    'get_world_size',
-    'get_rank',
+    "setup_distributed",
+    "cleanup_distributed",
+    "is_distributed",
+    "is_main_process",
+    "get_world_size",
+    "get_rank",
     # GPU optimization
-    'GPUAcceleratedMetrics',
+    "GPUAcceleratedMetrics",
     # JIT compilation
-    'JITRayleighQuotient',
-    'JITMutualInformation',
-    'JITNodeCorrelation',
-    'create_jit_metric',
+    "JITRayleighQuotient",
+    "JITMutualInformation",
+    "JITNodeCorrelation",
+    "create_jit_metric",
 ]

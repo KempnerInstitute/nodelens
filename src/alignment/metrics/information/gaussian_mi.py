@@ -35,7 +35,7 @@ class GaussianMIAnalytic(BaseMetric):
         noise_std: float = 0.1,
         regularization: float = 1e-6,
         per_neuron: bool = True,
-        use_entropy_edgeworth: bool = True
+        use_entropy_edgeworth: bool = True,
     ):
         """
         Initialize Gaussian MI metric with expansion.
@@ -74,11 +74,11 @@ class GaussianMIAnalytic(BaseMetric):
 
         if max_order >= 3:
             # Third cumulant (related to skewness)
-            cumulants[3] = torch.mean(data_centered ** 3, dim=0)
+            cumulants[3] = torch.mean(data_centered**3, dim=0)
 
         if max_order >= 4:
             # Fourth cumulant (related to kurtosis)
-            fourth_moment = torch.mean(data_centered ** 4, dim=0)
+            fourth_moment = torch.mean(data_centered**4, dim=0)
             cumulants[4] = fourth_moment - 3 * cumulants[2] ** 2
 
         return cumulants
@@ -98,18 +98,13 @@ class GaussianMIAnalytic(BaseMetric):
         if std <= eps:
             return 0.5 * torch.log(2 * torch.pi * torch.e * torch.clamp(var, min=eps))
         z = x / std
-        gamma1 = torch.mean(z ** 3)
-        gamma2 = torch.mean(z ** 4) - 3.0  # excess kurtosis
+        gamma1 = torch.mean(z**3)
+        gamma2 = torch.mean(z**4) - 3.0  # excess kurtosis
         h_gauss = 0.5 * torch.log(2 * torch.pi * torch.e * var)
-        corr = - (gamma1 ** 2) / 12.0 - (gamma2 ** 2) / 48.0
+        corr = -(gamma1**2) / 12.0 - (gamma2**2) / 48.0
         return h_gauss + corr
 
-    def _gaussian_mi(
-        self,
-        cov_x: torch.Tensor,
-        cov_y: torch.Tensor,
-        cov_xy: torch.Tensor
-    ) -> torch.Tensor:
+    def _gaussian_mi(self, cov_x: torch.Tensor, cov_y: torch.Tensor, cov_xy: torch.Tensor) -> torch.Tensor:
         """
         Compute Gaussian mutual information.
 
@@ -146,11 +141,7 @@ class GaussianMIAnalytic(BaseMetric):
         return mi
 
     def _edgeworth_correction(
-        self,
-        cumulants_x: Dict[int, torch.Tensor],
-        cumulants_y: Dict[int, torch.Tensor],
-        cov_xy: torch.Tensor,
-        order: int
+        self, cumulants_x: Dict[int, torch.Tensor], cumulants_y: Dict[int, torch.Tensor], cov_xy: torch.Tensor, order: int
     ) -> torch.Tensor:
         """
         Compute Edgeworth expansion corrections to mutual information.
@@ -164,79 +155,73 @@ class GaussianMIAnalytic(BaseMetric):
             # First-order correction involves third cumulants (skewness)
             # This is a simplified approximation
             kappa3_x = cumulants_x[3].mean() if cumulants_x[3].numel() > 1 else cumulants_x[3].item()
-            kappa3_y = cumulants_y[3].item() if hasattr(cumulants_y[3], 'item') else cumulants_y[3]
+            kappa3_y = cumulants_y[3].item() if hasattr(cumulants_y[3], "item") else cumulants_y[3]
             var_x = cumulants_x[2].mean() if cumulants_x[2].numel() > 1 else cumulants_x[2].item()
-            var_y = cumulants_y[2].item() if hasattr(cumulants_y[2], 'item') else cumulants_y[2]
+            var_y = cumulants_y[2].item() if hasattr(cumulants_y[2], "item") else cumulants_y[2]
 
             # Normalized third cumulants
-            gamma1_x = kappa3_x / (var_x ** 1.5 + 1e-8)
-            gamma1_y = kappa3_y / (var_y ** 1.5 + 1e-8)
+            gamma1_x = kappa3_x / (var_x**1.5 + 1e-8)
+            gamma1_y = kappa3_y / (var_y**1.5 + 1e-8)
 
             # Correlation coefficient (cov_xy is already scalar)
             corr = cov_xy / (torch.sqrt(torch.tensor(var_x * var_y)) + 1e-8)
 
             # First-order correction (simplified form)
-            correction += (1/6) * corr * gamma1_x * gamma1_y
+            correction += (1 / 6) * corr * gamma1_x * gamma1_y
 
         if order >= 2 and 4 in cumulants_x and 4 in cumulants_y:
             # Second-order correction involves fourth cumulants (kurtosis)
             kappa4_x = cumulants_x[4].mean() if cumulants_x[4].numel() > 1 else cumulants_x[4].item()
-            kappa4_y = cumulants_y[4].item() if hasattr(cumulants_y[4], 'item') else cumulants_y[4]
+            kappa4_y = cumulants_y[4].item() if hasattr(cumulants_y[4], "item") else cumulants_y[4]
             var_x = cumulants_x[2].mean() if cumulants_x[2].numel() > 1 else cumulants_x[2].item()
-            var_y = cumulants_y[2].item() if hasattr(cumulants_y[2], 'item') else cumulants_y[2]
+            var_y = cumulants_y[2].item() if hasattr(cumulants_y[2], "item") else cumulants_y[2]
 
             # Normalized fourth cumulants (excess kurtosis)
-            gamma2_x = kappa4_x / (var_x ** 2 + 1e-8)
-            gamma2_y = kappa4_y / (var_y ** 2 + 1e-8)
+            gamma2_x = kappa4_x / (var_x**2 + 1e-8)
+            gamma2_y = kappa4_y / (var_y**2 + 1e-8)
 
             # Correlation coefficient
             corr = cov_xy / (torch.sqrt(torch.tensor(var_x * var_y)) + 1e-8)
 
             # Second-order correction (simplified form)
-            correction += (1/24) * (corr ** 2) * (gamma2_x + gamma2_y)
+            correction += (1 / 24) * (corr**2) * (gamma2_x + gamma2_y)
 
             if 3 in cumulants_x and 3 in cumulants_y:
                 # Mixed term involving third cumulants
                 kappa3_x = cumulants_x[3].mean() if cumulants_x[3].numel() > 1 else cumulants_x[3].item()
-                kappa3_y = cumulants_y[3].item() if hasattr(cumulants_y[3], 'item') else cumulants_y[3]
-                gamma1_x = kappa3_x / (var_x ** 1.5 + 1e-8)
-                gamma1_y = kappa3_y / (var_y ** 1.5 + 1e-8)
-                correction += (1/72) * (gamma1_x ** 2 + gamma1_y ** 2)
+                kappa3_y = cumulants_y[3].item() if hasattr(cumulants_y[3], "item") else cumulants_y[3]
+                gamma1_x = kappa3_x / (var_x**1.5 + 1e-8)
+                gamma1_y = kappa3_y / (var_y**1.5 + 1e-8)
+                correction += (1 / 72) * (gamma1_x**2 + gamma1_y**2)
 
         if order >= 3:
             # Third-order corrections become quite complex
             # Here we provide a simplified version
             if 4 in cumulants_x and 4 in cumulants_y and 3 in cumulants_x and 3 in cumulants_y:
                 var_x = cumulants_x[2].mean() if cumulants_x[2].numel() > 1 else cumulants_x[2].item()
-                var_y = cumulants_y[2].item() if hasattr(cumulants_y[2], 'item') else cumulants_y[2]
+                var_y = cumulants_y[2].item() if hasattr(cumulants_y[2], "item") else cumulants_y[2]
                 corr = cov_xy / (torch.sqrt(torch.tensor(var_x * var_y)) + 1e-8)
 
                 kappa3_x = cumulants_x[3].mean() if cumulants_x[3].numel() > 1 else cumulants_x[3].item()
-                kappa3_y = cumulants_y[3].item() if hasattr(cumulants_y[3], 'item') else cumulants_y[3]
+                kappa3_y = cumulants_y[3].item() if hasattr(cumulants_y[3], "item") else cumulants_y[3]
                 kappa4_x = cumulants_x[4].mean() if cumulants_x[4].numel() > 1 else cumulants_x[4].item()
-                kappa4_y = cumulants_y[4].item() if hasattr(cumulants_y[4], 'item') else cumulants_y[4]
+                kappa4_y = cumulants_y[4].item() if hasattr(cumulants_y[4], "item") else cumulants_y[4]
 
-                gamma1_x = kappa3_x / (var_x ** 1.5 + 1e-8)
-                gamma1_y = kappa3_y / (var_y ** 1.5 + 1e-8)
-                gamma2_x = kappa4_x / (var_x ** 2 + 1e-8)
-                gamma2_y = kappa4_y / (var_y ** 2 + 1e-8)
+                gamma1_x = kappa3_x / (var_x**1.5 + 1e-8)
+                gamma1_y = kappa3_y / (var_y**1.5 + 1e-8)
+                gamma2_x = kappa4_x / (var_x**2 + 1e-8)
+                gamma2_y = kappa4_y / (var_y**2 + 1e-8)
 
                 # Third-order correction (highly simplified)
-                correction += (1/144) * corr * (gamma1_x * gamma2_y + gamma1_y * gamma2_x)
+                correction += (1 / 144) * corr * (gamma1_x * gamma2_y + gamma1_y * gamma2_x)
 
         # Convert to scalar if needed
-        if hasattr(correction, 'item'):
+        if hasattr(correction, "item"):
             correction = correction.item()
 
         return correction
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute Gaussian MI with non-Gaussian corrections.
 
@@ -328,9 +313,7 @@ class GaussianMIAnalytic(BaseMetric):
                     cumulants_y_single = self._compute_cumulants(y_single, self.expansion_order + 2)
                     cov_xy_single = cov_xy[:, i].unsqueeze(1)
 
-                    correction = self._edgeworth_correction(
-                        cumulants_x, cumulants_y_single, cov_xy_single.squeeze(), self.expansion_order
-                    )
+                    correction = self._edgeworth_correction(cumulants_x, cumulants_y_single, cov_xy_single.squeeze(), self.expansion_order)
                     avg_correction += correction
 
                 avg_correction = avg_correction / output_dim

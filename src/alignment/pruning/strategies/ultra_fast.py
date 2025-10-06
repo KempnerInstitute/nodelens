@@ -34,17 +34,10 @@ class UltraFastParallelPruning(BasePruningStrategy):
         # Save original states efficiently
         self.original_states = []
         for model in self.networks:
-            state = {name: module.weight.data.clone()
-                    for name, module in model.named_modules()
-                    if hasattr(module, 'weight')}
+            state = {name: module.weight.data.clone() for name, module in model.named_modules() if hasattr(module, "weight")}
             self.original_states.append(state)
 
-    def run_pruning_experiments(
-        self,
-        strategies: List[str],
-        selection_modes: List[str],
-        pruning_amounts: List[float]
-    ) -> Dict[str, Any]:
+    def run_pruning_experiments(self, strategies: List[str], selection_modes: List[str], pruning_amounts: List[float]) -> Dict[str, Any]:
         """Run ultra-fast parallel pruning experiments."""
         logger.info("Running ULTRA-FAST PARALLEL pruning experiments")
 
@@ -58,9 +51,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
                 logger.info(f"  Selection mode: {selection_mode}")
 
                 # Always use ultra-parallel implementation
-                batch_results = self._ultra_fast_parallel_pruning(
-                    strategy_name, selection_mode, pruning_amounts
-                )
+                batch_results = self._ultra_fast_parallel_pruning(strategy_name, selection_mode, pruning_amounts)
 
                 # Store results
                 strategy_key = f"{strategy_name}_{selection_mode}"
@@ -70,7 +61,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
                     "accuracies_after_finetune": batch_results["accuracies_after"].mean(dim=0).tolist(),
                     "losses_before_finetune": batch_results["losses_before"].mean(dim=0).tolist(),
                     "losses_after_finetune": batch_results["losses_after"].mean(dim=0).tolist(),
-                    "improvements": (batch_results["accuracies_after"] - batch_results["accuracies_before"]).mean(dim=0).tolist()
+                    "improvements": (batch_results["accuracies_after"] - batch_results["accuracies_before"]).mean(dim=0).tolist(),
                 }
 
                 # Add standard deviations if multiple networks
@@ -88,12 +79,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
 
         return results
 
-    def _ultra_fast_parallel_pruning(
-        self,
-        strategy_name: str,
-        selection_mode: str,
-        pruning_amounts: List[float]
-    ) -> Dict[str, torch.Tensor]:
+    def _ultra_fast_parallel_pruning(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> Dict[str, torch.Tensor]:
         """
         Ultra-fast version that processes all networks and pruning amounts truly in parallel.
         Uses a single forward pass per batch for ALL configurations.
@@ -106,7 +92,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
         logger.info(f"    Networks: {num_networks}, Sparsity levels: {num_amounts}")
 
         # Initialize result tensors on GPU for speed
-        device = self.config.device if hasattr(self.config, 'device') else 'cuda'
+        device = self.config.device if hasattr(self.config, "device") else "cuda"
         accuracies_before = torch.zeros(num_networks, num_amounts, device=device)
         losses_before = torch.zeros(num_networks, num_amounts, device=device)
         sparsities = torch.zeros(num_networks, num_amounts)
@@ -128,8 +114,8 @@ class UltraFastParallelPruning(BasePruningStrategy):
         for net in self.networks:
             net.eval()
 
-        criterion = nn.CrossEntropyLoss(reduction='none')
-        eval_batches = getattr(self.config, 'eval_batches', None) if hasattr(self.config, 'eval_batches') else None
+        criterion = nn.CrossEntropyLoss(reduction="none")
+        eval_batches = getattr(self.config, "eval_batches", None) if hasattr(self.config, "eval_batches") else None
         batch_count = 0
 
         with torch.no_grad():
@@ -161,10 +147,9 @@ class UltraFastParallelPruning(BasePruningStrategy):
 
                 # Compute losses for all configs at once
                 expanded_targets = targets.unsqueeze(0).expand(total_configs, -1)
-                all_batch_losses = criterion(
-                    stacked_outputs.reshape(-1, stacked_outputs.size(-1)),
-                    expanded_targets.reshape(-1)
-                ).reshape(total_configs, batch_size)
+                all_batch_losses = criterion(stacked_outputs.reshape(-1, stacked_outputs.size(-1)), expanded_targets.reshape(-1)).reshape(
+                    total_configs, batch_size
+                )
 
                 # Sum losses
                 all_loss += all_batch_losses.sum(dim=1)
@@ -206,7 +191,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
             "losses_before": losses_before,
             "accuracies_after": accuracies_after,
             "losses_after": losses_after,
-            "sparsities": sparsities
+            "sparsities": sparsities,
         }
 
     def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
@@ -215,12 +200,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
         # The actual importance computation happens in _create_all_masks
         return module.weight.data.abs()
 
-    def _create_all_masks(
-        self,
-        strategy_name: str,
-        selection_mode: str,
-        pruning_amounts: List[float]
-    ) -> List[List[Dict[str, torch.Tensor]]]:
+    def _create_all_masks(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> List[List[Dict[str, torch.Tensor]]]:
         """Create all masks for all networks and pruning amounts."""
         all_masks = []
 
@@ -244,21 +224,18 @@ class UltraFastParallelPruning(BasePruningStrategy):
 
         return all_masks
 
-    def _create_magnitude_masks(
-        self,
-        model: nn.Module,
-        amount: float,
-        selection_mode: str
-    ) -> Dict[str, torch.Tensor]:
+    def _create_magnitude_masks(self, model: nn.Module, amount: float, selection_mode: str) -> Dict[str, torch.Tensor]:
         """Create magnitude-based masks for a model."""
         masks = {}
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 weight = module.weight.data
                 importance = weight.abs()
 
-                structured = getattr(self.config, 'alignment_structured_pruning', True) if hasattr(self.config, 'alignment_structured_pruning') else True
+                structured = (
+                    getattr(self.config, "alignment_structured_pruning", True) if hasattr(self.config, "alignment_structured_pruning") else True
+                )
 
                 if structured and len(weight.shape) >= 2:
                     # Structured pruning - prune entire neurons
@@ -272,19 +249,17 @@ class UltraFastParallelPruning(BasePruningStrategy):
 
         return masks
 
-    def _create_random_masks(
-        self,
-        model: nn.Module,
-        amount: float
-    ) -> Dict[str, torch.Tensor]:
+    def _create_random_masks(self, model: nn.Module, amount: float) -> Dict[str, torch.Tensor]:
         """Create random masks for a model."""
         masks = {}
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 weight = module.weight.data
 
-                structured = getattr(self.config, 'alignment_structured_pruning', True) if hasattr(self.config, 'alignment_structured_pruning') else True
+                structured = (
+                    getattr(self.config, "alignment_structured_pruning", True) if hasattr(self.config, "alignment_structured_pruning") else True
+                )
 
                 if structured and len(weight.shape) >= 2:
                     # Structured random pruning
@@ -304,24 +279,14 @@ class UltraFastParallelPruning(BasePruningStrategy):
 
         return masks
 
-    def _create_alignment_masks(
-        self,
-        model: nn.Module,
-        amount: float,
-        selection_mode: str
-    ) -> Dict[str, torch.Tensor]:
+    def _create_alignment_masks(self, model: nn.Module, amount: float, selection_mode: str) -> Dict[str, torch.Tensor]:
         """Create alignment-based masks (simplified for speed)."""
         # For ultra-fast mode, we'll use a simplified alignment metric
         # based on weight magnitudes weighted by gradient magnitudes
         # (Full alignment computation would require forward passes)
         return self._create_magnitude_masks(model, amount, selection_mode)
 
-    def _create_mask(
-        self,
-        importance: torch.Tensor,
-        amount: float,
-        selection_mode: str
-    ) -> torch.Tensor:
+    def _create_mask(self, importance: torch.Tensor, amount: float, selection_mode: str) -> torch.Tensor:
         """Create a binary mask based on importance scores."""
         if amount == 0:
             return torch.ones_like(importance)
@@ -347,13 +312,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
 
         return mask.float()
 
-    def _create_structured_mask(
-        self,
-        neuron_importance: torch.Tensor,
-        amount: float,
-        selection_mode: str,
-        weight_shape: torch.Size
-    ) -> torch.Tensor:
+    def _create_structured_mask(self, neuron_importance: torch.Tensor, amount: float, selection_mode: str, weight_shape: torch.Size) -> torch.Tensor:
         """Create a structured mask that prunes entire neurons."""
         num_neurons = neuron_importance.numel()
         num_to_prune = int(amount * num_neurons)
@@ -388,12 +347,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
 
         return mask
 
-    def _apply_mask_config(
-        self,
-        model: nn.Module,
-        masks: Dict[str, torch.Tensor],
-        original_state: Dict[str, torch.Tensor]
-    ):
+    def _apply_mask_config(self, model: nn.Module, masks: Dict[str, torch.Tensor], original_state: Dict[str, torch.Tensor]):
         """Apply masks to a model after restoring original weights."""
         with torch.no_grad():
             for name, module in model.named_modules():
@@ -411,7 +365,7 @@ class UltraFastParallelPruning(BasePruningStrategy):
         zero_params = 0
 
         for module in model.modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 weight = module.weight.data
                 total_params += weight.numel()
                 zero_params += (weight == 0).sum().item()

@@ -47,13 +47,7 @@ class CascadingAlignmentPruning(BasePruningStrategy):
         >>> masks = strategy.prune_model(model, get_layer_inputs_fn)
     """
 
-    def __init__(
-        self,
-        metric: str = 'rayleigh_quotient',
-        direction: str = 'forward',
-        config: Optional[PruningConfig] = None,
-        **metric_kwargs
-    ):
+    def __init__(self, metric: str = "rayleigh_quotient", direction: str = "forward", config: Optional[PruningConfig] = None, **metric_kwargs):
         """
         Initialize cascading alignment pruning.
 
@@ -69,7 +63,7 @@ class CascadingAlignmentPruning(BasePruningStrategy):
         self.metric_kwargs = metric_kwargs
 
         # Default to structured pruning
-        if config and not hasattr(config, 'structured'):
+        if config and not hasattr(config, "structured"):
             config.structured = True
 
         # Initialize metric
@@ -82,12 +76,7 @@ class CascadingAlignmentPruning(BasePruningStrategy):
             logger.error(f"Failed to initialize metric {metric}: {e}")
             raise
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute alignment scores for a single module.
 
@@ -99,7 +88,7 @@ class CascadingAlignmentPruning(BasePruningStrategy):
         Returns:
             Alignment scores (neuron-wise)
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         if inputs is None:
@@ -116,11 +105,7 @@ class CascadingAlignmentPruning(BasePruningStrategy):
         return alignment_scores
 
     def prune_model(
-        self,
-        model: nn.Module,
-        get_layer_inputs_fn: callable,
-        amount: Optional[float] = None,
-        exclude_layers: Optional[List[str]] = None
+        self, model: nn.Module, get_layer_inputs_fn: callable, amount: Optional[float] = None, exclude_layers: Optional[List[str]] = None
     ) -> Dict[str, torch.Tensor]:
         """
         Prune model using cascading approach.
@@ -141,13 +126,11 @@ class CascadingAlignmentPruning(BasePruningStrategy):
         # Get prunable layers in order
         layers = []
         for name, module in model.named_modules():
-            if (hasattr(module, 'weight') and
-                len(module.weight.shape) >= 2 and
-                name not in exclude_layers):
+            if hasattr(module, "weight") and len(module.weight.shape) >= 2 and name not in exclude_layers:
                 layers.append((name, module))
 
         # Reverse if backward direction
-        if self.direction == 'backward':
+        if self.direction == "backward":
             layers = layers[::-1]
 
         logger.info(f"Cascading {self.direction} pruning of {len(layers)} layers")
@@ -181,7 +164,7 @@ class CascadingAlignmentPruning(BasePruningStrategy):
                     mask = torch.ones_like(module.weight)
                 else:
                     # Get neurons to prune based on mode
-                    if self.config.pruning_mode == 'low':
+                    if self.config.pruning_mode == "low":
                         threshold = alignment_scores.kthvalue(k).values
                         keep_mask = alignment_scores > threshold
                     else:  # 'high' mode
@@ -211,10 +194,10 @@ class CascadingAlignmentPruning(BasePruningStrategy):
         """Get layers in processing order based on direction."""
         layers = []
         for name, module in model.named_modules():
-            if hasattr(module, 'weight') and len(module.weight.shape) >= 2:
+            if hasattr(module, "weight") and len(module.weight.shape) >= 2:
                 layers.append((name, module))
 
-        if self.direction == 'backward':
+        if self.direction == "backward":
             layers = layers[::-1]
 
         return layers

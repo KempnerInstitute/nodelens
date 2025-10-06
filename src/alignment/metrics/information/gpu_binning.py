@@ -1,4 +1,3 @@
-
 from typing import Optional, Tuple, Union
 
 import torch
@@ -7,21 +6,18 @@ import torch
 class GPUBinning:
     """GPU-accelerated binning operations using PyTorch operations."""
 
-    def __init__(self, device: str = 'cuda'):
+    def __init__(self, device: str = "cuda"):
         """
         Initialize GPU binning.
 
         Args:
             device: Device to use ('cuda' or 'cpu')
         """
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
 
     @staticmethod
     @torch.jit.script
-    def _compute_bin_indices_1d(data: torch.Tensor,
-                                min_val: float,
-                                max_val: float,
-                                n_bins: int) -> torch.Tensor:
+    def _compute_bin_indices_1d(data: torch.Tensor, min_val: float, max_val: float, n_bins: int) -> torch.Tensor:
         """JIT-compiled function to compute 1D bin indices."""
         # Normalize to [0, 1]
         normalized = (data - min_val) / (max_val - min_val + 1e-10)
@@ -31,11 +27,9 @@ class GPUBinning:
         indices = (normalized * n_bins).long()
         return indices
 
-    def fast_histogram_1d(self,
-                         data: torch.Tensor,
-                         n_bins: int = 256,
-                         range_min: Optional[float] = None,
-                         range_max: Optional[float] = None) -> torch.Tensor:
+    def fast_histogram_1d(
+        self, data: torch.Tensor, n_bins: int = 256, range_min: Optional[float] = None, range_max: Optional[float] = None
+    ) -> torch.Tensor:
         """
         Compute 1D histogram on GPU.
 
@@ -66,10 +60,7 @@ class GPUBinning:
 
         return hist
 
-    def fast_histogram_2d(self,
-                         data_x: torch.Tensor,
-                         data_y: torch.Tensor,
-                         n_bins: Union[int, Tuple[int, int]] = 64) -> torch.Tensor:
+    def fast_histogram_2d(self, data_x: torch.Tensor, data_y: torch.Tensor, n_bins: Union[int, Tuple[int, int]] = 64) -> torch.Tensor:
         """
         Compute 2D histogram on GPU.
 
@@ -107,10 +98,7 @@ class GPUBinning:
 
         return hist.view(n_bins_y, n_bins_x)
 
-    def mutual_information_gpu(self,
-                              x: torch.Tensor,
-                              y: torch.Tensor,
-                              n_bins: int = 64) -> float:
+    def mutual_information_gpu(self, x: torch.Tensor, y: torch.Tensor, n_bins: int = 64) -> float:
         """
         Compute mutual information using GPU-accelerated binning.
 

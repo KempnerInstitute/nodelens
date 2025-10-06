@@ -26,12 +26,7 @@ class MutualInformationGaussian(BaseMetric):
     where ρ is the correlation coefficient.
     """
 
-    def __init__(
-        self,
-        use_pc_reference: bool = True,
-        min_samples: int = 2,
-        **config: Any
-    ):
+    def __init__(self, use_pc_reference: bool = True, min_samples: int = 2, **config: Any):
         """
         Initialize the Gaussian MI metric.
 
@@ -62,7 +57,7 @@ class MutualInformationGaussian(BaseMetric):
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
         target_outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute Gaussian MI for each output neuron.
@@ -132,7 +127,7 @@ class MutualInformationGaussian(BaseMetric):
 
         # Compute correlation matrix between outputs and refs: [N, K]
         # corr = (z_outputs^T @ z_refs) / (B-1)
-        denom = (batch_size - 1)
+        denom = batch_size - 1
         if self._should_use_cpu(z_outputs, z_refs):
             z_outputs = z_outputs.cpu()
             z_refs = z_refs.cpu()
@@ -158,12 +153,7 @@ class MutualInformationBinning(BaseMetric):
     through histogram binning of continuous values.
     """
 
-    def __init__(
-        self,
-        bins: int = 10,
-        min_samples: int = 50,
-        **config: Any
-    ):
+    def __init__(self, bins: int = 10, min_samples: int = 50, **config: Any):
         """
         Initialize the binning MI metric.
 
@@ -194,7 +184,7 @@ class MutualInformationBinning(BaseMetric):
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
         target_outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute binning-based MI for each output neuron.
@@ -259,9 +249,7 @@ class MutualInformationBinning(BaseMetric):
                 ref_k_np = current_ref_np[:, k]
 
                 # Bin the data
-                hist_2d, x_edges, y_edges = np.histogram2d(
-                    neuron_i_np, ref_k_np, bins=self.bins
-                )
+                hist_2d, x_edges, y_edges = np.histogram2d(neuron_i_np, ref_k_np, bins=self.bins)
 
                 # Convert to probabilities
                 joint_p = hist_2d / batch_size
@@ -273,9 +261,7 @@ class MutualInformationBinning(BaseMetric):
                 for xi in range(self.bins):
                     for yi in range(self.bins):
                         if joint_p[xi, yi] > 1e-12 and p_x[xi] > 1e-12 and p_y[yi] > 1e-12:
-                            mi_val += joint_p[xi, yi] * np.log(
-                                joint_p[xi, yi] / (p_x[xi] * p_y[yi])
-                            )
+                            mi_val += joint_p[xi, yi] * np.log(joint_p[xi, yi] / (p_x[xi] * p_y[yi]))
 
                 mi_sum += mi_val
                 valid_refs += 1
@@ -302,7 +288,7 @@ class ConditionalMutualInformation(MutualInformationGaussian):
         outputs: Optional[torch.Tensor] = None,
         target_outputs: Optional[torch.Tensor] = None,
         condition_on: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute conditional MI: I(outputs; target | condition).
@@ -322,25 +308,13 @@ class ConditionalMutualInformation(MutualInformationGaussian):
         # This is a simplified implementation
 
         # Regular MI between outputs and targets
-        mi_xy = super().compute(
-            outputs=outputs,
-            target_outputs=target_outputs,
-            **kwargs
-        )
+        mi_xy = super().compute(outputs=outputs, target_outputs=target_outputs, **kwargs)
 
         # MI between outputs and condition
-        mi_xz = super().compute(
-            outputs=outputs,
-            target_outputs=condition_on,
-            **kwargs
-        )
+        mi_xz = super().compute(outputs=outputs, target_outputs=condition_on, **kwargs)
 
         # MI between targets and condition
-        mi_yz = super().compute(
-            outputs=target_outputs,
-            target_outputs=condition_on,
-            **kwargs
-        )
+        mi_yz = super().compute(outputs=target_outputs, target_outputs=condition_on, **kwargs)
 
         # Approximate CMI (this is simplified - proper implementation would use
         # partial correlations or multivariate Gaussian formulas)

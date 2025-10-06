@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CompositeScores:
     """Container for multi-metric scores."""
+
     rq: Optional[torch.Tensor] = None
     mi: Optional[torch.Tensor] = None
     redundancy: Optional[torch.Tensor] = None
@@ -49,12 +50,7 @@ class NodeScoringService:
     """
 
     def __init__(
-        self,
-        metrics: Dict[str, Any],
-        alpha_mi: float = 0.3,
-        beta_synergy: float = 0.2,
-        gamma_redundancy: float = 0.3,
-        delta_rq: float = 0.2
+        self, metrics: Dict[str, Any], alpha_mi: float = 0.3, beta_synergy: float = 0.2, gamma_redundancy: float = 0.3, delta_rq: float = 0.2
     ):
         """
         Initialize node scoring service.
@@ -90,7 +86,7 @@ class NodeScoringService:
         include_redundancy: bool = True,
         include_synergy: bool = True,
         layer_name: Optional[str] = None,
-        **metric_kwargs
+        **metric_kwargs,
     ) -> CompositeScores:
         """
         Compute composite importance scores for all neurons in a layer.
@@ -114,57 +110,36 @@ class NodeScoringService:
         scores = CompositeScores(layer_name=layer_name)
 
         # 1. Compute RQ (always available)
-        if 'rq' in self.metrics:
+        if "rq" in self.metrics:
             try:
-                scores.rq = self.metrics['rq'].compute(
-                    inputs=inputs,
-                    weights=weights,
-                    targets=targets,
-                    **metric_kwargs
-                )
+                scores.rq = self.metrics["rq"].compute(inputs=inputs, weights=weights, targets=targets, **metric_kwargs)
                 logger.debug(f"RQ computed: shape={scores.rq.shape}")
             except Exception as e:
                 logger.warning(f"Failed to compute RQ: {e}")
                 scores.rq = torch.zeros(num_neurons, device=device)
 
         # 2. Compute MI (if targets available)
-        if 'mi' in self.metrics and targets is not None:
+        if "mi" in self.metrics and targets is not None:
             try:
-                scores.mi = self.metrics['mi'].compute(
-                    inputs=inputs,
-                    weights=weights,
-                    targets=targets,
-                    outputs=outputs,
-                    **metric_kwargs
-                )
+                scores.mi = self.metrics["mi"].compute(inputs=inputs, weights=weights, targets=targets, outputs=outputs, **metric_kwargs)
                 logger.debug(f"MI computed: shape={scores.mi.shape}")
             except Exception as e:
                 logger.warning(f"Failed to compute MI: {e}")
                 scores.mi = torch.zeros(num_neurons, device=device)
 
         # 3. Compute Redundancy (if requested and metric available)
-        if include_redundancy and 'redundancy' in self.metrics:
+        if include_redundancy and "redundancy" in self.metrics:
             try:
-                scores.redundancy = self.metrics['redundancy'].compute(
-                    inputs=inputs,
-                    weights=weights,
-                    **metric_kwargs
-                )
+                scores.redundancy = self.metrics["redundancy"].compute(inputs=inputs, weights=weights, **metric_kwargs)
                 logger.debug(f"Redundancy computed: shape={scores.redundancy.shape}")
             except Exception as e:
                 logger.warning(f"Failed to compute redundancy: {e}")
                 scores.redundancy = torch.zeros(num_neurons, device=device)
 
         # 4. Compute Synergy (if requested, targets available, and metric available)
-        if include_synergy and targets is not None and 'synergy' in self.metrics:
+        if include_synergy and targets is not None and "synergy" in self.metrics:
             try:
-                scores.synergy = self.metrics['synergy'].compute(
-                    inputs=inputs,
-                    weights=weights,
-                    targets=targets,
-                    outputs=outputs,
-                    **metric_kwargs
-                )
+                scores.synergy = self.metrics["synergy"].compute(inputs=inputs, weights=weights, targets=targets, outputs=outputs, **metric_kwargs)
                 logger.debug(f"Synergy computed: shape={scores.synergy.shape}")
             except Exception as e:
                 logger.warning(f"Failed to compute synergy: {e}")
@@ -175,12 +150,7 @@ class NodeScoringService:
 
         return scores
 
-    def _compute_composite(
-        self,
-        scores: CompositeScores,
-        num_neurons: int,
-        device: torch.device
-    ) -> torch.Tensor:
+    def _compute_composite(self, scores: CompositeScores, num_neurons: int, device: torch.device) -> torch.Tensor:
         """
         Compute weighted combination of individual scores.
 
@@ -246,7 +216,7 @@ class NodeScoringService:
         activation_data,  # ActivationData from capture service
         targets: Optional[torch.Tensor] = None,
         layers: Optional[List[str]] = None,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, CompositeScores]:
         """
         Compute composite scores for multiple layers.
@@ -276,14 +246,11 @@ class NodeScoringService:
                     targets=targets,
                     outputs=activation_data.outputs.get(layer),
                     layer_name=layer,
-                    **kwargs
+                    **kwargs,
                 )
                 layerwise_scores[layer] = scores
 
-                logger.info(
-                    f"Layer {layer}: composite score range "
-                    f"[{scores.composite.min():.4f}, {scores.composite.max():.4f}]"
-                )
+                logger.info(f"Layer {layer}: composite score range " f"[{scores.composite.min():.4f}, {scores.composite.max():.4f}]")
 
             except Exception as e:
                 logger.error(f"Failed to score layer {layer}: {e}")
@@ -291,9 +258,7 @@ class NodeScoringService:
         return layerwise_scores
 
     def rank_neurons_globally(
-        self,
-        layerwise_scores: Dict[str, CompositeScores],
-        return_indices: bool = False
+        self, layerwise_scores: Dict[str, CompositeScores], return_indices: bool = False
     ) -> Tuple[List[Tuple[str, int, float]], Optional[Dict]]:
         """
         Rank all neurons across all layers by composite score.
@@ -331,10 +296,7 @@ class NodeScoringService:
         return all_neurons, indices_dict
 
 
-def create_scoring_service(
-    metrics: Dict[str, Any],
-    **weights
-) -> NodeScoringService:
+def create_scoring_service(metrics: Dict[str, Any], **weights) -> NodeScoringService:
     """
     Factory function for creating NodeScoringService.
 
@@ -346,4 +308,3 @@ def create_scoring_service(
         Configured NodeScoringService
     """
     return NodeScoringService(metrics, **weights)
-

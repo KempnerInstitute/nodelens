@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ActivationData:
     """Container for captured activations and weights."""
+
     inputs: Dict[str, torch.Tensor]
     outputs: Dict[str, torch.Tensor]
     weights: Dict[str, torch.Tensor]
@@ -40,12 +41,7 @@ class ActivationCaptureService:
         >>> print(data.outputs['conv1'].shape)
     """
 
-    def __init__(
-        self,
-        model_wrapper: Any,  # BaseModelWrapper or similar
-        default_mode: str = 'flatten',
-        conv_spatial: str = 'patchwise'
-    ):
+    def __init__(self, model_wrapper: Any, default_mode: str = "flatten", conv_spatial: str = "patchwise"):  # BaseModelWrapper or similar
         """
         Initialize activation capture service.
 
@@ -64,7 +60,7 @@ class ActivationCaptureService:
         layers: Optional[List[str]] = None,
         mode: Optional[str] = None,
         include_weights: bool = True,
-        preprocess: bool = True
+        preprocess: bool = True,
     ) -> ActivationData:
         """
         Capture activations and weights for specified layers.
@@ -84,9 +80,7 @@ class ActivationCaptureService:
 
         # Capture activations using model wrapper
         try:
-            output, activations = self.model_wrapper.forward_with_activations(
-                input_batch, layers=layers
-            )
+            output, activations = self.model_wrapper.forward_with_activations(input_batch, layers=layers)
         except Exception as e:
             logger.error(f"Failed to capture activations: {e}")
             raise
@@ -113,19 +107,10 @@ class ActivationCaptureService:
         if include_weights:
             weights = self.model_wrapper.get_layer_weights(layers=layers)
 
-        return ActivationData(
-            inputs=inputs,
-            outputs=outputs,
-            weights=weights,
-            layer_names=layers
-        )
+        return ActivationData(inputs=inputs, outputs=outputs, weights=weights, layer_names=layers)
 
     def capture_batch_aggregated(
-        self,
-        dataloader,
-        layers: Optional[List[str]] = None,
-        max_batches: Optional[int] = None,
-        aggregation: str = 'concatenate'
+        self, dataloader, layers: Optional[List[str]] = None, max_batches: Optional[int] = None, aggregation: str = "concatenate"
     ) -> ActivationData:
         """
         Capture activations across multiple batches with aggregation.
@@ -152,11 +137,7 @@ class ActivationCaptureService:
             inputs = inputs.to(next(self.model_wrapper.model.parameters()).device)
 
             # Capture
-            data = self.capture(
-                inputs,
-                layers=layers,
-                include_weights=(batch_idx == 0)  # Only get weights once
-            )
+            data = self.capture(inputs, layers=layers, include_weights=(batch_idx == 0))  # Only get weights once
 
             # Accumulate
             for layer in layers:
@@ -166,43 +147,22 @@ class ActivationCaptureService:
                     all_outputs[layer].append(data.outputs[layer])
 
         # Aggregate
-        if aggregation == 'concatenate':
-            aggregated_inputs = {
-                layer: torch.cat(tensors, dim=0)
-                for layer, tensors in all_inputs.items() if tensors
-            }
-            aggregated_outputs = {
-                layer: torch.cat(tensors, dim=0)
-                for layer, tensors in all_outputs.items() if tensors
-            }
-        elif aggregation == 'mean':
-            aggregated_inputs = {
-                layer: torch.stack(tensors, dim=0).mean(dim=0)
-                for layer, tensors in all_inputs.items() if tensors
-            }
-            aggregated_outputs = {
-                layer: torch.stack(tensors, dim=0).mean(dim=0)
-                for layer, tensors in all_outputs.items() if tensors
-            }
+        if aggregation == "concatenate":
+            aggregated_inputs = {layer: torch.cat(tensors, dim=0) for layer, tensors in all_inputs.items() if tensors}
+            aggregated_outputs = {layer: torch.cat(tensors, dim=0) for layer, tensors in all_outputs.items() if tensors}
+        elif aggregation == "mean":
+            aggregated_inputs = {layer: torch.stack(tensors, dim=0).mean(dim=0) for layer, tensors in all_inputs.items() if tensors}
+            aggregated_outputs = {layer: torch.stack(tensors, dim=0).mean(dim=0) for layer, tensors in all_outputs.items() if tensors}
         else:  # 'none'
             aggregated_inputs = all_inputs
             aggregated_outputs = all_outputs
 
         # Get weights from first batch
-        weights = data.weights if 'data' in locals() else {}
+        weights = data.weights if "data" in locals() else {}
 
-        return ActivationData(
-            inputs=aggregated_inputs,
-            outputs=aggregated_outputs,
-            weights=weights,
-            layer_names=layers
-        )
+        return ActivationData(inputs=aggregated_inputs, outputs=aggregated_outputs, weights=weights, layer_names=layers)
 
-    def _preprocess_activations(
-        self,
-        activations: Dict[str, torch.Tensor],
-        mode: str
-    ) -> Dict[str, torch.Tensor]:
+    def _preprocess_activations(self, activations: Dict[str, torch.Tensor], mode: str) -> Dict[str, torch.Tensor]:
         """
         Preprocess activations based on mode.
 
@@ -213,23 +173,23 @@ class ActivationCaptureService:
         Returns:
             Preprocessed activations
         """
-        if mode == 'none':
+        if mode == "none":
             return activations
 
         processed = {}
         for name, tensor in activations.items():
-            if mode == 'flatten':
+            if mode == "flatten":
                 # Flatten to [batch, features]
                 if tensor.ndim > 2:
                     processed[name] = tensor.reshape(tensor.shape[0], -1)
                 else:
                     processed[name] = tensor
 
-            elif mode == 'preserve_spatial':
+            elif mode == "preserve_spatial":
                 # Keep original shape
                 processed[name] = tensor
 
-            elif mode == 'patchwise':
+            elif mode == "patchwise":
                 # For Conv: [B, C, H, W] -> [B, C, H*W]
                 if tensor.ndim == 4:  # Conv2d
                     B, C, H, W = tensor.shape
@@ -251,7 +211,7 @@ class ActivationCaptureService:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Cleanup on exit."""
-        if hasattr(self.model_wrapper, 'hook_manager'):
+        if hasattr(self.model_wrapper, "hook_manager"):
             self.model_wrapper.hook_manager.cleanup()
         return False
 
@@ -268,4 +228,3 @@ def create_capture_service(model_wrapper, **config) -> ActivationCaptureService:
         Configured ActivationCaptureService
     """
     return ActivationCaptureService(model_wrapper, **config)
-

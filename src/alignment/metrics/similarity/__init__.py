@@ -13,10 +13,10 @@ from .weight_similarity import (
 )
 
 __all__ = [
-    'ActivationCosineSimilarity',
-    'NodeRedundancy',
-    'WeightCosineSimilarity',
-    'WeightDotSimilarity',
-    'WeightEuclideanDistance',
-    'NodeCorrelation',
+    "ActivationCosineSimilarity",
+    "NodeRedundancy",
+    "WeightCosineSimilarity",
+    "WeightDotSimilarity",
+    "WeightEuclideanDistance",
+    "NodeCorrelation",
 ]

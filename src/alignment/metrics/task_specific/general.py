@@ -25,12 +25,7 @@ class TaskAlignment(BaseMetric):
     requires_weights = True
     requires_outputs = False
 
-    def __init__(
-        self,
-        task_loss_fn: Optional[Callable] = None,
-        alignment_type: str = "gradient",
-        normalize: bool = True
-    ):
+    def __init__(self, task_loss_fn: Optional[Callable] = None, alignment_type: str = "gradient", normalize: bool = True):
         """
         Initialize task alignment metric.
 
@@ -45,12 +40,7 @@ class TaskAlignment(BaseMetric):
         self.normalize = normalize
 
     def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        targets: Optional[torch.Tensor] = None,
-        **kwargs
+        self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, targets: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute task-specific alignment scores.
@@ -142,12 +132,7 @@ class ClassSelectivity(BaseMetric):
     requires_weights = True
     requires_outputs = False
 
-    def __init__(
-        self,
-        n_classes: Optional[int] = None,
-        selectivity_type: str = "variance",
-        temperature: float = 1.0
-    ):
+    def __init__(self, n_classes: Optional[int] = None, selectivity_type: str = "variance", temperature: float = 1.0):
         """
         Initialize class selectivity metric.
 
@@ -162,12 +147,7 @@ class ClassSelectivity(BaseMetric):
         self.temperature = temperature
 
     def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        **kwargs
+        self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute class selectivity scores.
@@ -266,12 +246,7 @@ class FeatureImportance(BaseMetric):
     requires_weights = True
     requires_outputs = False
 
-    def __init__(
-        self,
-        importance_method: str = "permutation",
-        n_permutations: int = 10,
-        task_metric: Optional[Callable] = None
-    ):
+    def __init__(self, importance_method: str = "permutation", n_permutations: int = 10, task_metric: Optional[Callable] = None):
         """
         Initialize feature importance metric.
 
@@ -290,12 +265,7 @@ class FeatureImportance(BaseMetric):
         return -F.mse_loss(outputs, targets).item()
 
     def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        targets: Optional[torch.Tensor] = None,
-        **kwargs
+        self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, targets: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute feature importance scores.
@@ -373,12 +343,7 @@ class RepresentationQuality(BaseMetric):
     requires_weights = True
     requires_outputs = False
 
-    def __init__(
-        self,
-        quality_measure: str = "linear_probe",
-        probe_type: str = "ridge",
-        regularization: float = 1.0
-    ):
+    def __init__(self, quality_measure: str = "linear_probe", probe_type: str = "ridge", regularization: float = 1.0):
         """
         Initialize representation quality metric.
 
@@ -393,12 +358,7 @@ class RepresentationQuality(BaseMetric):
         self.regularization = regularization
 
     def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        targets: Optional[torch.Tensor] = None,
-        **kwargs
+        self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, targets: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute representation quality scores.

@@ -38,11 +38,7 @@ class NodeCorrelation(BaseMetric):
 
     @torch.no_grad()
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute node correlation scores.
@@ -130,9 +126,7 @@ class NodeCorrelation(BaseMetric):
             # Only compute correlation for neurons with non-zero variance
             valid_indices = torch.where(valid_mask)[0]
             outer_std = torch.outer(std[valid_mask], std[valid_mask])
-            corr[valid_indices[:, None], valid_indices] = (
-                cov[valid_indices[:, None], valid_indices] / outer_std
-            )
+            corr[valid_indices[:, None], valid_indices] = cov[valid_indices[:, None], valid_indices] / outer_std
 
         # Set diagonal to 1 for valid neurons
         corr.diagonal().copy_(valid_mask.float())

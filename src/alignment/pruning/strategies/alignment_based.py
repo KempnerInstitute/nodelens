@@ -50,12 +50,7 @@ class AlignmentPruning(BasePruningStrategy):
         >>> mask = strategy.prune(layer, inputs=inputs)
     """
 
-    def __init__(
-        self,
-        metric: str = 'rayleigh_quotient',
-        config=None,
-        **metric_kwargs
-    ):
+    def __init__(self, metric: str = "rayleigh_quotient", config=None, **metric_kwargs):
         """
         Initialize alignment-based pruning strategy.
 
@@ -72,7 +67,7 @@ class AlignmentPruning(BasePruningStrategy):
         self.metric_kwargs = metric_kwargs
 
         # Default to structured pruning for alignment-based methods
-        if config and not hasattr(config, 'structured'):
+        if config and not hasattr(config, "structured"):
             logger.info("AlignmentPruning defaulting to structured=True (neuron pruning)")
             config.structured = True
 
@@ -87,12 +82,7 @@ class AlignmentPruning(BasePruningStrategy):
             logger.error(f"Failed to initialize metric {metric}: {e}")
             raise
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute importance scores based on alignment metrics.
 
@@ -115,14 +105,11 @@ class AlignmentPruning(BasePruningStrategy):
         Raises:
             ValueError: If inputs are not provided or module has no weights
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         if inputs is None:
-            raise ValueError(
-                "AlignmentPruning requires inputs to compute alignment. "
-                "Pass inputs to the prune() method."
-            )
+            raise ValueError("AlignmentPruning requires inputs to compute alignment. " "Pass inputs to the prune() method.")
 
         weights = module.weight.data
 
@@ -156,13 +143,7 @@ class AlignmentPruning(BasePruningStrategy):
 
         return importance
 
-    def prune(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        amount: Optional[float] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def prune(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, amount: Optional[float] = None, **kwargs) -> torch.Tensor:
         """
         Prune module based on alignment scores.
 
@@ -194,12 +175,12 @@ class AlignmentPruning(BasePruningStrategy):
                 return torch.ones_like(weights)
 
             # Handle different pruning modes
-            if self.config.pruning_mode == 'random':
+            if self.config.pruning_mode == "random":
                 # Random selection of neurons to prune
                 indices = torch.randperm(importance_scores.numel(), device=importance_scores.device)[:k]
                 keep_mask = torch.ones(importance_scores.numel(), dtype=torch.bool, device=importance_scores.device)
                 keep_mask[indices] = False
-            elif self.config.pruning_mode == 'low':
+            elif self.config.pruning_mode == "low":
                 # Prune neurons with lowest scores
                 threshold = importance_scores.kthvalue(k).values
                 keep_mask = importance_scores > threshold
@@ -245,13 +226,7 @@ class HybridPruning(BasePruningStrategy):
         >>> mask = strategy.prune(layer, inputs=inputs, amount=0.5)
     """
 
-    def __init__(
-        self,
-        alignment_metric: str = 'rayleigh_quotient',
-        alpha: float = 0.5,
-        config=None,
-        **metric_kwargs
-    ):
+    def __init__(self, alignment_metric: str = "rayleigh_quotient", alpha: float = 0.5, config=None, **metric_kwargs):
         """
         Initialize hybrid pruning strategy.
 
@@ -270,6 +245,7 @@ class HybridPruning(BasePruningStrategy):
         # Initialize the alignment metric
         try:
             from ...metrics import get_metric
+
             metric_class = get_metric(alignment_metric)
             if metric_class is None:
                 raise ValueError(f"Alignment metric '{alignment_metric}' not found in registry")
@@ -279,12 +255,7 @@ class HybridPruning(BasePruningStrategy):
             logger.error(f"Failed to initialize metric {alignment_metric}: {e}")
             raise
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute importance scores combining magnitude and alignment.
 
@@ -296,7 +267,7 @@ class HybridPruning(BasePruningStrategy):
         Returns:
             Combined importance scores
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         weights = module.weight.data
@@ -338,10 +309,7 @@ class HybridPruning(BasePruningStrategy):
             alignment_importance = (alignment_importance - align_min) / (align_max - align_min)
 
         # Combine scores
-        combined_importance = (
-            self.alpha * alignment_importance +
-            (1 - self.alpha) * magnitude_importance
-        )
+        combined_importance = self.alpha * alignment_importance + (1 - self.alpha) * magnitude_importance
 
         return combined_importance
 
@@ -372,19 +340,14 @@ class GlobalAlignmentPruning(AlignmentPruning):
         >>> masks = strategy.prune_model(model, layer_inputs_dict)
     """
 
-    def __init__(self, metric: str = 'rayleigh_quotient', config=None, **metric_kwargs):
+    def __init__(self, metric: str = "rayleigh_quotient", config=None, **metric_kwargs):
         """Initialize global alignment pruning strategy."""
         super().__init__(metric, config, **metric_kwargs)
         # Ensure global pruning is enabled
         if self.config:
             self.config.global_pruning = True
 
-    def prune_model(
-        self,
-        model: nn.Module,
-        layer_inputs: Dict[str, torch.Tensor],
-        amount: Optional[float] = None
-    ) -> Dict[str, torch.Tensor]:
+    def prune_model(self, model: nn.Module, layer_inputs: Dict[str, torch.Tensor], amount: Optional[float] = None) -> Dict[str, torch.Tensor]:
         """
         Prune entire model globally based on alignment scores.
 
@@ -403,7 +366,7 @@ class GlobalAlignmentPruning(AlignmentPruning):
         layer_info = []
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight') and name in layer_inputs:
+            if hasattr(module, "weight") and name in layer_inputs:
                 # Compute alignment scores for this layer
                 inputs = layer_inputs[name]
                 weights = module.weight.data
@@ -413,13 +376,15 @@ class GlobalAlignmentPruning(AlignmentPruning):
 
                 # Store scores and info
                 all_scores.append(alignment_scores.cpu())
-                layer_info.append({
-                    'name': name,
-                    'module': module,
-                    'scores': alignment_scores,
-                    'num_neurons': alignment_scores.numel(),
-                    'weight_shape': weights.shape
-                })
+                layer_info.append(
+                    {
+                        "name": name,
+                        "module": module,
+                        "scores": alignment_scores,
+                        "num_neurons": alignment_scores.numel(),
+                        "weight_shape": weights.shape,
+                    }
+                )
 
         if not all_scores:
             logger.warning("No layers found for global pruning")
@@ -434,15 +399,15 @@ class GlobalAlignmentPruning(AlignmentPruning):
             return {}
 
         # Get indices to prune based on pruning mode
-        if self.config.pruning_mode == 'low':
+        if self.config.pruning_mode == "low":
             # Prune neurons with lowest alignment
             _, sorted_indices = torch.sort(global_scores)
             prune_indices = sorted_indices[:k]
-        elif self.config.pruning_mode == 'high':
+        elif self.config.pruning_mode == "high":
             # Prune neurons with highest alignment
             _, sorted_indices = torch.sort(global_scores, descending=True)
             prune_indices = sorted_indices[:k]
-        elif self.config.pruning_mode == 'random':
+        elif self.config.pruning_mode == "random":
             # Randomly prune k neurons globally
             prune_indices = torch.randperm(global_scores.numel())[:k]
         else:
@@ -454,7 +419,7 @@ class GlobalAlignmentPruning(AlignmentPruning):
         running = 0
         for layer in layer_info:
             prefix_counts.append(running)
-            running += layer['num_neurons']
+            running += layer["num_neurons"]
         prefix_counts.append(running)
 
         # For each layer, select indices that fall into its range
@@ -465,29 +430,26 @@ class GlobalAlignmentPruning(AlignmentPruning):
             layer_global = prune_indices[in_layer_mask]
             local_indices = (layer_global - start).to(torch.long)
 
-            num_neurons = layer['num_neurons']
+            num_neurons = layer["num_neurons"]
             layer_prune_mask = torch.zeros(num_neurons, dtype=torch.bool)
             if local_indices.numel() > 0:
                 layer_prune_mask[local_indices] = True
 
             keep_mask = ~layer_prune_mask
-            weights = layer['module'].weight
+            weights = layer["module"].weight
             if len(weights.shape) == 2:
                 mask = keep_mask.unsqueeze(1).expand_as(weights).float()
             else:
                 mask = keep_mask.view(-1, 1, 1, 1).expand_as(weights).float()
 
-            self.apply_pruning(layer['module'], mask)
-            masks[layer['name']] = mask
+            self.apply_pruning(layer["module"], mask)
+            masks[layer["name"]] = mask
 
             pruned_neurons = layer_prune_mask.sum().item()
-            logger.info(
-                f"Layer {layer['name']}: pruned {pruned_neurons}/{num_neurons} neurons "
-                f"({pruned_neurons/num_neurons*100:.1f}%)"
-            )
+            logger.info(f"Layer {layer['name']}: pruned {pruned_neurons}/{num_neurons} neurons " f"({pruned_neurons/num_neurons*100:.1f}%)")
 
         # Log global statistics
-        total_neurons = sum(layer['num_neurons'] for layer in layer_info)
+        total_neurons = sum(layer["num_neurons"] for layer in layer_info)
         logger.info(f"Global pruning complete: {k}/{total_neurons} neurons pruned ({amount*100:.1f}%)")
 
         return masks

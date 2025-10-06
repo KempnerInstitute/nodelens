@@ -14,10 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def analyze_quantization_sensitivity(
-    model: nn.Module,
-    data_loader,
-    eval_fn: Callable,
-    precision_levels: List[str] = ['int8', 'int4']
+    model: nn.Module, data_loader, eval_fn: Callable, precision_levels: List[str] = ["int8", "int4"]
 ) -> Dict[str, Dict]:
     """
     Analyze how sensitive each layer is to quantization.
@@ -51,13 +48,13 @@ def analyze_quantization_sensitivity(
             quant_result = quantize_layer(module, precision)
 
             # Dequantize for evaluation
-            if precision == 'int8':
-                dequant = quant_result['weight'].float() * quant_result['scale']
-                if not quant_result.get('symmetric', True):
-                    dequant += quant_result['zero_point'].float() * quant_result['scale']
+            if precision == "int8":
+                dequant = quant_result["weight"].float() * quant_result["scale"]
+                if not quant_result.get("symmetric", True):
+                    dequant += quant_result["zero_point"].float() * quant_result["scale"]
             else:  # int4
                 # Simplified dequantization
-                dequant = quant_result['weight'].float() * quant_result['scale'].mean()
+                dequant = quant_result["weight"].float() * quant_result["scale"].mean()
 
             # Apply quantized weight
             module.weight.data = dequant
@@ -69,9 +66,9 @@ def analyze_quantization_sensitivity(
             sensitivity = abs(baseline_score - quantized_score)
 
             layer_results[precision] = {
-                'score': quantized_score,
-                'sensitivity': sensitivity,
-                'relative_error': sensitivity / baseline_score if baseline_score != 0 else 0
+                "score": quantized_score,
+                "sensitivity": sensitivity,
+                "relative_error": sensitivity / baseline_score if baseline_score != 0 else 0,
             }
 
             # Restore original
@@ -82,11 +79,7 @@ def analyze_quantization_sensitivity(
     return results
 
 
-def compute_quantization_error(
-    original_weight: torch.Tensor,
-    quantized_weight: torch.Tensor,
-    scale: torch.Tensor
-) -> Dict[str, float]:
+def compute_quantization_error(original_weight: torch.Tensor, quantized_weight: torch.Tensor, scale: torch.Tensor) -> Dict[str, float]:
     """
     Compute quantization error metrics.
 
@@ -106,23 +99,15 @@ def compute_quantization_error(
     mae = (original_weight - dequantized).abs().mean().item()
 
     # Signal-to-noise ratio
-    signal_power = (original_weight ** 2).mean().item()
+    signal_power = (original_weight**2).mean().item()
     noise_power = mse
     snr = 10 * torch.log10(torch.tensor(signal_power / (noise_power + 1e-10)))
 
-    return {
-        'mse': mse,
-        'mae': mae,
-        'snr': snr.item()
-    }
+    return {"mse": mse, "mae": mae, "snr": snr.item()}
 
 
 def find_optimal_bit_allocation(
-    model: nn.Module,
-    layer_scores: Dict[str, torch.Tensor],
-    target_avg_bits: float = 6.0,
-    min_bits: int = 4,
-    max_bits: int = 8
+    model: nn.Module, layer_scores: Dict[str, torch.Tensor], target_avg_bits: float = 6.0, min_bits: int = 4, max_bits: int = 8
 ) -> Dict[str, int]:
     """
     Find optimal bit allocation per layer based on importance.
@@ -177,14 +162,10 @@ def find_optimal_bit_allocation(
         bits_adjusted = bits_initial
 
     # Create allocation dict
-    allocation = {
-        layer_names[i]: bits_adjusted[i].item()
-        for i in range(len(layer_names))
-    }
+    allocation = {layer_names[i]: bits_adjusted[i].item() for i in range(len(layer_names))}
 
     # Verify average
     actual_avg = sum(allocation[name] * layer_sizes[i] for i, name in enumerate(layer_names)) / total_size
     logger.info(f"Bit allocation: target={target_avg_bits}, actual={actual_avg:.2f}")
 
     return allocation
-

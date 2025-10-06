@@ -50,11 +50,11 @@ class UltimatePruningStrategy:
     def __init__(
         self,
         target_sparsity: float = 0.7,
-        stages: str = 'full',  # 'full', 'fast', 'custom'
+        stages: str = "full",  # 'full', 'fast', 'custom'
         sensitivity_based: bool = True,
         use_redundancy: bool = True,
         fine_tune_epochs_per_stage: int = 10,
-        **config
+        **config,
     ):
         """
         Initialize ultimate pruning strategy.
@@ -77,9 +77,7 @@ class UltimatePruningStrategy:
 
         # Initialize sub-strategies
         if sensitivity_based:
-            self.adaptive_pruner = AdaptiveSensitivityPruning(
-                target_sparsity=target_sparsity
-            )
+            self.adaptive_pruner = AdaptiveSensitivityPruning(target_sparsity=target_sparsity)
 
         self.dependency_pruner = DependencyAwarePruning
 
@@ -88,58 +86,43 @@ class UltimatePruningStrategy:
 
     def _get_pruning_stages(self, mode: str) -> List[Dict]:
         """Define pruning stages based on mode."""
-        if mode == 'full':
+        if mode == "full":
             return [
                 {
-                    'name': 'Initial (Magnitude)',
-                    'target_fraction': 0.5,  # 50% of final target
-                    'metric': 'magnitude',
-                    'fine_tune_epochs': self.fine_tune_epochs_per_stage
+                    "name": "Initial (Magnitude)",
+                    "target_fraction": 0.5,  # 50% of final target
+                    "metric": "magnitude",
+                    "fine_tune_epochs": self.fine_tune_epochs_per_stage,
                 },
                 {
-                    'name': 'Intermediate (Alignment)',
-                    'target_fraction': 0.75,  # 75% of final target
-                    'metric': 'rayleigh_quotient',
-                    'fine_tune_epochs': self.fine_tune_epochs_per_stage
+                    "name": "Intermediate (Alignment)",
+                    "target_fraction": 0.75,  # 75% of final target
+                    "metric": "rayleigh_quotient",
+                    "fine_tune_epochs": self.fine_tune_epochs_per_stage,
                 },
                 {
-                    'name': 'Refined (Composite)',
-                    'target_fraction': 0.95,  # 95% of final target
-                    'metric': 'composite',
-                    'fine_tune_epochs': self.fine_tune_epochs_per_stage * 2
+                    "name": "Refined (Composite)",
+                    "target_fraction": 0.95,  # 95% of final target
+                    "metric": "composite",
+                    "fine_tune_epochs": self.fine_tune_epochs_per_stage * 2,
                 },
                 {
-                    'name': 'Cleanup',
-                    'target_fraction': 1.0,  # 100% of target
-                    'metric': 'composite',
-                    'fine_tune_epochs': self.fine_tune_epochs_per_stage * 2
-                }
+                    "name": "Cleanup",
+                    "target_fraction": 1.0,  # 100% of target
+                    "metric": "composite",
+                    "fine_tune_epochs": self.fine_tune_epochs_per_stage * 2,
+                },
             ]
 
-        elif mode == 'fast':
+        elif mode == "fast":
             return [
-                {
-                    'name': 'Magnitude',
-                    'target_fraction': 0.7,
-                    'metric': 'magnitude',
-                    'fine_tune_epochs': self.fine_tune_epochs_per_stage
-                },
-                {
-                    'name': 'Composite',
-                    'target_fraction': 1.0,
-                    'metric': 'composite',
-                    'fine_tune_epochs': self.fine_tune_epochs_per_stage * 2
-                }
+                {"name": "Magnitude", "target_fraction": 0.7, "metric": "magnitude", "fine_tune_epochs": self.fine_tune_epochs_per_stage},
+                {"name": "Composite", "target_fraction": 1.0, "metric": "composite", "fine_tune_epochs": self.fine_tune_epochs_per_stage * 2},
             ]
 
         else:  # one-shot
             return [
-                {
-                    'name': 'One-Shot Composite',
-                    'target_fraction': 1.0,
-                    'metric': 'composite',
-                    'fine_tune_epochs': self.fine_tune_epochs_per_stage * 3
-                }
+                {"name": "One-Shot Composite", "target_fraction": 1.0, "metric": "composite", "fine_tune_epochs": self.fine_tune_epochs_per_stage * 3}
             ]
 
     def prune(
@@ -149,7 +132,7 @@ class UltimatePruningStrategy:
         val_loader,
         layers_to_prune: Optional[List[str]] = None,
         trainer_fn: Optional[Callable] = None,
-        eval_fn: Optional[Callable] = None
+        eval_fn: Optional[Callable] = None,
     ) -> Dict[str, Any]:
         """
         Execute ultimate pruning strategy.
@@ -168,6 +151,7 @@ class UltimatePruningStrategy:
         # Auto-detect layers if not specified
         if layers_to_prune is None:
             from ...core.layer_detector import detect_trackable_layers
+
             layers_to_prune = detect_trackable_layers(model)
 
         logger.info(f"Pruning {len(layers_to_prune)} layers with {self.stages_mode} strategy")
@@ -182,20 +166,13 @@ class UltimatePruningStrategy:
         # Step 1: Sensitivity analysis (if enabled)
         if self.sensitivity_based and eval_fn:
             logger.info("Stage 0: Computing layer sensitivities...")
-            sensitivities = self.adaptive_pruner.compute_all_sensitivities(
-                model, layers_to_prune, eval_fn=lambda m: eval_fn(m, val_loader)
-            )
+            sensitivities = self.adaptive_pruner.compute_all_sensitivities(model, layers_to_prune, eval_fn=lambda m: eval_fn(m, val_loader))
             self.adaptive_pruner.print_sensitivity_report()
         else:
             sensitivities = None
 
         # Track results
-        results = {
-            'baseline_accuracy': baseline_acc,
-            'stage_results': [],
-            'final_masks': {},
-            'sensitivity_report': sensitivities
-        }
+        results = {"baseline_accuracy": baseline_acc, "stage_results": [], "final_masks": {}, "sensitivity_report": sensitivities}
 
         # Execute stages
         for stage_idx, stage in enumerate(self.stages):
@@ -204,35 +181,29 @@ class UltimatePruningStrategy:
             logger.info(f"{'='*80}")
 
             # Compute target amount for this stage
-            stage_target = self.target_sparsity * stage['target_fraction']
+            stage_target = self.target_sparsity * stage["target_fraction"]
 
             # Prune
-            stage_result = self._execute_stage(
-                model,
-                layers_to_prune,
-                stage_target,
-                stage['metric'],
-                sensitivities
-            )
+            stage_result = self._execute_stage(model, layers_to_prune, stage_target, stage["metric"], sensitivities)
 
             # Fine-tune if trainer provided
-            if trainer_fn and stage['fine_tune_epochs'] > 0:
+            if trainer_fn and stage["fine_tune_epochs"] > 0:
                 logger.info(f"Fine-tuning for {stage['fine_tune_epochs']} epochs...")
-                trainer_fn(model, train_loader, epochs=stage['fine_tune_epochs'])
+                trainer_fn(model, train_loader, epochs=stage["fine_tune_epochs"])
 
             # Evaluate
             if eval_fn:
                 stage_acc = eval_fn(model, val_loader)
                 logger.info(f"Accuracy after stage: {stage_acc:.2f}%")
-                stage_result['accuracy'] = stage_acc
+                stage_result["accuracy"] = stage_acc
 
-            results['stage_results'].append(stage_result)
+            results["stage_results"].append(stage_result)
 
         # Final evaluation
         if eval_fn:
             final_acc = eval_fn(model, val_loader)
-            results['final_accuracy'] = final_acc
-            results['accuracy_drop'] = baseline_acc - final_acc if baseline_acc else None
+            results["final_accuracy"] = final_acc
+            results["accuracy_drop"] = baseline_acc - final_acc if baseline_acc else None
 
             logger.info(f"\n{'='*80}")
             logger.info("FINAL RESULTS")
@@ -245,29 +216,15 @@ class UltimatePruningStrategy:
 
         return results
 
-    def _execute_stage(
-        self,
-        model: nn.Module,
-        layer_names: List[str],
-        stage_target: float,
-        metric_name: str,
-        sensitivities: Optional[Dict]
-    ) -> Dict:
+    def _execute_stage(self, model: nn.Module, layer_names: List[str], stage_target: float, metric_name: str, sensitivities: Optional[Dict]) -> Dict:
         """Execute a single pruning stage."""
 
-        stage_result = {
-            'metric': metric_name,
-            'target': stage_target,
-            'masks': {}
-        }
+        stage_result = {"metric": metric_name, "target": stage_target, "masks": {}}
 
         # Compute layer-specific amounts if adaptive
         if sensitivities:
             # Use adaptive amounts, scaled to stage target
-            layer_amounts = {
-                name: sens.recommended_amount * (stage_target / self.target_sparsity)
-                for name, sens in sensitivities.items()
-            }
+            layer_amounts = {name: sens.recommended_amount * (stage_target / self.target_sparsity) for name, sens in sensitivities.items()}
         else:
             # Uniform amount
             layer_amounts = {name: stage_target for name in layer_names}
@@ -280,16 +237,16 @@ class UltimatePruningStrategy:
             layer_amounts.get(layer_name, stage_target)
 
             # Compute scores based on metric
-            if metric_name == 'magnitude':
+            if metric_name == "magnitude":
                 scores = layer.weight.abs().flatten()
                 if scores.ndim > 1:
                     scores = scores.mean(dim=list(range(1, scores.ndim)))
 
-            elif metric_name == 'rayleigh_quotient':
+            elif metric_name == "rayleigh_quotient":
                 # Would need inputs - skip for now or use cached
                 scores = layer.weight.norm(dim=1)  # Fallback
 
-            elif metric_name == 'composite' and self.use_redundancy:
+            elif metric_name == "composite" and self.use_redundancy:
                 # Use redundancy-aware composite
                 # Would need full pipeline - simplified here
                 scores = layer.weight.norm(dim=1)
@@ -301,23 +258,15 @@ class UltimatePruningStrategy:
 
         # Apply with dependency awareness
         pruner = self.dependency_pruner(model)
-        result = pruner.prune(
-            layer_scores,
-            amount=stage_target,
-            dry_run=False
-        )
+        result = pruner.prune(layer_scores, amount=stage_target, dry_run=False)
 
-        stage_result['masks'] = result['masks']
-        stage_result['stats'] = result['stats']
+        stage_result["masks"] = result["masks"]
+        stage_result["stats"] = result["stats"]
 
         return stage_result
 
 
-def create_ultimate_pruner(
-    target_sparsity: float = 0.7,
-    mode: str = 'full',
-    **config
-) -> UltimatePruningStrategy:
+def create_ultimate_pruner(target_sparsity: float = 0.7, mode: str = "full", **config) -> UltimatePruningStrategy:
     """
     Factory function for creating ultimate pruning strategy.
 
@@ -329,9 +278,4 @@ def create_ultimate_pruner(
     Returns:
         Configured UltimatePruningStrategy
     """
-    return UltimatePruningStrategy(
-        target_sparsity=target_sparsity,
-        stages=mode,
-        **config
-    )
-
+    return UltimatePruningStrategy(target_sparsity=target_sparsity, stages=mode, **config)

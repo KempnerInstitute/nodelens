@@ -20,6 +20,7 @@ from matplotlib.gridspec import GridSpec
 # Try to import seaborn, but make it optional
 try:
     import seaborn as sns
+
     HAS_SEABORN = True
 except (ImportError, AttributeError):
     HAS_SEABORN = False
@@ -51,9 +52,9 @@ class UnifiedVisualizer:
             plt.style.use(style)
         except:
             try:
-                plt.style.use('seaborn-v0_8-darkgrid')
+                plt.style.use("seaborn-v0_8-darkgrid")
             except:
-                plt.style.use('default')
+                plt.style.use("default")
 
         self.figsize = figsize
 
@@ -62,22 +63,23 @@ class UnifiedVisualizer:
             self.colors = sns.color_palette("husl", 10)
         else:
             import matplotlib.cm as cm
+
             self.colors = [cm.tab10(i) for i in range(10)]
 
         # Extended colors for strategies
         self.strategy_colors = {
-            'magnitude': '#1f77b4',
-            'gradient': '#ff7f0e',
-            'fisher': '#2ca02c',
-            'random': '#d62728',
-            'low': '#9467bd',
-            'high': '#8c564b',
+            "magnitude": "#1f77b4",
+            "gradient": "#ff7f0e",
+            "fisher": "#2ca02c",
+            "random": "#d62728",
+            "low": "#9467bd",
+            "high": "#8c564b",
         }
 
         # Set global parameters
-        plt.rcParams['figure.dpi'] = 100
-        plt.rcParams['savefig.dpi'] = 300
-        plt.rcParams['font.size'] = 10
+        plt.rcParams["figure.dpi"] = 100
+        plt.rcParams["savefig.dpi"] = 300
+        plt.rcParams["font.size"] = 10
 
     # ========== Time Series Plots ==========
 
@@ -90,7 +92,7 @@ class UnifiedVisualizer:
         ylabel: str = "Value",
         legend_title: str = "Series",
         show_confidence: bool = True,
-        save_path: Optional[Union[str, Path]] = None
+        save_path: Optional[Union[str, Path]] = None,
     ) -> Figure:
         """
         Plot the evolution of metrics over time with optional confidence intervals.
@@ -112,36 +114,35 @@ class UnifiedVisualizer:
         fig, ax = plt.subplots(figsize=self.figsize)
 
         for i, (name, vals) in enumerate(values.items()):
-            if name in ['mean', 'std']:
+            if name in ["mean", "std"]:
                 continue
 
             color = self.colors[i % len(self.colors)]
 
-            if isinstance(vals, dict) and 'mean' in vals:
+            if isinstance(vals, dict) and "mean" in vals:
                 # Handle mean/std structure
-                means = vals['mean']
-                ax.plot(steps[:len(means)], means, label=name, color=color, linewidth=2)
+                means = vals["mean"]
+                ax.plot(steps[: len(means)], means, label=name, color=color, linewidth=2)
 
-                if show_confidence and 'std' in vals:
-                    stds = vals['std']
+                if show_confidence and "std" in vals:
+                    stds = vals["std"]
                     means = np.array(means)
                     stds = np.array(stds)
-                    ax.fill_between(steps[:len(means)], means - stds, means + stds,
-                                  alpha=0.2, color=color)
+                    ax.fill_between(steps[: len(means)], means - stds, means + stds, alpha=0.2, color=color)
             else:
                 # Simple list of values
-                ax.plot(steps[:len(vals)], vals, label=name, color=color, linewidth=2)
+                ax.plot(steps[: len(vals)], vals, label=name, color=color, linewidth=2)
 
         ax.set_xlabel(xlabel, fontsize=12)
         ax.set_ylabel(ylabel, fontsize=12)
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.legend(title=legend_title, loc='best')
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.legend(title=legend_title, loc="best")
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
         if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
@@ -151,9 +152,9 @@ class UnifiedVisualizer:
         self,
         scores: Dict[str, Union[torch.Tensor, np.ndarray, List[float]]],
         metric_name: str,
-        plot_type: str = 'violin',
+        plot_type: str = "violin",
         save_path: Optional[str] = None,
-        show_statistics: bool = True
+        show_statistics: bool = True,
     ) -> Figure:
         """
         Plot alignment scores across layers.
@@ -182,48 +183,47 @@ class UnifiedVisualizer:
 
         positions = range(len(layer_names))
 
-        if plot_type == 'violin':
+        if plot_type == "violin":
             parts = ax.violinplot(data, positions=positions, showmeans=True, showextrema=True)
-            for pc in parts['bodies']:
-                pc.set_facecolor('lightblue')
+            for pc in parts["bodies"]:
+                pc.set_facecolor("lightblue")
                 pc.set_alpha(0.7)
-        elif plot_type == 'box':
+        elif plot_type == "box":
             ax.boxplot(data, positions=positions, labels=layer_names)
-        elif plot_type == 'bar':
+        elif plot_type == "bar":
             means = [np.mean(d) for d in data]
             stds = [np.std(d) for d in data]
             bars = ax.bar(positions, means, yerr=stds, capsize=5)
 
             # Color bars by value
             norm = plt.Normalize(min(means), max(means))
-            sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=norm)
+            sm = plt.cm.ScalarMappable(cmap="coolwarm", norm=norm)
             for bar, val in zip(bars, means):
                 bar.set_color(sm.to_rgba(val))
 
-        if plot_type != 'bar':
+        if plot_type != "bar":
             ax.set_xticks(positions)
-            ax.set_xticklabels(layer_names, rotation=45, ha='right')
+            ax.set_xticklabels(layer_names, rotation=45, ha="right")
 
-        ax.set_xlabel('Layer')
-        ax.set_ylabel(f'{metric_name} Score')
-        ax.set_title(f'{metric_name} Distribution Across Layers')
+        ax.set_xlabel("Layer")
+        ax.set_ylabel(f"{metric_name} Score")
+        ax.set_title(f"{metric_name} Distribution Across Layers")
 
-        if show_statistics and plot_type != 'bar':
+        if show_statistics and plot_type != "bar":
             stats_text = []
             for i, (name, layer_scores) in enumerate(zip(layer_names, data)):
                 mean = np.mean(layer_scores)
                 std = np.std(layer_scores)
                 stats_text.append(f"{name}: μ={mean:.3f}, σ={std:.3f}")
 
-            textstr = '\n'.join(stats_text)
-            props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-            ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9,
-                   verticalalignment='top', bbox=props)
+            textstr = "\n".join(stats_text)
+            props = dict(boxstyle="round", facecolor="wheat", alpha=0.5)
+            ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9, verticalalignment="top", bbox=props)
 
         plt.tight_layout()
 
         if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
@@ -238,7 +238,7 @@ class UnifiedVisualizer:
         fmt: str = ".3f",
         xlabel: str = None,
         ylabel: str = None,
-        save_path: Optional[Union[str, Path]] = None
+        save_path: Optional[Union[str, Path]] = None,
     ) -> Figure:
         """
         Create a heatmap visualization.
@@ -264,22 +264,12 @@ class UnifiedVisualizer:
         else:
             df = data
 
-        fig, ax = plt.subplots(figsize=(max(12, len(df.columns) * 0.8),
-                                        max(8, len(df.index) * 0.5)))
+        fig, ax = plt.subplots(figsize=(max(12, len(df.columns) * 0.8), max(8, len(df.index) * 0.5)))
 
         if HAS_SEABORN:
-            sns.heatmap(
-                df,
-                ax=ax,
-                cmap=cmap,
-                center=0,
-                annot=annotate,
-                fmt=fmt,
-                cbar_kws={'label': 'Value'},
-                linewidths=0.5
-            )
+            sns.heatmap(df, ax=ax, cmap=cmap, center=0, annot=annotate, fmt=fmt, cbar_kws={"label": "Value"}, linewidths=0.5)
         else:
-            im = ax.imshow(df.values, cmap=cmap, aspect='auto')
+            im = ax.imshow(df.values, cmap=cmap, aspect="auto")
 
             ax.set_xticks(np.arange(len(df.columns)))
             ax.set_yticks(np.arange(len(df.index)))
@@ -289,15 +279,14 @@ class UnifiedVisualizer:
             plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
             cbar = plt.colorbar(im, ax=ax)
-            cbar.set_label('Value', rotation=270, labelpad=15)
+            cbar.set_label("Value", rotation=270, labelpad=15)
 
             if annotate:
                 for i in range(len(df.index)):
                     for j in range(len(df.columns)):
-                        ax.text(j, i, format(df.iloc[i, j], fmt),
-                                     ha="center", va="center", color="black")
+                        ax.text(j, i, format(df.iloc[i, j], fmt), ha="center", va="center", color="black")
 
-        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_title(title, fontsize=14, fontweight="bold")
         if xlabel:
             ax.set_xlabel(xlabel)
         if ylabel:
@@ -306,7 +295,7 @@ class UnifiedVisualizer:
         plt.tight_layout()
 
         if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
@@ -315,10 +304,10 @@ class UnifiedVisualizer:
     def plot_pruning_performance(
         self,
         results: Dict[str, Dict[float, Dict[str, float]]],
-        metrics: List[str] = ['accuracy', 'loss'],
+        metrics: List[str] = ["accuracy", "loss"],
         save_path: Optional[str] = None,
         title: Optional[str] = None,
-        show_confidence: bool = True
+        show_confidence: bool = True,
     ) -> Figure:
         """
         Plot performance metrics for multiple pruning strategies.
@@ -350,10 +339,10 @@ class UnifiedVisualizer:
 
                 for sparsity in sparsities:
                     if isinstance(strategy_results[sparsity], dict):
-                        if 'mean' in strategy_results[sparsity]:
-                            means.append(strategy_results[sparsity]['mean'].get(metric, 0))
-                            if 'std' in strategy_results[sparsity] and show_confidence:
-                                stds.append(strategy_results[sparsity]['std'].get(metric, 0))
+                        if "mean" in strategy_results[sparsity]:
+                            means.append(strategy_results[sparsity]["mean"].get(metric, 0))
+                            if "std" in strategy_results[sparsity] and show_confidence:
+                                stds.append(strategy_results[sparsity]["std"].get(metric, 0))
                         else:
                             means.append(strategy_results[sparsity].get(metric, 0))
                     else:
@@ -361,38 +350,33 @@ class UnifiedVisualizer:
 
                 # Plot
                 color = self.strategy_colors.get(strategy, self.colors[0])
-                line = ax.plot(sparsities, means, 'o-', label=strategy,
-                             linewidth=2.5, markersize=8, color=color)
+                line = ax.plot(sparsities, means, "o-", label=strategy, linewidth=2.5, markersize=8, color=color)
 
                 if stds and show_confidence:
                     means = np.array(means)
                     stds = np.array(stds)
-                    ax.fill_between(sparsities, means - stds, means + stds,
-                                  alpha=0.2, color=line[0].get_color())
+                    ax.fill_between(sparsities, means - stds, means + stds, alpha=0.2, color=line[0].get_color())
 
-            ax.set_xlabel('Sparsity Level', fontsize=12)
+            ax.set_xlabel("Sparsity Level", fontsize=12)
             ax.set_ylabel(metric.capitalize(), fontsize=12)
-            ax.set_title(f'{metric.capitalize()} vs Sparsity', fontsize=12)
-            ax.legend(loc='best')
+            ax.set_title(f"{metric.capitalize()} vs Sparsity", fontsize=12)
+            ax.legend(loc="best")
             ax.grid(True, alpha=0.3)
 
         if title:
-            fig.suptitle(title, fontsize=16, fontweight='bold')
+            fig.suptitle(title, fontsize=16, fontweight="bold")
 
         plt.tight_layout()
 
         if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
     # ========== Comparison Plots ==========
 
     def plot_radar_chart(
-        self,
-        data: Dict[str, Dict[str, float]],
-        title: str = "Multi-Metric Comparison",
-        save_path: Optional[Union[str, Path]] = None
+        self, data: Dict[str, Dict[str, float]], title: str = "Multi-Metric Comparison", save_path: Optional[Union[str, Path]] = None
     ) -> Figure:
         """
         Create a radar chart comparing multiple metrics.
@@ -412,14 +396,14 @@ class UnifiedVisualizer:
         angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
         angles += angles[:1]
 
-        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection="polar"))
 
         for i, series_name in enumerate(series):
             values = [data[series_name][metric] for metric in metrics]
             values += values[:1]
 
             color = self.colors[i % len(self.colors)]
-            ax.plot(angles, values, 'o-', linewidth=2, label=series_name, color=color)
+            ax.plot(angles, values, "o-", linewidth=2, label=series_name, color=color)
             ax.fill(angles, values, alpha=0.1, color=color)
 
         ax.set_theta_offset(np.pi / 2)
@@ -427,25 +411,20 @@ class UnifiedVisualizer:
         ax.set_xticks(angles[:-1])
         ax.set_xticklabels(metrics)
         ax.set_ylim(0, None)
-        ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
-        ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.1))
+        ax.set_title(title, fontsize=16, fontweight="bold", pad=20)
+        ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
         ax.grid(True)
 
         plt.tight_layout()
 
         if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
     # ========== Comprehensive Reports ==========
 
-    def create_comprehensive_report(
-        self,
-        results: Dict[str, Any],
-        output_dir: Union[str, Path],
-        experiment_name: str = "experiment"
-    ):
+    def create_comprehensive_report(self, results: Dict[str, Any], output_dir: Union[str, Path], experiment_name: str = "experiment"):
         """
         Create a comprehensive visual report with multiple plots.
 
@@ -463,46 +442,32 @@ class UnifiedVisualizer:
         # Generate various plots based on available data
 
         # 1. Metric evolution
-        if 'metrics_over_time' in results:
-            for metric_name, values in results['metrics_over_time'].items():
+        if "metrics_over_time" in results:
+            for metric_name, values in results["metrics_over_time"].items():
                 self.plot_metric_evolution(
-                    results.get('steps', list(range(len(next(iter(values.values())))))),
+                    results.get("steps", list(range(len(next(iter(values.values())))))),
                     values,
                     title=f"{metric_name} Evolution",
                     ylabel=metric_name,
-                    save_path=plots_dir / f"{metric_name}_evolution.png"
+                    save_path=plots_dir / f"{metric_name}_evolution.png",
                 )
 
         # 2. Layer scores
-        if 'layer_scores' in results:
-            for metric_name, scores in results['layer_scores'].items():
-                self.plot_layer_scores(
-                    scores,
-                    metric_name,
-                    save_path=plots_dir / f"{metric_name}_layers.png"
-                )
+        if "layer_scores" in results:
+            for metric_name, scores in results["layer_scores"].items():
+                self.plot_layer_scores(scores, metric_name, save_path=plots_dir / f"{metric_name}_layers.png")
 
         # 3. Heatmaps
-        if 'heatmap_data' in results:
-            self.plot_heatmap(
-                results['heatmap_data'],
-                title="Metrics Heatmap",
-                save_path=plots_dir / "metrics_heatmap.png"
-            )
+        if "heatmap_data" in results:
+            self.plot_heatmap(results["heatmap_data"], title="Metrics Heatmap", save_path=plots_dir / "metrics_heatmap.png")
 
         # 4. Pruning results
-        if 'pruning_results' in results:
-            self.plot_pruning_performance(
-                results['pruning_results'],
-                save_path=plots_dir / "pruning_performance.png"
-            )
+        if "pruning_results" in results:
+            self.plot_pruning_performance(results["pruning_results"], save_path=plots_dir / "pruning_performance.png")
 
         # 5. Comparisons
-        if 'comparison_data' in results:
-            self.plot_radar_chart(
-                results['comparison_data'],
-                save_path=plots_dir / "comparison_radar.png"
-            )
+        if "comparison_data" in results:
+            self.plot_radar_chart(results["comparison_data"], save_path=plots_dir / "comparison_radar.png")
 
         # Create summary statistics
         self._create_summary_statistics(results, output_dir)
@@ -516,23 +481,25 @@ class UnifiedVisualizer:
         """Create summary statistics CSV."""
         summary = []
 
-        if 'layer_scores' in results:
-            for metric_name, layer_scores in results['layer_scores'].items():
+        if "layer_scores" in results:
+            for metric_name, layer_scores in results["layer_scores"].items():
                 for layer_name, scores in layer_scores.items():
                     if isinstance(scores, torch.Tensor):
                         scores = scores.cpu().numpy()
                     elif not isinstance(scores, np.ndarray):
                         scores = np.array(scores)
 
-                    summary.append({
-                        'Metric': metric_name,
-                        'Layer': layer_name,
-                        'Mean': np.mean(scores),
-                        'Std': np.std(scores),
-                        'Min': np.min(scores),
-                        'Max': np.max(scores),
-                        'Count': len(scores)
-                    })
+                    summary.append(
+                        {
+                            "Metric": metric_name,
+                            "Layer": layer_name,
+                            "Mean": np.mean(scores),
+                            "Std": np.std(scores),
+                            "Min": np.min(scores),
+                            "Max": np.max(scores),
+                            "Count": len(scores),
+                        }
+                    )
 
         if summary:
             df = pd.DataFrame(summary)
@@ -564,27 +531,24 @@ Generated visualization report for alignment analysis.
 """
 
         # Add summary statistics
-        if 'layer_scores' in results:
+        if "layer_scores" in results:
             readme_content += f"- Number of metrics: {len(results['layer_scores'])}\n"
             all_layers = set()
-            for scores in results['layer_scores'].values():
+            for scores in results["layer_scores"].values():
                 all_layers.update(scores.keys())
             readme_content += f"- Number of layers: {len(all_layers)}\n"
 
-        if 'pruning_results' in results:
+        if "pruning_results" in results:
             readme_content += f"- Pruning strategies: {', '.join(results['pruning_results'].keys())}\n"
 
-        with open(output_dir / "README.md", 'w') as f:
+        with open(output_dir / "README.md", "w") as f:
             f.write(readme_content)
 
 
 # Convenience functions for quick plotting
 
-def plot_quick_summary(
-    scores: Dict[str, Any],
-    title: str = "Summary",
-    save_path: Optional[str] = None
-):
+
+def plot_quick_summary(scores: Dict[str, Any], title: str = "Summary", save_path: Optional[str] = None):
     """Quick plotting function for immediate visualization."""
     visualizer = UnifiedVisualizer()
 

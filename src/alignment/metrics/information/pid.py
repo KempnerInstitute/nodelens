@@ -23,6 +23,7 @@ try:
 
     # Add the external module to path if needed
     from ...external.BROJA_2PID import BROJA_2PID
+
     HAS_BROJA = True
 except ImportError:
     HAS_BROJA = False
@@ -40,13 +41,7 @@ class BasePIDMetric(BaseMetric):
     requires_weights = False
     requires_outputs = True
 
-    def __init__(
-        self,
-        bins: int = 10,
-        normalize: bool = True,
-        use_pca_inputs: bool = True,
-        **kwargs
-    ):
+    def __init__(self, bins: int = 10, normalize: bool = True, use_pca_inputs: bool = True, **kwargs):
         """
         Initialize PID metric.
 
@@ -61,12 +56,7 @@ class BasePIDMetric(BaseMetric):
         self.normalize = normalize
         self.use_pca_inputs = use_pca_inputs
 
-    def _prepare_pid_input(
-        self,
-        x1: torch.Tensor,
-        x2: torch.Tensor,
-        y: torch.Tensor
-    ) -> Optional[Dict[Tuple[int, int, int], float]]:
+    def _prepare_pid_input(self, x1: torch.Tensor, x2: torch.Tensor, y: torch.Tensor) -> Optional[Dict[Tuple[int, int, int], float]]:
         """
         Prepare input for BROJA PID computation.
 
@@ -142,13 +132,7 @@ class SharedInformation(BasePIDMetric):
 
     name = "pid_shared"
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        outputs: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, outputs: torch.Tensor, weights: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute shared information for each output neuron.
 
@@ -181,11 +165,7 @@ class SharedInformation(BasePIDMetric):
                 continue
 
             # Prepare PID input
-            pid_input = self._prepare_pid_input(
-                input_features[:, 0],
-                input_features[:, 1],
-                outputs[:, i]
-            )
+            pid_input = self._prepare_pid_input(input_features[:, 0], input_features[:, 1], outputs[:, i])
 
             if pid_input is None:
                 continue
@@ -216,13 +196,7 @@ class UniqueInformationX(BasePIDMetric):
 
     name = "pid_unique_x"
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        outputs: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, outputs: torch.Tensor, weights: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """Compute unique information from first input variable."""
         if not HAS_BROJA:
             logger.warning("BROJA not available, returning zeros")
@@ -241,11 +215,7 @@ class UniqueInformationX(BasePIDMetric):
             if input_features.shape[1] < 2:
                 continue
 
-            pid_input = self._prepare_pid_input(
-                input_features[:, 0],
-                input_features[:, 1],
-                outputs[:, i]
-            )
+            pid_input = self._prepare_pid_input(input_features[:, 0], input_features[:, 1], outputs[:, i])
 
             if pid_input is None:
                 continue
@@ -275,13 +245,7 @@ class UniqueInformationY(BasePIDMetric):
 
     name = "pid_unique_y"
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        outputs: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, outputs: torch.Tensor, weights: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """Compute unique information from second input variable."""
         if not HAS_BROJA:
             logger.warning("BROJA not available, returning zeros")
@@ -300,11 +264,7 @@ class UniqueInformationY(BasePIDMetric):
             if input_features.shape[1] < 2:
                 continue
 
-            pid_input = self._prepare_pid_input(
-                input_features[:, 0],
-                input_features[:, 1],
-                outputs[:, i]
-            )
+            pid_input = self._prepare_pid_input(input_features[:, 0], input_features[:, 1], outputs[:, i])
 
             if pid_input is None:
                 continue
@@ -334,13 +294,7 @@ class SynergisticInformation(BasePIDMetric):
 
     name = "pid_synergy"
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        outputs: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, outputs: torch.Tensor, weights: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """Compute synergistic information."""
         if not HAS_BROJA:
             logger.warning("BROJA not available, returning zeros")
@@ -359,11 +313,7 @@ class SynergisticInformation(BasePIDMetric):
             if input_features.shape[1] < 2:
                 continue
 
-            pid_input = self._prepare_pid_input(
-                input_features[:, 0],
-                input_features[:, 1],
-                outputs[:, i]
-            )
+            pid_input = self._prepare_pid_input(input_features[:, 0], input_features[:, 1], outputs[:, i])
 
             if pid_input is None:
                 continue

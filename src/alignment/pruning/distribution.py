@@ -17,13 +17,14 @@ logger = logging.getLogger(__name__)
 
 class DistributionStrategy(Enum):
     """Available distribution strategies."""
-    UNIFORM = 'uniform'  # Same % per layer
-    GLOBAL_THRESHOLD = 'global_threshold'  # Global score threshold
-    ADAPTIVE_SENSITIVITY = 'adaptive_sensitivity'  # Based on layer sensitivity
-    SIZE_PROPORTIONAL = 'size_proportional'  # Based on layer size
-    IMPORTANCE_WEIGHTED = 'importance_weighted'  # Based on avg scores
-    CASCADING = 'cascading'  # Sequential until target
-    HYBRID = 'hybrid'  # Combination of multiple
+
+    UNIFORM = "uniform"  # Same % per layer
+    GLOBAL_THRESHOLD = "global_threshold"  # Global score threshold
+    ADAPTIVE_SENSITIVITY = "adaptive_sensitivity"  # Based on layer sensitivity
+    SIZE_PROPORTIONAL = "size_proportional"  # Based on layer size
+    IMPORTANCE_WEIGHTED = "importance_weighted"  # Based on avg scores
+    CASCADING = "cascading"  # Sequential until target
+    HYBRID = "hybrid"  # Combination of multiple
 
 
 class PruningDistributionManager:
@@ -44,14 +45,7 @@ class PruningDistributionManager:
         >>> # amounts = {'conv1': 0.85, 'conv2': 0.75, 'fc1': 0.50, ...}
     """
 
-    def __init__(
-        self,
-        strategy: str = 'uniform',
-        target_sparsity: float = 0.5,
-        min_amount: float = 0.0,
-        max_amount: float = 0.95,
-        **kwargs
-    ):
+    def __init__(self, strategy: str = "uniform", target_sparsity: float = 0.5, min_amount: float = 0.0, max_amount: float = 0.95, **kwargs):
         """
         Initialize distribution manager.
 
@@ -69,11 +63,7 @@ class PruningDistributionManager:
         self.kwargs = kwargs
 
     def compute_distribution(
-        self,
-        model: nn.Module,
-        layer_names: List[str],
-        layer_scores: Optional[Dict[str, torch.Tensor]] = None,
-        eval_fn: Optional[Callable] = None
+        self, model: nn.Module, layer_names: List[str], layer_scores: Optional[Dict[str, torch.Tensor]] = None, eval_fn: Optional[Callable] = None
     ) -> Dict[str, float]:
         """
         Compute per-layer pruning amounts.
@@ -121,11 +111,7 @@ class PruningDistributionManager:
         """Same amount for all layers."""
         return {name: self.target_sparsity for name in layer_names}
 
-    def _global_threshold_distribution(
-        self,
-        layer_scores: Dict[str, torch.Tensor],
-        model: nn.Module
-    ) -> Dict[str, float]:
+    def _global_threshold_distribution(self, layer_scores: Dict[str, torch.Tensor], model: nn.Module) -> Dict[str, float]:
         """
         Compute amounts based on global score threshold.
 
@@ -154,12 +140,7 @@ class PruningDistributionManager:
 
         return amounts
 
-    def _adaptive_sensitivity_distribution(
-        self,
-        model: nn.Module,
-        layer_names: List[str],
-        eval_fn: Callable
-    ) -> Dict[str, float]:
+    def _adaptive_sensitivity_distribution(self, model: nn.Module, layer_names: List[str], eval_fn: Callable) -> Dict[str, float]:
         """
         Adaptive distribution based on layer sensitivity.
 
@@ -172,11 +153,7 @@ class PruningDistributionManager:
 
         return {name: sens.recommended_amount for name, sens in sensitivities.items()}
 
-    def _size_proportional_distribution(
-        self,
-        model: nn.Module,
-        layer_names: List[str]
-    ) -> Dict[str, float]:
+    def _size_proportional_distribution(self, model: nn.Module, layer_names: List[str]) -> Dict[str, float]:
         """
         Distribute based on layer size.
 
@@ -193,10 +170,7 @@ class PruningDistributionManager:
             total_size += size
 
         # Compute fractions
-        layer_fractions = {
-            name: size / total_size
-            for name, size in layer_sizes.items()
-        }
+        layer_fractions = {name: size / total_size for name, size in layer_sizes.items()}
 
         # Adjust amounts based on size
         # Larger fraction → prune more
@@ -212,21 +186,14 @@ class PruningDistributionManager:
 
         return amounts
 
-    def _importance_weighted_distribution(
-        self,
-        layer_scores: Dict[str, torch.Tensor],
-        model: nn.Module
-    ) -> Dict[str, float]:
+    def _importance_weighted_distribution(self, layer_scores: Dict[str, torch.Tensor], model: nn.Module) -> Dict[str, float]:
         """
         Distribute based on average layer importance.
 
         Low average importance → prune more.
         """
         # Compute average importance per layer
-        layer_importance = {
-            name: scores.mean().item()
-            for name, scores in layer_scores.items()
-        }
+        layer_importance = {name: scores.mean().item() for name, scores in layer_scores.items()}
 
         # Normalize importances
         max_importance = max(layer_importance.values())
@@ -248,20 +215,12 @@ class PruningDistributionManager:
             amounts[name] = max(self.min_amount, min(self.max_amount, amount))
 
         # Normalize to hit target
-        layer_sizes = {
-            name: dict(model.named_modules())[name].weight.numel()
-            for name in layer_scores.keys()
-        }
+        layer_sizes = {name: dict(model.named_modules())[name].weight.numel() for name in layer_scores.keys()}
         amounts = self._normalize_to_target(amounts, layer_sizes)
 
         return amounts
 
-    def _cascading_distribution(
-        self,
-        layer_scores: Dict[str, torch.Tensor],
-        model: nn.Module,
-        layer_names: List[str]
-    ) -> Dict[str, float]:
+    def _cascading_distribution(self, layer_scores: Dict[str, torch.Tensor], model: nn.Module, layer_names: List[str]) -> Dict[str, float]:
         """
         Sequential pruning until target hit.
 
@@ -269,20 +228,14 @@ class PruningDistributionManager:
         """
         # Rank layers by average importance (lowest first)
         if layer_scores:
-            layer_importance = {
-                name: scores.mean().item()
-                for name, scores in layer_scores.items()
-            }
+            layer_importance = {name: scores.mean().item() for name, scores in layer_scores.items()}
             sorted_layers = sorted(layer_importance.keys(), key=lambda x: layer_importance[x])
         else:
             # Default order
             sorted_layers = layer_names
 
         # Compute total params and target
-        layer_sizes = {
-            name: dict(model.named_modules())[name].weight.numel()
-            for name in layer_names
-        }
+        layer_sizes = {name: dict(model.named_modules())[name].weight.numel() for name in layer_names}
         total_params = sum(layer_sizes.values())
         target_to_remove = int(total_params * self.target_sparsity)
 
@@ -305,11 +258,7 @@ class PruningDistributionManager:
         return amounts
 
     def _hybrid_distribution(
-        self,
-        model: nn.Module,
-        layer_names: List[str],
-        layer_scores: Optional[Dict],
-        eval_fn: Optional[Callable]
+        self, model: nn.Module, layer_names: List[str], layer_scores: Optional[Dict], eval_fn: Optional[Callable]
     ) -> Dict[str, float]:
         """
         Hybrid: Combine multiple distribution strategies.
@@ -336,30 +285,21 @@ class PruningDistributionManager:
             adaptive = uniform
 
         # Weighted combination
-        weights = {
-            'uniform': 0.2,
-            'global': 0.3,
-            'importance': 0.2,
-            'adaptive': 0.3
-        }
+        weights = {"uniform": 0.2, "global": 0.3, "importance": 0.2, "adaptive": 0.3}
 
         amounts = {}
         for layer_name in layer_names:
             amount = (
-                weights['uniform'] * uniform[layer_name] +
-                weights['global'] * global_dist[layer_name] +
-                weights['importance'] * importance[layer_name] +
-                weights['adaptive'] * adaptive[layer_name]
+                weights["uniform"] * uniform[layer_name]
+                + weights["global"] * global_dist[layer_name]
+                + weights["importance"] * importance[layer_name]
+                + weights["adaptive"] * adaptive[layer_name]
             )
             amounts[layer_name] = max(self.min_amount, min(self.max_amount, amount))
 
         return amounts
 
-    def _normalize_to_target(
-        self,
-        amounts: Dict[str, float],
-        layer_sizes: Dict[str, int]
-    ) -> Dict[str, float]:
+    def _normalize_to_target(self, amounts: Dict[str, float], layer_sizes: Dict[str, int]) -> Dict[str, float]:
         """
         Normalize amounts to exactly hit target overall sparsity.
 
@@ -389,12 +329,7 @@ class PruningDistributionManager:
 
         return normalized
 
-    def print_distribution(
-        self,
-        amounts: Dict[str, float],
-        model: nn.Module,
-        layer_scores: Optional[Dict] = None
-    ):
+    def print_distribution(self, amounts: Dict[str, float], model: nn.Module, layer_scores: Optional[Dict] = None):
         """Print human-readable distribution plan."""
         print("\n" + "=" * 80)
         print(f"Pruning Distribution ({self.strategy.value})")
@@ -443,11 +378,7 @@ class PruningDistributionManager:
 
 
 def compute_pruning_distribution(
-    model: nn.Module,
-    layer_names: List[str],
-    strategy: str = 'adaptive_sensitivity',
-    target_sparsity: float = 0.5,
-    **kwargs
+    model: nn.Module, layer_names: List[str], strategy: str = "adaptive_sensitivity", target_sparsity: float = 0.5, **kwargs
 ) -> Dict[str, float]:
     """
     Convenience function for computing pruning distribution.
@@ -462,10 +393,6 @@ def compute_pruning_distribution(
     Returns:
         Per-layer pruning amounts
     """
-    manager = PruningDistributionManager(
-        strategy=strategy,
-        target_sparsity=target_sparsity
-    )
+    manager = PruningDistributionManager(strategy=strategy, target_sparsity=target_sparsity)
 
     return manager.compute_distribution(model, layer_names, **kwargs)
-

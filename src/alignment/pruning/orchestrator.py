@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PruningPlan:
     """Complete pruning plan."""
+
     distribution_strategy: str
     scoring_method: str
     per_layer_amounts: Dict[str, float]
@@ -59,12 +60,7 @@ class MasterPruningOrchestrator:
         >>> print(f"Accuracy: {result['baseline']}% → {result['final']}%")
     """
 
-    def __init__(
-        self,
-        verbose: bool = True,
-        parallel: bool = False,
-        num_workers: int = 4
-    ):
+    def __init__(self, verbose: bool = True, parallel: bool = False, num_workers: int = 4):
         """
         Initialize orchestrator.
 
@@ -81,16 +77,16 @@ class MasterPruningOrchestrator:
         self,
         model: nn.Module,
         target_sparsity: float,
-        distribution: str = 'adaptive_sensitivity',
-        scoring: str = 'composite',
-        direction: str = 'low',
+        distribution: str = "adaptive_sensitivity",
+        scoring: str = "composite",
+        direction: str = "low",
         use_dynamic: bool = False,
-        train_loader = None,
-        val_loader = None,
+        train_loader=None,
+        val_loader=None,
         trainer_fn: Optional[Callable] = None,
         eval_fn: Optional[Callable] = None,
         layers: Optional[List[str]] = None,
-        fine_tune_epochs: int = 20
+        fine_tune_epochs: int = 20,
     ) -> Dict[str, Any]:
         """
         Complete pruning workflow with all options.
@@ -138,6 +134,7 @@ class MasterPruningOrchestrator:
         # Auto-detect layers if needed
         if layers is None:
             from ..core.layer_detector import detect_trackable_layers
+
             layers = detect_trackable_layers(model)
             if self.verbose:
                 print(f"Auto-detected {len(layers)} trackable layers\n")
@@ -154,13 +151,9 @@ class MasterPruningOrchestrator:
             print("Step 1: Computing importance scores...")
 
         if use_dynamic and train_loader:
-            layer_scores = self._compute_dynamic_scores(
-                model, train_loader, layers, scoring
-            )
+            layer_scores = self._compute_dynamic_scores(model, train_loader, layers, scoring)
         else:
-            layer_scores = self._compute_static_scores(
-                model, val_loader or train_loader, layers, scoring
-            )
+            layer_scores = self._compute_static_scores(model, val_loader or train_loader, layers, scoring)
 
         if self.verbose:
             print(f"Computed scores for {len(layer_scores)} layers\n")
@@ -171,16 +164,10 @@ class MasterPruningOrchestrator:
 
         from .distribution import PruningDistributionManager
 
-        dist_manager = PruningDistributionManager(
-            strategy=distribution,
-            target_sparsity=target_sparsity
-        )
+        dist_manager = PruningDistributionManager(strategy=distribution, target_sparsity=target_sparsity)
 
         per_layer_amounts = dist_manager.compute_distribution(
-            model,
-            layers,
-            layer_scores=layer_scores,
-            eval_fn=lambda m: eval_fn(m, val_loader) if eval_fn and val_loader else None
+            model, layers, layer_scores=layer_scores, eval_fn=lambda m: eval_fn(m, val_loader) if eval_fn and val_loader else None
         )
 
         if self.verbose:
@@ -197,11 +184,7 @@ class MasterPruningOrchestrator:
             if layer_name not in layer_scores or layer_name not in per_layer_amounts:
                 continue
 
-            mask = MaskOperations.create_structured_mask(
-                layer_scores[layer_name],
-                amount=per_layer_amounts[layer_name],
-                mode=direction
-            )
+            mask = MaskOperations.create_structured_mask(layer_scores[layer_name], amount=per_layer_amounts[layer_name], mode=direction)
             masks[layer_name] = mask
 
         if self.verbose:
@@ -216,11 +199,7 @@ class MasterPruningOrchestrator:
         dep_pruner = DependencyAwarePruning(model)
 
         # Convert masks to scores for dependency pruner interface
-        pruning_result = dep_pruner.prune(
-            layer_scores,
-            amount=target_sparsity,  # Overall target
-            dry_run=False
-        )
+        pruning_result = dep_pruner.prune(layer_scores, amount=target_sparsity, dry_run=False)  # Overall target
 
         if self.verbose:
             print("Applied pruning\n")
@@ -247,24 +226,18 @@ class MasterPruningOrchestrator:
 
         # Return complete results
         return {
-            'baseline_accuracy': baseline_acc,
-            'final_accuracy': final_acc,
-            'accuracy_drop': baseline_acc - final_acc if baseline_acc and final_acc else None,
-            'target_sparsity': target_sparsity,
-            'distribution_strategy': distribution,
-            'scoring_method': scoring,
-            'per_layer_amounts': per_layer_amounts,
-            'masks': masks,
-            'pruning_stats': pruning_result['stats']
+            "baseline_accuracy": baseline_acc,
+            "final_accuracy": final_acc,
+            "accuracy_drop": baseline_acc - final_acc if baseline_acc and final_acc else None,
+            "target_sparsity": target_sparsity,
+            "distribution_strategy": distribution,
+            "scoring_method": scoring,
+            "per_layer_amounts": per_layer_amounts,
+            "masks": masks,
+            "pruning_stats": pruning_result["stats"],
         }
 
-    def _compute_static_scores(
-        self,
-        model: nn.Module,
-        data_loader,
-        layers: List[str],
-        scoring: str
-    ) -> Dict[str, torch.Tensor]:
+    def _compute_static_scores(self, model: nn.Module, data_loader, layers: List[str], scoring: str) -> Dict[str, torch.Tensor]:
         """Compute scores on current (trained) model."""
         from ..metrics import get_metric
         from ..models import BaseModelWrapper
@@ -284,26 +257,28 @@ class MasterPruningOrchestrator:
         data = capture.capture(inputs, include_weights=True)
 
         # Compute scores based on method
-        if scoring == 'magnitude':
+        if scoring == "magnitude":
             scores = {}
             for layer in layers:
                 if layer in data.weights:
                     weights = data.weights[layer]
                     scores[layer] = weights.abs().mean(dim=list(range(1, weights.ndim)))
 
-        elif scoring == 'rayleigh_quotient':
-            rq = get_metric('rayleigh_quotient')
+        elif scoring == "rayleigh_quotient":
+            rq = get_metric("rayleigh_quotient")
             scores = {}
             for layer in layers:
                 if layer in data.inputs and layer in data.weights:
                     scores[layer] = rq.compute(data.inputs[layer], data.weights[layer])
 
-        elif scoring == 'composite':
-            scorer = NodeScoringService(metrics={
-                'rq': get_metric('rayleigh_quotient'),
-                'redundancy': get_metric('pairwise_redundancy_gaussian', mode='output_based', num_pairs=10),
-                'synergy': get_metric('synergy_gaussian_mmi', num_pairs=10)
-            })
+        elif scoring == "composite":
+            scorer = NodeScoringService(
+                metrics={
+                    "rq": get_metric("rayleigh_quotient"),
+                    "redundancy": get_metric("pairwise_redundancy_gaussian", mode="output_based", num_pairs=10),
+                    "synergy": get_metric("synergy_gaussian_mmi", num_pairs=10),
+                }
+            )
 
             layer_scores_obj = scorer.compute_layerwise_scores(data, targets)
             scores = {name: ls.composite for name, ls in layer_scores_obj.items()}
@@ -313,13 +288,7 @@ class MasterPruningOrchestrator:
 
         return scores
 
-    def _compute_dynamic_scores(
-        self,
-        model: nn.Module,
-        train_loader,
-        layers: List[str],
-        scoring: str
-    ) -> Dict[str, torch.Tensor]:
+    def _compute_dynamic_scores(self, model: nn.Module, train_loader, layers: List[str], scoring: str) -> Dict[str, torch.Tensor]:
         """
         Compute scores using training dynamics.
 
@@ -336,11 +305,7 @@ class MasterPruningOrchestrator:
         return self._compute_static_scores(model, train_loader, layers, scoring)
 
 
-def prune_with_all_options(
-    model: nn.Module,
-    target_sparsity: float = 0.7,
-    **kwargs
-) -> Dict:
+def prune_with_all_options(model: nn.Module, target_sparsity: float = 0.7, **kwargs) -> Dict:
     """
     One-liner for complete pruning with all options.
 
@@ -354,4 +319,3 @@ def prune_with_all_options(
     """
     orchestrator = MasterPruningOrchestrator()
     return orchestrator.prune_complete(model, target_sparsity, **kwargs)
-

@@ -51,17 +51,13 @@ class TotalCorrelation(BaseMetric):
         else:
             # Joint entropy for multiple variables
             # Use multi-dimensional histogram
-            ranges = [(data_np[:, i].min(), data_np[:, i].max())
-                      for i in range(data_np.shape[1])]
+            ranges = [(data_np[:, i].min(), data_np[:, i].max()) for i in range(data_np.shape[1])]
             hist, _ = np.histogramdd(data_np, bins=self.n_bins, range=ranges)
             hist = hist.flatten() + 1e-10
             hist = hist / hist.sum()
             return -np.sum(hist * np.log(hist))
 
-    def compute(self,
-                inputs: Optional[torch.Tensor] = None,
-                weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None) -> float:
+    def compute(self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None) -> float:
         """Compute total correlation."""
         if outputs is None:
             raise ValueError("Outputs required for total correlation")
@@ -114,13 +110,7 @@ class InteractionInformation(BaseMetric):
         self.n_samples = n_samples
         self.bins = bins
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute interaction information scores.
 
@@ -152,15 +142,9 @@ class InteractionInformation(BaseMetric):
             Z = outputs[:, k]
 
             # Compute pairwise mutual information using histogram method
-            MI_XY = self._estimate_mi_binning(
-                X.unsqueeze(1), Y.unsqueeze(1)
-            )
-            MI_XZ = self._estimate_mi_binning(
-                X.unsqueeze(1), Z.unsqueeze(1)
-            )
-            MI_YZ = self._estimate_mi_binning(
-                Y.unsqueeze(1), Z.unsqueeze(1)
-            )
+            MI_XY = self._estimate_mi_binning(X.unsqueeze(1), Y.unsqueeze(1))
+            MI_XZ = self._estimate_mi_binning(X.unsqueeze(1), Z.unsqueeze(1))
+            MI_YZ = self._estimate_mi_binning(Y.unsqueeze(1), Z.unsqueeze(1))
 
             # Compute conditional mutual information I(X;Y|Z)
             # Using approximation: I(X;Y|Z) ≈ I(X;Y) - I(X;Y;Z)
@@ -250,10 +234,7 @@ class ConnectedInformation(BaseMetric):
 
         return total
 
-    def compute(self,
-                inputs: Optional[torch.Tensor] = None,
-                weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None) -> float:
+    def compute(self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None) -> float:
         """Compute connected information up to max_order."""
         if outputs is None:
             raise ValueError("Outputs required for connected information")
@@ -269,14 +250,14 @@ class ConnectedInformation(BaseMetric):
         total_connected = 0.0
 
         from itertools import combinations
+
         for order in range(2, min(n_vars + 1, self.max_order + 1)):
             for var_subset in combinations(range(n_vars), order):
                 interaction = self._compute_interaction_info(outputs, list(var_subset))
                 total_connected += abs(interaction)  # Use absolute value
 
         # Normalize by number of possible interactions
-        n_interactions = sum(1 for order in range(2, min(n_vars + 1, self.max_order + 1))
-                           for _ in combinations(range(n_vars), order))
+        n_interactions = sum(1 for order in range(2, min(n_vars + 1, self.max_order + 1)) for _ in combinations(range(n_vars), order))
 
         if n_interactions > 0:
             total_connected /= n_interactions
@@ -305,13 +286,7 @@ class SynergisticInformation(BaseMetric):
         self.group_size = group_size
         self.n_groups = n_groups
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute synergistic information scores.
 
@@ -334,7 +309,7 @@ class SynergisticInformation(BaseMetric):
 
         for _ in range(n_groups_actual):
             # Select a random group
-            idx = torch.randperm(n_neurons)[:self.group_size]
+            idx = torch.randperm(n_neurons)[: self.group_size]
             group_outputs = outputs[:, idx]
 
             # Compute joint entropy of the group

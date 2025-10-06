@@ -39,21 +39,13 @@ class ActivationL2Norm(BaseMetric):
     requires_weights = False
     requires_outputs = True
 
-    def __init__(
-        self,
-        aggregate_method: str = "l2",
-        use_absolute: bool = True
-    ):
+    def __init__(self, aggregate_method: str = "l2", use_absolute: bool = True):
         super().__init__()
         self.aggregate_method = aggregate_method
         self.use_absolute = use_absolute
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute activation-based importance scores.
@@ -178,11 +170,7 @@ class ActivationVariance(BaseMetric):
     requires_outputs = True
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """Compute variance of activations per neuron."""
         # Use outputs if available
@@ -205,4 +193,3 @@ class ActivationVariance(BaseMetric):
         variance = activations.var(dim=0)
 
         return variance
-

@@ -38,13 +38,9 @@ class MetricAggregator:
                 for layer_name, value in layer_values.items():
                     self.metrics_over_time[metric_name][layer_name].append(value)
             else:
-                self.metrics_over_time[metric_name]['value'].append(layer_values)
+                self.metrics_over_time[metric_name]["value"].append(layer_values)
 
-    def get_metric_evolution(
-        self,
-        metric_name: str,
-        layer_name: str
-    ) -> Tuple[List[int], List[float]]:
+    def get_metric_evolution(self, metric_name: str, layer_name: str) -> Tuple[List[int], List[float]]:
         """
         Get the evolution of a metric over time.
 
@@ -62,14 +58,9 @@ class MetricAggregator:
             return [], []
 
         values = self.metrics_over_time[metric_name][layer_name]
-        return self.steps[:len(values)], values
+        return self.steps[: len(values)], values
 
-    def compute_trends(
-        self,
-        metric_name: str,
-        layer_name: str,
-        window_size: int = 10
-    ) -> Dict[str, Any]:
+    def compute_trends(self, metric_name: str, layer_name: str, window_size: int = 10) -> Dict[str, Any]:
         """
         Compute trend statistics for a metric.
 
@@ -90,9 +81,7 @@ class MetricAggregator:
 
         # Compute moving average
         if len(values) >= window_size:
-            moving_avg = np.convolve(values_array,
-                                    np.ones(window_size) / window_size,
-                                    mode='valid')
+            moving_avg = np.convolve(values_array, np.ones(window_size) / window_size, mode="valid")
         else:
             moving_avg = values_array
 
@@ -108,12 +97,12 @@ class MetricAggregator:
             change_points = []
 
         return {
-            'initial_value': float(values[0]),
-            'final_value': float(values[-1]),
-            'mean': float(np.mean(values_array)),
-            'std': float(np.std(values_array)),
-            'slope': float(slope),
-            'percent_change': float((values[-1] - values[0]) / (values[0] + 1e-8) * 100),
-            'moving_average': moving_avg.tolist() if len(moving_avg) > 0 else [],
-            'change_points': change_points.tolist()
+            "initial_value": float(values[0]),
+            "final_value": float(values[-1]),
+            "mean": float(np.mean(values_array)),
+            "std": float(np.std(values_array)),
+            "slope": float(slope),
+            "percent_change": float((values[-1] - values[0]) / (values[0] + 1e-8) * 100),
+            "moving_average": moving_avg.tolist() if len(moving_avg) > 0 else [],
+            "change_points": change_points.tolist(),
         }

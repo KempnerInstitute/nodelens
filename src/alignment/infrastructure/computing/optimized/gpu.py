@@ -9,11 +9,7 @@ import torch
 
 
 def gpu_histogram1d(
-    data: torch.Tensor,
-    bins: int = 10,
-    min_val: Optional[float] = None,
-    max_val: Optional[float] = None,
-    density: bool = False
+    data: torch.Tensor, bins: int = 10, min_val: Optional[float] = None, max_val: Optional[float] = None, density: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     GPU-accelerated 1D histogram computation.
@@ -59,7 +55,7 @@ def gpu_histogram2d(
     y: torch.Tensor,
     bins: Union[int, Tuple[int, int]] = 10,
     range: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None,
-    density: bool = False
+    density: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     GPU-accelerated 2D histogram computation.
@@ -115,12 +111,7 @@ def gpu_histogram2d(
     return hist, x_edges, y_edges
 
 
-def gpu_mutual_information(
-    x: torch.Tensor,
-    y: torch.Tensor,
-    bins: int = 10,
-    method: str = "histogram"
-) -> torch.Tensor:
+def gpu_mutual_information(x: torch.Tensor, y: torch.Tensor, bins: int = 10, method: str = "histogram") -> torch.Tensor:
     """
     GPU-accelerated mutual information computation.
 
@@ -149,11 +140,7 @@ def gpu_mutual_information(
         p_x_p_y = p_x.unsqueeze(0) * p_y.unsqueeze(1)
 
         # Use log trick to avoid log(0)
-        log_term = torch.where(
-            p_xy > 1e-10,
-            torch.log(p_xy / (p_x_p_y + 1e-10)),
-            torch.tensor(0.0, device=x.device)
-        )
+        log_term = torch.where(p_xy > 1e-10, torch.log(p_xy / (p_x_p_y + 1e-10)), torch.tensor(0.0, device=x.device))
 
         mi = (p_xy * log_term).sum()
 
@@ -192,9 +179,12 @@ def gpu_mutual_information(
             return x.log() - 1.0 / (2.0 * x)
 
         # MI estimation
-        mi = digamma_approx(torch.tensor(k, dtype=torch.float32)) + \
-             digamma_approx(torch.tensor(n, dtype=torch.float32)) - \
-             digamma_approx(n_x).mean() - digamma_approx(n_y).mean()
+        mi = (
+            digamma_approx(torch.tensor(k, dtype=torch.float32))
+            + digamma_approx(torch.tensor(n, dtype=torch.float32))
+            - digamma_approx(n_x).mean()
+            - digamma_approx(n_y).mean()
+        )
 
         return mi.clamp(min=0)
 
@@ -202,11 +192,7 @@ def gpu_mutual_information(
         raise ValueError(f"Unknown method: {method}")
 
 
-def gpu_entropy(
-    data: torch.Tensor,
-    bins: int = 10,
-    method: str = "histogram"
-) -> torch.Tensor:
+def gpu_entropy(data: torch.Tensor, bins: int = 10, method: str = "histogram") -> torch.Tensor:
     """
     GPU-accelerated entropy computation.
 
@@ -241,12 +227,7 @@ def gpu_entropy(
         raise ValueError(f"Unknown method: {method}")
 
 
-def gpu_conditional_entropy(
-    x: torch.Tensor,
-    y: torch.Tensor,
-    condition: torch.Tensor,
-    bins: int = 10
-) -> torch.Tensor:
+def gpu_conditional_entropy(x: torch.Tensor, y: torch.Tensor, condition: torch.Tensor, bins: int = 10) -> torch.Tensor:
     """
     GPU-accelerated conditional entropy H(X,Y|Z).
 
@@ -276,7 +257,7 @@ def gpu_conditional_entropy(
     indices = z_idx * bins * bins + y_idx * bins + x_idx
 
     # Count occurrences
-    hist_xyz = torch.zeros(bins ** 3, device=x.device)
+    hist_xyz = torch.zeros(bins**3, device=x.device)
     ones = torch.ones(n, device=x.device)
     hist_xyz.scatter_add_(0, indices, ones)
     hist_xyz = hist_xyz.reshape(bins, bins, bins) + 1e-10
@@ -296,11 +277,7 @@ def gpu_conditional_entropy(
             p_xy_given_z = p_xyz[z] / p_z[z]
 
             # H(X,Y|Z=z)
-            log_term = torch.where(
-                p_xy_given_z > 1e-10,
-                p_xy_given_z.log(),
-                torch.tensor(0.0, device=x.device)
-            )
+            log_term = torch.where(p_xy_given_z > 1e-10, p_xy_given_z.log(), torch.tensor(0.0, device=x.device))
             h_xy_z = -(p_xy_given_z * log_term).sum()
 
             # Weight by p(z)

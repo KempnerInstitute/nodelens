@@ -92,7 +92,7 @@ class GaussianPIDSynergyMMI(BaseMetric):
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
         target_outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         if outputs is None or target_outputs is None:
             raise ValueError("GaussianPIDSynergyMMI requires outputs and target_outputs")
@@ -156,7 +156,7 @@ class GaussianPIDSynergyMMI(BaseMetric):
                     Yij = torch.stack([yi, yj], dim=1)
                     I_joint = _mi_gaussian_scalar_vector(z, Yij)
                     R_mmi = torch.minimum(I_i, I_j)
-                    s_sum += (I_joint - I_i - I_j + R_mmi)
+                    s_sum += I_joint - I_i - I_j + R_mmi
                 synergy[i] = s_sum / js.numel()
         else:
             # For multivariate Z, average I across dims; use same MMI structure
@@ -177,9 +177,7 @@ class GaussianPIDSynergyMMI(BaseMetric):
                         I_joint_sum += _mi_gaussian_scalar_vector(Z[:, k], torch.stack([yi, yj], dim=1))
                     I_joint = I_joint_sum / d
                     R_mmi = torch.minimum(I_i, I_j)
-                    s_sum += (I_joint - I_i - I_j + R_mmi)
+                    s_sum += I_joint - I_i - I_j + R_mmi
                 synergy[i] = s_sum / js.numel()
 
         return torch.nan_to_num(synergy, nan=0.0, neginf=0.0, posinf=0.0)
-
-

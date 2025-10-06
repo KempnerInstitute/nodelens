@@ -7,8 +7,9 @@ from .gaussian_mi import GaussianMIAnalytic
 from .mi_projection import MIProjectionVsMeanInput
 from .mutual_information import MutualInformationBinning, MutualInformationGaussian
 from .pairwise_gaussian import PairwiseRedundancyGaussian
-from .pid import SharedInformation, UniqueInformationX, UniqueInformationY
+from .pid import SharedInformation
 from .pid import SynergisticInformation as PIDSynergisticInformation
+from .pid import UniqueInformationX, UniqueInformationY
 from .redundancy import AverageRedundancy
 from .synergy_mmi import SynergyGaussianMMI
 
@@ -20,35 +21,38 @@ try:
         SynergisticInformation,
         TotalCorrelation,
     )
+
     _has_higher_order = True
 except ImportError:
     _has_higher_order = False
 
 __all__ = [
     # Mutual Information
-    'MutualInformationGaussian',
-    'MutualInformationBinning',
-    'GaussianMIAnalytic',
+    "MutualInformationGaussian",
+    "MutualInformationBinning",
+    "GaussianMIAnalytic",
     # Redundancy
-    'AverageRedundancy',
-    'PairwiseRedundancyGaussian',
+    "AverageRedundancy",
+    "PairwiseRedundancyGaussian",
     # Synergy
-    'SynergyGaussianMMI',
+    "SynergyGaussianMMI",
     # PID
-    'SharedInformation',
-    'UniqueInformationX',
-    'UniqueInformationY',
-    'PIDSynergisticInformation',
+    "SharedInformation",
+    "UniqueInformationX",
+    "UniqueInformationY",
+    "PIDSynergisticInformation",
     # Conditional MI
-    'ConditionalMutualInformation',
+    "ConditionalMutualInformation",
     # MI Projection
-    'MIProjectionVsMeanInput',
+    "MIProjectionVsMeanInput",
 ]
 
 if _has_higher_order:
-    __all__.extend([
-        'TotalCorrelation',
-        'InteractionInformation',
-        'ConnectedInformation',
-        'SynergisticInformation',
-    ])
+    __all__.extend(
+        [
+            "TotalCorrelation",
+            "InteractionInformation",
+            "ConnectedInformation",
+            "SynergisticInformation",
+        ]
+    )

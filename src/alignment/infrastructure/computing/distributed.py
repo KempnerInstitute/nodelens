@@ -33,23 +33,18 @@ def get_world_size() -> int:
     return dist.get_world_size()
 
 
-def setup_distributed(
-    backend: str = "nccl",
-    init_method: Optional[str] = None,
-    world_size: Optional[int] = None,
-    rank: Optional[int] = None
-) -> bool:
+def setup_distributed(backend: str = "nccl", init_method: Optional[str] = None, world_size: Optional[int] = None, rank: Optional[int] = None) -> bool:
     """
-    Setup distributed training environment.
-   e
-    Args:
-        backend: Backend to use ('nccl', 'gloo')
-        init_method: URL specifying how to initialize the process group
-        world_size: Number of processes
-        rank: Rank of the current process
+     Setup distributed training environment.
+    e
+     Args:
+         backend: Backend to use ('nccl', 'gloo')
+         init_method: URL specifying how to initialize the process group
+         world_size: Number of processes
+         rank: Rank of the current process
 
-    Returns:
-        True if distributed setup successful, False otherwise
+     Returns:
+         True if distributed setup successful, False otherwise
     """
     if not torch.cuda.is_available() and backend == "nccl":
         logger.warning("CUDA not available, falling back to gloo backend")
@@ -66,12 +61,7 @@ def setup_distributed(
             if init_method is None:
                 init_method = os.environ.get("INIT_METHOD", "env://")
 
-            dist.init_process_group(
-                backend=backend,
-                init_method=init_method,
-                world_size=world_size,
-                rank=rank
-            )
+            dist.init_process_group(backend=backend, init_method=init_method, world_size=world_size, rank=rank)
 
             if torch.cuda.is_available():
                 torch.cuda.set_device(rank % torch.cuda.device_count())
@@ -106,11 +96,7 @@ def barrier():
         dist.barrier()
 
 
-def reduce_tensor(
-    tensor: torch.Tensor,
-    op: dist.ReduceOp = dist.ReduceOp.SUM,
-    dst: int = 0
-) -> torch.Tensor:
+def reduce_tensor(tensor: torch.Tensor, op: dist.ReduceOp = dist.ReduceOp.SUM, dst: int = 0) -> torch.Tensor:
     """
     Reduce tensor across all processes.
 
@@ -134,10 +120,7 @@ def reduce_tensor(
     return tensor
 
 
-def gather_tensor(
-    tensor: torch.Tensor,
-    dst: int = 0
-) -> Optional[List[torch.Tensor]]:
+def gather_tensor(tensor: torch.Tensor, dst: int = 0) -> Optional[List[torch.Tensor]]:
     """
     Gather tensors from all processes.
 
@@ -163,10 +146,7 @@ def gather_tensor(
         return None
 
 
-def all_reduce(
-    tensor: torch.Tensor,
-    op: dist.ReduceOp = dist.ReduceOp.SUM
-) -> torch.Tensor:
+def all_reduce(tensor: torch.Tensor, op: dist.ReduceOp = dist.ReduceOp.SUM) -> torch.Tensor:
     """
     All-reduce tensor across all processes.
 
@@ -189,10 +169,7 @@ def all_reduce(
     return tensor
 
 
-def broadcast(
-    tensor: torch.Tensor,
-    src: int = 0
-) -> torch.Tensor:
+def broadcast(tensor: torch.Tensor, src: int = 0) -> torch.Tensor:
     """
     Broadcast tensor from source to all processes.
 
@@ -219,7 +196,7 @@ class DistributedMetricComputer:
     building on the basic distributed utilities.
     """
 
-    def __init__(self, backend: str = 'nccl'):
+    def __init__(self, backend: str = "nccl"):
         """
         Initialize distributed computing.
 
@@ -244,20 +221,16 @@ class DistributedMetricComputer:
 
         # Auto-detect from environment
         if rank is None:
-            rank = int(os.environ.get('RANK', 0))
+            rank = int(os.environ.get("RANK", 0))
         if world_size is None:
-            world_size = int(os.environ.get('WORLD_SIZE', 1))
+            world_size = int(os.environ.get("WORLD_SIZE", 1))
 
         self.rank = rank
         self.world_size = world_size
 
         if world_size > 1:
             # Initialize process group
-            dist.init_process_group(
-                backend=self.backend,
-                rank=rank,
-                world_size=world_size
-            )
+            dist.init_process_group(backend=self.backend, rank=rank, world_size=world_size)
             self.initialized = True
 
     def cleanup(self):
@@ -289,7 +262,7 @@ class DistributedMetricComputer:
             return [local_metric]
 
         # Ensure tensor is on correct device
-        if not local_metric.is_cuda and self.backend == 'nccl':
+        if not local_metric.is_cuda and self.backend == "nccl":
             local_metric = local_metric.cuda()
 
         # Gather from all processes
@@ -298,9 +271,7 @@ class DistributedMetricComputer:
 
         return gathered
 
-    def reduce_metrics(self,
-                      local_metric: torch.Tensor,
-                      reduction: str = 'mean') -> torch.Tensor:
+    def reduce_metrics(self, local_metric: torch.Tensor, reduction: str = "mean") -> torch.Tensor:
         """
         Reduce metrics across all processes.
 
@@ -317,28 +288,25 @@ class DistributedMetricComputer:
         # Clone to avoid modifying original
         metric = local_metric.clone()
 
-        if not metric.is_cuda and self.backend == 'nccl':
+        if not metric.is_cuda and self.backend == "nccl":
             metric = metric.cuda()
 
         # Reduce across processes
-        if reduction == 'sum':
+        if reduction == "sum":
             dist.all_reduce(metric, op=dist.ReduceOp.SUM)
-        elif reduction == 'mean':
+        elif reduction == "mean":
             dist.all_reduce(metric, op=dist.ReduceOp.SUM)
             metric = metric / self.world_size
-        elif reduction == 'max':
+        elif reduction == "max":
             dist.all_reduce(metric, op=dist.ReduceOp.MAX)
-        elif reduction == 'min':
+        elif reduction == "min":
             dist.all_reduce(metric, op=dist.ReduceOp.MIN)
         else:
             raise ValueError(f"Unknown reduction: {reduction}")
 
         return metric
 
-    def distributed_metric_computation(self,
-                                     metric_fn: Callable,
-                                     data_loader: torch.utils.data.DataLoader,
-                                     **metric_kwargs) -> Dict[str, float]:
+    def distributed_metric_computation(self, metric_fn: Callable, data_loader: torch.utils.data.DataLoader, **metric_kwargs) -> Dict[str, float]:
         """
         Compute metrics in distributed fashion.
 
@@ -360,17 +328,14 @@ class DistributedMetricComputer:
 
         # Aggregate local results
         if local_results:
-            local_metric = torch.tensor(
-                sum(local_results) / len(local_results),
-                device='cuda' if self.backend == 'nccl' else 'cpu'
-            )
+            local_metric = torch.tensor(sum(local_results) / len(local_results), device="cuda" if self.backend == "nccl" else "cpu")
         else:
             local_metric = torch.tensor(0.0)
 
         # Reduce across all processes
-        global_metric = self.reduce_metrics(local_metric, reduction='mean')
+        global_metric = self.reduce_metrics(local_metric, reduction="mean")
 
-        return {'metric': global_metric.item()}
+        return {"metric": global_metric.item()}
 
 
 class DistributedModelWrapper:
@@ -398,11 +363,7 @@ class DistributedModelWrapper:
         torch.cuda.set_device(device)
         self.model = self.model.cuda(device)
 
-        self.ddp_model = DDP(
-            self.model,
-            device_ids=[device],
-            output_device=device
-        )
+        self.ddp_model = DDP(self.model, device_ids=[device], output_device=device)
 
     def get_model(self) -> torch.nn.Module:
         """Get the wrapped model."""
@@ -410,10 +371,7 @@ class DistributedModelWrapper:
 
 
 def distributed_metric_aggregation(
-    metric_computer: Any,
-    data_partitions: List[Tuple[torch.Tensor, ...]],
-    metric_name: str,
-    **compute_kwargs
+    metric_computer: Any, data_partitions: List[Tuple[torch.Tensor, ...]], metric_name: str, **compute_kwargs
 ) -> float:
     """
     Aggregate metric computation across data partitions.
@@ -435,12 +393,7 @@ def distributed_metric_aggregation(
         local_scores = []
         for partition in data_partitions:
             inputs, weights, outputs = partition
-            score = metric_computer.compute(
-                inputs=inputs,
-                weights=weights,
-                outputs=outputs,
-                **compute_kwargs
-            )
+            score = metric_computer.compute(inputs=inputs, weights=weights, outputs=outputs, **compute_kwargs)
             local_scores.append(score)
 
         # Average local scores
@@ -451,7 +404,7 @@ def distributed_metric_aggregation(
             local_tensor = torch.tensor(0.0, dtype=torch.float32)
 
         # Reduce across processes
-        global_avg = dist_computer.reduce_metrics(local_tensor, reduction='mean')
+        global_avg = dist_computer.reduce_metrics(local_tensor, reduction="mean")
 
         return global_avg.item()
 
@@ -462,10 +415,7 @@ def distributed_metric_aggregation(
 class DistributedBatchProcessor:
     """Process batches in distributed fashion with automatic load balancing."""
 
-    def __init__(self,
-                 world_size: int,
-                 rank: int,
-                 device: Optional[torch.device] = None):
+    def __init__(self, world_size: int, rank: int, device: Optional[torch.device] = None):
         """
         Initialize distributed batch processor.
 
@@ -476,7 +426,7 @@ class DistributedBatchProcessor:
         """
         self.world_size = world_size
         self.rank = rank
-        self.device = device or torch.device(f'cuda:{rank}')
+        self.device = device or torch.device(f"cuda:{rank}")
 
     def split_batch(self, batch: torch.Tensor) -> torch.Tensor:
         """
@@ -519,7 +469,7 @@ class DistributedBatchProcessor:
         max_size = max(s.item() for s in sizes)
         padded_result = torch.zeros(max_size, *local_result.shape[1:], device=self.device)
         if local_result.size(0) > 0:
-            padded_result[:local_result.size(0)] = local_result
+            padded_result[: local_result.size(0)] = local_result
 
         gathered = [torch.zeros_like(padded_result) for _ in range(self.world_size)]
         dist.all_gather(gathered, padded_result)

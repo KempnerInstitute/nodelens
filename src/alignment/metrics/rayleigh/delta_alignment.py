@@ -28,13 +28,7 @@ class DeltaAlignment(RayleighQuotient):
     This metric requires the model to store initial weights for comparison.
     """
 
-    def __init__(
-        self,
-        relative: bool = True,
-        min_samples: int = 2,
-        scale_by_norm: bool = False,
-        **config: Any
-    ):
+    def __init__(self, relative: bool = True, min_samples: int = 2, scale_by_norm: bool = False, **config: Any):
         """
         Initialize the Delta Alignment metric.
 
@@ -64,7 +58,7 @@ class DeltaAlignment(RayleighQuotient):
         outputs: Optional[torch.Tensor] = None,
         layer_name: Optional[str] = None,
         initial_weights: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute Delta Alignment values for each neuron.
@@ -86,10 +80,7 @@ class DeltaAlignment(RayleighQuotient):
         # Get initial weights
         if initial_weights is None:
             if layer_name is None or layer_name not in self._initial_weights:
-                logger.warning(
-                    f"DeltaAlignment: No initial weights found for layer '{layer_name}'. "
-                    "Using zeros as initial weights."
-                )
+                logger.warning(f"DeltaAlignment: No initial weights found for layer '{layer_name}'. " "Using zeros as initial weights.")
                 initial_weights = torch.zeros_like(weights)
             else:
                 initial_weights = self._initial_weights[layer_name]
@@ -97,8 +88,7 @@ class DeltaAlignment(RayleighQuotient):
         # Ensure shapes match
         if initial_weights.shape != weights.shape:
             logger.warning(
-                f"DeltaAlignment: Shape mismatch between current weights {weights.shape} "
-                f"and initial weights {initial_weights.shape}. Reshaping."
+                f"DeltaAlignment: Shape mismatch between current weights {weights.shape} " f"and initial weights {initial_weights.shape}. Reshaping."
             )
             if initial_weights.numel() == weights.numel():
                 initial_weights = initial_weights.reshape(weights.shape)
@@ -130,7 +120,7 @@ class NormalizedDeltaAlignment(DeltaAlignment):
         outputs: Optional[torch.Tensor] = None,
         layer_name: Optional[str] = None,
         initial_weights: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute normalized delta alignment values.
@@ -139,14 +129,7 @@ class NormalizedDeltaAlignment(DeltaAlignment):
             Normalized delta alignment values [output_features]
         """
         # Get regular delta alignment
-        delta_rq = super().compute(
-            inputs=inputs,
-            weights=weights,
-            outputs=outputs,
-            layer_name=layer_name,
-            initial_weights=initial_weights,
-            **kwargs
-        )
+        delta_rq = super().compute(inputs=inputs, weights=weights, outputs=outputs, layer_name=layer_name, initial_weights=initial_weights, **kwargs)
 
         # Get initial weights for normalization
         if initial_weights is None:

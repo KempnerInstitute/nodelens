@@ -25,12 +25,7 @@ class MaskOperations:
     """
 
     @staticmethod
-    def create_structured_mask(
-        scores: torch.Tensor,
-        amount: float,
-        mode: str = 'low',
-        min_keep: int = 1
-    ) -> torch.Tensor:
+    def create_structured_mask(scores: torch.Tensor, amount: float, mode: str = "low", min_keep: int = 1) -> torch.Tensor:
         """
         Create structured mask (neuron/channel level) from importance scores.
 
@@ -52,19 +47,19 @@ class MaskOperations:
         if num_to_prune == 0:
             return mask
 
-        if mode == 'low':
+        if mode == "low":
             # Prune lowest scores
             _, indices = torch.topk(scores, num_to_keep, largest=True)
             mask = torch.zeros_like(scores, dtype=torch.bool)
             mask[indices] = True
 
-        elif mode == 'high':
+        elif mode == "high":
             # Prune highest scores
             _, indices = torch.topk(scores, num_to_keep, largest=False)
             mask = torch.zeros_like(scores, dtype=torch.bool)
             mask[indices] = True
 
-        elif mode == 'random':
+        elif mode == "random":
             # Random pruning
             indices = torch.randperm(num_neurons)[:num_to_keep]
             mask = torch.zeros_like(scores, dtype=torch.bool)
@@ -77,11 +72,7 @@ class MaskOperations:
         return mask
 
     @staticmethod
-    def create_unstructured_mask(
-        scores: torch.Tensor,
-        amount: float,
-        mode: str = 'low'
-    ) -> torch.Tensor:
+    def create_unstructured_mask(scores: torch.Tensor, amount: float, mode: str = "low") -> torch.Tensor:
         """
         Create unstructured mask (weight level) from importance scores.
 
@@ -103,11 +94,11 @@ class MaskOperations:
         # Flatten for processing
         scores_flat = scores.flatten()
 
-        if mode == 'low':
+        if mode == "low":
             _, indices = torch.topk(scores_flat, num_to_keep, largest=True)
-        elif mode == 'high':
+        elif mode == "high":
             _, indices = torch.topk(scores_flat, num_to_keep, largest=False)
-        elif mode == 'random':
+        elif mode == "random":
             indices = torch.randperm(num_weights)[:num_to_keep]
         else:
             raise ValueError(f"Unknown mode: {mode}")
@@ -123,11 +114,7 @@ class MaskOperations:
         return mask
 
     @staticmethod
-    def expand_neuron_mask_to_weights(
-        neuron_mask: torch.Tensor,
-        weight_shape: Tuple[int, ...],
-        dim: int = 0
-    ) -> torch.Tensor:
+    def expand_neuron_mask_to_weights(neuron_mask: torch.Tensor, weight_shape: Tuple[int, ...], dim: int = 0) -> torch.Tensor:
         """
         Expand neuron/channel mask to full weight tensor.
 
@@ -168,11 +155,7 @@ class MaskOperations:
         return mask
 
     @staticmethod
-    def apply_mask_to_weights(
-        weights: torch.Tensor,
-        mask: torch.Tensor,
-        mode: str = 'multiply'
-    ) -> torch.Tensor:
+    def apply_mask_to_weights(weights: torch.Tensor, mask: torch.Tensor, mode: str = "multiply") -> torch.Tensor:
         """
         Apply mask to weights.
 
@@ -185,13 +168,11 @@ class MaskOperations:
             Masked weights
         """
         if mask.shape != weights.shape:
-            raise ValueError(
-                f"Mask shape {mask.shape} doesn't match weights shape {weights.shape}"
-            )
+            raise ValueError(f"Mask shape {mask.shape} doesn't match weights shape {weights.shape}")
 
-        if mode == 'multiply':
+        if mode == "multiply":
             return weights * mask.float()
-        elif mode == 'zero':
+        elif mode == "zero":
             masked_weights = weights.clone()
             masked_weights[~mask] = 0.0
             return masked_weights
@@ -214,18 +195,15 @@ class MaskOperations:
         pruned = total - kept
 
         return {
-            'total_elements': total,
-            'kept_elements': kept,
-            'pruned_elements': pruned,
-            'sparsity': pruned / total if total > 0 else 0.0,
-            'density': kept / total if total > 0 else 0.0
+            "total_elements": total,
+            "kept_elements": kept,
+            "pruned_elements": pruned,
+            "sparsity": pruned / total if total > 0 else 0.0,
+            "density": kept / total if total > 0 else 0.0,
         }
 
     @staticmethod
-    def combine_masks(
-        masks: list,
-        operation: str = 'and'
-    ) -> torch.Tensor:
+    def combine_masks(masks: list, operation: str = "and") -> torch.Tensor:
         """
         Combine multiple masks.
 
@@ -245,9 +223,9 @@ class MaskOperations:
             if mask.shape != result.shape:
                 raise ValueError("All masks must have the same shape")
 
-            if operation == 'and':
+            if operation == "and":
                 result = result & mask
-            elif operation == 'or':
+            elif operation == "or":
                 result = result | mask
             else:
                 raise ValueError(f"Unknown operation: {operation}")
@@ -255,11 +233,7 @@ class MaskOperations:
         return result
 
     @staticmethod
-    def global_threshold_mask(
-        layer_scores: dict,
-        global_amount: float,
-        mode: str = 'low'
-    ) -> dict:
+    def global_threshold_mask(layer_scores: dict, global_amount: float, mode: str = "low") -> dict:
         """
         Create masks using a global threshold across all layers.
 
@@ -285,14 +259,18 @@ class MaskOperations:
         num_total = len(all_scores_cat)
         num_to_keep = int(num_total * (1 - global_amount))
 
-        if mode == 'low':
+        if mode == "low":
             threshold = torch.topk(all_scores_cat, num_to_keep, largest=True)[0][-1]
+
             def threshold_fn(s):
                 return s >= threshold
-        elif mode == 'high':
+
+        elif mode == "high":
             threshold = torch.topk(all_scores_cat, num_to_keep, largest=False)[0][-1]
+
             def threshold_fn(s):
                 return s <= threshold
+
         else:
             raise ValueError(f"Global thresholding not supported for mode: {mode}")
 
@@ -306,4 +284,3 @@ class MaskOperations:
         logger.info(f"Global thresholding: {num_to_keep}/{num_total} elements kept")
 
         return masks
-

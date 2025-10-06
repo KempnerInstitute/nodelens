@@ -26,12 +26,7 @@ class AverageRedundancy(BaseMetric):
     with the rest of the layer.
     """
 
-    def __init__(
-        self,
-        min_samples: int = 2,
-        use_correlation: bool = True,
-        **config: Any
-    ):
+    def __init__(self, min_samples: int = 2, use_correlation: bool = True, **config: Any):
         """
         Initialize the redundancy metric.
 
@@ -57,11 +52,7 @@ class AverageRedundancy(BaseMetric):
         return False
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute average redundancy for each neuron.
@@ -165,12 +156,7 @@ class NodeRedundancy(BaseMetric):
     correlated inputs.
     """
 
-    def __init__(
-        self,
-        min_samples: int = 2,
-        exclude_self: bool = True,
-        **config: Any
-    ):
+    def __init__(self, min_samples: int = 2, exclude_self: bool = True, **config: Any):
         """
         Initialize node redundancy metric.
 
@@ -196,11 +182,7 @@ class NodeRedundancy(BaseMetric):
         return False
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute redundancy for each input feature.
@@ -272,11 +254,7 @@ class LayerRedundancy(BaseMetric):
     the average pairwise mutual information between neurons.
     """
 
-    def __init__(
-        self,
-        return_matrix: bool = False,
-        **config: Any
-    ):
+    def __init__(self, return_matrix: bool = False, **config: Any):
         """
         Initialize layer redundancy metric.
 
@@ -301,11 +279,7 @@ class LayerRedundancy(BaseMetric):
         return False
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute overall layer redundancy.
@@ -315,12 +289,7 @@ class LayerRedundancy(BaseMetric):
             If return_matrix=True: redundancy matrix [num_neurons, num_neurons]
         """
         # Get per-neuron redundancy scores
-        neuron_redundancies = self._avg_redundancy.compute(
-            inputs=inputs,
-            weights=weights,
-            outputs=outputs,
-            **kwargs
-        )
+        neuron_redundancies = self._avg_redundancy.compute(inputs=inputs, weights=weights, outputs=outputs, **kwargs)
 
         if self.return_matrix:
             # Return full redundancy matrix (would need to modify avg_redundancy)

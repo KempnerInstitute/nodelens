@@ -34,12 +34,7 @@ class MagnitudePruning(BasePruningStrategy):
         >>> mask = strategy.prune(conv_layer)
     """
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute importance scores based on weight magnitudes.
 
@@ -51,7 +46,7 @@ class MagnitudePruning(BasePruningStrategy):
         Returns:
             Tensor of importance scores (absolute weight values)
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         # Importance is simply the absolute value of weights
@@ -84,12 +79,7 @@ class IterativeMagnitudePruning(IterativePruningStrategy):
         ... )
     """
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute importance scores based on weight magnitudes.
 
@@ -101,7 +91,7 @@ class IterativeMagnitudePruning(IterativePruningStrategy):
         Returns:
             Tensor of importance scores (absolute weight values)
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         return module.weight.data.abs()
@@ -123,27 +113,18 @@ class GlobalMagnitudePruning(BasePruningStrategy):
         >>> masks = strategy.prune_model(model, amount=0.7)
     """
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute importance scores for a single module.
 
         Note: For global pruning, use prune_model() instead of prune().
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         return module.weight.data.abs()
 
-    def prune_model(
-        self,
-        model: nn.Module,
-        amount: Optional[float] = None
-    ) -> dict:
+    def prune_model(self, model: nn.Module, amount: Optional[float] = None) -> dict:
         """
         Prune entire model globally based on weight magnitudes.
 
@@ -161,7 +142,7 @@ class GlobalMagnitudePruning(BasePruningStrategy):
         module_info = []
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 scores = module.weight.data.abs()
                 all_scores.append(scores.flatten())
                 module_info.append((name, module, scores.shape))

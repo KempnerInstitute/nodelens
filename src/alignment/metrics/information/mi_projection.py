@@ -42,11 +42,7 @@ class MIProjectionVsMeanInput(BaseMetric):
 
     @torch.no_grad()
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute MI scores for each neuron.
@@ -154,12 +150,8 @@ class MIProjectionVsMeanInput(BaseMetric):
                 mi = 0.0
                 for pi in range(self.bins):
                     for mi_idx in range(self.bins):
-                        if (joint_prob[pi, mi_idx] > self.eps and
-                            p_proj[pi] > self.eps and
-                            p_mean[mi_idx] > self.eps):
-                            mi += joint_prob[pi, mi_idx] * np.log2(
-                                joint_prob[pi, mi_idx] / (p_proj[pi] * p_mean[mi_idx])
-                            )
+                        if joint_prob[pi, mi_idx] > self.eps and p_proj[pi] > self.eps and p_mean[mi_idx] > self.eps:
+                            mi += joint_prob[pi, mi_idx] * np.log2(joint_prob[pi, mi_idx] / (p_proj[pi] * p_mean[mi_idx]))
 
                 mi_scores[i] = mi
 

@@ -6,10 +6,8 @@ from ..core.registry import METRIC_REGISTRY
 
 # Import all metric modules to register them
 from . import information, rayleigh, similarity, spectral, task_specific
-from .information import (
-    gaussian_pid,  # Register gaussian PID synergy
-    pairwise_gaussian,  # Ensure registration side-effects
-)
+from .information import gaussian_pid  # Register gaussian PID synergy
+from .information import pairwise_gaussian  # Ensure registration side-effects
 
 
 def get_metric(name: str, **kwargs):
@@ -37,4 +35,4 @@ def list_metrics():
 
 
 # For convenience, expose the registry and functions
-__all__ = ['METRIC_REGISTRY', 'get_metric', 'list_metrics']
+__all__ = ["METRIC_REGISTRY", "get_metric", "list_metrics"]

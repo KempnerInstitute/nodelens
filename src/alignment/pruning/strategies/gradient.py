@@ -39,11 +39,7 @@ class GradientPruning(BasePruningStrategy):
         >>> mask = strategy.prune(layer, amount=0.5)
     """
 
-    def __init__(
-        self,
-        config=None,
-        mode: Literal['gradient', 'taylor'] = 'taylor'
-    ):
+    def __init__(self, config=None, mode: Literal["gradient", "taylor"] = "taylor"):
         """
         Initialize gradient pruning strategy.
 
@@ -56,12 +52,7 @@ class GradientPruning(BasePruningStrategy):
         super().__init__(config)
         self.mode = mode
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute importance scores based on gradients.
 
@@ -76,7 +67,7 @@ class GradientPruning(BasePruningStrategy):
         Raises:
             ValueError: If module has no gradients
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         if module.weight.grad is None:
@@ -87,10 +78,10 @@ class GradientPruning(BasePruningStrategy):
                 "on converged models as gradients will be near-zero."
             )
 
-        if self.mode == 'gradient':
+        if self.mode == "gradient":
             # Use gradient magnitude
             importance = module.weight.grad.abs()
-        elif self.mode == 'taylor':
+        elif self.mode == "taylor":
             # Use Taylor approximation (gradient * weight)
             importance = (module.weight.grad * module.weight.data).abs()
         else:
@@ -135,21 +126,17 @@ class FisherPruning(BasePruningStrategy):
             model: Model to accumulate Fisher information for
         """
         for name, module in model.named_modules():
-            if hasattr(module, 'weight') and module.weight.grad is not None:
+            if hasattr(module, "weight") and module.weight.grad is not None:
                 if name not in self.fisher_info:
                     self.fisher_info[name] = torch.zeros_like(module.weight.data)
 
                 # Accumulate squared gradients
-                self.fisher_info[name] += module.weight.grad.data ** 2
+                self.fisher_info[name] += module.weight.grad.data**2
 
         self.n_samples += 1
 
     def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        module_name: Optional[str] = None,
-        **kwargs
+        self, module: nn.Module, inputs: Optional[torch.Tensor] = None, module_name: Optional[str] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute importance scores based on Fisher information.
@@ -174,15 +161,11 @@ class FisherPruning(BasePruningStrategy):
         fisher = self.fisher_info[module_name] / self.n_samples
 
         # Importance is Fisher info times weight squared
-        importance = fisher * (module.weight.data ** 2)
+        importance = fisher * (module.weight.data**2)
 
         return importance
 
-    def prune_model(
-        self,
-        model: nn.Module,
-        amount: Optional[float] = None
-    ) -> dict:
+    def prune_model(self, model: nn.Module, amount: Optional[float] = None) -> dict:
         """
         Prune model based on accumulated Fisher information.
 
@@ -196,10 +179,8 @@ class FisherPruning(BasePruningStrategy):
         masks = {}
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
-                importance = self.compute_importance_scores(
-                    module, module_name=name
-                )
+            if hasattr(module, "weight"):
+                importance = self.compute_importance_scores(module, module_name=name)
                 mask = self.create_pruning_mask(importance, amount)
                 self.apply_pruning(module, mask)
                 masks[name] = mask
@@ -258,28 +239,19 @@ class MomentumPruning(BasePruningStrategy):
             model: Model to update momentum for
         """
         for name, module in model.named_modules():
-            if hasattr(module, 'weight') and module.weight.grad is not None:
+            if hasattr(module, "weight") and module.weight.grad is not None:
                 # Current importance (gradient-weight product)
-                current_importance = (
-                    module.weight.grad.data * module.weight.data
-                ).abs()
+                current_importance = (module.weight.grad.data * module.weight.data).abs()
 
                 if name not in self.importance_buffer:
                     # Initialize buffer
                     self.importance_buffer[name] = current_importance
                 else:
                     # Update with momentum
-                    self.importance_buffer[name] = (
-                        self.momentum * self.importance_buffer[name] +
-                        (1 - self.momentum) * current_importance
-                    )
+                    self.importance_buffer[name] = self.momentum * self.importance_buffer[name] + (1 - self.momentum) * current_importance
 
     def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        module_name: Optional[str] = None,
-        **kwargs
+        self, module: nn.Module, inputs: Optional[torch.Tensor] = None, module_name: Optional[str] = None, **kwargs
     ) -> torch.Tensor:
         """
         Get importance scores from momentum buffer.
@@ -302,11 +274,7 @@ class MomentumPruning(BasePruningStrategy):
 
         return self.importance_buffer[module_name]
 
-    def prune_model(
-        self,
-        model: nn.Module,
-        amount: Optional[float] = None
-    ) -> dict:
+    def prune_model(self, model: nn.Module, amount: Optional[float] = None) -> dict:
         """
         Prune model based on momentum buffer.
 
@@ -320,10 +288,8 @@ class MomentumPruning(BasePruningStrategy):
         masks = {}
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
-                importance = self.compute_importance_scores(
-                    module, module_name=name
-                )
+            if hasattr(module, "weight"):
+                importance = self.compute_importance_scores(module, module_name=name)
                 mask = self.create_pruning_mask(importance, amount)
                 self.apply_pruning(module, mask)
                 masks[name] = mask

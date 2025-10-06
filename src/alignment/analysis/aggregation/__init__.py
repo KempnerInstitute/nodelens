@@ -7,7 +7,7 @@ from .metrics import MetricAggregator
 from .results import ResultAggregator
 
 __all__ = [
-    'ResultAggregator',
-    'MetricAggregator',
-    'LayerAggregator',
+    "ResultAggregator",
+    "MetricAggregator",
+    "LayerAggregator",
 ]

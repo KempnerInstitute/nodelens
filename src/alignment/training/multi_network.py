@@ -29,7 +29,7 @@ def train_networks_fully_tensorized(
     checkpoint_dir: Optional[Path] = None,
     log_interval: int = 100,
     eval_interval: int = 1,
-    callbacks: Optional[List[Callable]] = None
+    callbacks: Optional[List[Callable]] = None,
 ) -> Tuple[List[nn.Module], Dict[str, List[float]]]:
     """
     Train multiple networks simultaneously using tensorized operations.
@@ -60,9 +60,18 @@ def train_networks_fully_tensorized(
     if len(networks) == 1:
         logger.warning("Only one network provided, falling back to standard training")
         return _train_single_network(
-            networks[0], train_loader, val_loader, epochs, optimizer_class,
-            optimizer_kwargs, loss_fn, device, checkpoint_dir, log_interval,
-            eval_interval, callbacks
+            networks[0],
+            train_loader,
+            val_loader,
+            epochs,
+            optimizer_class,
+            optimizer_kwargs,
+            loss_fn,
+            device,
+            checkpoint_dir,
+            log_interval,
+            eval_interval,
+            callbacks,
         )
 
     # Verify all networks have the same architecture
@@ -86,13 +95,7 @@ def train_networks_fully_tensorized(
     optimizer = optimizer_class(tensorized_net.parameters(), **optimizer_kwargs)
 
     # Training history
-    history = {
-        'train_loss': [],
-        'train_acc': [],
-        'val_loss': [],
-        'val_acc': [],
-        'epoch_times': []
-    }
+    history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "epoch_times": []}
 
     # Training loop
     logger.info(f"Starting tensorized training of {num_networks} networks for {epochs} epochs")
@@ -101,25 +104,20 @@ def train_networks_fully_tensorized(
         epoch_start = time.time()
 
         # Training phase
-        train_loss, train_acc = _tensorized_train_epoch(
-            tensorized_net, train_loader, optimizer, loss_fn, device,
-            epoch, log_interval, callbacks
-        )
+        train_loss, train_acc = _tensorized_train_epoch(tensorized_net, train_loader, optimizer, loss_fn, device, epoch, log_interval, callbacks)
 
         # Validation phase
         val_loss, val_acc = 0.0, 0.0
         if val_loader and (epoch + 1) % eval_interval == 0:
-            val_loss, val_acc = _tensorized_evaluate(
-                tensorized_net, val_loader, loss_fn, device
-            )
+            val_loss, val_acc = _tensorized_evaluate(tensorized_net, val_loader, loss_fn, device)
 
         # Record history
         epoch_time = time.time() - epoch_start
-        history['train_loss'].append(train_loss)
-        history['train_acc'].append(train_acc)
-        history['val_loss'].append(val_loss)
-        history['val_acc'].append(val_acc)
-        history['epoch_times'].append(epoch_time)
+        history["train_loss"].append(train_loss)
+        history["train_acc"].append(train_acc)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
+        history["epoch_times"].append(epoch_time)
 
         # Log progress
         logger.info(
@@ -131,9 +129,7 @@ def train_networks_fully_tensorized(
 
         # Save checkpoint
         if checkpoint_dir and (epoch + 1) % eval_interval == 0:
-            _save_tensorized_checkpoint(
-                tensorized_net, optimizer, epoch, history, checkpoint_dir
-            )
+            _save_tensorized_checkpoint(tensorized_net, optimizer, epoch, history, checkpoint_dir)
 
     # Extract individual networks
     trained_networks = tensorized_net.extract_networks()
@@ -209,7 +205,7 @@ def _tensorized_train_epoch(
     device: torch.device,
     epoch: int,
     log_interval: int,
-    callbacks: Optional[List[Callable]] = None
+    callbacks: Optional[List[Callable]] = None,
 ) -> Tuple[float, float]:
     """Train for one epoch with tensorized operations."""
     model.train()
@@ -251,10 +247,7 @@ def _tensorized_train_epoch(
 
         # Logging
         if batch_idx % log_interval == 0:
-            logger.debug(
-                f"Epoch {epoch} [{batch_idx}/{len(train_loader)}] "
-                f"Loss: {loss.item():.4f}"
-            )
+            logger.debug(f"Epoch {epoch} [{batch_idx}/{len(train_loader)}] " f"Loss: {loss.item():.4f}")
 
         # Callbacks
         if callbacks:
@@ -268,10 +261,7 @@ def _tensorized_train_epoch(
 
 
 def _tensorized_evaluate(
-    model: TensorizedNetworkWrapper,
-    val_loader: torch.utils.data.DataLoader,
-    loss_fn: nn.Module,
-    device: torch.device
+    model: TensorizedNetworkWrapper, val_loader: torch.utils.data.DataLoader, loss_fn: nn.Module, device: torch.device
 ) -> Tuple[float, float]:
     """Evaluate tensorized model."""
     model.eval()
@@ -314,7 +304,7 @@ def _train_single_network(
     checkpoint_dir: Optional[Path],
     log_interval: int,
     eval_interval: int,
-    callbacks: Optional[List[Callable]]
+    callbacks: Optional[List[Callable]],
 ) -> Tuple[List[nn.Module], Dict[str, List[float]]]:
     """Fallback to standard single network training."""
     device = torch.device(device)
@@ -324,13 +314,7 @@ def _train_single_network(
     optimizer_kwargs = optimizer_kwargs or {}
     optimizer = optimizer_class(network.parameters(), **optimizer_kwargs)
 
-    history = {
-        'train_loss': [],
-        'train_acc': [],
-        'val_loss': [],
-        'val_acc': [],
-        'epoch_times': []
-    }
+    history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "epoch_times": []}
 
     logger.info("Using standard single network training")
 
@@ -387,11 +371,11 @@ def _train_single_network(
 
         # Record history
         epoch_time = time.time() - epoch_start
-        history['train_loss'].append(avg_train_loss)
-        history['train_acc'].append(train_acc)
-        history['val_loss'].append(val_loss)
-        history['val_acc'].append(val_acc)
-        history['epoch_times'].append(epoch_time)
+        history["train_loss"].append(avg_train_loss)
+        history["train_acc"].append(train_acc)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
+        history["epoch_times"].append(epoch_time)
 
         # Log progress
         logger.info(
@@ -406,10 +390,10 @@ def _train_single_network(
             checkpoint_dir = Path(checkpoint_dir)
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
             checkpoint = {
-                'epoch': epoch,
-                'model_state_dict': network.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'history': history
+                "epoch": epoch,
+                "model_state_dict": network.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "history": history,
             }
             checkpoint_path = checkpoint_dir / f"single_epoch_{epoch}.pt"
             torch.save(checkpoint, checkpoint_path)
@@ -423,22 +407,18 @@ def _train_single_network(
 
 
 def _save_tensorized_checkpoint(
-    model: TensorizedNetworkWrapper,
-    optimizer: optim.Optimizer,
-    epoch: int,
-    history: Dict[str, List[float]],
-    checkpoint_dir: Path
+    model: TensorizedNetworkWrapper, optimizer: optim.Optimizer, epoch: int, history: Dict[str, List[float]], checkpoint_dir: Path
 ):
     """Save checkpoint for tensorized training."""
     checkpoint_dir = Path(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'history': history,
-        'num_networks': model.num_networks
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "history": history,
+        "num_networks": model.num_networks,
     }
 
     checkpoint_path = checkpoint_dir / f"tensorized_epoch_{epoch}.pt"
