@@ -180,7 +180,7 @@ class GradientAlignment(BaseMetric):
             # Oja's rule: Hebbian with weight decay
             # Δw = η * y * (x - y*w)
             # Requires current weights
-            if weights is None:
+            if weights is None:  # noqa: F821
                 signal = outputs.T @ inputs / B
             else:
                 # y * x^T - y * y^T * w

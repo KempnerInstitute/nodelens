@@ -145,7 +145,7 @@ class UnifiedReporter:
 
     def _generate_html_header(self, include_toc: bool) -> str:
         """Generate HTML header with styles."""
-        return f"""<!DOCTYPE html>
+        html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>{self.title}</title>
