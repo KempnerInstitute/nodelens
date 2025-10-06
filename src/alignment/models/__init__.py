@@ -5,26 +5,13 @@ This module provides wrappers that add activation tracking and other
 functionality needed for alignment analysis to standard PyTorch models.
 """
 
-from .base import BaseModelWrapper
-from .wrappers import (
-    ModelWrapper,
-    AlignmentNetwork,
-    ActivationTracker,
-)
-from .transformers import (
-    TransformerWrapperEnhanced,
-    LLaMAWrapper,
-)
-from .architectures.standard_models import (
-    MLP,
-    CNN2P2,
-    SimpleConvNet,
-    create_model,
-)
-from . import hub  # registers torchvision/timm/huggingface model loaders
-
 # Register standard models
 from ..core.registry import register_model
+from . import hub  # registers torchvision/timm/huggingface model loaders
+from .architectures.standard_models import CNN2P2, MLP, SimpleConvNet, create_model
+from .base import BaseModelWrapper
+from .transformers import LLaMAWrapper, TransformerWrapperEnhanced
+from .wrappers import ActivationTracker, AlignmentNetwork, ModelWrapper
 
 # Register the models
 register_model("mlp")(MLP)

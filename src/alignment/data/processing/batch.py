@@ -2,10 +2,11 @@
 Batch processing utilities for efficient metric computation on large datasets.
 """
 
-import torch
-from typing import Dict, List, Optional, Callable, Tuple, Any
-from torch.utils.data import DataLoader
 import logging
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import torch
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -264,9 +265,10 @@ def compute_metrics_parallel(
     Returns:
         Results dictionary
     """
-    import torch.multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor, as_completed
-    
+
+    import torch.multiprocessing as mp
+
     # Determine devices
     if devices is None:
         if torch.cuda.is_available():

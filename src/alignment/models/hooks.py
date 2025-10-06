@@ -5,11 +5,12 @@ This module provides lifecycle-managed hooks that automatically clean up
 to prevent memory leaks.
 """
 
+import logging
 from contextlib import contextmanager
-from typing import List, Dict, Callable, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
+
 import torch
 import torch.nn as nn
-import logging
 
 logger = logging.getLogger(__name__)
 

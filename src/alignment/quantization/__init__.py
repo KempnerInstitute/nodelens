@@ -13,18 +13,17 @@ Supports:
 - Symmetric and asymmetric quantization
 """
 
-from .ptq import (
-    quantize_model,
-    quantize_layer,
-    INT8Quantizer,
-    INT4Quantizer,
-    MixedPrecisionQuantizer
-)
-
 from .analysis import (
     analyze_quantization_sensitivity,
     compute_quantization_error,
-    find_optimal_bit_allocation
+    find_optimal_bit_allocation,
+)
+from .ptq import (
+    INT4Quantizer,
+    INT8Quantizer,
+    MixedPrecisionQuantizer,
+    quantize_layer,
+    quantize_model,
 )
 
 __all__ = [

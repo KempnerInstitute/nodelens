@@ -7,17 +7,14 @@ This module provides:
 """
 
 from .batch import BatchMetricProcessor
+from .covariance import CovarianceEstimator, estimate_covariance
 from .layers import (
+    AttentionPreprocessor,
+    CNNPreprocessor,
     LayerPreprocessor,
     LinearPreprocessor,
-    CNNPreprocessor,
-    AttentionPreprocessor,
-    preprocess_layer_activations,
     get_preprocessor,
-)
-from .covariance import (
-    CovarianceEstimator,
-    estimate_covariance,
+    preprocess_layer_activations,
 )
 
 __all__ = [

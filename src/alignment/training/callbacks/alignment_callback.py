@@ -4,11 +4,11 @@ Training callbacks for alignment metrics.
 Enables computing alignment metrics during training with minimal overhead.
 """
 
-from typing import Dict, List, Optional, Any
-import torch
-import torch.nn as nn
 import logging
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +16,16 @@ logger = logging.getLogger(__name__)
 class AlignmentMetricsCallback:
     """
     Lightweight callback to compute alignment metrics during training.
-    
+
     Piggybacks on the training forward pass with no extra computation.
     Computes metrics every N steps using cached activations.
-    
+
     Key features:
     - Zero extra forward passes
     - Minimal overhead (~5-10ms per frequency)
     - Automatic activation capture via HookManager
     - Supports any tracker (WandB, TensorBoard, etc.)
-    
+
     Example:
         >>> from alignment.training.callbacks import AlignmentMetricsCallback
         >>> callback = AlignmentMetricsCallback(
@@ -33,17 +33,17 @@ class AlignmentMetricsCallback:
         ...     layers=['conv1', 'fc1'],
         ...     frequency=100
         ... )
-        >>> 
+        >>>
         >>> # In training loop:
         >>> for batch_idx, (inputs, targets) in enumerate(train_loader):
         ...     outputs = model(inputs)
         ...     loss.backward()
         ...     optimizer.step()
-        ...     
+        ...
         ...     # Compute metrics (minimal overhead)
         ...     callback.on_batch_end(wrapper, inputs, targets, global_step)
     """
-    
+
     def __init__(
         self,
         metrics: Dict[str, Any],
@@ -56,7 +56,7 @@ class AlignmentMetricsCallback:
     ):
         """
         Initialize alignment metrics callback.
-        
+
         Args:
             metrics: Dict of initialized metrics (e.g., {'rq': RayleighQuotient()})
             layers: Layer names to track
@@ -73,7 +73,7 @@ class AlignmentMetricsCallback:
         self.aggregation = aggregation
         self.tracker = tracker
         self.save_history = save_history
-        
+
         # Initialize history storage
         if save_history:
             self.history = {
@@ -81,9 +81,9 @@ class AlignmentMetricsCallback:
                 for layer in layers
             }
             self.step_history = []
-        
+
         self.step = 0
-    
+
     def on_batch_end(
         self,
         model_wrapper,
@@ -94,7 +94,7 @@ class AlignmentMetricsCallback:
     ):
         """
         Compute metrics at the end of a training batch.
-        
+
         Args:
             model_wrapper: Model wrapper with HookManager
             inputs: Input batch (same as used for forward)
@@ -107,11 +107,11 @@ class AlignmentMetricsCallback:
             self.step = step
         else:
             self.step += 1
-        
+
         # Only compute at specified frequency
         if self.step % self.frequency != 0:
             return
-        
+
         # Sample subset for efficiency (if large batch)
         if self.sample_size is not None and inputs.size(0) > self.sample_size:
             indices = torch.randperm(inputs.size(0))[:self.sample_size]
@@ -120,7 +120,7 @@ class AlignmentMetricsCallback:
         else:
             inputs_sampled = inputs
             targets_sampled = targets
-        
+
         # Capture activations (reuses existing forward, no extra pass)
         # Use no_grad to avoid interfering with training
         with torch.no_grad():
@@ -128,7 +128,7 @@ class AlignmentMetricsCallback:
                 # Use HookManager for safe capture
                 outputs, activations = model_wrapper.forward_with_activations(inputs_sampled)
                 weights = model_wrapper.get_layer_weights(self.layers)
-                
+
                 # Compute metrics for each layer
                 for layer in self.layers:
                     self._compute_layer_metrics(
@@ -138,10 +138,10 @@ class AlignmentMetricsCallback:
                         targets_sampled,
                         **kwargs
                     )
-            
+
             except Exception as e:
                 logger.warning(f"Failed to compute alignment metrics at step {self.step}: {e}")
-    
+
     def _compute_layer_metrics(
         self,
         layer: str,
@@ -155,11 +155,11 @@ class AlignmentMetricsCallback:
         layer_input = activations.get(f'{layer}_input')
         layer_output = activations.get(f'{layer}_output')
         layer_weights = weights.get(layer)
-        
+
         if layer_weights is None:
             logger.warning(f"No weights found for layer {layer}")
             return
-        
+
         # Compute each metric
         for metric_name, metric in self.metrics.items():
             try:
@@ -173,10 +173,10 @@ class AlignmentMetricsCallback:
                     metric_kwargs['outputs'] = layer_output
                 if targets is not None:
                     metric_kwargs['targets'] = targets
-                
+
                 # Compute metric
                 scores = metric.compute(**metric_kwargs, **kwargs)
-                
+
                 # Aggregate to scalar
                 if self.aggregation == 'mean':
                     value = scores.mean().item()
@@ -186,14 +186,14 @@ class AlignmentMetricsCallback:
                     value = {'mean': scores.mean().item(), 'std': scores.std().item()}
                 else:
                     value = scores.mean().item()
-                
+
                 # Store history
                 if self.save_history:
                     if self.aggregation == 'both':
                         self.history[layer][metric_name].append(value)
                     else:
                         self.history[layer][metric_name].append(value)
-                
+
                 # Log to tracker
                 if self.tracker:
                     if self.aggregation == 'both':
@@ -205,23 +205,23 @@ class AlignmentMetricsCallback:
                         self.tracker.log({
                             f'{layer}/{metric_name}': value
                         }, step=self.step)
-                
+
                 logger.debug(f"Step {self.step}, {layer}/{metric_name}: {value}")
-            
+
             except Exception as e:
                 logger.warning(f"Failed to compute {metric_name} for {layer}: {e}")
-    
+
     def get_history(self) -> Dict:
         """Get complete metrics history."""
         if not self.save_history:
             logger.warning("History not saved (save_history=False)")
             return {}
-        
+
         return {
             'history': self.history,
             'steps': self.step_history if hasattr(self, 'step_history') else list(range(0, self.step + 1, self.frequency))
         }
-    
+
     def reset(self):
         """Reset history and step counter."""
         self.step = 0
@@ -231,17 +231,17 @@ class AlignmentMetricsCallback:
                 for layer in self.layers
             }
             self.step_history = []
-    
+
     def save_history(self, path: str):
         """Save history to file."""
         if not self.save_history:
             logger.warning("No history to save")
             return
-        
+
         import json
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Convert to JSON-serializable format
         history_data = {
             'history': self.history,
@@ -250,10 +250,10 @@ class AlignmentMetricsCallback:
             'metrics': list(self.metrics.keys()),
             'frequency': self.frequency
         }
-        
+
         with open(path, 'w') as f:
             json.dump(history_data, f, indent=2)
-        
+
         logger.info(f"Saved alignment history to {path}")
 
 
@@ -264,12 +264,12 @@ def create_alignment_callback(
 ) -> AlignmentMetricsCallback:
     """
     Factory function for creating alignment callbacks.
-    
+
     Args:
         metrics: Dictionary of metrics
         layers: Layers to track
         **config: Additional configuration
-        
+
     Returns:
         Configured AlignmentMetricsCallback
     """

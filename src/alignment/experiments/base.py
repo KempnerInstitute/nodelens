@@ -5,20 +5,21 @@ This module provides the foundation for all experiment types,
 handling common functionality like checkpointing, logging, and metrics.
 """
 
-from typing import Dict, List, Optional, Any, Union, Callable
-from dataclasses import dataclass, field
-from pathlib import Path
-import torch
-import logging
-from abc import ABC, abstractmethod
 import json
+import logging
 import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
+
+import torch
 
 from alignment.core.base import BaseExperiment as CoreBaseExperiment
-from alignment.core.registry import get_metric, get_model, get_dataset, DATASET_REGISTRY
-from alignment.models import ModelWrapper
+from alignment.core.registry import DATASET_REGISTRY, get_dataset, get_metric, get_model
 from alignment.data.loaders import create_distributed_loader
+from alignment.models import ModelWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +237,7 @@ class BaseExperiment(CoreBaseExperiment):
             # Try to get model from registry first
             try:
                 from alignment.core.registry import MODEL_REGISTRY
-                
+
                 # Handle parameter mapping for specific models
                 model_kwargs = self.config.model_config.copy()
                 

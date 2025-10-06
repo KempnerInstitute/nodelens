@@ -1,11 +1,11 @@
 """Experiment tracking utilities for the alignment framework."""
 
 from .base import (
-    ExperimentTracker,
-    WandBTracker,
-    TensorBoardTracker,
-    MultiTracker,
     DummyTracker,
+    ExperimentTracker,
+    MultiTracker,
+    TensorBoardTracker,
+    WandBTracker,
     create_tracker,
 )
 

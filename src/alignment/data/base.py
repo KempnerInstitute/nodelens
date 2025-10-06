@@ -6,14 +6,15 @@ This module provides base functionality for all dataset implementations,
 ensuring consistency across different datasets.
 """
 
-from typing import Dict, Tuple, Optional, Any, List, Union, Callable
-import torch
-from torch.utils.data import Dataset, DataLoader, Sampler
-import torch.distributed as dist
-from abc import ABC, abstractmethod
 import logging
-import numpy as np
+from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+import numpy as np
+import torch
+import torch.distributed as dist
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 from alignment.core.base import BaseDataset as CoreBaseDataset
 
@@ -227,7 +228,7 @@ class BaseDataset(CoreBaseDataset):
             Sampler for class-balanced training
         """
         from torch.utils.data import WeightedRandomSampler
-        
+
         # Get class counts
         if hasattr(self._dataset, 'targets'):
             targets = torch.tensor(self._dataset.targets)

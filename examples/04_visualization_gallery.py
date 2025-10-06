@@ -6,7 +6,7 @@ including all the new plotting methods added to the framework.
 
 Usage:
     python visualization_demo.py
-    
+
 This demo showcases:
     - Enhanced accuracy vs sparsity plots with relative performance
     - Weight distribution comparison before/after pruning
@@ -19,15 +19,17 @@ Output:
     Results are saved to: results/enhanced_visualizations/
 """
 
-import torch
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import torch
+
 from alignment.analysis.visualization import PruningVisualizer
 
 
 def create_demo_results():
     """Create comprehensive demo results for visualization."""
-    
+
     # Progressive dropout results
     dropout_results = {
         'dropout_rates': [0.0, 0.2, 0.4, 0.6, 0.8, 0.9],
@@ -53,7 +55,7 @@ def create_demo_results():
             'random': [46, 55, 62, 67, 71, 74, 76, 77, 78, 79]
         }
     }
-    
+
     # Standard pruning results (sparsity-based)
     pruning_results = {}
     for strategy in ['magnitude', 'gradient', 'fisher', 'random']:
@@ -68,12 +70,12 @@ def create_demo_results():
             }
             accuracy = base_acc * (1 - sparsity * decay_factors[strategy])
             accuracy += np.random.normal(0, 1.0)
-            
+
             pruning_results[strategy][sparsity] = {
                 'accuracy': max(10, min(100, accuracy)),
                 'loss': 0.1 + sparsity * 0.8 * (1 + decay_factors[strategy])
             }
-    
+
     # Multi-seed results
     multi_seed_results = {}
     for strategy in ['magnitude', 'gradient', 'random']:
@@ -88,36 +90,36 @@ def create_demo_results():
                     'loss': base['loss'] + np.random.normal(0, 0.1)
                 }
             multi_seed_results[strategy].append(seed_data)
-    
+
     # Layer-wise sparsity patterns
     layer_sparsities = {
         'magnitude': {'conv1': 0.3, 'conv2': 0.5, 'fc1': 0.7, 'fc2': 0.9},
         'gradient': {'conv1': 0.4, 'conv2': 0.5, 'fc1': 0.6, 'fc2': 0.8},
         'random': {'conv1': 0.5, 'conv2': 0.5, 'fc1': 0.5, 'fc2': 0.5}
     }
-    
+
     model_accuracy = {
         'magnitude': 85.3,
         'gradient': 82.1,
         'random': 68.5
     }
-    
+
     # Weight distributions (simulated)
     np.random.seed(42)
     weights_before = {
         'conv1': torch.randn(64, 3, 3, 3),
         'fc1': torch.randn(128, 512)
     }
-    
+
     weights_after = {}
     for layer_name, weights in weights_before.items():
         # Simulate pruning effects
         mask_magnitude = torch.abs(weights) > torch.quantile(torch.abs(weights), 0.5)
         weights_after[f"{layer_name}_magnitude"] = weights * mask_magnitude
-        
+
         mask_random = torch.rand_like(weights) > 0.5
         weights_after[f"{layer_name}_random"] = weights * mask_random
-    
+
     # Multi-metric comparison data
     strategy_metrics = {
         'magnitude_low': {
@@ -149,7 +151,7 @@ def create_demo_results():
             'Memory': 0.90
         }
     }
-    
+
     # Efficiency curve data
     efficiency_data = {}
     for strategy in ['magnitude_low', 'magnitude_high', 'gradient_low', 'random']:
@@ -163,9 +165,9 @@ def create_demo_results():
         factor = efficiency_factors[strategy]
         accuracies = 100 * np.exp(-0.3 * (compression_ratios - 1) / factor)
         accuracies = np.clip(accuracies, 10, 100)
-        
+
         efficiency_data[strategy] = list(zip(compression_ratios, accuracies))
-    
+
     return {
         'dropout_results': dropout_results,
         'pruning_results': pruning_results,
@@ -184,87 +186,87 @@ def main():
     print("=" * 60)
     print("Enhanced Pruning Visualization Demo")
     print("=" * 60)
-    
+
     # Create output directory
     output_dir = Path('results/enhanced_visualizations')
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create demo data
     print("\nGenerating demo data...")
     demo_data = create_demo_results()
-    
+
     # Initialize visualizer
     visualizer = PruningVisualizer()
-    
+
     # 1. Enhanced accuracy vs sparsity plot
     print("\n1. Creating enhanced accuracy vs sparsity plot...")
-    fig1 = visualizer.plot_accuracy_vs_sparsity_enhanced(
+    visualizer.plot_accuracy_vs_sparsity_enhanced(
         demo_data['dropout_results'],
         save_path=output_dir / 'enhanced_accuracy_vs_sparsity.png'
     )
-    
+
     # 2. Standard pruning performance
     print("2. Creating standard pruning performance plot...")
-    fig2 = visualizer.plot_pruning_performance(
+    visualizer.plot_pruning_performance(
         demo_data['pruning_results'],
         metrics=['accuracy', 'loss'],
         save_path=output_dir / 'pruning_performance.png',
         title='Pruning Strategy Performance Comparison'
     )
-    
+
     # 3. Weight distribution comparison
     print("3. Creating weight distribution comparison...")
-    fig3 = visualizer.plot_weight_distribution_comparison(
+    visualizer.plot_weight_distribution_comparison(
         demo_data['weights_before'],
         demo_data['weights_after'],
         strategies=['magnitude', 'random'],
         save_path=output_dir / 'weight_distributions.png'
     )
-    
+
     # 4. Multi-metric radar chart
     print("4. Creating multi-metric radar chart...")
-    fig4 = visualizer.plot_multi_metric_radar(
+    visualizer.plot_multi_metric_radar(
         demo_data['strategy_metrics'],
         save_path=output_dir / 'multi_metric_radar.png'
     )
-    
+
     # 5. Pruning efficiency curves
     print("5. Creating pruning efficiency curves...")
-    fig5 = visualizer.plot_pruning_efficiency_curve(
+    visualizer.plot_pruning_efficiency_curve(
         demo_data['efficiency_data'],
         save_path=output_dir / 'efficiency_curves.png'
     )
-    
+
     # 6. Comprehensive dashboard
     print("6. Creating comprehensive dashboard...")
-    fig6 = visualizer.plot_comprehensive_dashboard(
+    visualizer.plot_comprehensive_dashboard(
         demo_data['dropout_results'],
         save_path=output_dir / 'comprehensive_dashboard.png'
     )
-    
+
     # 7. Comparison grid
     print("7. Creating comparison grid...")
-    fig7 = visualizer.plot_pruning_comparison_grid(
+    visualizer.plot_pruning_comparison_grid(
         demo_data['pruning_results'],
         save_path=output_dir / 'comparison_grid.png'
     )
-    
+
     # 8. Multi-seed analysis
     print("8. Creating multi-seed analysis...")
-    fig8 = visualizer.plot_multi_seed_results(
+    visualizer.plot_multi_seed_results(
         demo_data['multi_seed_results'],
         metric='accuracy',
         save_path=output_dir / 'multi_seed_analysis.png'
     )
-    
+
     # 9. Layer-wise pruning visualization
     print("9. Creating layer-wise pruning visualization...")
-    fig9 = visualizer.plot_layer_wise_pruning(
+    visualizer.plot_layer_wise_pruning(
         demo_data['layer_sparsities'],
         demo_data['model_accuracy'],
         save_path=output_dir / 'layer_wise_pruning.png'
     )
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("Enhanced Visualization Demo Complete!")
@@ -280,7 +282,7 @@ def main():
     print("  7. comparison_grid.png - 6-panel strategy comparison")
     print("  8. multi_seed_analysis.png - Statistical analysis across seeds")
     print("  9. layer_wise_pruning.png - Layer-specific sparsity patterns")
-    
+
     print("\nVisualization Features:")
     print("  - Consistent color scheme across all plots")
     print("  - High-resolution output (300 DPI)")
@@ -290,4 +292,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()

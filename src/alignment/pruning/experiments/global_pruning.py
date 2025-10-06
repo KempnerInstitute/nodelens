@@ -5,21 +5,22 @@ This module implements experiments that apply the same dropout rate globally
 across all layers and track changes in alignment metrics.
 """
 
-from typing import Dict, List, Optional, Any
+import logging
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from pathlib import Path
-import logging
-from dataclasses import dataclass, field, asdict
 
-from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.experiments.config_components import PruningConfig
 from alignment.experiments.training_utils import (
+    convert_training_history,
     create_experiment_trainer,
     train_with_metrics,
-    convert_training_history
 )
 
 logger = logging.getLogger(__name__)

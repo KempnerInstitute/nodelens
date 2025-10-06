@@ -2,16 +2,11 @@
 
 from .checkpoint import (
     CheckpointManager,
-    save_checkpoint,
-    load_checkpoint,
     cleanup_old_checkpoints,
+    load_checkpoint,
+    save_checkpoint,
 )
-from .logging import (
-    setup_logging,
-    get_logger,
-    log_metrics,
-    log_experiment_config,
-)
+from .logging import get_logger, log_experiment_config, log_metrics, setup_logging
 
 __all__ = [
     # Checkpointing
@@ -24,4 +19,4 @@ __all__ = [
     'get_logger',
     'log_metrics',
     'log_experiment_config',
-] 
+]

@@ -6,7 +6,7 @@ studies, matching the functionality from the old alignment codebase.
 """
 
 import logging
-from typing import List, Optional, Dict, Tuple, Any, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn

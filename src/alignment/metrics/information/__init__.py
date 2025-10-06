@@ -2,30 +2,23 @@
 Information-theoretic metrics for neural network alignment.
 """
 
-from .mutual_information import (
-    MutualInformationGaussian,
-    MutualInformationBinning,
-)
-from .redundancy import AverageRedundancy
-from .pid import (
-    SharedInformation,
-    UniqueInformationX,
-    UniqueInformationY,
-    SynergisticInformation as PIDSynergisticInformation,
-)
 from .conditional_mutual_information import ConditionalMutualInformation
-from .mi_projection import MIProjectionVsMeanInput
 from .gaussian_mi import GaussianMIAnalytic
+from .mi_projection import MIProjectionVsMeanInput
+from .mutual_information import MutualInformationBinning, MutualInformationGaussian
 from .pairwise_gaussian import PairwiseRedundancyGaussian
+from .pid import SharedInformation, UniqueInformationX, UniqueInformationY
+from .pid import SynergisticInformation as PIDSynergisticInformation
+from .redundancy import AverageRedundancy
 from .synergy_mmi import SynergyGaussianMMI
 
 # Import higher-order metrics if available
 try:
     from .higher_order import (
-        TotalCorrelation,
-        InteractionInformation,
         ConnectedInformation,
+        InteractionInformation,
         SynergisticInformation,
+        TotalCorrelation,
     )
     _has_higher_order = True
 except ImportError:
@@ -58,4 +51,4 @@ if _has_higher_order:
         'InteractionInformation',
         'ConnectedInformation',
         'SynergisticInformation',
-    ]) 
+    ])

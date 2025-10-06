@@ -5,24 +5,20 @@ This module provides a unified dataset interface that can handle
 various dataset types without code duplication.
 """
 
-from typing import Tuple, Optional
+from typing import Optional, Tuple
+
 import torch.utils.data
-
-from alignment.data.datasets.unified_dataset import (
-    UnifiedDataset,
-    DATASET_CONFIGS,
-)
-
-from alignment.data.datasets.text_datasets import (
-    TextDataset,
-    WikiTextDataset,
-    C4Dataset,
-    load_text_dataset,
-)
 
 # Import for backward compatibility - these are now created dynamically
 # but we import them to make them available at module level
 from alignment.core.registry import DATASET_REGISTRY
+from alignment.data.datasets.text_datasets import (
+    C4Dataset,
+    TextDataset,
+    WikiTextDataset,
+    load_text_dataset,
+)
+from alignment.data.datasets.unified_dataset import DATASET_CONFIGS, UnifiedDataset
 
 # Get dynamically created dataset classes
 MNISTDataset = DATASET_REGISTRY.get("mnist")

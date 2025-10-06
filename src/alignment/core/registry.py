@@ -5,9 +5,8 @@ This module provides a unified registration system for metrics, models,
 datasets, and experiments, making them easily discoverable and instantiable.
 """
 
-from typing import Dict, Type, Any, Optional, Callable, TypeVar, Union, List
 import logging
-from functools import wraps
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +15,18 @@ T = TypeVar('T')
 
 class Registry:
     """Generic registry for framework components."""
-    
+
     def __init__(self, name: str):
         """
         Initialize a registry.
-        
+
         Args:
             name: Name of the registry (e.g., "metrics", "models")
         """
         self.name = name
         self._registry: Dict[str, Type[Any]] = {}
         self._metadata: Dict[str, Dict[str, Any]] = {}
-    
+
     def register(
         self,
         name: str,
@@ -36,14 +35,14 @@ class Registry:
     ) -> Union[Callable[[Type[T]], Type[T]], Type[T]]:
         """
         Register a class in the registry.
-        
+
         Can be used as a decorator or called directly.
-        
+
         Args:
             name: Name to register the class under
             cls: Class to register (if not using as decorator)
             **metadata: Additional metadata to store with the registration
-            
+
         Returns:
             Registered class or decorator function
         """
@@ -54,31 +53,31 @@ class Registry:
                 )
             self._registry[name] = cls_to_register
             self._metadata[name] = metadata
-            
+
             # Add registry info to the class
             setattr(cls_to_register, '_registry_name', name)
             setattr(cls_to_register, '_registry', self.name)
-            
+
             logger.debug(f"Registered '{name}' in {self.name} registry")
             return cls_to_register
-        
+
         if cls is None:
             # Used as decorator
             return decorator
         else:
             # Direct registration
             return decorator(cls)
-    
+
     def get(self, name: str) -> Type[Any]:
         """
         Get a registered class by name.
-        
+
         Args:
             name: Name of the registered class
-            
+
         Returns:
             The registered class
-            
+
         Raises:
             KeyError: If name is not registered
         """
@@ -89,33 +88,33 @@ class Registry:
                 f"Available: {available}"
             )
         return self._registry[name]
-    
+
     def get_metadata(self, name: str) -> Dict[str, Any]:
         """Get metadata for a registered class."""
         return self._metadata.get(name, {})
-    
+
     def list(self) -> List[str]:
         """List all registered names."""
         return list(self._registry.keys())
-    
+
     def create(self, name: str, **kwargs: Any) -> Any:
         """
         Create an instance of a registered class.
-        
+
         Args:
             name: Name of the registered class
             **kwargs: Arguments to pass to the class constructor
-            
+
         Returns:
             Instance of the registered class
         """
         cls = self.get(name)
         return cls(**kwargs)
-    
+
     def __contains__(self, name: str) -> bool:
         """Check if a name is registered."""
         return name in self._registry
-    
+
     def __len__(self) -> int:
         """Get number of registered items."""
         return len(self._registry)
@@ -196,17 +195,17 @@ def get_reporter(name: str, **kwargs: Any) -> Any:
 def discover_and_register(module_path: str, registry_type: str = "all") -> None:
     """
     Auto-discover and register components from a module.
-    
+
     Args:
         module_path: Python module path to scan
         registry_type: Type of components to register ("all", "metrics", etc.)
     """
     import importlib
     import pkgutil
-    
+
     try:
         module = importlib.import_module(module_path)
-        
+
         # Recursively walk through submodules
         for importer, modname, ispkg in pkgutil.walk_packages(
             path=module.__path__,
@@ -218,6 +217,6 @@ def discover_and_register(module_path: str, registry_type: str = "all") -> None:
                 logger.debug(f"Imported module: {modname}")
             except Exception as e:
                 logger.warning(f"Failed to import {modname}: {e}")
-                
+
     except Exception as e:
-        logger.error(f"Failed to discover components from {module_path}: {e}") 
+        logger.error(f"Failed to discover components from {module_path}: {e}")
