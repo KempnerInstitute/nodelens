@@ -2,17 +2,18 @@
 Unit tests for checkpoint utilities.
 """
 
+import os
+import tempfile
+from pathlib import Path
+
 import pytest
 import torch
 import torch.nn as nn
-import tempfile
-import os
-from pathlib import Path
 
-from alignment.utils.checkpoint import (
-    save_checkpoint,
+from alignment.infrastructure.storage.checkpoint import (
     load_checkpoint,
-    save_model_for_inference
+    save_checkpoint,
+    save_model_for_inference,
 )
 
 
