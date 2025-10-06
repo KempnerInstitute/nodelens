@@ -16,30 +16,25 @@ from .random import BernoulliPruning, LayerwiseRandomPruning, RandomPruning
 
 __all__ = [
     # Magnitude
-    'MagnitudePruning',
-    'IterativeMagnitudePruning',
-    'GlobalMagnitudePruning',
-
+    "MagnitudePruning",
+    "IterativeMagnitudePruning",
+    "GlobalMagnitudePruning",
     # Gradient
-    'GradientPruning',
-    'FisherPruning',
-    'MomentumPruning',
-
+    "GradientPruning",
+    "FisherPruning",
+    "MomentumPruning",
     # Random
-    'RandomPruning',
-    'LayerwiseRandomPruning',
-    'BernoulliPruning',
-
+    "RandomPruning",
+    "LayerwiseRandomPruning",
+    "BernoulliPruning",
     # Parallel
-    'ParallelModePruning',
-    'TensorizedPruning',
-    'AsyncParallelPruning',
-    'ParallelBatchPruning',
-
-
+    "ParallelModePruning",
+    "TensorizedPruning",
+    "AsyncParallelPruning",
+    "ParallelBatchPruning",
     # Alignment-based
-    'AlignmentPruning',
-    'HybridPruning',
-    'GlobalAlignmentPruning',
-    'CascadingAlignmentPruning',
+    "AlignmentPruning",
+    "HybridPruning",
+    "GlobalAlignmentPruning",
+    "CascadingAlignmentPruning",
 ]

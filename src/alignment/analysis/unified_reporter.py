@@ -39,11 +39,7 @@ class UnifiedReporter:
         self.data = {}
         self.figures = []
         self.tables = []
-        self.metadata = {
-            "title": title,
-            "created": datetime.now().isoformat(),
-            "version": "1.0"
-        }
+        self.metadata = {"title": title, "created": datetime.now().isoformat(), "version": "1.0"}
 
     def add_section(self, name: str, content: Any, section_type: str = "text"):
         """
@@ -54,11 +50,7 @@ class UnifiedReporter:
             content: Section content (text, DataFrame, dict, etc.)
             section_type: Type of section ('text', 'data', 'table', 'code')
         """
-        self.sections.append({
-            "name": name,
-            "content": content,
-            "type": section_type
-        })
+        self.sections.append({"name": name, "content": content, "type": section_type})
 
     def add_figure(self, figure_path: Union[str, Path], caption: str = "", width: Optional[str] = None):
         """
@@ -69,11 +61,7 @@ class UnifiedReporter:
             caption: Figure caption
             width: Optional width specification (e.g., "80%", "600px")
         """
-        self.figures.append({
-            "path": str(figure_path),
-            "caption": caption,
-            "width": width
-        })
+        self.figures.append({"path": str(figure_path), "caption": caption, "width": width})
 
     def add_table(self, name: str, data: Union[pd.DataFrame, Dict, List]):
         """
@@ -90,10 +78,7 @@ class UnifiedReporter:
         else:
             df = data
 
-        self.tables.append({
-            "name": name,
-            "data": df
-        })
+        self.tables.append({"name": name, "data": df})
 
     def add_metadata(self, key: str, value: Any):
         """Add metadata to the report."""
@@ -124,15 +109,15 @@ class UnifiedReporter:
             html += '<div class="section"><h2>Tables</h2>'
             for table in self.tables:
                 html += f'<h3>{table["name"]}</h3>'
-                html += table["data"].to_html(classes='data-table', index=False)
-            html += '</div>'
+                html += table["data"].to_html(classes="data-table", index=False)
+            html += "</div>"
 
         # Add figures
         if self.figures:
             html += '<div class="section"><h2>Figures</h2>'
             for fig in self.figures:
                 html += self._generate_html_figure(fig)
-            html += '</div>'
+            html += "</div>"
 
         html += self._generate_html_footer()
 
@@ -249,7 +234,7 @@ class UnifiedReporter:
 
         # Add custom metadata
         for key, value in self.metadata.items():
-            if key not in ['title', 'created', 'version']:
+            if key not in ["title", "created", "version"]:
                 html += f"<br><strong>{key.title()}:</strong> {value}"
 
         html += "</div>"
@@ -269,7 +254,7 @@ class UnifiedReporter:
         if self.figures:
             toc += '<li><a href="#figures">Figures</a></li>'
 
-        toc += '</ul></div>'
+        toc += "</ul></div>"
         return toc
 
     def _generate_html_section(self, section: Dict) -> str:
@@ -286,16 +271,16 @@ class UnifiedReporter:
             html += f"<pre><code>{content}</code></pre>"
         elif section_type == "data":
             if isinstance(content, pd.DataFrame):
-                html += content.to_html(classes='data-table', index=False)
+                html += content.to_html(classes="data-table", index=False)
             elif isinstance(content, dict):
                 html += "<pre>" + json.dumps(content, indent=2) + "</pre>"
             else:
                 html += f"<p>{str(content)}</p>"
         elif section_type == "table":
             if isinstance(content, pd.DataFrame):
-                html += content.to_html(classes='data-table', index=False)
+                html += content.to_html(classes="data-table", index=False)
 
-        html += '</div>'
+        html += "</div>"
         return html
 
     def _generate_html_figure(self, fig: Dict) -> str:
@@ -308,7 +293,7 @@ class UnifiedReporter:
         if fig["caption"]:
             html += f'<div class="figure-caption">{fig["caption"]}</div>'
 
-        html += '</div>'
+        html += "</div>"
         return html
 
     def _generate_html_footer(self) -> str:
@@ -334,7 +319,7 @@ class UnifiedReporter:
         if self.metadata:
             md += "## Metadata\n\n"
             for key, value in self.metadata.items():
-                if key not in ['title', 'created']:
+                if key not in ["title", "created"]:
                     md += f"- **{key.title()}**: {value}\n"
             md += "\n"
 
@@ -383,7 +368,7 @@ class UnifiedReporter:
             md += "## Figures\n\n"
             for fig in self.figures:
                 md += f"![{fig['caption']}]({fig['path']})\n"
-                if fig['caption']:
+                if fig["caption"]:
                     md += f"*{fig['caption']}*\n"
                 md += "\n"
 
@@ -404,23 +389,15 @@ class UnifiedReporter:
             output_path: Path to save the JSON file
             pretty: Whether to pretty-print the JSON
         """
-        report_data = {
-            "metadata": self.metadata,
-            "sections": [],
-            "tables": [],
-            "figures": []
-        }
+        report_data = {"metadata": self.metadata, "sections": [], "tables": [], "figures": []}
 
         # Add sections
         for section in self.sections:
-            section_data = {
-                "name": section["name"],
-                "type": section["type"]
-            }
+            section_data = {"name": section["name"], "type": section["type"]}
 
             content = section["content"]
             if isinstance(content, pd.DataFrame):
-                section_data["content"] = content.to_dict('records')
+                section_data["content"] = content.to_dict("records")
             elif isinstance(content, (dict, list, str, int, float)):
                 section_data["content"] = content
             else:
@@ -430,10 +407,7 @@ class UnifiedReporter:
 
         # Add tables
         for table in self.tables:
-            report_data["tables"].append({
-                "name": table["name"],
-                "data": table["data"].to_dict('records')
-            })
+            report_data["tables"].append({"name": table["name"], "data": table["data"].to_dict("records")})
 
         # Add figures
         report_data["figures"] = self.figures
@@ -442,7 +416,7 @@ class UnifiedReporter:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             if pretty:
                 json.dump(report_data, f, indent=2, default=str)
             else:
@@ -519,12 +493,7 @@ class UnifiedReporter:
 
 
 # Convenience function for quick report generation
-def generate_quick_report(
-    results: Dict[str, Any],
-    output_path: Union[str, Path],
-    title: str = "Quick Report",
-    format: str = "html"
-):
+def generate_quick_report(results: Dict[str, Any], output_path: Union[str, Path], title: str = "Quick Report", format: str = "html"):
     """
     Generate a quick report from results dictionary.
 

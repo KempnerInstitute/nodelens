@@ -29,12 +29,7 @@ class ResultAggregator:
         self.results = {}
         self.metadata = {}
 
-    def add_results(
-        self,
-        name: str,
-        results: Dict[str, Any],
-        metadata: Optional[Dict[str, Any]] = None
-    ):
+    def add_results(self, name: str, results: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None):
         """
         Add results from an experiment.
 
@@ -60,7 +55,7 @@ class ResultAggregator:
         if not name:
             name = path.stem
 
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             results = json.load(f)
 
         self.add_results(name, results)
@@ -80,10 +75,7 @@ class ResultAggregator:
         logger.info(f"Loaded {len(self.results)} result files from {directory}")
 
     def get_metric_values(
-        self,
-        metric_name: str,
-        layer_name: Optional[str] = None,
-        experiment_names: Optional[List[str]] = None
+        self, metric_name: str, layer_name: Optional[str] = None, experiment_names: Optional[List[str]] = None
     ) -> Dict[str, Union[float, Dict[str, float]]]:
         """
         Extract specific metric values across experiments.
@@ -108,8 +100,8 @@ class ResultAggregator:
             exp_results = self.results[exp_name]
 
             # Navigate to metrics
-            if 'metrics' in exp_results:
-                metrics = exp_results['metrics']
+            if "metrics" in exp_results:
+                metrics = exp_results["metrics"]
 
                 # Get final metrics (last step)
                 if metrics:
@@ -126,12 +118,7 @@ class ResultAggregator:
 
         return metric_values
 
-    def compute_statistics(
-        self,
-        metric_name: str,
-        layer_name: str,
-        experiment_pattern: Optional[str] = None
-    ) -> Dict[str, float]:
+    def compute_statistics(self, metric_name: str, layer_name: str, experiment_pattern: Optional[str] = None) -> Dict[str, float]:
         """
         Compute statistics for a metric across experiments.
 
@@ -145,8 +132,7 @@ class ResultAggregator:
         """
         # Filter experiments
         if experiment_pattern:
-            exp_names = [name for name in self.results.keys()
-                        if experiment_pattern in name]
+            exp_names = [name for name in self.results.keys() if experiment_pattern in name]
         else:
             exp_names = list(self.results.keys())
 
@@ -160,21 +146,17 @@ class ResultAggregator:
         values_array = np.array(values)
 
         return {
-            'mean': float(np.mean(values_array)),
-            'std': float(np.std(values_array)),
-            'min': float(np.min(values_array)),
-            'max': float(np.max(values_array)),
-            'median': float(np.median(values_array)),
-            'q1': float(np.percentile(values_array, 25)),
-            'q3': float(np.percentile(values_array, 75)),
-            'count': len(values)
+            "mean": float(np.mean(values_array)),
+            "std": float(np.std(values_array)),
+            "min": float(np.min(values_array)),
+            "max": float(np.max(values_array)),
+            "median": float(np.median(values_array)),
+            "q1": float(np.percentile(values_array, 25)),
+            "q3": float(np.percentile(values_array, 75)),
+            "count": len(values),
         }
 
-    def to_dataframe(
-        self,
-        metrics: Optional[List[str]] = None,
-        layers: Optional[List[str]] = None
-    ) -> pd.DataFrame:
+    def to_dataframe(self, metrics: Optional[List[str]] = None, layers: Optional[List[str]] = None) -> pd.DataFrame:
         """
         Convert results to a pandas DataFrame.
 
@@ -188,17 +170,17 @@ class ResultAggregator:
         data = []
 
         for exp_name, results in self.results.items():
-            row = {'experiment': exp_name}
+            row = {"experiment": exp_name}
 
             # Add metadata
             if exp_name in self.metadata:
                 row.update(self.metadata[exp_name])
 
             # Add metrics
-            if 'metrics' in results and results['metrics']:
+            if "metrics" in results and results["metrics"]:
                 # Get final metrics
-                last_step = max(int(k) for k in results['metrics'].keys())
-                step_metrics = results['metrics'][str(last_step)]
+                last_step = max(int(k) for k in results["metrics"].keys())
+                step_metrics = results["metrics"][str(last_step)]
 
                 for metric_name, layer_values in step_metrics.items():
                     if metrics and metric_name not in metrics:

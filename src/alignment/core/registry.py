@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class Registry:
@@ -27,12 +27,7 @@ class Registry:
         self._registry: Dict[str, Type[Any]] = {}
         self._metadata: Dict[str, Dict[str, Any]] = {}
 
-    def register(
-        self,
-        name: str,
-        cls: Optional[Type[T]] = None,
-        **metadata: Any
-    ) -> Union[Callable[[Type[T]], Type[T]], Type[T]]:
+    def register(self, name: str, cls: Optional[Type[T]] = None, **metadata: Any) -> Union[Callable[[Type[T]], Type[T]], Type[T]]:
         """
         Register a class in the registry.
 
@@ -46,17 +41,16 @@ class Registry:
         Returns:
             Registered class or decorator function
         """
+
         def decorator(cls_to_register: Type[T]) -> Type[T]:
             if name in self._registry:
-                logger.warning(
-                    f"Overwriting existing registration '{name}' in {self.name} registry"
-                )
+                logger.warning(f"Overwriting existing registration '{name}' in {self.name} registry")
             self._registry[name] = cls_to_register
             self._metadata[name] = metadata
 
             # Add registry info to the class
-            setattr(cls_to_register, '_registry_name', name)
-            setattr(cls_to_register, '_registry', self.name)
+            setattr(cls_to_register, "_registry_name", name)
+            setattr(cls_to_register, "_registry", self.name)
 
             logger.debug(f"Registered '{name}' in {self.name} registry")
             return cls_to_register
@@ -83,10 +77,7 @@ class Registry:
         """
         if name not in self._registry:
             available = list(self._registry.keys())
-            raise KeyError(
-                f"'{name}' not found in {self.name} registry. "
-                f"Available: {available}"
-            )
+            raise KeyError(f"'{name}' not found in {self.name} registry. " f"Available: {available}")
         return self._registry[name]
 
     def get_metadata(self, name: str) -> Dict[str, Any]:
@@ -207,11 +198,7 @@ def discover_and_register(module_path: str, registry_type: str = "all") -> None:
         module = importlib.import_module(module_path)
 
         # Recursively walk through submodules
-        for importer, modname, ispkg in pkgutil.walk_packages(
-            path=module.__path__,
-            prefix=module.__name__ + '.',
-            onerror=lambda x: None
-        ):
+        for importer, modname, ispkg in pkgutil.walk_packages(path=module.__path__, prefix=module.__name__ + ".", onerror=lambda x: None):
             try:
                 importlib.import_module(modname)
                 logger.debug(f"Imported module: {modname}")

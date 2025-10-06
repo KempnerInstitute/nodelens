@@ -21,11 +21,7 @@ class WeightSimilarityBase(BaseMetric):
 
     @torch.no_grad()
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute weight similarity scores.
@@ -77,11 +73,7 @@ class WeightCosineSimilarity(WeightSimilarityBase):
 
         # Normalize weight vectors
         weight_norms = torch.norm(weights, dim=1, keepdim=True)
-        normalized_weights = torch.where(
-            weight_norms > 1e-12,
-            weights / weight_norms,
-            torch.zeros_like(weights)
-        )
+        normalized_weights = torch.where(weight_norms > 1e-12, weights / weight_norms, torch.zeros_like(weights))
 
         # Compute pairwise cosine similarities
         cosine_sim_matrix = torch.matmul(normalized_weights, normalized_weights.T)
@@ -136,7 +128,7 @@ class WeightEuclideanDistance(WeightSimilarityBase):
 
         # Compute pairwise Euclidean distances efficiently
         # ||w_i - w_j||^2 = ||w_i||^2 + ||w_j||^2 - 2 * w_i @ w_j
-        weight_norms_sq = torch.sum(weights ** 2, dim=1, keepdim=True)
+        weight_norms_sq = torch.sum(weights**2, dim=1, keepdim=True)
         dot_products = torch.matmul(weights, weights.T)
 
         # Distance matrix

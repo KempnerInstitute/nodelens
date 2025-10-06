@@ -25,13 +25,7 @@ class ReinforcementLearningAlignment(BaseMetric):
     requires_weights = True
     requires_outputs = False
 
-    def __init__(
-        self,
-        alignment_type: str = "value_correlation",
-        discount_factor: float = 0.99,
-        n_actions: int = 4,
-        use_advantage: bool = True
-    ):
+    def __init__(self, alignment_type: str = "value_correlation", discount_factor: float = 0.99, n_actions: int = 4, use_advantage: bool = True):
         """
         Initialize RL alignment metric.
 
@@ -61,7 +55,7 @@ class ReinforcementLearningAlignment(BaseMetric):
         rewards: Optional[torch.Tensor] = None,
         next_states: Optional[torch.Tensor] = None,
         values: Optional[torch.Tensor] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Compute RL alignment scores.
@@ -108,9 +102,7 @@ class ReinforcementLearningAlignment(BaseMetric):
                 neuron_activations = outputs[:, i]
 
                 if neuron_activations.std() > 0 and values.std() > 0:
-                    correlation = torch.corrcoef(
-                        torch.stack([neuron_activations, values])
-                    )[0, 1]
+                    correlation = torch.corrcoef(torch.stack([neuron_activations, values]))[0, 1]
                     alignment_scores[i] = correlation.abs()
 
         elif self.alignment_type == "policy_gradient":
@@ -141,9 +133,7 @@ class ReinforcementLearningAlignment(BaseMetric):
 
                 if neuron_activations.std() > 0:
                     # Compute correlation with policy gradient signal
-                    correlation = torch.corrcoef(
-                        torch.stack([neuron_activations, policy_gradient_signal])
-                    )[0, 1]
+                    correlation = torch.corrcoef(torch.stack([neuron_activations, policy_gradient_signal]))[0, 1]
                     alignment_scores[i] = correlation.abs()
 
         elif self.alignment_type == "reward_prediction":
@@ -186,9 +176,7 @@ class ReinforcementLearningAlignment(BaseMetric):
                 neuron_activations = outputs[:, i]
 
                 if neuron_activations.std() > 0 and td_errors.std() > 0:
-                    correlation = torch.corrcoef(
-                        torch.stack([neuron_activations, td_errors.abs()])
-                    )[0, 1]
+                    correlation = torch.corrcoef(torch.stack([neuron_activations, td_errors.abs()]))[0, 1]
                     alignment_scores[i] = correlation.abs()
 
         else:

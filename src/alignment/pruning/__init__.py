@@ -68,37 +68,30 @@ logger = logging.getLogger(__name__)
 # Registry of available pruning strategies
 PRUNING_STRATEGIES = {
     # Magnitude-based strategies
-    'magnitude': MagnitudePruning,
-    'iterative_magnitude': IterativeMagnitudePruning,
-    'global_magnitude': GlobalMagnitudePruning,
-
+    "magnitude": MagnitudePruning,
+    "iterative_magnitude": IterativeMagnitudePruning,
+    "global_magnitude": GlobalMagnitudePruning,
     # Gradient-based strategies
-    'gradient': GradientPruning,
-    'fisher': FisherPruning,
-    'momentum': MomentumPruning,
-
+    "gradient": GradientPruning,
+    "fisher": FisherPruning,
+    "momentum": MomentumPruning,
     # Alignment-based strategies
-    'alignment': AlignmentPruning,
-    'hybrid': HybridPruning,
-    'global_alignment': GlobalAlignmentPruning,
-    'cascading_alignment': CascadingAlignmentPruning,
-
+    "alignment": AlignmentPruning,
+    "hybrid": HybridPruning,
+    "global_alignment": GlobalAlignmentPruning,
+    "cascading_alignment": CascadingAlignmentPruning,
     # Random strategies (kept for backward compatibility)
     # Note: Consider using selection_mode='random' instead
-    'random': RandomPruning,
-    'bernoulli': BernoulliPruning,
-
+    "random": RandomPruning,
+    "bernoulli": BernoulliPruning,
     # Parallel strategies
-    'parallel_mode': ParallelModePruning,
-    'tensorized': TensorizedPruning,
-    'async_parallel': AsyncParallelPruning,
+    "parallel_mode": ParallelModePruning,
+    "tensorized": TensorizedPruning,
+    "async_parallel": AsyncParallelPruning,
 }
 
 
-def get_pruning_strategy(
-    name: str,
-    **kwargs
-) -> BasePruningStrategy:
+def get_pruning_strategy(name: str, **kwargs) -> BasePruningStrategy:
     """
     Get a pruning strategy by name.
 
@@ -114,10 +107,7 @@ def get_pruning_strategy(
     """
     if name not in PRUNING_STRATEGIES:
         available = list(PRUNING_STRATEGIES.keys())
-        raise ValueError(
-            f"Unknown pruning strategy: {name}. "
-            f"Available strategies: {available}"
-        )
+        raise ValueError(f"Unknown pruning strategy: {name}. " f"Available strategies: {available}")
 
     strategy_class = PRUNING_STRATEGIES[name]
     return strategy_class(**kwargs)
@@ -130,37 +120,31 @@ def list_pruning_strategies() -> list:
 
 __all__ = [
     # Base classes
-    'BasePruningStrategy',
-    'IterativePruningStrategy',
-    'PruningConfig',
-
+    "BasePruningStrategy",
+    "IterativePruningStrategy",
+    "PruningConfig",
     # Magnitude strategies
-    'MagnitudePruning',
-    'IterativeMagnitudePruning',
-    'GlobalMagnitudePruning',
-
+    "MagnitudePruning",
+    "IterativeMagnitudePruning",
+    "GlobalMagnitudePruning",
     # Gradient strategies
-    'GradientPruning',
-    'FisherPruning',
-    'MomentumPruning',
-
+    "GradientPruning",
+    "FisherPruning",
+    "MomentumPruning",
     # Alignment strategies
-    'AlignmentPruning',
-    'HybridPruning',
-    'GlobalAlignmentPruning',
-    'CascadingAlignmentPruning',
-
+    "AlignmentPruning",
+    "HybridPruning",
+    "GlobalAlignmentPruning",
+    "CascadingAlignmentPruning",
     # Random strategies
-    'RandomPruning',
-    'LayerwiseRandomPruning',
-    'BernoulliPruning',
-
+    "RandomPruning",
+    "LayerwiseRandomPruning",
+    "BernoulliPruning",
     # Parallel strategies
-    'ParallelModePruning',
-    'TensorizedPruning',
-    'AsyncParallelPruning',
-
+    "ParallelModePruning",
+    "TensorizedPruning",
+    "AsyncParallelPruning",
     # Functions
-    'get_pruning_strategy',
-    'list_pruning_strategies',
+    "get_pruning_strategy",
+    "list_pruning_strategies",
 ]

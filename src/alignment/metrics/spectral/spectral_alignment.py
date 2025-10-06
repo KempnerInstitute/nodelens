@@ -28,11 +28,9 @@ class SpectralGapMetric(BaseMetric):
         super().__init__()
         self.normalize = normalize
 
-    def compute(self,
-                inputs: Optional[torch.Tensor] = None,
-                weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None,
-                **kwargs) -> torch.Tensor:
+    def compute(
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
         """Compute spectral gap of weight matrix."""
         if weights is None:
             raise ValueError("Weights required for spectral gap metric")
@@ -108,15 +106,13 @@ class EigenvalueAlignmentMetric(BaseMetric):
         _, S, _ = torch.svd(weights)
 
         if self.top_k is not None and S.numel() > self.top_k:
-            S = S[:self.top_k]
+            S = S[: self.top_k]
 
         return S.sort(descending=True)[0]
 
-    def compute(self,
-                inputs: Optional[torch.Tensor] = None,
-                weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None,
-                **kwargs) -> torch.Tensor:
+    def compute(
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
         """Compute eigenvalue alignment."""
         if weights is None:
             raise ValueError("Weights required for eigenvalue alignment")
@@ -171,11 +167,9 @@ class SpectralClusteringAlignment(BaseMetric):
         self.n_components = n_components
         self.n_clusters = n_clusters
 
-    def compute(self,
-                inputs: Optional[torch.Tensor] = None,
-                weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None,
-                **kwargs) -> torch.Tensor:
+    def compute(
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
         """Compute spectral clustering alignment."""
         if weights is None or outputs is None:
             raise ValueError("Both weights and outputs required")
@@ -191,7 +185,7 @@ class SpectralClusteringAlignment(BaseMetric):
         # Get top eigenvectors of weight matrix
         try:
             U, S, V = torch.svd(weights)
-            top_components = V[:, :self.n_components]  # Right singular vectors
+            top_components = V[:, : self.n_components]  # Right singular vectors
 
             # Project outputs using eigenvectors
             if outputs.size(-1) != top_components.size(0):
@@ -238,11 +232,9 @@ class PowerIterationAlignment(BaseMetric):
         self.max_iterations = max_iterations
         self.tolerance = tolerance
 
-    def compute(self,
-                inputs: Optional[torch.Tensor] = None,
-                weights: Optional[torch.Tensor] = None,
-                outputs: Optional[torch.Tensor] = None,
-                **kwargs) -> torch.Tensor:
+    def compute(
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
         """Compute power iteration convergence rate."""
         if weights is None:
             raise ValueError("Weights required for power iteration alignment")

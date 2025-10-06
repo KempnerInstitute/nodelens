@@ -38,10 +38,10 @@ class PairwiseRedundancyGaussian(BaseMetric):
     def __init__(
         self,
         num_pairs: int = 10,
-        sampling_strategy: str = 'random',
-        mode: str = 'output_based',  # 'output_based' or 'covariance_based'
+        sampling_strategy: str = "random",
+        mode: str = "output_based",  # 'output_based' or 'covariance_based'
         regularization: float = 1e-6,
-        **config: Any
+        **config: Any,
     ):
         """
         Initialize pairwise redundancy metric.
@@ -63,22 +63,18 @@ class PairwiseRedundancyGaussian(BaseMetric):
 
     @property
     def requires_inputs(self) -> bool:
-        return self.mode == 'covariance_based'
+        return self.mode == "covariance_based"
 
     @property
     def requires_weights(self) -> bool:
-        return self.mode == 'covariance_based'
+        return self.mode == "covariance_based"
 
     @property
     def requires_outputs(self) -> bool:
-        return self.mode == 'output_based'
+        return self.mode == "output_based"
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute per-neuron redundancy scores.
@@ -93,7 +89,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
             Per-neuron redundancy scores [num_neurons]
         """
         # Route to appropriate implementation
-        if self.mode == 'output_based':
+        if self.mode == "output_based":
             if outputs is None:
                 # Compute outputs if not provided
                 if inputs is None or weights is None:
@@ -107,7 +103,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
 
             return self._compute_output_based(outputs)
 
-        elif self.mode == 'covariance_based':
+        elif self.mode == "covariance_based":
             if inputs is None or weights is None:
                 raise ValueError("covariance_based mode requires inputs and weights")
             return self._compute_covariance_based(inputs, weights)
@@ -156,7 +152,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
         corr_matrix = torch.clamp(corr_matrix, -0.9999, 0.9999)
 
         # Redundancy: I(Yi; Yj) = -0.5·log(1 - ρ²)
-        rho_sq = corr_matrix ** 2
+        rho_sq = corr_matrix**2
         R_matrix = -0.5 * torch.log(1 - rho_sq + 1e-8)  # [N, N]
 
         # Zero out diagonal (neuron with itself)
@@ -165,7 +161,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
         # Per-neuron redundancy: average over sampled partners
         redundancy = torch.zeros(N, device=outputs.device)
 
-        if self.sampling_strategy == 'all':
+        if self.sampling_strategy == "all":
             # Average over all partners
             row_sums = R_matrix.sum(dim=1)
             redundancy = row_sums / max(1, N - 1)
@@ -178,11 +174,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
 
         return redundancy
 
-    def _compute_covariance_based(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor
-    ) -> torch.Tensor:
+    def _compute_covariance_based(self, inputs: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """
         Compute redundancy via input covariance (SLOWER but works without outputs).
 
@@ -218,9 +210,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
 
         # Add regularization
         if self.regularization > 0:
-            cov = cov + self.regularization * torch.eye(
-                input_features, device=cov.device, dtype=cov.dtype
-            )
+            cov = cov + self.regularization * torch.eye(input_features, device=cov.device, dtype=cov.dtype)
 
         # Compute redundancy for each neuron
         redundancy = torch.zeros(num_neurons, device=weights.device, dtype=weights.dtype)
@@ -235,9 +225,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
             # Compute correlation with each partner
             correlations = []
             for j in partner_indices:
-                rho_sq = self._compute_correlation_squared(
-                    weights[i], weights[j], cov
-                )
+                rho_sq = self._compute_correlation_squared(weights[i], weights[j], cov)
                 correlations.append(rho_sq)
 
             # Average redundancy with partners
@@ -251,11 +239,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
 
         return redundancy
 
-    def _sample_partners_fast(
-        self,
-        neuron_idx: int,
-        num_neurons: int
-    ) -> torch.Tensor:
+    def _sample_partners_fast(self, neuron_idx: int, num_neurons: int) -> torch.Tensor:
         """
         Sample partner neurons for redundancy computation.
 
@@ -270,11 +254,11 @@ class PairwiseRedundancyGaussian(BaseMetric):
         available = list(range(num_neurons))
         available.remove(neuron_idx)
 
-        if self.sampling_strategy == 'all':
+        if self.sampling_strategy == "all":
             # Use all other neurons
             return torch.tensor(available, dtype=torch.long)
 
-        elif self.sampling_strategy == 'random':
+        elif self.sampling_strategy == "random":
             # Random sample
             num_to_sample = min(self.num_pairs, len(available))
             if num_to_sample == 0:
@@ -283,7 +267,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
             indices = torch.randperm(len(available))[:num_to_sample]
             return torch.tensor([available[i] for i in indices], dtype=torch.long)
 
-        elif self.sampling_strategy == 'nearest':
+        elif self.sampling_strategy == "nearest":
             # Sample nearby indices (assumes some ordering)
             num_to_sample = min(self.num_pairs, len(available))
             if num_to_sample == 0:
@@ -297,12 +281,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
         else:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
 
-    def _compute_correlation_squared(
-        self,
-        w_i: torch.Tensor,
-        w_j: torch.Tensor,
-        cov: torch.Tensor
-    ) -> torch.Tensor:
+    def _compute_correlation_squared(self, w_i: torch.Tensor, w_j: torch.Tensor, cov: torch.Tensor) -> torch.Tensor:
         """
         Compute squared correlation between two neurons in covariance space.
 
@@ -327,18 +306,14 @@ class PairwiseRedundancyGaussian(BaseMetric):
         if denominator < 1e-12:
             return torch.tensor(0.0, device=w_i.device, dtype=w_i.dtype)
 
-        rho_sq = (cov_ij ** 2) / denominator
+        rho_sq = (cov_ij**2) / denominator
 
         # Clip to [0, 1]
         rho_sq = torch.clamp(rho_sq, min=0.0, max=1.0)
 
         return rho_sq
 
-    def compute_pairwise_matrix(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor
-    ) -> torch.Tensor:
+    def compute_pairwise_matrix(self, inputs: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """
         Compute full pairwise redundancy matrix.
 
@@ -363,21 +338,14 @@ class PairwiseRedundancyGaussian(BaseMetric):
         cov = (inputs_centered.T @ inputs_centered) / max(1, batch_size - 1)
 
         if self.regularization > 0:
-            cov = cov + self.regularization * torch.eye(
-                cov.shape[0], device=cov.device, dtype=cov.dtype
-            )
+            cov = cov + self.regularization * torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
 
         # Compute pairwise redundancy
-        redundancy_matrix = torch.zeros(
-            num_neurons, num_neurons,
-            device=weights.device, dtype=weights.dtype
-        )
+        redundancy_matrix = torch.zeros(num_neurons, num_neurons, device=weights.device, dtype=weights.dtype)
 
         for i in range(num_neurons):
             for j in range(i + 1, num_neurons):
-                rho_sq = self._compute_correlation_squared(
-                    weights[i], weights[j], cov
-                )
+                rho_sq = self._compute_correlation_squared(weights[i], weights[j], cov)
                 # Clip correlation
                 rho_sq = torch.clamp(rho_sq, max=0.9999)
                 redundancy = -0.5 * torch.log(1 - rho_sq + 1e-8)

@@ -32,8 +32,8 @@ class BaseMetric(ABC):
         """
         self._name = name or self.__class__.__name__
         self.config = config
-        self._force_cpu_for_large_ops = config.get('force_cpu_for_large_ops', True)
-        self._cpu_threshold = config.get('cpu_threshold', 1e8)  # 100M elements
+        self._force_cpu_for_large_ops = config.get("force_cpu_for_large_ops", True)
+        self._cpu_threshold = config.get("cpu_threshold", 1e8)  # 100M elements
 
     @property
     def name(self) -> str:
@@ -60,11 +60,7 @@ class BaseMetric(ABC):
 
     @abstractmethod
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute the metric values.
@@ -87,7 +83,7 @@ class BaseMetric(ABC):
         outputs: Optional[torch.Tensor] = None,
         world_size: int = 1,
         rank: int = 0,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute metric in distributed setting with automatic reduction.
@@ -128,12 +124,7 @@ class BaseMetric(ABC):
 class BaseModel(ABC):
     """Base class for model wrappers."""
 
-    def __init__(
-        self,
-        model: nn.Module,
-        tracked_layers: Optional[List[str]] = None,
-        **config: Any
-    ):
+    def __init__(self, model: nn.Module, tracked_layers: Optional[List[str]] = None, **config: Any):
         """
         Initialize the model wrapper.
 
@@ -165,15 +156,15 @@ class BaseModel(ABC):
         """Register forward hooks for activation collection."""
         for name, module in self._model.named_modules():
             if name in self._tracked_layers:
-                hook = module.register_forward_hook(
-                    self._create_activation_hook(name)
-                )
+                hook = module.register_forward_hook(self._create_activation_hook(name))
                 self._hooks.append(hook)
 
     def _create_activation_hook(self, layer_name: str):
         """Create a forward hook for a specific layer."""
+
         def hook(module, input, output):
             self._activation_cache[layer_name] = output.detach()
+
         return hook
 
     def _clear_hooks(self) -> None:
@@ -182,11 +173,7 @@ class BaseModel(ABC):
             hook.remove()
         self._hooks.clear()
 
-    def get_layer_activations(
-        self,
-        inputs: torch.Tensor,
-        layers: Optional[List[str]] = None
-    ) -> Dict[str, torch.Tensor]:
+    def get_layer_activations(self, inputs: torch.Tensor, layers: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """Get activations for specified layers."""
         layers = layers or self._tracked_layers
 
@@ -198,24 +185,14 @@ class BaseModel(ABC):
             _ = self._model(inputs)
 
         # Return requested activations
-        return {
-            layer: self._activation_cache[layer]
-            for layer in layers
-            if layer in self._activation_cache
-        }
+        return {layer: self._activation_cache[layer] for layer in layers if layer in self._activation_cache}
 
     @abstractmethod
-    def get_layer_weights(
-        self,
-        layers: Optional[List[str]] = None
-    ) -> Dict[str, torch.Tensor]:
+    def get_layer_weights(self, layers: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """Get weights for specified layers."""
         pass
 
-    def forward_with_activations(
-        self,
-        inputs: torch.Tensor
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def forward_with_activations(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Forward pass that also returns intermediate activations."""
         self._activation_cache.clear()
         outputs = self._model(inputs)
@@ -230,12 +207,7 @@ class BaseModel(ABC):
 class BaseDataset(ABC):
     """Base class for dataset wrappers."""
 
-    def __init__(
-        self,
-        name: str,
-        data_path: Optional[str] = None,
-        **config: Any
-    ):
+    def __init__(self, name: str, data_path: Optional[str] = None, **config: Any):
         """
         Initialize the dataset wrapper.
 
@@ -266,35 +238,17 @@ class BaseDataset(ABC):
         pass
 
     @abstractmethod
-    def get_train_loader(
-        self,
-        batch_size: int,
-        shuffle: bool = True,
-        num_workers: int = 4,
-        **kwargs: Any
-    ) -> DataLoader:
+    def get_train_loader(self, batch_size: int, shuffle: bool = True, num_workers: int = 4, **kwargs: Any) -> DataLoader:
         """Get training data loader."""
         pass
 
     @abstractmethod
-    def get_val_loader(
-        self,
-        batch_size: int,
-        shuffle: bool = False,
-        num_workers: int = 4,
-        **kwargs: Any
-    ) -> DataLoader:
+    def get_val_loader(self, batch_size: int, shuffle: bool = False, num_workers: int = 4, **kwargs: Any) -> DataLoader:
         """Get validation data loader."""
         pass
 
     @abstractmethod
-    def get_test_loader(
-        self,
-        batch_size: int,
-        shuffle: bool = False,
-        num_workers: int = 4,
-        **kwargs: Any
-    ) -> DataLoader:
+    def get_test_loader(self, batch_size: int, shuffle: bool = False, num_workers: int = 4, **kwargs: Any) -> DataLoader:
         """Get test data loader."""
         pass
 
@@ -302,12 +256,7 @@ class BaseDataset(ABC):
 class BaseExperiment(ABC):
     """Base class for experiments."""
 
-    def __init__(
-        self,
-        name: str,
-        config: Dict[str, Any],
-        output_dir: Optional[str] = None
-    ):
+    def __init__(self, name: str, config: Dict[str, Any], output_dir: Optional[str] = None):
         """
         Initialize the experiment.
 
@@ -337,12 +286,7 @@ class BaseExperiment(ABC):
         pass
 
     @abstractmethod
-    def run(
-        self,
-        models: Union[nn.Module, List[nn.Module]],
-        dataset: BaseDataset,
-        **kwargs: Any
-    ) -> Dict[str, Any]:
+    def run(self, models: Union[nn.Module, List[nn.Module]], dataset: BaseDataset, **kwargs: Any) -> Dict[str, Any]:
         """Run the experiment."""
         pass
 
@@ -353,7 +297,7 @@ class BaseExperiment(ABC):
         # Convert tensors to lists for JSON serialization
         serializable_results = self._make_serializable(results)
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(serializable_results, f, indent=2)
 
         logger.info(f"Saved results to {output_path}")
@@ -362,7 +306,7 @@ class BaseExperiment(ABC):
         """Load experiment results."""
         input_path = self._output_dir / filename
 
-        with open(input_path, 'r') as f:
+        with open(input_path, "r") as f:
             results = json.load(f)
 
         return results
@@ -378,12 +322,7 @@ class BaseExperiment(ABC):
         else:
             return obj
 
-    def save_checkpoint(
-        self,
-        models: Union[nn.Module, List[nn.Module]],
-        epoch: int,
-        **additional_state: Any
-    ) -> None:
+    def save_checkpoint(self, models: Union[nn.Module, List[nn.Module]], epoch: int, **additional_state: Any) -> None:
         """Save a checkpoint during experiment."""
         checkpoint_dir = self._output_dir / "checkpoints"
         checkpoint_dir.mkdir(exist_ok=True)
@@ -393,21 +332,12 @@ class BaseExperiment(ABC):
         if not isinstance(models, list):
             models = [models]
 
-        state = {
-            'epoch': epoch,
-            'models': [m.state_dict() for m in models],
-            'config': self._config,
-            **additional_state
-        }
+        state = {"epoch": epoch, "models": [m.state_dict() for m in models], "config": self._config, **additional_state}
 
         torch.save(state, checkpoint_path)
         logger.info(f"Saved checkpoint to {checkpoint_path}")
 
-    def load_checkpoint(
-        self,
-        models: Union[nn.Module, List[nn.Module]],
-        epoch: int
-    ) -> Dict[str, Any]:
+    def load_checkpoint(self, models: Union[nn.Module, List[nn.Module]], epoch: int) -> Dict[str, Any]:
         """Load a checkpoint."""
         checkpoint_path = self._output_dir / "checkpoints" / f"checkpoint_epoch_{epoch}.pt"
 
@@ -419,7 +349,7 @@ class BaseExperiment(ABC):
         if not isinstance(models, list):
             models = [models]
 
-        for model, state_dict in zip(models, state['models']):
+        for model, state_dict in zip(models, state["models"]):
             model.load_state_dict(state_dict)
 
         logger.info(f"Loaded checkpoint from {checkpoint_path}")

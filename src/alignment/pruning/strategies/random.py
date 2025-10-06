@@ -52,12 +52,7 @@ class RandomPruning(BasePruningStrategy):
         if seed is not None:
             torch.manual_seed(seed)
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute random importance scores.
 
@@ -72,7 +67,7 @@ class RandomPruning(BasePruningStrategy):
         Returns:
             Tensor of random importance scores
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         weights = module.weight.data
@@ -121,13 +116,7 @@ class LayerwiseRandomPruning(RandomPruning):
         >>> masks = strategy.prune_model(model)
     """
 
-    def __init__(
-        self,
-        config=None,
-        layer_sparsity: Optional[dict] = None,
-        default_sparsity: float = 0.5,
-        seed: Optional[int] = None
-    ):
+    def __init__(self, config=None, layer_sparsity: Optional[dict] = None, default_sparsity: float = 0.5, seed: Optional[int] = None):
         """
         Initialize layerwise random pruning.
 
@@ -154,7 +143,7 @@ class LayerwiseRandomPruning(RandomPruning):
         masks = {}
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 # Get sparsity for this layer
                 if name in self.layer_sparsity:
                     amount = self.layer_sparsity[name]
@@ -194,13 +183,7 @@ class BernoulliPruning(BasePruningStrategy):
         >>> masks = strategy.prune_model(model)
     """
 
-    def __init__(
-        self,
-        config=None,
-        probability: float = 0.5,
-        probability_map: Optional[dict] = None,
-        seed: Optional[int] = None
-    ):
+    def __init__(self, config=None, probability: float = 0.5, probability_map: Optional[dict] = None, seed: Optional[int] = None):
         """
         Initialize Bernoulli pruning strategy.
 
@@ -217,12 +200,7 @@ class BernoulliPruning(BasePruningStrategy):
         if seed is not None:
             torch.manual_seed(seed)
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute Bernoulli importance scores.
 
@@ -236,11 +214,11 @@ class BernoulliPruning(BasePruningStrategy):
         Returns:
             Tensor of importance scores
         """
-        if not hasattr(module, 'weight'):
+        if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have weights")
 
         # Get probability for this module
-        prob = kwargs.get('probability', self.probability)
+        prob = kwargs.get("probability", self.probability)
 
         # Check if module type has specific probability
         for module_type, type_prob in self.probability_map.items():
@@ -260,11 +238,7 @@ class BernoulliPruning(BasePruningStrategy):
         return importance
 
     def create_pruning_mask(
-        self,
-        importance_scores: torch.Tensor,
-        amount: Optional[float] = None,
-        structured: Optional[bool] = None,
-        dim: Optional[int] = None
+        self, importance_scores: torch.Tensor, amount: Optional[float] = None, structured: Optional[bool] = None, dim: Optional[int] = None
     ) -> torch.Tensor:
         """
         Create Bernoulli pruning mask.

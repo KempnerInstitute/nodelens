@@ -26,12 +26,7 @@ class WeightCosineSimilarity(BaseMetric):
     other neurons in the same layer, measuring weight alignment.
     """
 
-    def __init__(
-        self,
-        normalize: bool = True,
-        exclude_self: bool = True,
-        **config: Any
-    ):
+    def __init__(self, normalize: bool = True, exclude_self: bool = True, **config: Any):
         """
         Initialize weight cosine similarity metric.
 
@@ -57,11 +52,7 @@ class WeightCosineSimilarity(BaseMetric):
         return False
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute average cosine similarity for each weight vector.
@@ -124,13 +115,7 @@ class ActivationCosineSimilarity(BaseMetric):
     across the batch dimension.
     """
 
-    def __init__(
-        self,
-        min_samples: int = 2,
-        exclude_self: bool = True,
-        use_outputs: bool = True,
-        **config: Any
-    ):
+    def __init__(self, min_samples: int = 2, exclude_self: bool = True, use_outputs: bool = True, **config: Any):
         """
         Initialize activation cosine similarity metric.
 
@@ -158,11 +143,7 @@ class ActivationCosineSimilarity(BaseMetric):
         return self.use_outputs
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute average cosine similarity between activation patterns.
@@ -234,12 +215,7 @@ class WeightActivationAlignment(BaseMetric):
     components of the activation covariance, using cosine similarity.
     """
 
-    def __init__(
-        self,
-        n_components: int = 5,
-        min_samples: int = 10,
-        **config: Any
-    ):
+    def __init__(self, n_components: int = 5, min_samples: int = 10, **config: Any):
         """
         Initialize weight-activation alignment metric.
 
@@ -265,11 +241,7 @@ class WeightActivationAlignment(BaseMetric):
         return False
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute alignment between weights and activation PCs.

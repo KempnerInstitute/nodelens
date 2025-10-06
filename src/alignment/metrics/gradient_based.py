@@ -48,10 +48,10 @@ class GradientAlignment(BaseMetric):
 
     def __init__(
         self,
-        local_signal: str = 'hebbian',  # 'hebbian', 'anti_hebbian', 'output', 'input'
+        local_signal: str = "hebbian",  # 'hebbian', 'anti_hebbian', 'output', 'input'
         normalize: bool = True,
         accumulate_over_batches: bool = False,
-        **config: Any
+        **config: Any,
     ):
         """
         Initialize gradient alignment metric.
@@ -96,7 +96,7 @@ class GradientAlignment(BaseMetric):
         outputs: Optional[torch.Tensor] = None,
         gradients: Optional[torch.Tensor] = None,
         targets: Optional[torch.Tensor] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Compute alignment between local signal and backprop gradient.
@@ -130,9 +130,7 @@ class GradientAlignment(BaseMetric):
         B, N = outputs.shape
 
         # Compute local signal
-        local_signal = self._compute_local_signal(
-            inputs, outputs, targets, gradients.shape
-        )  # [N, D_in] - same shape as gradients
+        local_signal = self._compute_local_signal(inputs, outputs, targets, gradients.shape)  # [N, D_in] - same shape as gradients
 
         # Compute correlation with gradients
         alignment = self._compute_correlation(local_signal, gradients)
@@ -141,11 +139,7 @@ class GradientAlignment(BaseMetric):
         return alignment
 
     def _compute_local_signal(
-        self,
-        inputs: torch.Tensor,  # [B, D_in]
-        outputs: torch.Tensor,  # [B, N]
-        targets: Optional[torch.Tensor],
-        grad_shape: torch.Size
+        self, inputs: torch.Tensor, outputs: torch.Tensor, targets: Optional[torch.Tensor], grad_shape: torch.Size  # [B, D_in]  # [B, N]
     ) -> torch.Tensor:
         """
         Compute local learning signal.
@@ -156,12 +150,12 @@ class GradientAlignment(BaseMetric):
         B, D_in = inputs.shape
         B, N = outputs.shape
 
-        if self.local_signal == 'hebbian':
+        if self.local_signal == "hebbian":
             # Hebbian: Δw_ij ∝ x_i * y_j
             # Averaged over batch: [N, D_in]
             signal = outputs.T @ inputs / B  # Outer product averaged
 
-        elif self.local_signal == 'anti_hebbian':
+        elif self.local_signal == "anti_hebbian":
             # Anti-Hebbian: Δw_ij ∝ x_i * (target - y_j)
             if targets is None:
                 logger.warning("Anti-Hebbian requires targets, falling back to Hebbian")
@@ -176,7 +170,7 @@ class GradientAlignment(BaseMetric):
                 error = target_onehot - outputs  # [B, N]
                 signal = error.T @ inputs / B
 
-        elif self.local_signal == 'oja':
+        elif self.local_signal == "oja":
             # Oja's rule: Hebbian with weight decay
             # Δw = η * y * (x - y*w)
             # Requires current weights
@@ -188,12 +182,12 @@ class GradientAlignment(BaseMetric):
                 # This is simplified; full Oja needs weight norm
                 signal = hebbian
 
-        elif self.local_signal == 'output':
+        elif self.local_signal == "output":
             # Just output: Δw ∝ y
             # Broadcast to weight shape
             signal = outputs.mean(dim=0).unsqueeze(1).expand(N, D_in)
 
-        elif self.local_signal == 'input':
+        elif self.local_signal == "input":
             # Just input: Δw ∝ x
             # Broadcast to weight shape
             signal = inputs.mean(dim=0).unsqueeze(0).expand(N, D_in)
@@ -203,11 +197,7 @@ class GradientAlignment(BaseMetric):
 
         return signal
 
-    def _compute_correlation(
-        self,
-        signal: torch.Tensor,  # [N, D_in]
-        gradients: torch.Tensor  # [N, D_in]
-    ) -> torch.Tensor:
+    def _compute_correlation(self, signal: torch.Tensor, gradients: torch.Tensor) -> torch.Tensor:  # [N, D_in]  # [N, D_in]
         """
         Compute correlation between local signal and backprop gradient.
 
@@ -271,11 +261,7 @@ class LocalLearningRuleSearch(BaseMetric):
         >>> # Can then use this to train with local rules!
     """
 
-    def __init__(
-        self,
-        candidate_rules: Optional[List[str]] = None,
-        **config
-    ):
+    def __init__(self, candidate_rules: Optional[List[str]] = None, **config):
         """
         Initialize local learning rule search.
 
@@ -285,9 +271,7 @@ class LocalLearningRuleSearch(BaseMetric):
         """
         super().__init__(**config)
 
-        self.candidate_rules = candidate_rules or [
-            'hebbian', 'anti_hebbian', 'oja', 'output', 'input'
-        ]
+        self.candidate_rules = candidate_rules or ["hebbian", "anti_hebbian", "oja", "output", "input"]
 
     @property
     def requires_inputs(self) -> bool:
@@ -309,7 +293,7 @@ class LocalLearningRuleSearch(BaseMetric):
         gradients: Optional[torch.Tensor] = None,
         targets: Optional[torch.Tensor] = None,
         return_correlations: bool = False,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Find best local learning rule per neuron.
@@ -332,13 +316,7 @@ class LocalLearningRuleSearch(BaseMetric):
 
         for rule in self.candidate_rules:
             metric = GradientAlignment(local_signal=rule)
-            corr = metric.compute(
-                inputs=inputs,
-                weights=weights,
-                outputs=outputs,
-                gradients=gradients,
-                targets=targets
-            )
+            corr = metric.compute(inputs=inputs, weights=weights, outputs=outputs, gradients=gradients, targets=targets)
             correlations[rule] = corr
 
         # Stack into matrix [N, num_rules]
@@ -352,11 +330,7 @@ class LocalLearningRuleSearch(BaseMetric):
 
         return best_rule_indices
 
-    def get_learning_rule_for_neuron(
-        self,
-        neuron_idx: int,
-        best_rule_idx: int
-    ) -> str:
+    def get_learning_rule_for_neuron(self, neuron_idx: int, best_rule_idx: int) -> str:
         """Get the name of the best rule for a neuron."""
         return self.candidate_rules[best_rule_idx]
 
@@ -385,12 +359,7 @@ class GradientStatisticsTracker:
         self.signal_history[layer_name] = []
         self.correlation_history[layer_name] = []
 
-    def update(
-        self,
-        layer_name: str,
-        gradient: torch.Tensor,
-        local_signal: torch.Tensor
-    ):
+    def update(self, layer_name: str, gradient: torch.Tensor, local_signal: torch.Tensor):
         """
         Update statistics after a training step.
 
@@ -422,11 +391,7 @@ class GradientStatisticsTracker:
 
         return sum(self.correlation_history[layer_name]) / len(self.correlation_history[layer_name])
 
-    def get_best_local_rule(
-        self,
-        layer_name: str,
-        candidate_rules: List[str]
-    ) -> Tuple[str, float]:
+    def get_best_local_rule(self, layer_name: str, candidate_rules: List[str]) -> Tuple[str, float]:
         """
         Determine which local rule best approximates backprop for this layer.
 
@@ -437,13 +402,10 @@ class GradientStatisticsTracker:
         # For now, return based on accumulated correlation
         avg_corr = self.get_average_correlation(layer_name)
 
-        return (self.local_signal if hasattr(self, 'local_signal') else 'hebbian', avg_corr)
+        return (self.local_signal if hasattr(self, "local_signal") else "hebbian", avg_corr)
 
 
-def design_local_learning_rule(
-    gradient_tracker: GradientStatisticsTracker,
-    layer_name: str
-) -> Dict[str, Any]:
+def design_local_learning_rule(gradient_tracker: GradientStatisticsTracker, layer_name: str) -> Dict[str, Any]:
     """
     Design optimal local learning rule for a layer based on gradient analysis.
 
@@ -458,7 +420,7 @@ def design_local_learning_rule(
     grad_history = gradient_tracker.gradient_history[layer_name]
 
     if not grad_history:
-        return {'rule': 'hebbian', 'params': {}}
+        return {"rule": "hebbian", "params": {}}
 
     # Compute gradient statistics
     avg_grad_magnitude = torch.stack([g.abs().mean() for g in grad_history]).mean()
@@ -467,26 +429,20 @@ def design_local_learning_rule(
     # Design rule based on statistics
     if grad_direction_consistency > 0.8:
         # Consistent gradient → simple Hebbian works
-        rule = 'hebbian'
+        rule = "hebbian"
         learning_rate = avg_grad_magnitude.item() * 0.1
 
     elif grad_direction_consistency < 0.3:
         # Inconsistent → need more sophisticated rule
-        rule = 'oja'
+        rule = "oja"
         learning_rate = avg_grad_magnitude.item() * 0.05
 
     else:
         # Moderate → anti-Hebbian
-        rule = 'anti_hebbian'
+        rule = "anti_hebbian"
         learning_rate = avg_grad_magnitude.item() * 0.08
 
-    return {
-        'rule': rule,
-        'params': {
-            'learning_rate': learning_rate,
-            'direction_consistency': grad_direction_consistency
-        }
-    }
+    return {"rule": rule, "params": {"learning_rate": learning_rate, "direction_consistency": grad_direction_consistency}}
 
 
 def compute_direction_consistency(gradient_history: List[torch.Tensor]) -> float:
@@ -508,11 +464,10 @@ def compute_direction_consistency(gradient_history: List[torch.Tensor]) -> float
     # Compute pairwise cosine similarities
     similarities = []
     for i in range(len(grads_normalized) - 1):
-        cos_sim = (grads_normalized[i] * grads_normalized[i+1]).sum()
+        cos_sim = (grads_normalized[i] * grads_normalized[i + 1]).sum()
         similarities.append(cos_sim.abs().item())
 
     # Average similarity
     consistency = sum(similarities) / len(similarities)
 
     return consistency
-

@@ -6,14 +6,9 @@ used throughout the framework.
 """
 
 from .base import BaseDataset, BaseExperiment, BaseMetric, BaseModel
-from .protocols import (
-    AlignmentMetric,
-    DatasetWrapper,
-    Experiment,
-    MetricAggregator,
-    ResultReporter,
-)
+from .protocols import AlignmentMetric, DatasetWrapper, Experiment, MetricAggregator
 from .protocols import ModelWrapper as ModelWrapperProtocol
+from .protocols import ResultReporter
 from .registry import (
     Registry,
     get_dataset,

@@ -45,31 +45,24 @@ __all__ = [
     "ModelWrapper",
     "BaseMetric",
     "METRIC_REGISTRY",
-
     # Metrics
     "get_metric",
     "list_metrics",
-
     # Data processing
     "BatchMetricProcessor",
-
     # Services (NEW in v0.2.0)
     "ActivationCaptureService",
     "ActivationData",
     "NodeScoringService",
     "CompositeScores",
     "MaskOperations",
-
     # Pruning
     "PruningConfig",
     "get_pruning_strategy",
-
     # Experiment tracking
     "create_tracker",
-
     # Visualization
     "AlignmentVisualizer",
-
     # Version
-    "__version__"
+    "__version__",
 ]

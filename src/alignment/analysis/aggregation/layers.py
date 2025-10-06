@@ -50,21 +50,16 @@ class LayerAggregator:
             if values:
                 values_array = np.array(values)
                 summary[metric_name] = {
-                    'mean': float(np.mean(values_array)),
-                    'std': float(np.std(values_array)),
-                    'min': float(np.min(values_array)),
-                    'max': float(np.max(values_array)),
-                    'count': len(values)
+                    "mean": float(np.mean(values_array)),
+                    "std": float(np.std(values_array)),
+                    "min": float(np.min(values_array)),
+                    "max": float(np.max(values_array)),
+                    "count": len(values),
                 }
 
         return summary
 
-    def rank_layers(
-        self,
-        metric_name: str,
-        criterion: str = 'mean',
-        ascending: bool = True
-    ) -> List[Tuple[str, float]]:
+    def rank_layers(self, metric_name: str, criterion: str = "mean", ascending: bool = True) -> List[Tuple[str, float]]:
         """
         Rank layers by a specific metric.
 
@@ -82,13 +77,13 @@ class LayerAggregator:
             if metric_name in metrics and metrics[metric_name]:
                 values_array = np.array(metrics[metric_name])
 
-                if criterion == 'mean':
+                if criterion == "mean":
                     value = np.mean(values_array)
-                elif criterion == 'max':
+                elif criterion == "max":
                     value = np.max(values_array)
-                elif criterion == 'min':
+                elif criterion == "min":
                     value = np.min(values_array)
-                elif criterion == 'std':
+                elif criterion == "std":
                     value = np.std(values_array)
                 else:
                     raise ValueError(f"Unknown criterion: {criterion}")
@@ -100,11 +95,7 @@ class LayerAggregator:
 
         return layer_values
 
-    def find_anomalous_layers(
-        self,
-        metric_name: str,
-        threshold_std: float = 2.0
-    ) -> List[str]:
+    def find_anomalous_layers(self, metric_name: str, threshold_std: float = 2.0) -> List[str]:
         """
         Find layers with anomalous metric values.
 

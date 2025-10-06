@@ -25,12 +25,7 @@ class ClassificationAlignment(BaseMetric):
     requires_weights = True
     requires_outputs = False
 
-    def __init__(
-        self,
-        n_classes: int,
-        alignment_type: str = "boundary_distance",
-        temperature: float = 1.0
-    ):
+    def __init__(self, n_classes: int, alignment_type: str = "boundary_distance", temperature: float = 1.0):
         """
         Initialize classification alignment metric.
 
@@ -54,7 +49,7 @@ class ClassificationAlignment(BaseMetric):
         outputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         logits: Optional[torch.Tensor] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Compute classification alignment scores.
@@ -97,9 +92,7 @@ class ClassificationAlignment(BaseMetric):
             for i in range(n_neurons):
                 # Check if there's enough variance for correlation
                 if outputs[:, i].std() > 1e-8 and entropy.std() > 1e-8:
-                    correlation = torch.corrcoef(
-                        torch.stack([outputs[:, i], entropy])
-                    )[0, 1]
+                    correlation = torch.corrcoef(torch.stack([outputs[:, i], entropy]))[0, 1]
                     # Handle NaN values
                     if torch.isnan(correlation):
                         alignment_scores[i] = 0.0
@@ -156,9 +149,7 @@ class ClassificationAlignment(BaseMetric):
 
                 # Correlation between neuron activation and confident correct predictions
                 if neuron_activations.std() > 0 and weighted_correct.std() > 0:
-                    correlation = torch.corrcoef(
-                        torch.stack([neuron_activations, weighted_correct])
-                    )[0, 1]
+                    correlation = torch.corrcoef(torch.stack([neuron_activations, weighted_correct]))[0, 1]
                     alignment_scores[i] = correlation.abs()
 
         else:

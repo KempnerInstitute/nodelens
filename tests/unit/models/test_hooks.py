@@ -5,6 +5,7 @@ Unit tests for HookManager.
 import pytest
 import torch
 import torch.nn as nn
+
 from alignment.models.hooks import HookManager, PersistentHookManager
 
 

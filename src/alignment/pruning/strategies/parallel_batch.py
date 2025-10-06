@@ -20,7 +20,7 @@ class ParallelBatchPruning:
 
     def __init__(self, config=None):
         self.config = config
-        self.eval_batches = getattr(config, 'eval_batches', None) if config else None
+        self.eval_batches = getattr(config, "eval_batches", None) if config else None
 
     def run_pruning_experiments(
         self,
@@ -29,7 +29,7 @@ class ParallelBatchPruning:
         strategies: List[str],
         selection_modes: List[str],
         pruning_amounts: List[float],
-        device: str = 'cuda'
+        device: str = "cuda",
     ) -> Dict[str, any]:
         """
         Run pruning experiments for all configurations in parallel.
@@ -52,9 +52,7 @@ class ParallelBatchPruning:
         # Save original states efficiently
         original_states = []
         for model in networks:
-            state = {name: module.weight.data.clone()
-                    for name, module in model.named_modules()
-                    if hasattr(module, 'weight')}
+            state = {name: module.weight.data.clone() for name, module in model.named_modules() if hasattr(module, "weight")}
             original_states.append(state)
 
         # Process each strategy
@@ -66,8 +64,7 @@ class ParallelBatchPruning:
 
                 # Run parallel pruning for this configuration
                 batch_results = self._parallel_batch_pruning(
-                    networks, data_loader, strategy_name, selection_mode,
-                    pruning_amounts, original_states, device
+                    networks, data_loader, strategy_name, selection_mode, pruning_amounts, original_states, device
                 )
 
                 # Store aggregated results
@@ -78,7 +75,7 @@ class ParallelBatchPruning:
                     "accuracies_after_finetune": batch_results["accuracies_after"].mean(dim=0).tolist(),
                     "losses_before_finetune": batch_results["losses_before"].mean(dim=0).tolist(),
                     "losses_after_finetune": batch_results["losses_after"].mean(dim=0).tolist(),
-                    "improvements": (batch_results["accuracies_after"] - batch_results["accuracies_before"]).mean(dim=0).tolist()
+                    "improvements": (batch_results["accuracies_after"] - batch_results["accuracies_before"]).mean(dim=0).tolist(),
                 }
 
                 # Add standard deviations if multiple networks
@@ -104,7 +101,7 @@ class ParallelBatchPruning:
         selection_mode: str,
         pruning_amounts: List[float],
         original_states: List[Dict[str, torch.Tensor]],
-        device: str
+        device: str,
     ) -> Dict[str, torch.Tensor]:
         """
         Process all networks and pruning amounts in parallel using vectorized operations.
@@ -138,7 +135,7 @@ class ParallelBatchPruning:
         for net in networks:
             net.eval()
 
-        criterion = nn.CrossEntropyLoss(reduction='none')
+        criterion = nn.CrossEntropyLoss(reduction="none")
         batch_count = 0
 
         with torch.no_grad():
@@ -170,10 +167,9 @@ class ParallelBatchPruning:
 
                 # Compute losses for all configs at once
                 expanded_targets = targets.unsqueeze(0).expand(total_configs, -1)
-                all_batch_losses = criterion(
-                    stacked_outputs.reshape(-1, stacked_outputs.size(-1)),
-                    expanded_targets.reshape(-1)
-                ).reshape(total_configs, batch_size)
+                all_batch_losses = criterion(stacked_outputs.reshape(-1, stacked_outputs.size(-1)), expanded_targets.reshape(-1)).reshape(
+                    total_configs, batch_size
+                )
 
                 # Sum losses
                 all_loss += all_batch_losses.sum(dim=1)
@@ -215,15 +211,11 @@ class ParallelBatchPruning:
             "losses_before": losses_before,
             "accuracies_after": accuracies_after,
             "losses_after": losses_after,
-            "sparsities": sparsities
+            "sparsities": sparsities,
         }
 
     def _create_all_masks(
-        self,
-        networks: List[nn.Module],
-        strategy_name: str,
-        selection_mode: str,
-        pruning_amounts: List[float]
+        self, networks: List[nn.Module], strategy_name: str, selection_mode: str, pruning_amounts: List[float]
     ) -> List[List[Dict[str, torch.Tensor]]]:
         """Create all masks for all networks and pruning amounts."""
         all_masks = []
@@ -248,21 +240,16 @@ class ParallelBatchPruning:
 
         return all_masks
 
-    def _create_magnitude_masks(
-        self,
-        model: nn.Module,
-        amount: float,
-        selection_mode: str
-    ) -> Dict[str, torch.Tensor]:
+    def _create_magnitude_masks(self, model: nn.Module, amount: float, selection_mode: str) -> Dict[str, torch.Tensor]:
         """Create magnitude-based masks for a model."""
         masks = {}
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 weight = module.weight.data
                 importance = weight.abs()
 
-                if hasattr(self.config, 'alignment_structured_pruning') and self.config.alignment_structured_pruning and len(weight.shape) >= 2:
+                if hasattr(self.config, "alignment_structured_pruning") and self.config.alignment_structured_pruning and len(weight.shape) >= 2:
                     # Structured pruning - prune entire neurons
                     neuron_importance = importance.mean(dim=tuple(range(1, len(weight.shape))))
                     mask = self._create_structured_mask(neuron_importance, amount, selection_mode, weight.shape)
@@ -274,19 +261,15 @@ class ParallelBatchPruning:
 
         return masks
 
-    def _create_random_masks(
-        self,
-        model: nn.Module,
-        amount: float
-    ) -> Dict[str, torch.Tensor]:
+    def _create_random_masks(self, model: nn.Module, amount: float) -> Dict[str, torch.Tensor]:
         """Create random masks for a model."""
         masks = {}
 
         for name, module in model.named_modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 weight = module.weight.data
 
-                if hasattr(self.config, 'alignment_structured_pruning') and self.config.alignment_structured_pruning and len(weight.shape) >= 2:
+                if hasattr(self.config, "alignment_structured_pruning") and self.config.alignment_structured_pruning and len(weight.shape) >= 2:
                     # Structured random pruning
                     num_neurons = weight.shape[0]
                     num_to_prune = int(amount * num_neurons)
@@ -304,12 +287,7 @@ class ParallelBatchPruning:
 
         return masks
 
-    def _create_mask(
-        self,
-        importance: torch.Tensor,
-        amount: float,
-        selection_mode: str
-    ) -> torch.Tensor:
+    def _create_mask(self, importance: torch.Tensor, amount: float, selection_mode: str) -> torch.Tensor:
         """Create a binary mask based on importance scores."""
         if amount == 0:
             return torch.ones_like(importance)
@@ -335,13 +313,7 @@ class ParallelBatchPruning:
 
         return mask.float()
 
-    def _create_structured_mask(
-        self,
-        neuron_importance: torch.Tensor,
-        amount: float,
-        selection_mode: str,
-        weight_shape: torch.Size
-    ) -> torch.Tensor:
+    def _create_structured_mask(self, neuron_importance: torch.Tensor, amount: float, selection_mode: str, weight_shape: torch.Size) -> torch.Tensor:
         """Create a structured mask that prunes entire neurons."""
         num_neurons = neuron_importance.numel()
         num_to_prune = int(amount * num_neurons)
@@ -376,12 +348,7 @@ class ParallelBatchPruning:
 
         return mask
 
-    def _apply_mask_config(
-        self,
-        model: nn.Module,
-        masks: Dict[str, torch.Tensor],
-        original_state: Dict[str, torch.Tensor]
-    ):
+    def _apply_mask_config(self, model: nn.Module, masks: Dict[str, torch.Tensor], original_state: Dict[str, torch.Tensor]):
         """Apply masks to a model after restoring original weights."""
         with torch.no_grad():
             for name, module in model.named_modules():
@@ -399,7 +366,7 @@ class ParallelBatchPruning:
         zero_params = 0
 
         for module in model.modules():
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 weight = module.weight.data
                 total_params += weight.numel()
                 zero_params += (weight == 0).sum().item()

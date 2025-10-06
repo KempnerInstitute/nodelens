@@ -18,13 +18,13 @@ from .spectral_classic import (
 
 __all__ = [
     # Phase 3 metrics
-    'SpectralGapMetric',
-    'EigenvalueAlignmentMetric',
-    'SpectralClusteringAlignment',
-    'PowerIterationAlignment',
+    "SpectralGapMetric",
+    "EigenvalueAlignmentMetric",
+    "SpectralClusteringAlignment",
+    "PowerIterationAlignment",
     # Classic metrics
-    'SpectralAlignment',
-    'SpectralNormRatio',
-    'EigenvalueEntropy',
-    'SpectralClusteringScore'
+    "SpectralAlignment",
+    "SpectralNormRatio",
+    "EigenvalueEntropy",
+    "SpectralClusteringScore",
 ]

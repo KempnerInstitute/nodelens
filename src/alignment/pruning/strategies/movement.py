@@ -48,12 +48,7 @@ class MovementPruning(BasePruningStrategy):
         >>> mask = strategy.prune(model, amount=0.5)
     """
 
-    def __init__(
-        self,
-        config: Optional[PruningConfig] = None,
-        use_momentum: bool = True,
-        momentum: float = 0.9
-    ):
+    def __init__(self, config: Optional[PruningConfig] = None, use_momentum: bool = True, momentum: float = 0.9):
         """
         Initialize movement pruning.
 
@@ -90,20 +85,13 @@ class MovementPruning(BasePruningStrategy):
                 else:
                     if self.use_momentum:
                         # Exponential moving average
-                        self.movement_history[name] = (
-                            self.momentum * self.movement_history[name] +
-                            (1 - self.momentum) * movement
-                        )
+                        self.movement_history[name] = self.momentum * self.movement_history[name] + (1 - self.momentum) * movement
                     else:
                         # Simple accumulation
                         self.movement_history[name] += movement
 
     def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        module_name: Optional[str] = None,
-        **kwargs
+        self, module: nn.Module, inputs: Optional[torch.Tensor] = None, module_name: Optional[str] = None, **kwargs
     ) -> torch.Tensor:
         """
         Compute movement-based importance scores.
@@ -120,13 +108,10 @@ class MovementPruning(BasePruningStrategy):
         weight = module.weight
 
         # Get movement history if available
-        if module_name and module_name + '.weight' in self.movement_history:
-            movement = self.movement_history[module_name + '.weight']
+        if module_name and module_name + ".weight" in self.movement_history:
+            movement = self.movement_history[module_name + ".weight"]
         else:
-            logger.warning(
-                f"No movement history for {module_name}, falling back to magnitude. "
-                "Use update_movement_history() during training."
-            )
+            logger.warning(f"No movement history for {module_name}, falling back to magnitude. " "Use update_movement_history() during training.")
             # Fallback to magnitude
             return weight.abs()
 
@@ -156,12 +141,12 @@ class MovementPruning(BasePruningStrategy):
             total = movement.numel()
 
             stats[name] = {
-                'moving_away_zero': moving_away,
-                'moving_toward_zero': moving_toward,
-                'total_params': total,
-                'fraction_toward_zero': moving_toward / total,
-                'mean_movement': movement.mean().item(),
-                'std_movement': movement.std().item()
+                "moving_away_zero": moving_away,
+                "moving_toward_zero": moving_toward,
+                "total_params": total,
+                "fraction_toward_zero": moving_toward / total,
+                "mean_movement": movement.mean().item(),
+                "std_movement": movement.std().item(),
             }
 
         return stats
@@ -175,12 +160,7 @@ class AdaptiveMovementPruning(MovementPruning):
     are consistently moving toward zero.
     """
 
-    def __init__(
-        self,
-        base_amount: float = 0.5,
-        adaptation_strength: float = 0.3,
-        **kwargs
-    ):
+    def __init__(self, base_amount: float = 0.5, adaptation_strength: float = 0.3, **kwargs):
         """
         Initialize adaptive movement pruning.
 
@@ -192,11 +172,7 @@ class AdaptiveMovementPruning(MovementPruning):
         self.base_amount = base_amount
         self.adaptation_strength = adaptation_strength
 
-    def compute_adaptive_amount(
-        self,
-        module: nn.Module,
-        module_name: str
-    ) -> float:
+    def compute_adaptive_amount(self, module: nn.Module, module_name: str) -> float:
         """
         Compute adaptive pruning amount for this module.
 
@@ -207,10 +183,10 @@ class AdaptiveMovementPruning(MovementPruning):
         Returns:
             Adjusted pruning amount
         """
-        if module_name + '.weight' not in self.movement_history:
+        if module_name + ".weight" not in self.movement_history:
             return self.base_amount
 
-        movement = self.movement_history[module_name + '.weight']
+        movement = self.movement_history[module_name + ".weight"]
 
         # Fraction moving toward zero
         toward_zero = (movement < 0).float().mean().item()
@@ -222,20 +198,11 @@ class AdaptiveMovementPruning(MovementPruning):
         # Clip to valid range
         adapted_amount = max(0.1, min(0.9, adapted_amount))
 
-        logger.info(
-            f"{module_name}: {toward_zero:.1%} moving toward zero, "
-            f"adapted amount: {adapted_amount:.1%}"
-        )
+        logger.info(f"{module_name}: {toward_zero:.1%} moving toward zero, " f"adapted amount: {adapted_amount:.1%}")
 
         return adapted_amount
 
-    def prune(
-        self,
-        module: nn.Module,
-        amount: Optional[float] = None,
-        module_name: Optional[str] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def prune(self, module: nn.Module, amount: Optional[float] = None, module_name: Optional[str] = None, **kwargs) -> torch.Tensor:
         """
         Prune with adaptive amount.
 
@@ -248,4 +215,3 @@ class AdaptiveMovementPruning(MovementPruning):
 
         # Use parent's prune method with adapted amount
         return super().prune(module, amount=amount, module_name=module_name, **kwargs)
-

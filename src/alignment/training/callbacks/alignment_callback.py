@@ -50,9 +50,9 @@ class AlignmentMetricsCallback:
         layers: List[str],
         frequency: int = 100,
         sample_size: Optional[int] = None,
-        aggregation: str = 'mean',
+        aggregation: str = "mean",
         tracker: Optional[Any] = None,
-        save_history: bool = True
+        save_history: bool = True,
     ):
         """
         Initialize alignment metrics callback.
@@ -76,22 +76,12 @@ class AlignmentMetricsCallback:
 
         # Initialize history storage
         if save_history:
-            self.history = {
-                layer: {metric_name: [] for metric_name in metrics}
-                for layer in layers
-            }
+            self.history = {layer: {metric_name: [] for metric_name in metrics} for layer in layers}
             self.step_history = []
 
         self.step = 0
 
-    def on_batch_end(
-        self,
-        model_wrapper,
-        inputs: torch.Tensor,
-        targets: Optional[torch.Tensor] = None,
-        step: Optional[int] = None,
-        **kwargs
-    ):
+    def on_batch_end(self, model_wrapper, inputs: torch.Tensor, targets: Optional[torch.Tensor] = None, step: Optional[int] = None, **kwargs):
         """
         Compute metrics at the end of a training batch.
 
@@ -114,7 +104,7 @@ class AlignmentMetricsCallback:
 
         # Sample subset for efficiency (if large batch)
         if self.sample_size is not None and inputs.size(0) > self.sample_size:
-            indices = torch.randperm(inputs.size(0))[:self.sample_size]
+            indices = torch.randperm(inputs.size(0))[: self.sample_size]
             inputs_sampled = inputs[indices]
             targets_sampled = targets[indices] if targets is not None else None
         else:
@@ -131,29 +121,18 @@ class AlignmentMetricsCallback:
 
                 # Compute metrics for each layer
                 for layer in self.layers:
-                    self._compute_layer_metrics(
-                        layer,
-                        activations,
-                        weights,
-                        targets_sampled,
-                        **kwargs
-                    )
+                    self._compute_layer_metrics(layer, activations, weights, targets_sampled, **kwargs)
 
             except Exception as e:
                 logger.warning(f"Failed to compute alignment metrics at step {self.step}: {e}")
 
     def _compute_layer_metrics(
-        self,
-        layer: str,
-        activations: Dict[str, torch.Tensor],
-        weights: Dict[str, torch.Tensor],
-        targets: Optional[torch.Tensor],
-        **kwargs
+        self, layer: str, activations: Dict[str, torch.Tensor], weights: Dict[str, torch.Tensor], targets: Optional[torch.Tensor], **kwargs
     ):
         """Compute metrics for a single layer."""
         # Get layer data
-        layer_input = activations.get(f'{layer}_input')
-        layer_output = activations.get(f'{layer}_output')
+        layer_input = activations.get(f"{layer}_input")
+        layer_output = activations.get(f"{layer}_output")
         layer_weights = weights.get(layer)
 
         if layer_weights is None:
@@ -166,45 +145,40 @@ class AlignmentMetricsCallback:
                 # Determine what to pass based on metric requirements
                 metric_kwargs = {}
                 if metric.requires_inputs and layer_input is not None:
-                    metric_kwargs['inputs'] = layer_input
+                    metric_kwargs["inputs"] = layer_input
                 if metric.requires_weights:
-                    metric_kwargs['weights'] = layer_weights
+                    metric_kwargs["weights"] = layer_weights
                 if metric.requires_outputs and layer_output is not None:
-                    metric_kwargs['outputs'] = layer_output
+                    metric_kwargs["outputs"] = layer_output
                 if targets is not None:
-                    metric_kwargs['targets'] = targets
+                    metric_kwargs["targets"] = targets
 
                 # Compute metric
                 scores = metric.compute(**metric_kwargs, **kwargs)
 
                 # Aggregate to scalar
-                if self.aggregation == 'mean':
+                if self.aggregation == "mean":
                     value = scores.mean().item()
-                elif self.aggregation == 'std':
+                elif self.aggregation == "std":
                     value = scores.std().item()
-                elif self.aggregation == 'both':
-                    value = {'mean': scores.mean().item(), 'std': scores.std().item()}
+                elif self.aggregation == "both":
+                    value = {"mean": scores.mean().item(), "std": scores.std().item()}
                 else:
                     value = scores.mean().item()
 
                 # Store history
                 if self.save_history:
-                    if self.aggregation == 'both':
+                    if self.aggregation == "both":
                         self.history[layer][metric_name].append(value)
                     else:
                         self.history[layer][metric_name].append(value)
 
                 # Log to tracker
                 if self.tracker:
-                    if self.aggregation == 'both':
-                        self.tracker.log({
-                            f'{layer}/{metric_name}_mean': value['mean'],
-                            f'{layer}/{metric_name}_std': value['std']
-                        }, step=self.step)
+                    if self.aggregation == "both":
+                        self.tracker.log({f"{layer}/{metric_name}_mean": value["mean"], f"{layer}/{metric_name}_std": value["std"]}, step=self.step)
                     else:
-                        self.tracker.log({
-                            f'{layer}/{metric_name}': value
-                        }, step=self.step)
+                        self.tracker.log({f"{layer}/{metric_name}": value}, step=self.step)
 
                 logger.debug(f"Step {self.step}, {layer}/{metric_name}: {value}")
 
@@ -218,18 +192,15 @@ class AlignmentMetricsCallback:
             return {}
 
         return {
-            'history': self.history,
-            'steps': self.step_history if hasattr(self, 'step_history') else list(range(0, self.step + 1, self.frequency))
+            "history": self.history,
+            "steps": self.step_history if hasattr(self, "step_history") else list(range(0, self.step + 1, self.frequency)),
         }
 
     def reset(self):
         """Reset history and step counter."""
         self.step = 0
         if self.save_history:
-            self.history = {
-                layer: {metric_name: [] for metric_name in self.metrics}
-                for layer in self.layers
-            }
+            self.history = {layer: {metric_name: [] for metric_name in self.metrics} for layer in self.layers}
             self.step_history = []
 
     def save_history(self, path: str):
@@ -239,29 +210,26 @@ class AlignmentMetricsCallback:
             return
 
         import json
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         # Convert to JSON-serializable format
         history_data = {
-            'history': self.history,
-            'steps': list(range(0, self.step + 1, self.frequency)),
-            'layers': self.layers,
-            'metrics': list(self.metrics.keys()),
-            'frequency': self.frequency
+            "history": self.history,
+            "steps": list(range(0, self.step + 1, self.frequency)),
+            "layers": self.layers,
+            "metrics": list(self.metrics.keys()),
+            "frequency": self.frequency,
         }
 
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(history_data, f, indent=2)
 
         logger.info(f"Saved alignment history to {path}")
 
 
-def create_alignment_callback(
-    metrics: Dict[str, Any],
-    layers: List[str],
-    **config
-) -> AlignmentMetricsCallback:
+def create_alignment_callback(metrics: Dict[str, Any], layers: List[str], **config) -> AlignmentMetricsCallback:
     """
     Factory function for creating alignment callbacks.
 
@@ -274,4 +242,3 @@ def create_alignment_callback(
         Configured AlignmentMetricsCallback
     """
     return AlignmentMetricsCallback(metrics, layers, **config)
-

@@ -2,22 +2,14 @@
 Unit tests for experiment classes.
 """
 
-import tempfile
-from pathlib import Path
 
-import pytest
-import torch
 
 from alignment.experiments import (
-    BaseExperiment,
-    CNNConfig,
-    EvaluationConfig,
     ExperimentConfig,
     GeneralAlignmentConfig,
     GeneralAlignmentExperiment,
     PruningConfig,
     TrainingConfig,
-    create_config_from_dict,
 )
 
 
@@ -39,9 +31,7 @@ class TestTrainingConfig:
 
     def test_basic_training_config(self):
         """Test basic training configuration."""
-        config = TrainingConfig(
-            training_epochs=10, learning_rate=0.001, batch_size=64, optimizer="adam"
-        )
+        config = TrainingConfig(training_epochs=10, learning_rate=0.001, batch_size=64, optimizer="adam")
 
         assert config.training_epochs == 10
         assert config.learning_rate == 0.001
@@ -62,9 +52,7 @@ class TestPruningConfig:
 
     def test_basic_pruning_config(self):
         """Test basic pruning configuration."""
-        config = PruningConfig(
-            dropout_rates=[0.1, 0.3, 0.5], pruning_metric="magnitude", dropout_mode="scaled"
-        )
+        config = PruningConfig(dropout_rates=[0.1, 0.3, 0.5], pruning_metric="magnitude", dropout_mode="scaled")
 
         assert config.dropout_rates == [0.1, 0.3, 0.5]
         assert config.pruning_metric == "magnitude"
@@ -115,7 +103,7 @@ class TestGeneralAlignmentExperiment:
             device="cpu",
             seed=42,
         )
-        
+
         exp = GeneralAlignmentExperiment(config=config)
 
         assert exp.config.name == "test_experiment"

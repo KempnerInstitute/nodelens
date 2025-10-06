@@ -13,12 +13,7 @@ import torch.nn as nn
 logger = logging.getLogger(__name__)
 
 
-def evaluate_classification(
-    model: nn.Module,
-    data_loader,
-    device: str = 'cuda',
-    criterion: Optional[nn.Module] = None
-) -> Dict[str, float]:
+def evaluate_classification(model: nn.Module, data_loader, device: str = "cuda", criterion: Optional[nn.Module] = None) -> Dict[str, float]:
     """
     Evaluate classification model.
 
@@ -53,20 +48,12 @@ def evaluate_classification(
             correct += predicted.eq(targets).sum().item()
 
     avg_loss = total_loss / len(data_loader)
-    accuracy = 100. * correct / total
+    accuracy = 100.0 * correct / total
 
-    return {
-        'loss': avg_loss,
-        'accuracy': accuracy
-    }
+    return {"loss": avg_loss, "accuracy": accuracy}
 
 
-def evaluate_perplexity(
-    model: nn.Module,
-    data_loader,
-    device: str = 'cuda',
-    max_batches: Optional[int] = None
-) -> Dict[str, float]:
+def evaluate_perplexity(model: nn.Module, data_loader, device: str = "cuda", max_batches: Optional[int] = None) -> Dict[str, float]:
     """
     Evaluate language model perplexity.
 
@@ -90,8 +77,8 @@ def evaluate_perplexity(
 
             # Handle different batch formats
             if isinstance(batch, dict):
-                input_ids = batch['input_ids'].to(device)
-                labels = batch.get('labels', input_ids).to(device)
+                input_ids = batch["input_ids"].to(device)
+                labels = batch.get("labels", input_ids).to(device)
             else:
                 input_ids, labels = batch
                 input_ids = input_ids.to(device)
@@ -101,15 +88,12 @@ def evaluate_perplexity(
             outputs = model(input_ids, labels=labels)
 
             # Get loss
-            if hasattr(outputs, 'loss'):
+            if hasattr(outputs, "loss"):
                 loss = outputs.loss
             else:
                 # Compute manually
-                logits = outputs.logits if hasattr(outputs, 'logits') else outputs
-                loss = nn.CrossEntropyLoss()(
-                    logits.view(-1, logits.size(-1)),
-                    labels.view(-1)
-                )
+                logits = outputs.logits if hasattr(outputs, "logits") else outputs
+                loss = nn.CrossEntropyLoss()(logits.view(-1, logits.size(-1)), labels.view(-1))
 
             # Accumulate
             batch_tokens = (labels != -100).sum().item()  # Count non-padding tokens
@@ -119,19 +103,10 @@ def evaluate_perplexity(
     avg_loss = total_loss / total_tokens
     perplexity = torch.exp(torch.tensor(avg_loss)).item()
 
-    return {
-        'perplexity': perplexity,
-        'loss': avg_loss
-    }
+    return {"perplexity": perplexity, "loss": avg_loss}
 
 
-def evaluate_model(
-    model: nn.Module,
-    data_loader,
-    task: str = 'classification',
-    device: str = 'cuda',
-    **kwargs
-) -> Dict[str, float]:
+def evaluate_model(model: nn.Module, data_loader, task: str = "classification", device: str = "cuda", **kwargs) -> Dict[str, float]:
     """
     General evaluation function that dispatches to task-specific evaluators.
 
@@ -145,25 +120,20 @@ def evaluate_model(
     Returns:
         Evaluation metrics dictionary
     """
-    if task == 'classification':
+    if task == "classification":
         return evaluate_classification(model, data_loader, device, **kwargs)
 
-    elif task in ['language_modeling', 'lm', 'causal_lm']:
+    elif task in ["language_modeling", "lm", "causal_lm"]:
         return evaluate_perplexity(model, data_loader, device, **kwargs)
 
-    elif task == 'regression':
+    elif task == "regression":
         return evaluate_regression(model, data_loader, device, **kwargs)
 
     else:
         raise ValueError(f"Unknown task: {task}")
 
 
-def evaluate_regression(
-    model: nn.Module,
-    data_loader,
-    device: str = 'cuda',
-    criterion: Optional[nn.Module] = None
-) -> Dict[str, float]:
+def evaluate_regression(model: nn.Module, data_loader, device: str = "cuda", criterion: Optional[nn.Module] = None) -> Dict[str, float]:
     """
     Evaluate regression model.
 
@@ -198,10 +168,7 @@ def evaluate_regression(
             total_mae += mae * batch_size
             total += batch_size
 
-    return {
-        'mse': total_mse / total,
-        'mae': total_mae / total
-    }
+    return {"mse": total_mse / total, "mae": total_mae / total}
 
 
 class EvaluationManager:
@@ -211,7 +178,7 @@ class EvaluationManager:
     Useful for tracking multiple metrics during experiments.
     """
 
-    def __init__(self, task: str = 'classification'):
+    def __init__(self, task: str = "classification"):
         """
         Initialize evaluation manager.
 
@@ -221,14 +188,7 @@ class EvaluationManager:
         self.task = task
         self.history = []
 
-    def evaluate(
-        self,
-        model: nn.Module,
-        data_loader,
-        device: str = 'cuda',
-        step: Optional[int] = None,
-        **kwargs
-    ) -> Dict[str, float]:
+    def evaluate(self, model: nn.Module, data_loader, device: str = "cuda", step: Optional[int] = None, **kwargs) -> Dict[str, float]:
         """
         Evaluate and record results.
 
@@ -245,7 +205,7 @@ class EvaluationManager:
         results = evaluate_model(model, data_loader, self.task, device, **kwargs)
 
         if step is not None:
-            results['step'] = step
+            results["step"] = step
 
         self.history.append(results)
 
@@ -255,7 +215,7 @@ class EvaluationManager:
         """Get evaluation history."""
         return self.history
 
-    def get_best(self, metric: str = 'accuracy') -> Dict[str, float]:
+    def get_best(self, metric: str = "accuracy") -> Dict[str, float]:
         """
         Get best result based on metric.
 
@@ -268,10 +228,9 @@ class EvaluationManager:
         if not self.history:
             return {}
 
-        if metric in ['perplexity', 'loss', 'mse', 'mae']:
+        if metric in ["perplexity", "loss", "mse", "mae"]:
             # Lower is better
-            return min(self.history, key=lambda x: x.get(metric, float('inf')))
+            return min(self.history, key=lambda x: x.get(metric, float("inf")))
         else:
             # Higher is better (accuracy, etc.)
-            return max(self.history, key=lambda x: x.get(metric, float('-inf')))
-
+            return max(self.history, key=lambda x: x.get(metric, float("-inf")))

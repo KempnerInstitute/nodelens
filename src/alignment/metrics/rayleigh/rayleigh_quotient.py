@@ -39,7 +39,7 @@ class RayleighQuotient(BaseMetric):
         scale_by_norm: bool = False,
         class_conditioned_targets: Optional[torch.Tensor] = None,
         regularization: float = 1e-6,
-        **config: Any
+        **config: Any,
     ):
         """
         Initialize the Rayleigh Quotient metric.
@@ -77,7 +77,7 @@ class RayleighQuotient(BaseMetric):
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
         targets: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute Rayleigh Quotient values for each neuron.
@@ -110,18 +110,12 @@ class RayleighQuotient(BaseMetric):
 
         # Check sample size
         if batch_size < self.min_samples:
-            logger.warning(
-                f"RQ: Only {batch_size} samples, minimum {self.min_samples} recommended. "
-                "Returning zeros."
-            )
+            logger.warning(f"RQ: Only {batch_size} samples, minimum {self.min_samples} recommended. " "Returning zeros.")
             return torch.zeros(output_features, device=weights.device, dtype=weights.dtype)
 
         # Check dimension compatibility
         if input_features != weight_features:
-            logger.warning(
-                f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. "
-                "Truncating to common dimensions."
-            )
+            logger.warning(f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. " "Truncating to common dimensions.")
             min_dim = min(input_features, weight_features)
             inputs = inputs[:, :min_dim]
             weights = weights[:, :min_dim]
@@ -130,7 +124,7 @@ class RayleighQuotient(BaseMetric):
         compute_device = weights.device
         if self._should_use_cpu(inputs, weights):
             logger.debug("RQ: Moving computation to CPU for large tensors")
-            compute_device = torch.device('cpu')
+            compute_device = torch.device("cpu")
             inputs = inputs.cpu()
             weights = weights.cpu()
 
@@ -144,7 +138,7 @@ class RayleighQuotient(BaseMetric):
             cov = torch.zeros(input_features, input_features, device=inputs.device, dtype=inputs.dtype)
             total_weight = 0.0
             for c in classes:
-                mask = (tgt == c)
+                mask = tgt == c
                 if mask.sum() < self.min_samples:
                     continue
                 Xc = inputs[mask]
@@ -165,13 +159,11 @@ class RayleighQuotient(BaseMetric):
 
         # Add regularization to diagonal for numerical stability
         if self.regularization > 0:
-            cov = cov + self.regularization * torch.eye(
-                input_features, device=cov.device, dtype=cov.dtype
-            )
+            cov = cov + self.regularization * torch.eye(input_features, device=cov.device, dtype=cov.dtype)
 
         # Scale covariance by norm if requested
         if self.scale_by_norm:
-            cov_norm = torch.norm(cov, p='fro')
+            cov_norm = torch.norm(cov, p="fro")
             if cov_norm > 0:
                 cov = cov / cov_norm
 
@@ -207,12 +199,7 @@ class RayleighQuotient(BaseMetric):
         return rq_values
 
     def compute_class_conditioned(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        targets: torch.Tensor,
-        return_delta_rq: bool = False,
-        **kwargs: Any
+        self, inputs: torch.Tensor, weights: torch.Tensor, targets: torch.Tensor, return_delta_rq: bool = False, **kwargs: Any
     ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Compute class-conditioned Rayleigh Quotient.
@@ -264,7 +251,7 @@ class RayleighQuotient(BaseMetric):
         total_weight = 0.0
 
         for c in classes:
-            mask = (targets == c)
+            mask = targets == c
             n_c = mask.sum()
 
             if n_c < self.min_samples:
@@ -280,9 +267,7 @@ class RayleighQuotient(BaseMetric):
 
             # Add regularization
             if self.regularization > 0:
-                cov_c = cov_c + self.regularization * torch.eye(
-                    input_features, device=device, dtype=cov_c.dtype
-                )
+                cov_c = cov_c + self.regularization * torch.eye(input_features, device=device, dtype=cov_c.dtype)
 
             # Compute RQ for this class
             wc = torch.matmul(weights, cov_c)
@@ -324,19 +309,9 @@ class RayleighQuotient(BaseMetric):
         # Compute ΔRQ
         delta_rq = rq_uncond - rq_cond
 
-        return {
-            'rq_uncond': rq_uncond,
-            'rq_cond': rq_cond,
-            'delta_rq': delta_rq
-        }
+        return {"rq_uncond": rq_uncond, "rq_cond": rq_cond, "delta_rq": delta_rq}
 
-    def _compute_patchwise(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        weight_by_variance: bool = True,
-        **kwargs: Any
-    ) -> torch.Tensor:
+    def _compute_patchwise(self, inputs: torch.Tensor, weights: torch.Tensor, weight_by_variance: bool = True, **kwargs: Any) -> torch.Tensor:
         """
         Compute patch-wise RQ for CNN layers.
 
@@ -379,7 +354,7 @@ class RayleighQuotient(BaseMetric):
 
             # Scale by norm if requested
             if self.scale_by_norm:
-                cov_norm = torch.norm(patch_cov, p='fro')
+                cov_norm = torch.norm(patch_cov, p="fro")
                 if cov_norm > 0:
                     patch_cov = patch_cov / cov_norm
 
@@ -434,14 +409,7 @@ class PatchWiseRayleighQuotient(RayleighQuotient):
     and then aggregates the results, weighted by patch variance.
     """
 
-    def __init__(
-        self,
-        relative: bool = True,
-        min_samples: int = 2,
-        scale_by_norm: bool = False,
-        weight_by_variance: bool = True,
-        **config: Any
-    ):
+    def __init__(self, relative: bool = True, min_samples: int = 2, scale_by_norm: bool = False, weight_by_variance: bool = True, **config: Any):
         """
         Initialize patch-wise RQ metric.
 
@@ -456,11 +424,7 @@ class PatchWiseRayleighQuotient(RayleighQuotient):
         self.weight_by_variance = weight_by_variance
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute patch-wise RQ for convolutional inputs.

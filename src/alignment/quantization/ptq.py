@@ -20,11 +20,7 @@ class INT8Quantizer:
     Converts FP32/FP16 weights and activations to INT8.
     """
 
-    def __init__(
-        self,
-        per_channel: bool = True,
-        symmetric: bool = True
-    ):
+    def __init__(self, per_channel: bool = True, symmetric: bool = True):
         """
         Initialize INT8 quantizer.
 
@@ -35,11 +31,7 @@ class INT8Quantizer:
         self.per_channel = per_channel
         self.symmetric = symmetric
 
-    def quantize_tensor(
-        self,
-        tensor: torch.Tensor,
-        dim: int = 0
-    ) -> tuple:
+    def quantize_tensor(self, tensor: torch.Tensor, dim: int = 0) -> tuple:
         """
         Quantize a tensor to INT8.
 
@@ -87,10 +79,7 @@ class INT8Quantizer:
 
         return quantized, scale, zero_point
 
-    def quantize_linear_layer(
-        self,
-        layer: nn.Linear
-    ) -> Dict:
+    def quantize_linear_layer(self, layer: nn.Linear) -> Dict:
         """
         Quantize a Linear layer.
 
@@ -105,16 +94,10 @@ class INT8Quantizer:
         # Quantize weights (per output channel)
         q_weight, scale, zero_point = self.quantize_tensor(weight, dim=0)
 
-        result = {
-            'weight': q_weight,
-            'scale': scale,
-            'zero_point': zero_point,
-            'original_dtype': weight.dtype,
-            'original_shape': weight.shape
-        }
+        result = {"weight": q_weight, "scale": scale, "zero_point": zero_point, "original_dtype": weight.dtype, "original_shape": weight.shape}
 
         if layer.bias is not None:
-            result['bias'] = layer.bias.data
+            result["bias"] = layer.bias.data
 
         return result
 
@@ -135,10 +118,7 @@ class INT4Quantizer:
         """
         self.block_size = block_size
 
-    def quantize_tensor(
-        self,
-        tensor: torch.Tensor
-    ) -> tuple:
+    def quantize_tensor(self, tensor: torch.Tensor) -> tuple:
         """
         Quantize tensor to INT4 using block-wise quantization.
 
@@ -198,12 +178,7 @@ class MixedPrecisionQuantizer:
     - Less important: Lower precision (INT4)
     """
 
-    def __init__(
-        self,
-        importance_threshold: float = 0.5,
-        high_precision: str = 'int8',
-        low_precision: str = 'int4'
-    ):
+    def __init__(self, importance_threshold: float = 0.5, high_precision: str = "int8", low_precision: str = "int4"):
         """
         Initialize mixed-precision quantizer.
 
@@ -219,11 +194,7 @@ class MixedPrecisionQuantizer:
         self.int8_quantizer = INT8Quantizer()
         self.int4_quantizer = INT4Quantizer()
 
-    def quantize_model_adaptive(
-        self,
-        model: nn.Module,
-        layer_importance: Dict[str, float]
-    ) -> Dict:
+    def quantize_model_adaptive(self, model: nn.Module, layer_importance: Dict[str, float]) -> Dict:
         """
         Quantize model with mixed precision based on importance.
 
@@ -254,19 +225,17 @@ class MixedPrecisionQuantizer:
                 # Low importance -> lower precision (more compression)
                 precision = self.low_precision
                 result = self.int4_quantizer.quantize_tensor(module.weight.data)
-                result = {'weight': result[0], 'scale': result[1], 'zero_point': result[2]}
+                result = {"weight": result[0], "scale": result[1], "zero_point": result[2]}
 
-            result['precision'] = precision
-            result['importance'] = importance
+            result["precision"] = precision
+            result["importance"] = importance
             results[name] = result
 
         return results
 
 
 def quantize_model(
-    model: nn.Module,
-    precision: Literal['int8', 'int4', 'mixed'] = 'int8',
-    layer_importance: Optional[Dict[str, float]] = None
+    model: nn.Module, precision: Literal["int8", "int4", "mixed"] = "int8", layer_importance: Optional[Dict[str, float]] = None
 ) -> Dict:
     """
     Quantize entire model.
@@ -279,11 +248,11 @@ def quantize_model(
     Returns:
         Quantization results per layer
     """
-    if precision == 'int8':
+    if precision == "int8":
         quantizer = INT8Quantizer()
-    elif precision == 'int4':
+    elif precision == "int4":
         quantizer = INT4Quantizer()
-    elif precision == 'mixed':
+    elif precision == "mixed":
         if layer_importance is None:
             raise ValueError("Mixed precision requires layer_importance")
         quantizer = MixedPrecisionQuantizer()
@@ -299,10 +268,7 @@ def quantize_model(
     return results
 
 
-def quantize_layer(
-    layer: nn.Module,
-    precision: str = 'int8'
-) -> Dict:
+def quantize_layer(layer: nn.Module, precision: str = "int8") -> Dict:
     """
     Quantize a single layer.
 
@@ -313,9 +279,9 @@ def quantize_layer(
     Returns:
         Quantization result
     """
-    if precision == 'int8':
+    if precision == "int8":
         quantizer = INT8Quantizer()
-    elif precision == 'int4':
+    elif precision == "int4":
         quantizer = INT4Quantizer()
     else:
         raise ValueError(f"Unknown precision: {precision}")
@@ -324,4 +290,3 @@ def quantize_layer(
         return quantizer.quantize_linear_layer(layer)
     else:
         raise ValueError(f"Unsupported layer type: {type(layer)}")
-

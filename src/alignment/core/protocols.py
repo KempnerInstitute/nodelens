@@ -36,11 +36,7 @@ class AlignmentMetric(Protocol):
         ...
 
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute the metric values.
@@ -63,7 +59,7 @@ class AlignmentMetric(Protocol):
         outputs: Optional[torch.Tensor] = None,
         world_size: int = 1,
         rank: int = 0,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """Compute metric in distributed setting with automatic reduction."""
         ...
@@ -82,11 +78,7 @@ class ModelWrapper(Protocol):
         """List of layer names being tracked for alignment."""
         ...
 
-    def get_layer_activations(
-        self,
-        inputs: torch.Tensor,
-        layers: Optional[List[str]] = None
-    ) -> Dict[str, torch.Tensor]:
+    def get_layer_activations(self, inputs: torch.Tensor, layers: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """
         Get activations for specified layers.
 
@@ -99,25 +91,15 @@ class ModelWrapper(Protocol):
         """
         ...
 
-    def get_layer_weights(
-        self,
-        layers: Optional[List[str]] = None
-    ) -> Dict[str, torch.Tensor]:
+    def get_layer_weights(self, layers: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """Get weights for specified layers."""
         ...
 
-    def forward_with_activations(
-        self,
-        inputs: torch.Tensor
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def forward_with_activations(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Forward pass that also returns intermediate activations."""
         ...
 
-    def apply_dropout_mask(
-        self,
-        dropout_masks: Dict[str, torch.Tensor],
-        mode: str = "multiplicative"
-    ) -> None:
+    def apply_dropout_mask(self, dropout_masks: Dict[str, torch.Tensor], mode: str = "multiplicative") -> None:
         """Apply dropout masks to specified layers."""
         ...
 
@@ -140,33 +122,15 @@ class DatasetWrapper(Protocol):
         """Shape of a single input sample (excluding batch dimension)."""
         ...
 
-    def get_train_loader(
-        self,
-        batch_size: int,
-        shuffle: bool = True,
-        num_workers: int = 4,
-        **kwargs: Any
-    ) -> DataLoader:
+    def get_train_loader(self, batch_size: int, shuffle: bool = True, num_workers: int = 4, **kwargs: Any) -> DataLoader:
         """Get training data loader."""
         ...
 
-    def get_val_loader(
-        self,
-        batch_size: int,
-        shuffle: bool = False,
-        num_workers: int = 4,
-        **kwargs: Any
-    ) -> DataLoader:
+    def get_val_loader(self, batch_size: int, shuffle: bool = False, num_workers: int = 4, **kwargs: Any) -> DataLoader:
         """Get validation data loader."""
         ...
 
-    def get_test_loader(
-        self,
-        batch_size: int,
-        shuffle: bool = False,
-        num_workers: int = 4,
-        **kwargs: Any
-    ) -> DataLoader:
+    def get_test_loader(self, batch_size: int, shuffle: bool = False, num_workers: int = 4, **kwargs: Any) -> DataLoader:
         """Get test data loader."""
         ...
 
@@ -188,12 +152,7 @@ class Experiment(Protocol):
         """Setup the experiment (called once before running)."""
         ...
 
-    def run(
-        self,
-        models: Union[nn.Module, List[nn.Module]],
-        dataset: DatasetWrapper,
-        **kwargs: Any
-    ) -> Dict[str, Any]:
+    def run(self, models: Union[nn.Module, List[nn.Module]], dataset: DatasetWrapper, **kwargs: Any) -> Dict[str, Any]:
         """
         Run the experiment.
 
@@ -224,12 +183,7 @@ class MetricAggregator(Protocol):
         """Aggregator name."""
         ...
 
-    def aggregate(
-        self,
-        metrics: Dict[str, torch.Tensor],
-        mode: str = "layer",
-        **kwargs: Any
-    ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+    def aggregate(self, metrics: Dict[str, torch.Tensor], mode: str = "layer", **kwargs: Any) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Aggregate metrics across layers or other dimensions.
 
@@ -252,12 +206,7 @@ class ResultReporter(Protocol):
         """Reporter name."""
         ...
 
-    def report(
-        self,
-        results: Dict[str, Any],
-        output_path: Optional[str] = None,
-        **kwargs: Any
-    ) -> None:
+    def report(self, results: Dict[str, Any], output_path: Optional[str] = None, **kwargs: Any) -> None:
         """
         Generate report from results.
 
@@ -268,11 +217,6 @@ class ResultReporter(Protocol):
         """
         ...
 
-    def visualize(
-        self,
-        results: Dict[str, Any],
-        plot_type: str,
-        **kwargs: Any
-    ) -> Any:
+    def visualize(self, results: Dict[str, Any], plot_type: str, **kwargs: Any) -> Any:
         """Generate visualizations from results."""
         ...

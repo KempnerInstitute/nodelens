@@ -17,7 +17,7 @@ def save_checkpoint(
     epoch: int,
     filepath: str,
     additional_state: Optional[Dict[str, Any]] = None,
-    save_hooks: bool = False
+    save_hooks: bool = False,
 ) -> None:
     """
     Save a checkpoint, handling models with hooks gracefully.
@@ -31,12 +31,12 @@ def save_checkpoint(
         save_hooks: Whether to attempt saving the full model (with hooks)
     """
     checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
     }
 
     if optimizer is not None:
-        checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+        checkpoint["optimizer_state_dict"] = optimizer.state_dict()
 
     if additional_state is not None:
         checkpoint.update(additional_state)
@@ -44,7 +44,7 @@ def save_checkpoint(
     if save_hooks:
         # Try to save the full model, but warn about hooks
         try:
-            checkpoint['model'] = model
+            checkpoint["model"] = model
             logger.warning("Saving full model with hooks. This may not be loadable.")
         except Exception as e:
             logger.warning(f"Failed to save full model: {e}. Saving state_dict only.")
@@ -58,10 +58,7 @@ def save_checkpoint(
 
 
 def load_checkpoint(
-    filepath: str,
-    model: Optional[torch.nn.Module] = None,
-    optimizer: Optional[torch.optim.Optimizer] = None,
-    map_location: Optional[str] = None
+    filepath: str, model: Optional[torch.nn.Module] = None, optimizer: Optional[torch.optim.Optimizer] = None, map_location: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Load a checkpoint, handling different checkpoint formats.
@@ -81,23 +78,23 @@ def load_checkpoint(
     checkpoint = torch.load(filepath, map_location=map_location)
 
     # Load model state if model is provided
-    if model is not None and 'model_state_dict' in checkpoint:
+    if model is not None and "model_state_dict" in checkpoint:
         try:
-            model.load_state_dict(checkpoint['model_state_dict'])
+            model.load_state_dict(checkpoint["model_state_dict"])
             logger.info("Model state loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load model state: {e}")
             # Try to load with strict=False
             try:
-                model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+                model.load_state_dict(checkpoint["model_state_dict"], strict=False)
                 logger.warning("Model state loaded with strict=False")
             except Exception as e2:
                 logger.error(f"Failed to load model state even with strict=False: {e2}")
 
     # Load optimizer state if optimizer is provided
-    if optimizer is not None and 'optimizer_state_dict' in checkpoint:
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
         try:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             logger.info("Optimizer state loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load optimizer state: {e}")
@@ -105,11 +102,7 @@ def load_checkpoint(
     return checkpoint
 
 
-def save_model_for_inference(
-    model: torch.nn.Module,
-    filepath: str,
-    remove_hooks: bool = True
-) -> None:
+def save_model_for_inference(model: torch.nn.Module, filepath: str, remove_hooks: bool = True) -> None:
     """
     Save a model for inference, optionally removing hooks.
 
@@ -118,11 +111,11 @@ def save_model_for_inference(
         filepath: Path to save the model
         remove_hooks: Whether to remove hooks before saving
     """
-    if remove_hooks and hasattr(model, '_forward_hooks'):
+    if remove_hooks and hasattr(model, "_forward_hooks"):
         # Store hooks temporarily
         hooks_backup = {}
         for name, module in model.named_modules():
-            if hasattr(module, '_forward_hooks') and len(module._forward_hooks) > 0:
+            if hasattr(module, "_forward_hooks") and len(module._forward_hooks) > 0:
                 hooks_backup[name] = dict(module._forward_hooks)
                 module._forward_hooks.clear()
 

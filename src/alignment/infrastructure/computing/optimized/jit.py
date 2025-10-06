@@ -8,12 +8,9 @@ import torch
 
 # JIT-compiled helper functions
 
+
 @torch.jit.script
-def compute_rayleigh_quotient_jit(
-    inputs: torch.Tensor,
-    weights: torch.Tensor,
-    epsilon: float = 1e-8
-) -> torch.Tensor:
+def compute_rayleigh_quotient_jit(inputs: torch.Tensor, weights: torch.Tensor, epsilon: float = 1e-8) -> torch.Tensor:
     """
     JIT-compiled Rayleigh Quotient computation.
 
@@ -68,11 +65,7 @@ def compute_cosine_similarity_matrix_jit(weights: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def compute_mutual_information_gaussian_jit(
-    x: torch.Tensor,
-    y: torch.Tensor,
-    epsilon: float = 1e-8
-) -> torch.Tensor:
+def compute_mutual_information_gaussian_jit(x: torch.Tensor, y: torch.Tensor, epsilon: float = 1e-8) -> torch.Tensor:
     """
     JIT-compiled Gaussian mutual information estimation.
 
@@ -111,11 +104,7 @@ def compute_mutual_information_gaussian_jit(
 
 
 @torch.jit.script
-def compute_eigenvalue_entropy_jit(
-    matrix: torch.Tensor,
-    temperature: float = 1.0,
-    epsilon: float = 1e-8
-) -> torch.Tensor:
+def compute_eigenvalue_entropy_jit(matrix: torch.Tensor, temperature: float = 1.0, epsilon: float = 1e-8) -> torch.Tensor:
     """
     JIT-compiled eigenvalue entropy computation.
 
@@ -146,10 +135,7 @@ def compute_eigenvalue_entropy_jit(
 
 
 @torch.jit.script
-def compute_node_correlation_jit(
-    activations: torch.Tensor,
-    epsilon: float = 1e-8
-) -> torch.Tensor:
+def compute_node_correlation_jit(activations: torch.Tensor, epsilon: float = 1e-8) -> torch.Tensor:
     """
     JIT-compiled node correlation computation.
 
@@ -213,10 +199,7 @@ def compute_spectral_norm_jit(weights: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def compute_batch_histogram_jit(
-    data: torch.Tensor,
-    bins: int = 10
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def compute_batch_histogram_jit(data: torch.Tensor, bins: int = 10) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     JIT-compiled batch histogram computation.
 
@@ -258,6 +241,7 @@ def compute_batch_histogram_jit(
 
 # Optimized metric classes using JIT
 
+
 class JITRayleighQuotient:
     """JIT-optimized Rayleigh Quotient metric."""
 
@@ -293,6 +277,7 @@ class JITNodeCorrelation:
 
 # Factory for creating JIT-optimized metrics
 
+
 def create_jit_metric(metric_name: str, **kwargs):
     """
     Create a JIT-optimized version of a metric.
@@ -305,9 +290,9 @@ def create_jit_metric(metric_name: str, **kwargs):
         JIT-optimized metric instance
     """
     jit_metrics = {
-        'rayleigh_quotient': JITRayleighQuotient,
-        'mutual_information': JITMutualInformation,
-        'node_correlation': JITNodeCorrelation,
+        "rayleigh_quotient": JITRayleighQuotient,
+        "mutual_information": JITMutualInformation,
+        "node_correlation": JITNodeCorrelation,
     }
 
     if metric_name not in jit_metrics:
@@ -318,12 +303,8 @@ def create_jit_metric(metric_name: str, **kwargs):
 
 # Benchmark utilities
 
-def benchmark_jit_vs_regular(
-    metric_name: str,
-    input_shape: Tuple[int, ...],
-    n_iterations: int = 100,
-    device: str = 'cuda'
-) -> Tuple[float, float]:
+
+def benchmark_jit_vs_regular(metric_name: str, input_shape: Tuple[int, ...], n_iterations: int = 100, device: str = "cuda") -> Tuple[float, float]:
     """
     Benchmark JIT vs regular implementation.
 
@@ -340,7 +321,7 @@ def benchmark_jit_vs_regular(
     import time
 
     # Create dummy data
-    if metric_name == 'rayleigh_quotient':
+    if metric_name == "rayleigh_quotient":
         inputs = torch.randn(input_shape[0], input_shape[1], device=device)
         weights = torch.randn(input_shape[2], input_shape[1], device=device)
 

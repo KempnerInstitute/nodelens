@@ -34,7 +34,7 @@ class VisionTaskAlignment(BaseMetric):
         image_size: Tuple[int, int] = (224, 224),
         patch_size: int = 16,
         n_orientations: int = 8,
-        require_real_data: bool = False
+        require_real_data: bool = False,
     ):
         """
         Initialize vision task alignment metric.
@@ -64,7 +64,7 @@ class VisionTaskAlignment(BaseMetric):
         images: Optional[torch.Tensor] = None,
         feature_maps: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Compute vision task alignment scores.
@@ -102,15 +102,11 @@ class VisionTaskAlignment(BaseMetric):
                 # Expect flattened spatial maps concatenated per neuron: [B, n_neurons * H * W]
                 total_features = outputs.shape[1]
                 if total_features % n_neurons != 0:
-                    raise ValueError(
-                        f"Cannot infer spatial dims: features={total_features} not divisible by neurons={n_neurons}"
-                    )
+                    raise ValueError(f"Cannot infer spatial dims: features={total_features} not divisible by neurons={n_neurons}")
                 spatial_area = total_features // n_neurons
-                spatial_size = int(spatial_area ** 0.5)
+                spatial_size = int(spatial_area**0.5)
                 if spatial_size * spatial_size != spatial_area:
-                    raise ValueError(
-                        f"Non-square spatial area inferred: area={spatial_area}. Provide conv outputs or proper preprocessing."
-                    )
+                    raise ValueError(f"Non-square spatial area inferred: area={spatial_area}. Provide conv outputs or proper preprocessing.")
                 batch_size = outputs.shape[0]
                 outputs = outputs.reshape(batch_size, n_neurons, spatial_size, spatial_size)
             elif outputs.dim() == 4:
@@ -133,15 +129,11 @@ class VisionTaskAlignment(BaseMetric):
 
                 # Average correlation with shifted versions
                 corr_right = F.cosine_similarity(
-                    neuron_maps.reshape(neuron_maps.shape[0], -1),
-                    shifted_right.reshape(shifted_right.shape[0], -1),
-                    dim=1
+                    neuron_maps.reshape(neuron_maps.shape[0], -1), shifted_right.reshape(shifted_right.shape[0], -1), dim=1
                 ).mean()
 
                 corr_down = F.cosine_similarity(
-                    neuron_maps.reshape(neuron_maps.shape[0], -1),
-                    shifted_down.reshape(shifted_down.shape[0], -1),
-                    dim=1
+                    neuron_maps.reshape(neuron_maps.shape[0], -1), shifted_down.reshape(shifted_down.shape[0], -1), dim=1
                 ).mean()
 
                 alignment_scores[i] = (corr_right + corr_down) / 2
@@ -175,23 +167,21 @@ class VisionTaskAlignment(BaseMetric):
             # Measure correlation between neuron activations and edges
             for i in range(n_neurons):
                 if outputs.dim() == 4:
-                    neuron_response = outputs[:, i:i+1]
+                    neuron_response = outputs[:, i : i + 1]
                 else:
                     # Reshape if needed
                     neuron_response = outputs[:, i].reshape(outputs.shape[0], 1, -1)
-                    neuron_response = neuron_response.reshape(outputs.shape[0], 1,
-                                                              int(neuron_response.shape[2]**0.5),
-                                                              int(neuron_response.shape[2]**0.5))
+                    neuron_response = neuron_response.reshape(
+                        outputs.shape[0], 1, int(neuron_response.shape[2] ** 0.5), int(neuron_response.shape[2] ** 0.5)
+                    )
 
                 # Resize if necessary
                 if neuron_response.shape[-2:] != edge_magnitude.shape[-2:]:
-                    neuron_response = F.interpolate(neuron_response, size=edge_magnitude.shape[-2:], mode='bilinear')
+                    neuron_response = F.interpolate(neuron_response, size=edge_magnitude.shape[-2:], mode="bilinear")
 
                 # Compute correlation
                 correlation = F.cosine_similarity(
-                    neuron_response.reshape(neuron_response.shape[0], -1),
-                    edge_magnitude.reshape(edge_magnitude.shape[0], -1),
-                    dim=1
+                    neuron_response.reshape(neuron_response.shape[0], -1), edge_magnitude.reshape(edge_magnitude.shape[0], -1), dim=1
                 ).mean()
 
                 alignment_scores[i] = correlation.abs()
@@ -217,8 +207,8 @@ class VisionTaskAlignment(BaseMetric):
                     power_spectrum = torch.abs(fft_response) ** 2
 
                     # Measure concentration of energy in different frequency bands
-                    low_freq_energy = power_spectrum[..., :power_spectrum.shape[-2]//4, :power_spectrum.shape[-1]//4].sum()
-                    high_freq_energy = power_spectrum[..., power_spectrum.shape[-2]//4:, power_spectrum.shape[-1]//4:].sum()
+                    low_freq_energy = power_spectrum[..., : power_spectrum.shape[-2] // 4, : power_spectrum.shape[-1] // 4].sum()
+                    high_freq_energy = power_spectrum[..., power_spectrum.shape[-2] // 4 :, power_spectrum.shape[-1] // 4 :].sum()
 
                     # Ratio indicates texture selectivity
                     if low_freq_energy > 0:
@@ -287,7 +277,7 @@ class VisionTaskAlignment(BaseMetric):
             # Create edge pattern
             x = torch.arange(w, device=device).float() - w / 2
             y = torch.arange(h, device=device).float() - h / 2
-            xx, yy = torch.meshgrid(x, y, indexing='xy')
+            xx, yy = torch.meshgrid(x, y, indexing="xy")
 
             # Rotated coordinates
             edge_pattern = torch.sin(xx * torch.cos(angle) + yy * torch.sin(angle))
@@ -306,9 +296,9 @@ class VisionTaskAlignment(BaseMetric):
             kernel_size = max(3, 15 - 2 * (i % 5))
 
             # Create Gaussian kernel for smoothing
-            kernel = torch.ones(1, 1, kernel_size, kernel_size, device=device) / (kernel_size ** 2)
+            kernel = torch.ones(1, 1, kernel_size, kernel_size, device=device) / (kernel_size**2)
 
             # Apply convolution for texture effect
-            textures[:, i:i+1] = F.conv2d(textures[:, i:i+1], kernel, padding=kernel_size//2)
+            textures[:, i : i + 1] = F.conv2d(textures[:, i : i + 1], kernel, padding=kernel_size // 2)
 
         return textures

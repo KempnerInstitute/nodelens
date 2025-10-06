@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LayerSensitivity:
     """Sensitivity information for a layer."""
+
     name: str
     sensitivity: float  # Accuracy drop when layer perturbed
     size: int  # Number of parameters
@@ -56,12 +57,12 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
     def __init__(
         self,
         target_sparsity: float = 0.5,
-        metric: str = 'rayleigh_quotient',
-        sensitivity_method: str = 'perturbation',  # 'perturbation', 'gradient', 'hessian'
+        metric: str = "rayleigh_quotient",
+        sensitivity_method: str = "perturbation",  # 'perturbation', 'gradient', 'hessian'
         min_amount: float = 0.1,
         max_amount: float = 0.9,
         config: Optional[PruningConfig] = None,
-        **metric_kwargs
+        **metric_kwargs,
     ):
         """
         Initialize adaptive sensitivity pruning.
@@ -86,12 +87,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         # Will be populated during sensitivity analysis
         self.layer_sensitivities: Dict[str, LayerSensitivity] = {}
 
-    def compute_importance_scores(
-        self,
-        module: nn.Module,
-        inputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute importance scores using specified metric.
 
@@ -103,8 +99,8 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         metric = get_metric(self.metric_name, **self.metric_kwargs)
 
         # Compute scores
-        if hasattr(metric, 'requires_outputs') and metric.requires_outputs:
-            outputs = kwargs.get('outputs')
+        if hasattr(metric, "requires_outputs") and metric.requires_outputs:
+            outputs = kwargs.get("outputs")
             scores = metric.compute(inputs=inputs, weights=module.weight, outputs=outputs)
         else:
             scores = metric.compute(inputs=inputs, weights=module.weight)
@@ -119,12 +115,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         return scores
 
     def measure_layer_sensitivity(
-        self,
-        model: nn.Module,
-        layer_name: str,
-        eval_fn: Callable,
-        perturbation_scale: float = 0.1,
-        num_trials: int = 3
+        self, model: nn.Module, layer_name: str, eval_fn: Callable, perturbation_scale: float = 0.1, num_trials: int = 3
     ) -> float:
         """
         Measure sensitivity of a single layer.
@@ -145,7 +136,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         # Get layer
         layer = dict(model.named_modules())[layer_name]
 
-        if not hasattr(layer, 'weight'):
+        if not hasattr(layer, "weight"):
             return 0.0
 
         # Store original weight
@@ -156,11 +147,11 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
         for _ in range(num_trials):
             # Perturb layer
-            if self.sensitivity_method == 'perturbation':
+            if self.sensitivity_method == "perturbation":
                 perturbation = perturbation_scale * torch.randn_like(layer.weight)
                 layer.weight.data = original_weight + perturbation
 
-            elif self.sensitivity_method == 'masking':
+            elif self.sensitivity_method == "masking":
                 # Random masking (simulate pruning)
                 mask = torch.rand_like(layer.weight) > 0.3  # Mask 30%
                 layer.weight.data = original_weight * mask
@@ -182,12 +173,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
         return avg_sensitivity
 
-    def compute_all_sensitivities(
-        self,
-        model: nn.Module,
-        layer_names: List[str],
-        eval_fn: Callable
-    ) -> Dict[str, LayerSensitivity]:
+    def compute_all_sensitivities(self, model: nn.Module, layer_names: List[str], eval_fn: Callable) -> Dict[str, LayerSensitivity]:
         """
         Compute sensitivities for all specified layers.
 
@@ -214,10 +200,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
             # Store
             sensitivities[layer_name] = LayerSensitivity(
-                name=layer_name,
-                sensitivity=sens,
-                size=size,
-                recommended_amount=0.0  # Will be computed next
+                name=layer_name, sensitivity=sens, size=size, recommended_amount=0.0  # Will be computed next
             )
 
         # Compute recommended amounts
@@ -227,10 +210,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
         return sensitivities
 
-    def _compute_adaptive_amounts(
-        self,
-        sensitivities: Dict[str, LayerSensitivity]
-    ) -> Dict[str, LayerSensitivity]:
+    def _compute_adaptive_amounts(self, sensitivities: Dict[str, LayerSensitivity]) -> Dict[str, LayerSensitivity]:
         """
         Compute adaptive pruning amounts based on sensitivities.
 
@@ -265,10 +245,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         target_params_to_prune = int(total_params * self.target_sparsity)
 
         # Compute current total
-        current_pruned = sum(
-            sensitivities[name].size * initial_amounts[name]
-            for name in sensitivities
-        )
+        current_pruned = sum(sensitivities[name].size * initial_amounts[name] for name in sensitivities)
 
         # Scale amounts to hit target
         scale_factor = target_params_to_prune / current_pruned if current_pruned > 0 else 1.0
@@ -282,19 +259,12 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
             layer_sens.recommended_amount = adapted_amount
 
-            logger.info(
-                f"{name}: sensitivity={layer_sens.sensitivity:.4f}, "
-                f"amount={adapted_amount:.1%}"
-            )
+            logger.info(f"{name}: sensitivity={layer_sens.sensitivity:.4f}, " f"amount={adapted_amount:.1%}")
 
         return sensitivities
 
     def prune_adaptive(
-        self,
-        model: nn.Module,
-        layer_names: List[str],
-        eval_fn: Callable,
-        inputs_per_layer: Optional[Dict[str, torch.Tensor]] = None
+        self, model: nn.Module, layer_names: List[str], eval_fn: Callable, inputs_per_layer: Optional[Dict[str, torch.Tensor]] = None
     ) -> Dict[str, torch.Tensor]:
         """
         Prune model adaptively based on layer sensitivities.
@@ -326,18 +296,11 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
             scores = self.compute_importance_scores(layer, inputs=inputs)
 
             # Create mask with adaptive amount
-            mask = self.create_pruning_mask(
-                scores,
-                amount=layer_sens.recommended_amount,
-                structured=self.config.structured
-            )
+            mask = self.create_pruning_mask(scores, amount=layer_sens.recommended_amount, structured=self.config.structured)
 
             masks[layer_name] = mask
 
-            logger.info(
-                f"{layer_name}: pruning {layer_sens.recommended_amount:.1%} "
-                f"(sensitivity: {layer_sens.sensitivity:.4f})"
-            )
+            logger.info(f"{layer_name}: pruning {layer_sens.recommended_amount:.1%} " f"(sensitivity: {layer_sens.sensitivity:.4f})")
 
         return masks
 
@@ -352,34 +315,21 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         print("=" * 80)
 
         # Sort by sensitivity
-        sorted_layers = sorted(
-            self.layer_sensitivities.values(),
-            key=lambda x: x.sensitivity,
-            reverse=True
-        )
+        sorted_layers = sorted(self.layer_sensitivities.values(), key=lambda x: x.sensitivity, reverse=True)
 
         print(f"\n{'Layer':<30} {'Sensitivity':<12} {'Size':<10} {'Pruning %'}")
         print("-" * 80)
 
         for layer_sens in sorted_layers:
-            print(
-                f"{layer_sens.name:<30} "
-                f"{layer_sens.sensitivity:<12.4f} "
-                f"{layer_sens.size:<10} "
-                f"{layer_sens.recommended_amount:>8.1%}"
-            )
+            print(f"{layer_sens.name:<30} " f"{layer_sens.sensitivity:<12.4f} " f"{layer_sens.size:<10} " f"{layer_sens.recommended_amount:>8.1%}")
 
         print("\n" + "=" * 80)
 
         # Summary statistics
         total_size = sum(s.size for s in self.layer_sensitivities.values())
-        total_pruned = sum(
-            s.size * s.recommended_amount
-            for s in self.layer_sensitivities.values()
-        )
+        total_pruned = sum(s.size * s.recommended_amount for s in self.layer_sensitivities.values())
         overall_sparsity = total_pruned / total_size
 
         print(f"Overall sparsity: {overall_sparsity:.1%}")
         print(f"Target sparsity: {self.target_sparsity:.1%}")
         print("=" * 80 + "\n")
-

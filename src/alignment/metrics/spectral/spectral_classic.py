@@ -23,12 +23,7 @@ class SpectralAlignment(BaseMetric):
 
     name = "spectral_alignment"
 
-    def __init__(
-        self,
-        n_components: Optional[int] = None,
-        normalize: bool = True,
-        epsilon: float = 1e-8
-    ):
+    def __init__(self, n_components: Optional[int] = None, normalize: bool = True, epsilon: float = 1e-8):
         """
         Initialize spectral alignment metric.
 
@@ -42,13 +37,7 @@ class SpectralAlignment(BaseMetric):
         self.normalize = normalize
         self.epsilon = epsilon
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute spectral alignment scores.
 
@@ -123,13 +112,7 @@ class SpectralNormRatio(BaseMetric):
         super().__init__()
         self.epsilon = epsilon
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute spectral norm ratio for each layer.
 
@@ -145,7 +128,7 @@ class SpectralNormRatio(BaseMetric):
         spectral_norm = LA.matrix_norm(weights, ord=2)
 
         # Compute Frobenius norm
-        frobenius_norm = weights.norm(p='fro')
+        frobenius_norm = weights.norm(p="fro")
 
         # Compute ratio
         ratio = spectral_norm / (frobenius_norm + self.epsilon)
@@ -177,13 +160,7 @@ class EigenvalueEntropy(BaseMetric):
         self.temperature = temperature
         self.epsilon = epsilon
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute eigenvalue entropy for neuron activations.
 
@@ -239,12 +216,7 @@ class SpectralClusteringScore(BaseMetric):
 
     name = "spectral_clustering_score"
 
-    def __init__(
-        self,
-        n_clusters: int = 5,
-        similarity_type: str = "correlation",
-        epsilon: float = 1e-8
-    ):
+    def __init__(self, n_clusters: int = 5, similarity_type: str = "correlation", epsilon: float = 1e-8):
         """
         Initialize spectral clustering score.
 
@@ -258,13 +230,7 @@ class SpectralClusteringScore(BaseMetric):
         self.similarity_type = similarity_type
         self.epsilon = epsilon
 
-    def compute(
-        self,
-        inputs: torch.Tensor,
-        weights: torch.Tensor,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> torch.Tensor:
+    def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute spectral clustering scores.
 
@@ -294,7 +260,7 @@ class SpectralClusteringScore(BaseMetric):
             # RBF kernel similarity
             dist_matrix = torch.cdist(weights, weights, p=2)
             sigma = dist_matrix.mean()
-            similarity = torch.exp(-dist_matrix**2 / (2 * sigma**2))
+            similarity = torch.exp(-(dist_matrix**2) / (2 * sigma**2))
 
         else:
             raise ValueError(f"Unknown similarity type: {self.similarity_type}")
