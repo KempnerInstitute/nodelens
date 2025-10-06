@@ -1,8 +1,6 @@
 # Quick Reference
 
-**Common code patterns and examples**
-
----
+Common code patterns and examples.
 
 ## Basic Usage
 
@@ -66,8 +64,6 @@ result = prune_with_all_options(
 )
 ```
 
----
-
 ## Metrics
 
 ### Rayleigh Quotient
@@ -124,30 +120,33 @@ scorer = NodeScoringService(
 scores = scorer.compute_composite_scores(inputs, weights, targets)
 ```
 
----
-
 ## Pruning
 
-### Pruning Strategies
+### Available Strategies
 
 ```python
-# Available strategies:
 strategies = [
-    'magnitude',        # L1/L2 norm
-    'random',          # Baseline
-    'gradient',        # Gradient-based
-    'alignment',       # RQ-based
-    'composite',       # Redundancy-aware
-    'movement',        # Training-aware
-    'adaptive',        # Adaptive per-layer
-    'ultimate'         # Multi-stage (best)
+    'magnitude',
+    'random',
+    'gradient',
+    'alignment',
+    'composite',
+    'movement',
+    'adaptive',
+    'ultimate'
 ]
 ```
 
 ### Distribution Methods
 
 ```python
-# How to allocate sparsity across layers:
+distributions = [
+    'uniform',
+    'global_threshold',
+    'adaptive_sensitivity',
+    'importance_weighted',
+    'size_proportional'
+]
 distributions = [
     'uniform',                  # Same % per layer
     'global_threshold',         # Global score threshold
@@ -159,15 +158,13 @@ distributions = [
 ]
 ```
 
-### Direction Options
+### Pruning Direction
 
 ```python
-direction='low'     # Prune low-scoring (production default)
-direction='high'    # Prune high-scoring (ablation study)
-direction='random'  # Random (baseline)
+direction='low'     # Prune low-scoring neurons
+direction='high'    # Prune high-scoring neurons (ablation)
+direction='random'  # Random pruning (baseline)
 ```
-
----
 
 ## Training Integration
 
@@ -205,8 +202,6 @@ alignment = grad_align.compute(
 )
 # High alignment = Hebbian rule works for this neuron
 ```
-
----
 
 ## Architecture-Specific
 
@@ -256,8 +251,6 @@ scores = redundancy.compute(outputs=outputs)
 # [11008] - one per neuron
 ```
 
----
-
 ## Configuration
 
 ### Minimal Config
@@ -290,8 +283,6 @@ pruning:
 
 Run: `python scripts/run_experiment.py --config my_config.yaml`
 
----
-
 ## Performance Tips
 
 ### For Large Models (LLMs)
@@ -319,8 +310,6 @@ from alignment.pruning.parallel_optimizer import ParallelPruningOptimizer
 optimizer = ParallelPruningOptimizer()
 results = optimizer.prune_ensemble_parallel(networks, ...)
 ```
-
----
 
 ## Common Patterns
 
@@ -361,8 +350,6 @@ train(model, train_loader, epochs=20)
 accuracy = evaluate(model, test_loader)
 ```
 
----
-
 ## Troubleshooting
 
 ### Singular Covariance
@@ -387,7 +374,5 @@ from alignment.pruning.dependency_aware import prune_model_with_dependencies
 result = prune_model_with_dependencies(model, scores, amount)
 ```
 
----
-
-See [USER_GUIDE.md](USER_GUIDE.md) for detailed documentation.
+See [user_guide.md](user_guide.md) for detailed documentation.
 
