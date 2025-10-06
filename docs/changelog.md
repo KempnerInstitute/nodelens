@@ -114,7 +114,6 @@ This release introduces **intelligent, redundancy-aware pruning** with a complet
 
 #### **v0.1.0 → v0.2.0**
 
-**Good news:** All changes are **100% backward compatible!**
 
 #### **Existing code continues to work:**
 ```python
