@@ -1,61 +1,48 @@
-# How to Run Experiments with YAML Configs
+# Usage Guide
 
-## Quick Start
+## Running Experiments
 
-### Step 1: Activate Environment
+The framework uses YAML configuration files to specify experiments. This approach allows reproducible experiments and easy parameter management.
+
+### Basic Usage
 
 ```bash
 conda activate alignment
 cd /path/to/alignment
-```
-
-### Step 2: Run Experiment
-
-```bash
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 ```
 
----
+### Example Configurations
 
-## Available Example Configs
+The `configs/examples/` directory contains pre-configured experiments:
 
-### 1. MNIST Basic Analysis
-
+**MNIST Basic Analysis**
 ```bash
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 ```
+Trains an MLP on MNIST and computes alignment scores.
 
-Computes: RQ scores for simple MLP on MNIST
-
-### 2. ResNet Pruning
-
+**ResNet Pruning**
 ```bash
 python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 ```
+Applies pruning to ResNet-18 on CIFAR-10 using alignment-based importance scores.
 
-Performs: Redundancy-aware pruning on ResNet-18 with CIFAR-10
-
-### 3. LLaMA-3 Scoring
-
+**LLaMA-3 Scoring**
 ```bash
 python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
 ```
+Computes per-neuron importance scores for LLaMA model feed-forward layers.
 
-Computes: Per-neuron importance scores for LLaMA-3 FFN
-
-### 4. LLaMA-3 Pruning
-
+**LLaMA-3 Pruning**
 ```bash
 python scripts/run_experiment.py --config configs/examples/llama3_pruning.yaml
 ```
-
-Performs: Redundancy-aware pruning of LLaMA-3 model
-
----
+Prunes LLaMA model using information-theoretic importance scores.
 
 ## Command-Line Overrides
 
-Override any parameter:
+Override configuration parameters from the command line:
 
 ```bash
 python scripts/run_experiment.py \
@@ -65,62 +52,149 @@ python scripts/run_experiment.py \
   --target-sparsity 0.5
 ```
 
-Common overrides:
-- `--device cuda:0` - GPU selection
-- `--batch-size 64` - Batch size
-- `--target-sparsity 0.7` - Pruning amount
-- `--epochs 50` - Training epochs
-- `--output-dir ./my_results` - Output directory
+Common override options:
+- `--device cuda:0` - Select GPU device
+- `--batch-size 64` - Set batch size
+- `--target-sparsity 0.7` - Set pruning target
+- `--epochs 50` - Set training epochs
+- `--output-dir ./results` - Set output directory
 
----
+## Creating Custom Configurations
 
-## Creating Custom Configs
+### From Template
 
-### Method 1: Copy and Modify Template
+Copy the template and modify for your needs:
 
 ```bash
 cp configs/template.yaml configs/my_experiment.yaml
-# Edit my_experiment.yaml
+# Edit my_experiment.yaml with desired parameters
 python scripts/run_experiment.py --config configs/my_experiment.yaml
 ```
 
-### Method 2: Copy Existing Example
+### From Existing Example
+
+Start with an example configuration:
 
 ```bash
 cp configs/examples/resnet_pruning.yaml configs/my_resnet.yaml
-# Modify my_resnet.yaml
+# Modify specific parameters
 python scripts/run_experiment.py --config configs/my_resnet.yaml
 ```
 
----
+## Configuration Structure
 
-## Config Structure
-
-All configs have the same structure:
+All configuration files follow the same structure:
 
 ```yaml
-experiment:        # Experiment settings
-  name: "..."
-  seed: 42
+```yaml
+experiment:
+  name: "my_experiment"
   device: "cuda"
-
-model:            # Model architecture
-  name: "..."     # 'resnet18', 'mlp', 'meta-llama/...'
+  
+model:
+  name: "resnet18"
   pretrained: true
-
-dataset:          # Data source
-  name: "..."     # 'mnist', 'cifar10', 'wikitext'
+  
+dataset:
+  name: "cifar10"
   batch_size: 128
 
-metrics:          # Metrics to compute
+metrics:
   enabled: ['rayleigh_quotient']
 
-pruning:          # Pruning settings (optional)
-  enabled: true
-  strategy: '...'
-  target_sparsity: 0.7
+pruning:
+  enabled: false
+```
 
-# ... other sections as needed
+See `configs/template.yaml` for all available parameters.
+
+## Experiment Types
+
+### Computing Metrics
+
+Compute alignment and information-theoretic scores:
+
+```yaml
+metrics:
+  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian', 'synergy_gaussian_mmi']
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+  
+  pairwise_redundancy_gaussian:
+    mode: 'output_based'
+    num_pairs: 10
+
+training:
+  enabled: false
+pruning:
+  enabled: false
+```
+
+### Training Networks
+
+Train from scratch with optional metric tracking:
+
+```yaml
+training:
+  enabled: true
+  epochs: 100
+  learning_rate: 0.001
+  optimizer: 'adam'
+  compute_metrics_during_training: false
+```
+
+### Pruning Networks
+
+Apply pruning with specified strategy:
+
+```yaml
+pruning:
+  enabled: true
+  strategy: 'composite'
+  target_sparsity: 0.7
+  distribution: 'adaptive_sensitivity'
+  scoring: 'rayleigh_quotient'
+  structured: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 20
+    learning_rate: 0.0001
+```
+
+### Multi-Level Pruning
+
+Test multiple sparsity levels:
+
+```yaml
+pruning:
+  enabled: true
+  sparsity_levels: [0.3, 0.5, 0.7, 0.9]
+  strategy: 'magnitude'
+```
+
+## Output Structure
+
+Results are saved to the specified output directory:
+
+```
+results/[experiment_name]/
+├── config.yaml           # Configuration used
+├── results.json          # Numerical results
+├── scores/               # Per-layer importance scores
+├── plots/                # Visualizations
+└── checkpoints/          # Model checkpoints
+```
+
+## Workflow
+
+1. Create or select configuration file
+2. Activate environment: `conda activate alignment`
+3. Run experiment: `python scripts/run_experiment.py --config [path]`
+4. Results saved to output directory
+5. Analyze results and visualizations
 ```
 
 See `configs/template.yaml` for complete parameter reference.
