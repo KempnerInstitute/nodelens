@@ -23,6 +23,8 @@ semgrep>=1.0.0
 sphinx>=6.0.0
 sphinx-rtd-theme>=1.2.0
 sphinx-autodoc-typehints>=1.23.0
+myst-parser>=2.0.0
+sphinx-copybutton>=0.5.0
 linkchecker>=10.0.0
 
 # Performance
