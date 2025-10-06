@@ -44,12 +44,12 @@ def create_simple_cnn():
         nn.Flatten(),
         nn.Linear(64 * 7 * 7, 128),
         nn.ReLU(),
-        nn.Linear(128, 10)
+        nn.Linear(128, 10),
     )
     return model
 
 
-def evaluate_model(model, dataloader, device='cpu'):
+def evaluate_model(model, dataloader, device="cpu"):
     """Evaluate model accuracy."""
     model.eval()
     correct = 0
@@ -73,28 +73,16 @@ def main():
     print("=" * 80)
 
     # Setup
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\nUsing device: {device}")
 
     # Load MNIST
     print("\n1. Loading MNIST dataset...")
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 
-    test_dataset = datasets.MNIST(
-        root='./data',
-        train=False,
-        download=True,
-        transform=transform
-    )
+    test_dataset = datasets.MNIST(root="./data", train=False, download=True, transform=transform)
 
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=128,
-        shuffle=False
-    )
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=128, shuffle=False)
 
     # Create and wrap model
     print("\n2. Creating model...")
@@ -104,12 +92,7 @@ def main():
     # For demo, we'll use random weights
     print("   (Using random initialization for demo)")
 
-    wrapper = BaseModelWrapper(
-        model,
-        tracked_layers=['3', '6'],  # Conv2 and Linear1
-        track_inputs=True,
-        track_outputs=True
-    )
+    wrapper = BaseModelWrapper(model, tracked_layers=["3", "6"], track_inputs=True, track_outputs=True)  # Conv2 and Linear1
 
     print(f"   Tracking layers: {wrapper.tracked_layers}")
 
@@ -119,20 +102,16 @@ def main():
 
     # Initialize metrics
     print("\n4. Initializing metrics...")
-    rq_metric = get_metric('rayleigh_quotient', relative=True, regularization=1e-6)
-    redundancy_metric = get_metric('pairwise_redundancy_gaussian', num_pairs=10)
-    synergy_metric = get_metric('synergy_gaussian_mmi', num_pairs=10)
+    rq_metric = get_metric("rayleigh_quotient", relative=True, regularization=1e-6)
+    redundancy_metric = get_metric("pairwise_redundancy_gaussian", num_pairs=10)
+    synergy_metric = get_metric("synergy_gaussian_mmi", num_pairs=10)
 
     scoring_service = NodeScoringService(
-        metrics={
-            'rq': rq_metric,
-            'redundancy': redundancy_metric,
-            'synergy': synergy_metric
-        },
-        alpha_mi=0.0,      # No MI (would need proper MI metric)
+        metrics={"rq": rq_metric, "redundancy": redundancy_metric, "synergy": synergy_metric},
+        alpha_mi=0.0,  # No MI (would need proper MI metric)
         beta_synergy=0.3,  # Synergy weight
         gamma_redundancy=0.4,  # Redundancy weight (negative)
-        delta_rq=0.3       # RQ weight
+        delta_rq=0.3,  # RQ weight
     )
 
     # Capture activations on a subset
@@ -141,22 +120,13 @@ def main():
     batch_inputs = batch_inputs.to(device)
     batch_targets = batch_targets.to(device)
 
-    activation_data = capture_service.capture(
-        batch_inputs,
-        layers=wrapper.tracked_layers,
-        include_weights=True
-    )
+    activation_data = capture_service.capture(batch_inputs, layers=wrapper.tracked_layers, include_weights=True)
 
     print(f"   Captured data from {len(activation_data.layer_names)} layers")
 
     # Compute composite scores
     print("\n6. Computing composite scores...")
-    layerwise_scores = scoring_service.compute_layerwise_scores(
-        activation_data,
-        targets=batch_targets,
-        include_redundancy=True,
-        include_synergy=True
-    )
+    layerwise_scores = scoring_service.compute_layerwise_scores(activation_data, targets=batch_targets, include_redundancy=True, include_synergy=True)
 
     # Display results for first layer
     layer_name = wrapper.tracked_layers[0]
@@ -178,10 +148,7 @@ def main():
     layer_name = wrapper.tracked_layers[-1]  # Linear layer
     if layer_name in activation_data.inputs:
         delta_rq_results = rq_metric.compute_class_conditioned(
-            inputs=activation_data.inputs[layer_name],
-            weights=activation_data.weights[layer_name],
-            targets=batch_targets,
-            return_delta_rq=True
+            inputs=activation_data.inputs[layer_name], weights=activation_data.weights[layer_name], targets=batch_targets, return_delta_rq=True
         )
 
         print(f"   Layer '{layer_name}':")
@@ -199,11 +166,7 @@ def main():
             continue
 
         # Create mask using composite scores
-        mask = MaskOperations.create_structured_mask(
-            scores.composite,
-            amount=pruning_amount,
-            mode='low'  # Prune low-importance neurons
-        )
+        mask = MaskOperations.create_structured_mask(scores.composite, amount=pruning_amount, mode="low")  # Prune low-importance neurons
 
         stats = MaskOperations.get_mask_statistics(mask)
         print(f"   Layer '{layer_name}': {stats['kept_elements']}/{stats['total_elements']} neurons kept")
@@ -216,25 +179,13 @@ def main():
         scores = layerwise_scores[layer_name]
 
         # Method 1: Random
-        mask_random = MaskOperations.create_structured_mask(
-            torch.rand_like(scores.composite),
-            amount=pruning_amount,
-            mode='random'
-        )
+        mask_random = MaskOperations.create_structured_mask(torch.rand_like(scores.composite), amount=pruning_amount, mode="random")
 
         # Method 2: RQ only
-        mask_rq = MaskOperations.create_structured_mask(
-            scores.rq,
-            amount=pruning_amount,
-            mode='low'
-        )
+        mask_rq = MaskOperations.create_structured_mask(scores.rq, amount=pruning_amount, mode="low")
 
         # Method 3: Composite (redundancy-aware)
-        mask_composite = MaskOperations.create_structured_mask(
-            scores.composite,
-            amount=pruning_amount,
-            mode='low'
-        )
+        mask_composite = MaskOperations.create_structured_mask(scores.composite, amount=pruning_amount, mode="low")
 
         # Check overlap
         overlap_rq_composite = (mask_rq & mask_composite).sum().item() / mask_rq.sum().item()
@@ -253,7 +204,8 @@ def main():
     print("\n" + "=" * 80)
     print("Summary")
     print("=" * 80)
-    print("""
+    print(
+        """
 Key Features Demonstrated:
 ✓ ActivationCaptureService - Clean API for activation capture
 ✓ PairwiseRedundancyGaussian - Identifies redundant neurons
@@ -273,9 +225,9 @@ Next Steps:
 2. Apply masks and fine-tune
 3. Compare accuracy vs magnitude/random baselines
 4. Repeat across multiple sparsity levels
-    """)
+    """
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

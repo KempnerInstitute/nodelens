@@ -32,7 +32,7 @@ from alignment.services import (
 )
 
 
-def load_llama_model(model_name: str = 'gpt2', use_small_model: bool = True):
+def load_llama_model(model_name: str = "gpt2", use_small_model: bool = True):
     """
     Load LLaMA or similar model.
 
@@ -47,7 +47,7 @@ def load_llama_model(model_name: str = 'gpt2', use_small_model: bool = True):
     # Replace with 'meta-llama/Meta-Llama-3-8B' for actual LLaMA-3
 
     if use_small_model:
-        model_name = 'gpt2'  # 12 layers, 768 hidden, much faster to load
+        model_name = "gpt2"  # 12 layers, 768 hidden, much faster to load
         print("Using GPT-2 as demo (same architecture principles as LLaMA)")
 
     print(f"Loading {model_name}...")
@@ -68,13 +68,7 @@ def load_llama_model(model_name: str = 'gpt2', use_small_model: bool = True):
     return model, tokenizer
 
 
-def analyze_ffn_layer(
-    model,
-    wrapper: LLaMAWrapper,
-    layer_idx: int,
-    input_text: List[str],
-    tokenizer
-):
+def analyze_ffn_layer(model, wrapper: LLaMAWrapper, layer_idx: int, input_text: List[str], tokenizer):
     """
     Analyze a single FFN layer - compute per-neuron scores.
 
@@ -93,7 +87,7 @@ def analyze_ffn_layer(
     print(f"{'='*80}")
 
     # Tokenize inputs
-    inputs = tokenizer(input_text, padding=True, truncation=True, return_tensors='pt')
+    inputs = tokenizer(input_text, padding=True, truncation=True, return_tensors="pt")
 
     # Get FFN layer names (HF naming convention)
     # GPT-2: transformer.h.{i}.mlp.c_fc (up), c_proj (down)
@@ -104,12 +98,12 @@ def analyze_ffn_layer(
     ffn_down = None
 
     for name, module in model.named_modules():
-        if f'.{layer_idx}.' in name or f'.h.{layer_idx}.' in name:
-            if 'mlp' in name:
+        if f".{layer_idx}." in name or f".h.{layer_idx}." in name:
+            if "mlp" in name:
                 if isinstance(module, nn.Linear):
-                    if 'up_proj' in name or 'c_fc' in name:
+                    if "up_proj" in name or "c_fc" in name:
                         ffn_up = name
-                    elif 'down_proj' in name or 'c_proj' in name:
+                    elif "down_proj" in name or "c_proj" in name:
                         ffn_down = name
 
     if ffn_up is None:
@@ -143,8 +137,8 @@ def analyze_ffn_layer(
         acts = wrapper_ffn._activation_cache
 
     # Get layer activations and weights
-    ffn_input = acts.get(f'{ffn_up}_input')
-    ffn_output = acts.get(f'{ffn_up}_output')
+    ffn_input = acts.get(f"{ffn_up}_input")
+    ffn_output = acts.get(f"{ffn_up}_output")
     ffn_weights = ffn_up_module.weight.detach()  # [num_neurons, hidden_dim]
 
     if ffn_input is None or ffn_output is None:
@@ -171,18 +165,16 @@ def analyze_ffn_layer(
 
     # 1. Rayleigh Quotient (alignment)
     print("    - RQ (alignment with input PCs)...")
-    rq_metric = get_metric('rayleigh_quotient')
+    rq_metric = get_metric("rayleigh_quotient")
     rq_scores = rq_metric.compute(inputs=ffn_input_2d, weights=ffn_weights)
-    metrics_results['rq'] = rq_scores
+    metrics_results["rq"] = rq_scores
     print(f"      Range: [{rq_scores.min():.4f}, {rq_scores.max():.4f}], Mean: {rq_scores.mean():.4f}")
 
     # 2. Redundancy (overlap with other neurons)
     print("    - Redundancy (overlap with other neurons)...")
-    redundancy_metric = get_metric('pairwise_redundancy_gaussian',
-                                   mode='output_based',  # FAST!
-                                   num_pairs=20)
+    redundancy_metric = get_metric("pairwise_redundancy_gaussian", mode="output_based", num_pairs=20)  # FAST!
     redundancy_scores = redundancy_metric.compute(outputs=ffn_output_2d)
-    metrics_results['redundancy'] = redundancy_scores
+    metrics_results["redundancy"] = redundancy_scores
     print(f"      Range: [{redundancy_scores.min():.4f}, {redundancy_scores.max():.4f}], Mean: {redundancy_scores.mean():.4f}")
 
     # 3. Show per-neuron breakdown
@@ -216,12 +208,7 @@ def analyze_ffn_layer(
     return metrics_results
 
 
-def prune_ffn_neurons(
-    model,
-    layer_idx: int,
-    scores: torch.Tensor,
-    amount: float = 0.3
-):
+def prune_ffn_neurons(model, layer_idx: int, scores: torch.Tensor, amount: float = 0.3):
     """
     Prune individual neurons in FFN layer with dependency awareness.
 
@@ -240,11 +227,11 @@ def prune_ffn_neurons(
     ffn_down = None
 
     for name, module in model.named_modules():
-        if f'.{layer_idx}.' in name and 'mlp' in name:
+        if f".{layer_idx}." in name and "mlp" in name:
             if isinstance(module, nn.Linear):
-                if 'up_proj' in name or 'c_fc' in name:
+                if "up_proj" in name or "c_fc" in name:
                     ffn_up = (name, module)
-                elif 'down_proj' in name or 'c_proj' in name:
+                elif "down_proj" in name or "c_proj" in name:
                     ffn_down = (name, module)
 
     if ffn_up is None or ffn_down is None:
@@ -255,7 +242,7 @@ def prune_ffn_neurons(
     down_name, down_module = ffn_down
 
     # Create mask
-    mask = MaskOperations.create_structured_mask(scores, amount=amount, mode='low')
+    mask = MaskOperations.create_structured_mask(scores, amount=amount, mode="low")
     num_kept = mask.sum().item()
     num_total = len(mask)
 
@@ -296,7 +283,7 @@ def main():
     print("=" * 80)
 
     # Setup
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\nDevice: {device}")
 
     # Load model (using GPT-2 for demo, same principles apply to LLaMA-3)
@@ -304,24 +291,14 @@ def main():
     model = model.to(device)
 
     # Wrap model
-    wrapper = LLaMAWrapper(
-        model,
-        track_ffn=True,
-        track_attention=True
-    )
+    wrapper = LLaMAWrapper(model, track_ffn=True, track_attention=True)
 
     # Sample inputs
-    input_texts = [
-        "The capital of France is",
-        "Artificial intelligence is",
-        "The meaning of life is"
-    ]
+    input_texts = ["The capital of France is", "Artificial intelligence is", "The meaning of life is"]
 
     # Analyze first layer's FFN
     layer_idx = 0
-    scores_dict = analyze_ffn_layer(
-        model, wrapper, layer_idx, input_texts, tokenizer
-    )
+    scores_dict = analyze_ffn_layer(model, wrapper, layer_idx, input_texts, tokenizer)
 
     if not scores_dict:
         print("\n⚠️ Could not analyze FFN layer")
@@ -333,8 +310,8 @@ def main():
     print(f"{'='*80}")
 
     # Combine RQ and redundancy
-    rq = scores_dict['rq']
-    redundancy = scores_dict['redundancy']
+    rq = scores_dict["rq"]
+    redundancy = scores_dict["redundancy"]
 
     # Composite: High RQ + Low Redundancy = Important
     # Score = RQ - 0.5*Redundancy
@@ -357,12 +334,7 @@ def main():
 
     pruning_amount = 0.3  # Prune 30% of FFN neurons
 
-    mask = prune_ffn_neurons(
-        model,
-        layer_idx=layer_idx,
-        scores=composite,
-        amount=pruning_amount
-    )
+    mask = prune_ffn_neurons(model, layer_idx=layer_idx, scores=composite, amount=pruning_amount)
 
     # Verify model still runs
     print(f"\n{'='*80}")
@@ -371,7 +343,7 @@ def main():
 
     with torch.no_grad():
         # Tokenize
-        test_input = tokenizer("After pruning, the model", return_tensors='pt').to(device)
+        test_input = tokenizer("After pruning, the model", return_tensors="pt").to(device)
 
         # Forward pass
         try:
@@ -385,7 +357,8 @@ def main():
     print(f"\n{'='*80}")
     print("Summary")
     print(f"{'='*80}")
-    print(f"""
+    print(
+        f"""
 What we demonstrated:
 
 1. ✓ Per-Neuron Analysis in FFN:
@@ -423,9 +396,9 @@ Next Steps:
 3. Try different pruning amounts
 4. Analyze multiple layers
 5. Compare with magnitude pruning
-    """)
+    """
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

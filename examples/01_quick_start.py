@@ -31,13 +31,7 @@ from alignment.models import ModelWrapper
 
 def main():
     # 1. Create a simple neural network
-    model = nn.Sequential(
-        nn.Linear(784, 256),
-        nn.ReLU(),
-        nn.Linear(256, 128),
-        nn.ReLU(),
-        nn.Linear(128, 10)
-    )
+    model = nn.Sequential(nn.Linear(784, 256), nn.ReLU(), nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, 10))
 
     print("Model created with 3 linear layers")
 
@@ -59,12 +53,12 @@ def main():
     print(f"Extracted weights from {len(weights)} layers")
 
     # 6. Compute alignment metrics
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Computing Alignment Metrics")
-    print("="*60)
+    print("=" * 60)
 
     # Rayleigh Quotient
-    RQMetric = get_metric('rayleigh_quotient')
+    RQMetric = get_metric("rayleigh_quotient")
     rq_metric = RQMetric()  # Instantiate the metric
 
     for layer_name in wrapped_model.tracked_layers:
@@ -83,12 +77,12 @@ def main():
         print(f"  Max neuron score: {scores.max():.4f}")
 
     # 7. Try other metrics
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Trying Other Metrics")
-    print("="*60)
+    print("=" * 60)
 
     # Weight cosine similarity
-    WeightSimMetric = get_metric('weight_cosine_similarity')
+    WeightSimMetric = get_metric("weight_cosine_similarity")
     weight_sim = WeightSimMetric()  # Instantiate
     for layer_name in wrapped_model.tracked_layers:
         layer_weights = weights[layer_name]
@@ -96,15 +90,15 @@ def main():
         print(f"\nWeight Cosine Similarity ({layer_name}): mean={sim_scores.mean():.4f}")
 
     # 8. Demonstrate pruning
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Pruning Demo")
-    print("="*60)
+    print("=" * 60)
 
     from alignment.pruning import PruningConfig, get_pruning_strategy
 
     # Use magnitude-based pruning
-    config = PruningConfig(amount=0.5, pruning_mode='low')
-    strategy = get_pruning_strategy('magnitude', config=config)
+    config = PruningConfig(amount=0.5, pruning_mode="low")
+    strategy = get_pruning_strategy("magnitude", config=config)
 
     # Apply pruning to first layer
     first_layer = model[0]  # First linear layer

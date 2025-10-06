@@ -44,7 +44,7 @@ import torch
 import torch.nn as nn
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Direct imports
 from alignment.pruning.base import PruningConfig
@@ -59,6 +59,7 @@ from alignment.pruning.strategies import (
 
 class SimpleNet(nn.Module):
     """Simple network for demonstration."""
+
     def __init__(self, input_size=784, hidden_size=256, num_classes=10):
         super().__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
@@ -96,7 +97,7 @@ def demo_basic_pruning():
 
     # 1. Magnitude pruning - low mode (prune small weights)
     print("1. Magnitude Pruning - Low Mode (prune small weights):")
-    config = PruningConfig(amount=sparsity, pruning_mode='low')
+    config = PruningConfig(amount=sparsity, pruning_mode="low")
     pruner = MagnitudePruning(config)
 
     scores = pruner.compute_importance_scores(layer)
@@ -113,7 +114,7 @@ def demo_basic_pruning():
 
     # 2. Magnitude pruning - high mode (prune large weights)
     print("\n2. Magnitude Pruning - High Mode (prune large weights):")
-    config = PruningConfig(amount=sparsity, pruning_mode='high')
+    config = PruningConfig(amount=sparsity, pruning_mode="high")
     pruner = MagnitudePruning(config)
 
     mask = pruner.create_pruning_mask(scores)
@@ -160,10 +161,7 @@ def demo_parallel_pruning():
 
     # 1. Parallel mode pruning
     print("1. Parallel Mode Pruning (all modes simultaneously):")
-    parallel_pruner = ParallelModePruning(
-        modes=['low', 'high', 'random'],
-        base_strategy='magnitude'
-    )
+    parallel_pruner = ParallelModePruning(modes=["low", "high", "random"], base_strategy="magnitude")
 
     start_time = time.time()
     result = parallel_pruner.prune_parallel(layer, amount=sparsity)
@@ -176,10 +174,10 @@ def demo_parallel_pruning():
 
     # Analyze overlaps
     print("\n   Mask overlaps:")
-    low_high_overlap = (result.masks['low'] * result.masks['high']).sum().item()
-    low_random_overlap = (result.masks['low'] * result.masks['random']).sum().item()
-    high_random_overlap = (result.masks['high'] * result.masks['random']).sum().item()
-    total = result.masks['low'].numel()
+    low_high_overlap = (result.masks["low"] * result.masks["high"]).sum().item()
+    low_random_overlap = (result.masks["low"] * result.masks["random"]).sum().item()
+    high_random_overlap = (result.masks["high"] * result.masks["random"]).sum().item()
+    total = result.masks["low"].numel()
 
     print(f"     low ∩ high: {low_high_overlap/total:.2%}")
     print(f"     low ∩ random: {low_random_overlap/total:.2%}")
@@ -191,7 +189,7 @@ def demo_parallel_pruning():
     start_time = time.time()
     masks_sequential = {}
 
-    for mode in ['low', 'high', 'random']:
+    for mode in ["low", "high", "random"]:
         config = PruningConfig(amount=sparsity, pruning_mode=mode)
         pruner = MagnitudePruning(config)
         scores = pruner.compute_importance_scores(layer)
@@ -220,7 +218,7 @@ def demo_tensorized_pruning():
     )
 
     # Move to GPU if available
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
     print(f"Device: {device}")
@@ -238,15 +236,11 @@ def demo_tensorized_pruning():
 
     # Test on first layer
     layer = model[0]
-    modes = ['low', 'high', 'random']
+    modes = ["low", "high", "random"]
     amounts = [0.1, 0.3, 0.5, 0.7, 0.9]
 
     start_time = time.time()
-    pruning_tensor = tensorized_pruner.compute_pruning_tensor(
-        layer,
-        modes=modes,
-        amounts=amounts
-    )
+    pruning_tensor = tensorized_pruner.compute_pruning_tensor(layer, modes=modes, amounts=amounts)
     tensorized_time = time.time() - start_time
 
     print(f"\n   Execution time: {tensorized_time:.4f}s")
@@ -258,7 +252,7 @@ def demo_tensorized_pruning():
     analysis = tensorized_pruner.analyze_pruning_patterns(pruning_tensor)
 
     print("\n   Sparsity progression (avg across weight dims):")
-    sparsity_prog = analysis['sparsity_progression']
+    sparsity_prog = analysis["sparsity_progression"]
     for i, mode in enumerate(modes):
         print(f"     {mode}: ", end="")
         for j, amount in enumerate(amounts):
@@ -275,7 +269,7 @@ def demo_tensorized_pruning():
         sequential_masks[mode] = {}
         for amount in amounts:
             config = PruningConfig(amount=amount, pruning_mode=mode)
-            if mode == 'random':
+            if mode == "random":
                 pruner = RandomPruning(config)
             else:
                 pruner = MagnitudePruning(config)
@@ -306,9 +300,9 @@ def demo_tensorized_pruning():
     print(f"   Memory efficiency: {sequential_memory/tensorized_memory:.2f}x")
 
     # 4. Show overlap analysis
-    if 'mode_overlap' in analysis:
+    if "mode_overlap" in analysis:
         print("\n4. Mode overlap analysis (low ∩ high):")
-        overlap = analysis['mode_overlap']
+        overlap = analysis["mode_overlap"]
         print("   Sparsity:  ", end="")
         for amount in amounts:
             print(f"{amount:.1f}  ", end="")
@@ -344,7 +338,7 @@ def demo_gradient_based_pruning():
 
     # 1. Gradient magnitude pruning - low mode
     print("\n1. Gradient Pruning - Low Mode (prune small gradients):")
-    config = PruningConfig(amount=sparsity, pruning_mode='low')
+    config = PruningConfig(amount=sparsity, pruning_mode="low")
     pruner = GradientPruning(config)
 
     scores = pruner.compute_importance_scores(layer)
@@ -360,7 +354,7 @@ def demo_gradient_based_pruning():
 
     # 2. Gradient magnitude pruning - high mode
     print("\n2. Gradient Pruning - High Mode (prune large gradients):")
-    config = PruningConfig(amount=sparsity, pruning_mode='high')
+    config = PruningConfig(amount=sparsity, pruning_mode="high")
     pruner = GradientPruning(config)
 
     mask = pruner.create_pruning_mask(scores)
@@ -410,6 +404,7 @@ def main():
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
 
 
