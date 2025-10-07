@@ -16,10 +16,10 @@ from .layer_preprocessing import (
 )
 
 __all__ = [
-    'LayerPreprocessor',
-    'LinearPreprocessor',
-    'CNNPreprocessor',
-    'AttentionPreprocessor',
-    'preprocess_layer_activations',
-    'get_preprocessor',
-] 
+    "LayerPreprocessor",
+    "LinearPreprocessor",
+    "CNNPreprocessor",
+    "AttentionPreprocessor",
+    "preprocess_layer_activations",
+    "get_preprocessor",
+]

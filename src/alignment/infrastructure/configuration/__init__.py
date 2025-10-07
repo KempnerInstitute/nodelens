@@ -13,13 +13,13 @@ from .config import (
 )
 
 __all__ = [
-    'Config',
-    'ExperimentConfig',
-    'MetricConfig',
-    'ModelConfig',
-    'DataConfig',
-    'load_config',
-    'save_config',
-    'merge_configs',
-    'validate_config',
-] 
+    "Config",
+    "ExperimentConfig",
+    "MetricConfig",
+    "ModelConfig",
+    "DataConfig",
+    "load_config",
+    "save_config",
+    "merge_configs",
+    "validate_config",
+]

@@ -7,7 +7,7 @@ from .markdown import MarkdownReporter
 from .json_reporter import JSONReporter
 
 __all__ = [
-    'HTMLReporter',
-    'MarkdownReporter',
-    'JSONReporter',
-] 
+    "HTMLReporter",
+    "MarkdownReporter",
+    "JSONReporter",
+]
