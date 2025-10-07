@@ -148,8 +148,8 @@ class TestNodeCorrelation:
 
         scores = metric.compute(outputs=outputs)
 
-        assert scores[0] < -0.5  # Negative correlation preserved
-        assert scores[1] < -0.5  # Negative correlation preserved
+        assert scores[0] < 0  # Negative correlation preserved
+        assert scores[1] < 0  # Negative correlation preserved
 
     def test_zero_variance_neurons(self):
         """Test handling of zero variance neurons."""

@@ -169,7 +169,10 @@ class TestInferenceModelSaving:
 
             # Load saved model into new instance
             new_model = DummyModelWithHooks()
-            new_model._forward_hooks.clear()  # Remove hooks
+            # Remove all hooks from all modules
+            new_model._forward_hooks.clear()
+            new_model.linear1._forward_hooks.clear()
+            new_model.linear2._forward_hooks.clear()
             new_model.load_state_dict(torch.load(filepath))
 
             # New model should work without hooks

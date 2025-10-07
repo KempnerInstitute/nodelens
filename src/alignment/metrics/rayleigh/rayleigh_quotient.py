@@ -119,6 +119,7 @@ class RayleighQuotient(BaseMetric):
             min_dim = min(input_features, weight_features)
             inputs = inputs[:, :min_dim]
             weights = weights[:, :min_dim]
+            input_features = min_dim  # Update input_features after truncation
 
         # Move to appropriate device for computation
         compute_device = weights.device
