@@ -168,7 +168,7 @@ class TestPairwiseRedundancyGaussian:
         weights = torch.randn(10, 25)  # Mismatch!
 
         metric = PairwiseRedundancyGaussian()
-        
+
         # Should raise an error for incompatible dimensions
         with pytest.raises(RuntimeError, match="cannot be multiplied"):
             redundancy = metric.compute(inputs=inputs, weights=weights)
