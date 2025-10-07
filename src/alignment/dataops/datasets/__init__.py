@@ -12,11 +12,11 @@ import torch.utils.data
 # Import for backward compatibility - these are now created dynamically
 # but we import them to make them available at module level
 from alignment.core.registry import DATASET_REGISTRY
-from alignment.data.datasets.unified_dataset import DATASET_CONFIGS, UnifiedDataset
+from alignment.dataops.datasets.unified_dataset import DATASET_CONFIGS, UnifiedDataset
 
 # Try to import text datasets (optional - requires additional dependencies)
 try:
-    from alignment.data.datasets.text_datasets import (
+    from alignment.dataops.datasets.text_datasets import (
         C4Dataset,
         TextDataset,
         WikiTextDataset,

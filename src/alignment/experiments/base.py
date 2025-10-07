@@ -18,7 +18,7 @@ import torch
 
 from alignment.core.base import BaseExperiment as CoreBaseExperiment
 from alignment.core.registry import DATASET_REGISTRY, get_dataset, get_metric, get_model
-from alignment.data.loaders import create_distributed_loader
+from alignment.dataops.loaders import create_distributed_loader
 from alignment.models import ModelWrapper
 
 logger = logging.getLogger(__name__)

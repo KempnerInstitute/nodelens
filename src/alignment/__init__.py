@@ -12,7 +12,7 @@ from .core.base import BaseMetric
 from .core.registry import METRIC_REGISTRY
 
 # Data processing
-from .data.processing import BatchMetricProcessor
+from .dataops.processing import BatchMetricProcessor
 
 # Experiment tracking
 from .experiments.tracking import create_tracker

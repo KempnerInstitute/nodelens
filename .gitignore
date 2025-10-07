@@ -142,16 +142,16 @@ dmypy.json
 *.ckpt
 *.safetensors
 
-# Data directories
-data/
-datasets/
+# Data directories (keep datasets out of git, but allow src/alignment/dataops/)
+/data/
+/datasets/
 /models/
-checkpoints/
-logs/
-runs/
-outputs/
-results/
-experiments/
+/checkpoints/
+/logs/
+/runs/
+/outputs/
+/results/
+/experiments/
 
 # Temporary files
 *.tmp

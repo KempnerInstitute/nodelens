@@ -14,7 +14,7 @@ from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 
 from alignment.core.registry import register_dataset
-from alignment.data.base import BaseDataset
+from alignment.dataops.base import BaseDataset
 
 logger = logging.getLogger(__name__)
 

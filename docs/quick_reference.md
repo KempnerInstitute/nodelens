@@ -298,7 +298,7 @@ redundancy = get_metric('pairwise_redundancy_gaussian',
 
 ```python
 # Use covariance shrinkage
-from alignment.data.processing import estimate_covariance
+from alignment.dataops.processing import estimate_covariance
 cov = estimate_covariance(X, method='ledoit_wolf')
 ```
 

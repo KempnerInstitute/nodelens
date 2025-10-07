@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 
 from alignment.core.registry import register_experiment
-from alignment.data.processing import preprocess_layer_activations
+from alignment.dataops.processing import preprocess_layer_activations
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 from alignment.models import ModelWrapper
@@ -629,7 +629,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
             weights = wrapped_model_to_use.get_layer_weights()
 
             # Manual preprocessing
-            from alignment.data.processing import preprocess_layer_activations
+            from alignment.dataops.processing import preprocess_layer_activations
 
             layer_modules = dict(wrapped_model_to_use._model.named_modules())
 

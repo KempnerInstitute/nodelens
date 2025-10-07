@@ -139,7 +139,7 @@ Batch Processing Multiple Metrics
 
 .. code-block:: python
 
-   from alignment.data.processing import BatchMetricProcessor
+   from alignment.dataops.processing import BatchMetricProcessor
    
    processor = BatchMetricProcessor(
        metrics=["rayleigh_quotient", "mutual_information_gaussian"],
