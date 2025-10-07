@@ -145,7 +145,7 @@ dmypy.json
 # Data directories
 data/
 datasets/
-models/
+/models/
 checkpoints/
 logs/
 runs/
