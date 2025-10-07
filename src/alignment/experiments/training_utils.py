@@ -98,9 +98,9 @@ def convert_training_history(history: Dict[str, Any], num_networks: int = 1) -> 
     results = {
         "training_epochs": len(history["train_loss"]),
         "final_train_loss": history["train_loss"][-1] if history["train_loss"] else 0.0,
-        "final_train_accuracy": history["train_metrics"][-1].get("accuracy", 0.0)
-        if history["train_metrics"] and history["train_metrics"][-1]
-        else 0.0,
+        "final_train_accuracy": (
+            history["train_metrics"][-1].get("accuracy", 0.0) if history["train_metrics"] and history["train_metrics"][-1] else 0.0
+        ),
         "training_history": history,
     }
 
@@ -117,9 +117,11 @@ def convert_training_history(history: Dict[str, Any], num_networks: int = 1) -> 
             network_history = history["per_network"][i]
             results["per_network_results"][i] = {
                 "final_train_loss": network_history["train_loss"][-1] if network_history["train_loss"] else 0.0,
-                "final_train_accuracy": network_history["train_metrics"][-1].get("accuracy", 0.0)
-                if network_history["train_metrics"] and network_history["train_metrics"][-1]
-                else 0.0,
+                "final_train_accuracy": (
+                    network_history["train_metrics"][-1].get("accuracy", 0.0)
+                    if network_history["train_metrics"] and network_history["train_metrics"][-1]
+                    else 0.0
+                ),
             }
             if network_history["val_loss"]:
                 results["per_network_results"][i]["final_val_loss"] = network_history["val_loss"][-1]

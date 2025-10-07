@@ -11,12 +11,11 @@ The module has been simplified to provide unified interfaces for common tasks.
 
 # Aggregation
 from .aggregation import LayerAggregator, MetricAggregator, ResultAggregator
-
 # Unified Reporting
 from .unified_reporter import UnifiedReporter, generate_quick_report
-
 # Unified Visualization
-from .visualization.unified_visualizer import UnifiedVisualizer, plot_quick_summary
+from .visualization.unified_visualizer import (UnifiedVisualizer,
+                                               plot_quick_summary)
 
 __all__ = [
     # Aggregation

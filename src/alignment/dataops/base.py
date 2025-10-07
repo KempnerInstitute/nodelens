@@ -1,5 +1,5 @@
 """
- 
+
 Base classes for dataset wrappers.
 
 This module provides base functionality for all dataset implementations,

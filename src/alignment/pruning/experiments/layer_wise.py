@@ -16,11 +16,9 @@ import torch
 
 from alignment.core.registry import register_experiment
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
-from alignment.experiments.training_utils import (
-    convert_training_history,
-    create_experiment_trainer,
-    train_with_metrics,
-)
+from alignment.experiments.training_utils import (convert_training_history,
+                                                  create_experiment_trainer,
+                                                  train_with_metrics)
 from alignment.models import ModelWrapper
 
 logger = logging.getLogger(__name__)
@@ -112,7 +110,8 @@ class LayerIsolatedPruningExperiment(BaseExperiment):
                     continue
 
                 # Preprocess activations based on CNN mode
-                from alignment.dataops.processing import preprocess_layer_activations
+                from alignment.dataops.processing import \
+                    preprocess_layer_activations
 
                 layer_modules = dict(self.wrapped_model._model.named_modules())
                 preprocessed = preprocess_layer_activations(

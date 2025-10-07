@@ -17,7 +17,8 @@ import torch
 import torch.nn as nn
 
 from ..metrics import get_metric
-from ..models.transformers import TransformerWrapperEnhanced as TransformerWrapper
+from ..models.transformers import \
+    TransformerWrapperEnhanced as TransformerWrapper
 from ..pruning import AlignmentPruning, PruningConfig
 from ..training.base import BaseTrainer
 from .base import BaseExperiment

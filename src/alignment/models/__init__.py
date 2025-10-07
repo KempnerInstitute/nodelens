@@ -8,7 +8,8 @@ functionality needed for alignment analysis to standard PyTorch models.
 # Register standard models
 from ..core.registry import register_model
 from . import hub  # registers torchvision/timm/huggingface model loaders
-from .architectures.standard_models import CNN2P2, MLP, SimpleConvNet, create_model
+from .architectures.standard_models import (CNN2P2, MLP, SimpleConvNet,
+                                            create_model)
 from .base import BaseModelWrapper
 from .transformers import LLaMAWrapper, TransformerWrapperEnhanced
 from .wrappers import ActivationTracker, AlignmentNetwork, ModelWrapper

@@ -44,24 +44,14 @@ import logging
 from typing import Optional, Type, Union
 
 from .base import BasePruningStrategy, IterativePruningStrategy, PruningConfig
-from .strategies import (
-    AlignmentPruning,
-    AsyncParallelPruning,
-    BernoulliPruning,
-    CascadingAlignmentPruning,
-    FisherPruning,
-    GlobalAlignmentPruning,
-    GlobalMagnitudePruning,
-    GradientPruning,
-    HybridPruning,
-    IterativeMagnitudePruning,
-    LayerwiseRandomPruning,
-    MagnitudePruning,
-    MomentumPruning,
-    ParallelModePruning,
-    RandomPruning,
-    TensorizedPruning,
-)
+from .strategies import (AlignmentPruning, AsyncParallelPruning,
+                         BernoulliPruning, CascadingAlignmentPruning,
+                         FisherPruning, GlobalAlignmentPruning,
+                         GlobalMagnitudePruning, GradientPruning,
+                         HybridPruning, IterativeMagnitudePruning,
+                         LayerwiseRandomPruning, MagnitudePruning,
+                         MomentumPruning, ParallelModePruning, RandomPruning,
+                         TensorizedPruning)
 
 logger = logging.getLogger(__name__)
 
