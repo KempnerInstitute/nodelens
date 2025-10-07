@@ -6,8 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.metrics.information.pairwise_gaussian import \
-    PairwiseRedundancyGaussian
+from alignment.metrics.information.pairwise_gaussian import PairwiseRedundancyGaussian
 
 
 class TestPairwiseRedundancyGaussian:

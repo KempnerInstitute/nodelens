@@ -5,10 +5,7 @@ Unit tests for similarity metrics.
 import pytest
 import torch
 
-from alignment.metrics.similarity import (NodeCorrelation, NodeRedundancy,
-                                          WeightCosineSimilarity,
-                                          WeightDotSimilarity,
-                                          WeightEuclideanDistance)
+from alignment.metrics.similarity import NodeCorrelation, NodeRedundancy, WeightCosineSimilarity, WeightDotSimilarity, WeightEuclideanDistance
 
 
 class TestNodeRedundancy:

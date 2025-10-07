@@ -27,8 +27,7 @@ from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
-from alignment.pruning.strategies import (MagnitudePruning,
-                                          ParallelBatchPruning, RandomPruning)
+from alignment.pruning.strategies import MagnitudePruning, ParallelBatchPruning, RandomPruning
 from alignment.services import ActivationCaptureService, MaskOperations
 
 logger = logging.getLogger(__name__)
@@ -626,8 +625,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
             weights = wrapped_model_to_use.get_layer_weights()
 
             # Manual preprocessing
-            from alignment.dataops.processing import \
-                preprocess_layer_activations
+            from alignment.dataops.processing import preprocess_layer_activations
 
             layer_modules = dict(wrapped_model_to_use._model.named_modules())
 
@@ -970,16 +968,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
                     if strategy_name == "magnitude":
                         if pruning_config.global_pruning:
-                            from alignment.pruning.strategies import \
-                                GlobalMagnitudePruning
+                            from alignment.pruning.strategies import GlobalMagnitudePruning
 
                             strategy = GlobalMagnitudePruning(config=pruning_config)
                         else:
                             strategy = MagnitudePruning(config=pruning_config)
                     elif strategy_name == "alignment":
-                        from alignment.pruning.strategies import (
-                            AlignmentPruning, CascadingAlignmentPruning,
-                            GlobalAlignmentPruning)
+                        from alignment.pruning.strategies import AlignmentPruning, CascadingAlignmentPruning, GlobalAlignmentPruning
 
                         # Get the alignment metric from config (default to rayleigh_quotient)
                         alignment_metric = getattr(self.config, "pruning_alignment_metric", "rayleigh_quotient")
@@ -997,8 +992,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     elif strategy_name == "cascading_alignment":
                         # Legacy cascading_alignment handling
                         logger.warning("'cascading_alignment' algorithm is deprecated. Use algorithms=['alignment'] with scope='cascading'")
-                        from alignment.pruning.strategies import \
-                            CascadingAlignmentPruning
+                        from alignment.pruning.strategies import CascadingAlignmentPruning
 
                         alignment_metric = getattr(self.config, "pruning_alignment_metric", "rayleigh_quotient")
                         pruning_config.structured = True
@@ -1012,8 +1006,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         strategy = HybridPruning(alignment_metric=alignment_metric, alpha=alpha, config=pruning_config)
                     elif strategy_name == "gradient":
                         logger.warning("Gradient pruning is not suitable for post-training pruning on converged models")
-                        from alignment.pruning.strategies import \
-                            GradientPruning
+                        from alignment.pruning.strategies import GradientPruning
 
                         strategy = GradientPruning(config=pruning_config)
                     elif strategy_name == "fisher":
@@ -1958,8 +1951,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
     def _compute_neuron_alignment_importance(self, module: nn.Module, layer_inputs: torch.Tensor) -> torch.Tensor:
         """Compute per-neuron alignment scores for structured pruning."""
-        from alignment.metrics.rayleigh.rayleigh_quotient import \
-            RayleighQuotient
+        from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 
         try:
             # Get weight matrix
@@ -2073,8 +2065,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
     def _compute_alignment_importance(self, module: nn.Module, layer_inputs: torch.Tensor) -> torch.Tensor:
         """Compute alignment-based importance scores for a layer."""
-        from alignment.metrics.rayleigh.rayleigh_quotient import \
-            RayleighQuotient
+        from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 
         try:
             # Get weight matrix
@@ -2449,15 +2440,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
         try:
             if strategy_name == "magnitude":
                 if pruning_config.global_pruning:
-                    from alignment.pruning.strategies import \
-                        GlobalMagnitudePruning
+                    from alignment.pruning.strategies import GlobalMagnitudePruning
 
                     return GlobalMagnitudePruning(config=pruning_config)
                 else:
                     return MagnitudePruning(config=pruning_config)
             elif strategy_name == "alignment":
-                from alignment.pruning.strategies import (
-                    AlignmentPruning, GlobalAlignmentPruning)
+                from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning
 
                 alignment_metric = getattr(self.config, "pruning_alignment_metric", "rayleigh_quotient")
 

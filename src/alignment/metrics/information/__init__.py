@@ -5,8 +5,7 @@ Information-theoretic metrics for neural network alignment.
 from .conditional_mutual_information import ConditionalMutualInformation
 from .gaussian_mi import GaussianMIAnalytic
 from .mi_projection import MIProjectionVsMeanInput
-from .mutual_information import (MutualInformationBinning,
-                                 MutualInformationGaussian)
+from .mutual_information import MutualInformationBinning, MutualInformationGaussian
 from .pairwise_gaussian import PairwiseRedundancyGaussian
 from .pid import SharedInformation
 from .pid import SynergisticInformation as PIDSynergisticInformation
@@ -16,8 +15,7 @@ from .synergy_mmi import SynergyGaussianMMI
 
 # Import higher-order metrics if available
 try:
-    from .higher_order import (ConnectedInformation, InteractionInformation,
-                               SynergisticInformation, TotalCorrelation)
+    from .higher_order import ConnectedInformation, InteractionInformation, SynergisticInformation, TotalCorrelation
 
     _has_higher_order = True
 except ImportError:

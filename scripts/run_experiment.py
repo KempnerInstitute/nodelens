@@ -29,10 +29,8 @@ sys.path.insert(0, os.path.join(current_dir, "src"))
 
 # Import from the alignment package
 from alignment.experiments.general_alignment import GeneralAlignmentExperiment
-from alignment.pruning.experiments.cascading_layer import \
-    CascadingLayerPruningExperiment
-from alignment.pruning.experiments.layer_wise import \
-    LayerIsolatedPruningExperiment
+from alignment.pruning.experiments.cascading_layer import CascadingLayerPruningExperiment
+from alignment.pruning.experiments.layer_wise import LayerIsolatedPruningExperiment
 
 logger = logging.getLogger(__name__)
 
@@ -304,8 +302,7 @@ def main():
         overrides["seed"] = args.seed
 
     # Load config using the proper config loader
-    from alignment.configs.config_loader import \
-        load_config as proper_load_config
+    from alignment.configs.config_loader import load_config as proper_load_config
 
     config = proper_load_config(args.config)
 

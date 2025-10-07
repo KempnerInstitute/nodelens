@@ -6,10 +6,14 @@ neural network layer types, ensuring consistent data formatting across
 the alignment framework.
 """
 
-from .layer_preprocessing import (AttentionPreprocessor, CNNPreprocessor,
-                                  LayerPreprocessor, LinearPreprocessor,
-                                  get_preprocessor,
-                                  preprocess_layer_activations)
+from .layer_preprocessing import (
+    AttentionPreprocessor,
+    CNNPreprocessor,
+    LayerPreprocessor,
+    LinearPreprocessor,
+    get_preprocessor,
+    preprocess_layer_activations,
+)
 
 __all__ = [
     "LayerPreprocessor",

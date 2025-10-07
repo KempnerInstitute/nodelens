@@ -8,9 +8,7 @@ This module provides:
 
 from .batch import BatchMetricProcessor
 from .covariance import CovarianceEstimator, estimate_covariance
-from .layers import (AttentionPreprocessor, CNNPreprocessor, LayerPreprocessor,
-                     LinearPreprocessor, get_preprocessor,
-                     preprocess_layer_activations)
+from .layers import AttentionPreprocessor, CNNPreprocessor, LayerPreprocessor, LinearPreprocessor, get_preprocessor, preprocess_layer_activations
 
 __all__ = [
     "BatchMetricProcessor",

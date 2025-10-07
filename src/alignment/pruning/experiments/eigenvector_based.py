@@ -14,9 +14,7 @@ import torch
 
 from alignment.core.registry import register_experiment
 from alignment.experiments.base import BaseExperiment, ExperimentConfig
-from alignment.experiments.training_utils import (convert_training_history,
-                                                  create_experiment_trainer,
-                                                  train_with_metrics)
+from alignment.experiments.training_utils import convert_training_history, create_experiment_trainer, train_with_metrics
 
 logger = logging.getLogger(__name__)
 

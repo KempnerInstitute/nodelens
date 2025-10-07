@@ -6,13 +6,20 @@ used throughout the framework.
 """
 
 from .base import BaseDataset, BaseExperiment, BaseMetric, BaseModel
-from .protocols import (AlignmentMetric, DatasetWrapper, Experiment,
-                        MetricAggregator)
+from .protocols import AlignmentMetric, DatasetWrapper, Experiment, MetricAggregator
 from .protocols import ModelWrapper as ModelWrapperProtocol
 from .protocols import ResultReporter
-from .registry import (Registry, get_dataset, get_experiment, get_metric,
-                       get_model, register_dataset, register_experiment,
-                       register_metric, register_model)
+from .registry import (
+    Registry,
+    get_dataset,
+    get_experiment,
+    get_metric,
+    get_model,
+    register_dataset,
+    register_experiment,
+    register_metric,
+    register_model,
+)
 
 __all__ = [
     # Protocols

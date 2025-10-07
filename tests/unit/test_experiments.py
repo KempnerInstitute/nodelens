@@ -2,9 +2,7 @@
 Unit tests for experiment classes.
 """
 
-from alignment.experiments import (ExperimentConfig, GeneralAlignmentConfig,
-                                   GeneralAlignmentExperiment, PruningConfig,
-                                   TrainingConfig)
+from alignment.experiments import ExperimentConfig, GeneralAlignmentConfig, GeneralAlignmentExperiment, PruningConfig, TrainingConfig
 
 
 class TestExperimentConfig:

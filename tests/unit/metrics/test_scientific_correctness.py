@@ -8,8 +8,7 @@ proving that the implementations match theoretical predictions.
 import pytest
 import torch
 
-from alignment.metrics.information.pairwise_gaussian import \
-    PairwiseRedundancyGaussian
+from alignment.metrics.information.pairwise_gaussian import PairwiseRedundancyGaussian
 from alignment.metrics.information.synergy_mmi import SynergyGaussianMMI
 from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 

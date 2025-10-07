@@ -17,8 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import torch
 
 from alignment.core.base import BaseExperiment as CoreBaseExperiment
-from alignment.core.registry import (DATASET_REGISTRY, get_dataset, get_metric,
-                                     get_model)
+from alignment.core.registry import DATASET_REGISTRY, get_dataset, get_metric, get_model
 from alignment.dataops.loaders import create_distributed_loader
 from alignment.models import ModelWrapper
 

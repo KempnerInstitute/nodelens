@@ -3,6 +3,7 @@ Metrics for measuring neural network alignment.
 """
 
 from ..core.registry import METRIC_REGISTRY
+
 # Import all metric modules to register them
 from . import information, rayleigh, similarity, spectral, task_specific
 from .information import gaussian_pid  # Register gaussian PID synergy
