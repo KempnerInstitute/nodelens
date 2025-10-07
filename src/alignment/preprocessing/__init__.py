@@ -7,12 +7,12 @@ the alignment framework.
 """
 
 from .layer_preprocessing import (
+    AttentionPreprocessor,
+    CNNPreprocessor,
     LayerPreprocessor,
     LinearPreprocessor,
-    CNNPreprocessor,
-    AttentionPreprocessor,
-    preprocess_layer_activations,
     get_preprocessor,
+    preprocess_layer_activations,
 )
 
 __all__ = [

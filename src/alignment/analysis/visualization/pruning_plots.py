@@ -5,13 +5,14 @@ This module provides comprehensive plotting capabilities for pruning analysis,
 including multi-strategy comparisons, accuracy/loss curves, and statistical analysis.
 """
 
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from typing import Dict, List, Optional, Tuple, Any, Union
-import pandas as pd
-from pathlib import Path
 import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import torch
 from matplotlib.gridspec import GridSpec
 
 # Try to import seaborn, but make it optional

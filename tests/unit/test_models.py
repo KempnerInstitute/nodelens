@@ -6,10 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.models.architectures.standard_models import (
-    CNN2P2,
-    MLP,
-)
+from alignment.models.architectures.standard_models import CNN2P2, MLP
 
 
 class TestMLP:

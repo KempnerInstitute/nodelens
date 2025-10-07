@@ -5,23 +5,24 @@ This module provides efficient parallel training and analysis of multiple networ
 with different seeds, computing metrics and performing pruning experiments.
 """
 
-import torch
-import torch.nn as nn
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Any, Callable, Union
-from pathlib import Path
+import json
 import logging
+import multiprocessing as mp
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-import multiprocessing as mp
 from dataclasses import dataclass
-import json
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from ..training.multi_network import train_networks_fully_tensorized
-from ..pruning import get_pruning_strategy, PruningConfig
-from ..metrics import get_metric
+import numpy as np
+import torch
+import torch.nn as nn
+
 from ..analysis.visualization.pruning_plots import PruningVisualizer
+from ..metrics import get_metric
 from ..models import ModelWrapper
+from ..pruning import PruningConfig, get_pruning_strategy
+from ..training.multi_network import train_networks_fully_tensorized
 
 logger = logging.getLogger(__name__)
 

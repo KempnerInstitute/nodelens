@@ -2,15 +2,16 @@
 Visualization utilities for alignment metrics and analysis.
 """
 
-from typing import Dict, List, Optional, Any, Union, Tuple, Callable
-from pathlib import Path
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-from matplotlib.axes import Axes
-import pandas as pd
 import logging
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import torch
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 # Try to import seaborn, but make it optional
 try:

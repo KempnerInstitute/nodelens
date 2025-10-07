@@ -5,15 +5,16 @@ This experiment progressively applies dropout to model layers
 and tracks how alignment metrics change.
 """
 
-from typing import Dict, List, Optional, Any
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from pathlib import Path
-import logging
 
-from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.core.registry import register_experiment
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
 
 logger = logging.getLogger(__name__)
 

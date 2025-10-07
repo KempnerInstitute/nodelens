@@ -1,10 +1,11 @@
 """Markdown report generation utilities."""
 
-from typing import Union
-from pathlib import Path
-import pandas as pd
-from datetime import datetime
 import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Union
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 

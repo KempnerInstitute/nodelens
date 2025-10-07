@@ -2,13 +2,14 @@
 Visualization utilities for alignment metrics analysis.
 """
 
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from typing import Dict, List, Optional, Tuple, Any
-import pandas as pd
-from pathlib import Path
 import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import torch
 
 # Try to import seaborn, but make it optional
 try:

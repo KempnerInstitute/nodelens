@@ -2,13 +2,13 @@
 
 from .config import (
     Config,
+    DataConfig,
     ExperimentConfig,
     MetricConfig,
     ModelConfig,
-    DataConfig,
     load_config,
-    save_config,
     merge_configs,
+    save_config,
     validate_config,
 )
 
