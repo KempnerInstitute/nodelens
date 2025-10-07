@@ -1,0 +1,76 @@
+# Test configuration for comprehensive alignment experiment
+name: test_comprehensive_alignment
+experiment_name: test_comprehensive_alignment
+experiment_type: general_alignment
+model_name: resnet18
+dataset_name: cifar10
+device: cuda
+train_model: true
+apply_pruning: true
+pretrained: false
+
+# Model configuration
+model_config:
+  num_classes: 10
+
+# Dataset configuration
+dataset_config:
+  data_path: ./data
+
+# Training configuration (reduced for testing)
+training_config:
+  epochs: 5
+  batch_size: 128
+  learning_rate: 0.001
+  optimizer: sgd
+  optimizer_kwargs:
+    momentum: 0.9
+    weight_decay: 0.0001
+  scheduler: cosine
+  device: cuda
+  log_interval: 50
+  eval_interval: 1
+
+# Alignment metrics
+alignment_metrics:
+  - rayleigh_quotient
+
+# Metric configurations
+metric_configs:
+  rayleigh_quotient:
+    scale_by_norm: false
+    force_cpu: false
+    aggregation_op: mean
+
+# Pruning configuration
+pruning_strategy: magnitude
+pruning_config:
+  amount: 0.5
+  structured: false
+
+# Workflow options
+compute_initial_metrics: true
+fine_tune_after_pruning: true
+fine_tune_epochs: 2
+
+# Analysis options
+track_performance: true
+save_checkpoints: true
+save_metrics_history: true
+generate_plots: true
+generate_html_report: true
+
+# Resource configuration
+batch_size: 128
+num_workers: 4
+seed: 42
+
+# Paths
+checkpoint_dir: ./checkpoints
+log_dir: ./logs
+
+# Visualization
+plot_dpi: 300
+
+# No distributed training
+distributed: false 

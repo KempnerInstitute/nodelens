@@ -1,0 +1,85 @@
+# Comprehensive MNIST MLP Configuration for All Pruning Experiments
+# This config can be used with different pruning_experiment values:
+# - standard: Regular pruning with general alignment analysis
+# - layer_isolated: Test high/low/random pruning per layer independently
+# - cascading_layer: Cascading pruning where earlier layers affect later ones
+
+name: mnist_mlp_all_pruning_experiments
+seed: 42
+
+# Model configuration
+model_name: mlp
+model_config:
+  input_dim: 784  # 28x28 flattened
+  hidden_dims: [512, 256, 128]
+  output_dim: 10
+  activation: relu
+  dropout_rate: 0.0  # No dropout during training
+  use_batchnorm: true
+
+# Dataset configuration
+dataset_name: mnist
+dataset_config:
+  root: ./data
+  train_batch_size: 128
+  val_batch_size: 256
+  num_workers: 4
+  download: true
+  normalize: true
+  flatten: true  # Flatten images for MLP
+
+# Training configuration
+train_model: true
+training_config:
+  epochs: 10
+  learning_rate: 0.001
+  optimizer: adam
+  scheduler: cosine
+  weight_decay: 0.0001
+  device: cuda
+  save_best: true
+  patience: 5
+
+# Pruning experiment type - can be overridden via command line
+# Options: standard, layer_isolated, cascading_layer
+pruning_experiment: standard
+
+# Standard pruning configuration (used when pruning_experiment=standard)
+apply_pruning: true
+pruning_strategy: magnitude_based
+pruning_amount: 0.9  # 90% pruning for standard experiment
+
+# Specialized pruning configuration (used for layer_isolated and cascading_layer)
+dropout_rates: [0.0, 0.2, 0.4, 0.6, 0.8, 0.9]
+dropout_mode: scaled
+exclude_classification_layer: true
+num_random_trials: 3
+recompute_scores: true
+
+# Alignment metrics configuration
+# For standard experiment, multiple metrics are computed
+# For specialized experiments, first metric is used for pruning decisions
+alignment_metrics:
+  - rayleigh_quotient
+  - mutual_information
+  - correlation
+
+# Analysis configuration
+analysis_config:
+  compute_layer_metrics: true
+  generate_plots: true
+  generate_html_report: true
+  plot_dpi: 300
+  save_intermediate_results: true
+
+# Evaluation configuration
+eval_model: true
+eval_batches: 50  # Use subset for faster evaluation (null for full validation set)
+
+# CNN preprocessing mode (for future use with conv models)
+cnn_mode: unfold  # Options: unfold, patchwise, batch_patch_combined
+
+# Output directories
+checkpoint_dir: ./checkpoints
+log_dir: ./logs
+results_dir: ./results 
