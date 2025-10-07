@@ -139,10 +139,7 @@ def test_experiment_tracking():
     logger.info("\nTesting experiment tracking...")
 
     try:
-        from alignment.utils.experiment_tracking import (
-            ExperimentTracker,
-            create_tracker,
-        )
+        from alignment.utils.experiment_tracking import ExperimentTracker, create_tracker
 
         # Test base tracker (doesn't raise NotImplementedError anymore)
         tracker = ExperimentTracker("test", {"key": "value"})

@@ -14,10 +14,11 @@ class TestPairwiseRedundancyGaussian:
 
     def test_initialization(self):
         """Test metric initialization."""
-        metric = PairwiseRedundancyGaussian(num_pairs=10, sampling_strategy="random")
+        metric = PairwiseRedundancyGaussian(num_pairs=10, sampling_strategy="random", mode="covariance_based")
 
         assert metric.num_pairs == 10
         assert metric.sampling_strategy == "random"
+        assert metric.mode == "covariance_based"
         assert metric.requires_inputs
         assert metric.requires_weights
         assert not metric.requires_outputs
@@ -161,17 +162,16 @@ class TestPairwiseRedundancyGaussian:
         assert not torch.isnan(redundancy).any()
 
     def test_dimension_mismatch_handling(self):
-        """Test handling of dimension mismatch between inputs and weights."""
+        """Test that dimension mismatch raises an error."""
         batch_size = 50
         inputs = torch.randn(batch_size, 20)
         weights = torch.randn(10, 25)  # Mismatch!
 
         metric = PairwiseRedundancyGaussian()
-        redundancy = metric.compute(inputs=inputs, weights=weights)
 
-        # Should handle by truncating
-        assert redundancy.shape == (10,)
-        assert not torch.isnan(redundancy).any()
+        # Should raise an error for incompatible dimensions
+        with pytest.raises(RuntimeError, match="cannot be multiplied"):
+            redundancy = metric.compute(inputs=inputs, weights=weights)
 
     def test_regularization_effect(self):
         """Test that regularization prevents singularity."""

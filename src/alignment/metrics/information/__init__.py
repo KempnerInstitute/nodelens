@@ -15,12 +15,7 @@ from .synergy_mmi import SynergyGaussianMMI
 
 # Import higher-order metrics if available
 try:
-    from .higher_order import (
-        ConnectedInformation,
-        InteractionInformation,
-        SynergisticInformation,
-        TotalCorrelation,
-    )
+    from .higher_order import ConnectedInformation, InteractionInformation, SynergisticInformation, TotalCorrelation
 
     _has_higher_order = True
 except ImportError:

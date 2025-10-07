@@ -29,7 +29,7 @@ def analyze_attention_structure(model):
     print("=" * 80)
 
     # Get first attention layer
-    attn_layer = model.transformer.h[0].attn if hasattr(model, 'transformer') else model.model.layers[0].self_attn
+    attn_layer = model.transformer.h[0].attn if hasattr(model, "transformer") else model.model.layers[0].self_attn
 
     # Find projection layers
     for name, module in attn_layer.named_modules():
@@ -92,10 +92,10 @@ def neuron_level_pruning_demo(model, layer_idx=0):
     outputs = target_proj(inputs)  # [B, num_neurons]
 
     # Compute per-neuron scores
-    rq = get_metric('rayleigh_quotient')
+    rq = get_metric("rayleigh_quotient")
     rq_scores = rq.compute(inputs, target_proj.weight)
 
-    redundancy = get_metric('pairwise_redundancy_gaussian', mode='output_based', num_pairs=20)
+    redundancy = get_metric("pairwise_redundancy_gaussian", mode="output_based", num_pairs=20)
     redundancy_scores = redundancy.compute(outputs=outputs)
 
     # Composite score
@@ -111,7 +111,7 @@ def neuron_level_pruning_demo(model, layer_idx=0):
 
     # Prune neurons
     pruning_amount = 0.3  # 30%
-    mask = MaskOperations.create_structured_mask(composite, amount=pruning_amount, mode='low')
+    mask = MaskOperations.create_structured_mask(composite, amount=pruning_amount, mode="low")
 
     num_pruned = (~mask).sum().item()
     num_kept = mask.sum().item()
@@ -168,7 +168,7 @@ def head_level_pruning_demo(model, layer_idx=0):
     inputs = torch.randn(16, 4096)
     outputs = q_proj(inputs)
 
-    redundancy = get_metric('pairwise_redundancy_gaussian', mode='output_based', num_pairs=20)
+    redundancy = get_metric("pairwise_redundancy_gaussian", mode="output_based", num_pairs=20)
     neuron_scores = redundancy.compute(outputs=outputs)  # [4096]
 
     # Aggregate to head-level
@@ -196,7 +196,7 @@ def head_level_pruning_demo(model, layer_idx=0):
 
     # Prune heads
     pruning_amount = 0.25  # 25% = 8 heads
-    head_mask = MaskOperations.create_structured_mask(head_scores, amount=pruning_amount, mode='low')
+    head_mask = MaskOperations.create_structured_mask(head_scores, amount=pruning_amount, mode="low")
 
     num_heads_pruned = (~head_mask).sum().item()
 
@@ -263,12 +263,12 @@ def main():
     print("Attention Layer Pruning: Neuron vs Head Level")
     print("=" * 80)
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\nDevice: {device}")
 
     # Load model (GPT-2 for demo, same principles for LLaMA)
     print("\nLoading model (GPT-2 for demo)...")
-    model = AutoModelForCausalLM.from_pretrained('gpt2')
+    model = AutoModelForCausalLM.from_pretrained("gpt2")
     model = model.to(device)
     model.eval()
 
@@ -295,7 +295,8 @@ def main():
     print("\n" + "=" * 80)
     print("Summary: You Can Prune Attention at BOTH Levels!")
     print("=" * 80)
-    print("""
+    print(
+        """
 1. NEURON-LEVEL Pruning (Fine-Grained):
    ✓ Attention projections are Linear layers with neurons
    ✓ Q projection: 4,096 neurons (LLaMA-3)
@@ -327,9 +328,9 @@ Recommendation:
 - For ANALYSIS: Use neuron-level (more detailed)
 - For PRUNING: Try both, see which performs better
 - For INTERPRETABILITY: Use head-level (cleaner)
-    """)
+    """
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

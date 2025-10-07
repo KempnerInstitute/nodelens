@@ -5,11 +5,7 @@ This module provides high-level services that compose core functionality
 for common operations like activation capture, scoring, and mask generation.
 """
 
-from .activation_capture import (
-    ActivationCaptureService,
-    ActivationData,
-    create_capture_service,
-)
+from .activation_capture import ActivationCaptureService, ActivationData, create_capture_service
 from .mask_ops import MaskOperations
 from .scoring import CompositeScores, NodeScoringService, create_scoring_service
 

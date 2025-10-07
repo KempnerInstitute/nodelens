@@ -12,7 +12,7 @@ from .core.base import BaseMetric
 from .core.registry import METRIC_REGISTRY
 
 # Data processing
-from .data.processing import BatchMetricProcessor
+from .dataops.processing import BatchMetricProcessor
 
 # Experiment tracking
 from .experiments.tracking import create_tracker
@@ -25,13 +25,7 @@ from .models import ModelWrapper
 from .pruning import PruningConfig, get_pruning_strategy
 
 # Services (NEW in v0.2.0)
-from .services import (
-    ActivationCaptureService,
-    ActivationData,
-    CompositeScores,
-    MaskOperations,
-    NodeScoringService,
-)
+from .services import ActivationCaptureService, ActivationData, CompositeScores, MaskOperations, NodeScoringService
 
 # Visualization
 try:

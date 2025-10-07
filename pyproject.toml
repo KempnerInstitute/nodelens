@@ -15,9 +15,13 @@ license = { file = "LICENSE" }
 dependencies = [
     "numpy",
     "torch",
+    "torchvision",
     "omegaconf",
     "seaborn",
     "matplotlib",
+    "tqdm",
+    "pandas",
+    "scipy",
 ]
 
 [tool.setuptools]
@@ -29,7 +33,7 @@ packages = ["alignment"]
 dev = [
     "ruff",
     "mypy>=1.0,<1.17",
-    "black>=23.1,<24.0",
+    "black>=24.0",
     "isort>=5.12,<6.1",
     "pytest",
     "pytest-sphinx",
@@ -77,6 +81,10 @@ version = { attr = "alignment.__version__" }
 
 [tool.black]
 line-length = 150
+
+[tool.isort]
+profile = "black"
+line_length = 150
 
 [tool.ruff]
 line-length = 150

@@ -8,12 +8,12 @@ from .global_pruning import GlobalDropoutConfig, GlobalDropoutExperiment
 from .layer_wise import LayerIsolatedConfig, LayerIsolatedPruningExperiment
 
 __all__ = [
-    'EigenvectorDropoutExperiment',
-    'EigenvectorConfig',
-    'CascadingLayerPruningExperiment',
-    'CascadingConfig',
-    'LayerIsolatedPruningExperiment',
-    'LayerIsolatedConfig',
-    'GlobalDropoutExperiment',
-    'GlobalDropoutConfig',
-] 
+    "EigenvectorDropoutExperiment",
+    "EigenvectorConfig",
+    "CascadingLayerPruningExperiment",
+    "CascadingConfig",
+    "LayerIsolatedPruningExperiment",
+    "LayerIsolatedConfig",
+    "GlobalDropoutExperiment",
+    "GlobalDropoutConfig",
+]

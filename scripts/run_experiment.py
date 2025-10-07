@@ -29,9 +29,7 @@ sys.path.insert(0, os.path.join(current_dir, "src"))
 
 # Import from the alignment package
 from alignment.experiments.general_alignment import GeneralAlignmentExperiment
-from alignment.pruning.experiments.cascading_layer import (
-    CascadingLayerPruningExperiment,
-)
+from alignment.pruning.experiments.cascading_layer import CascadingLayerPruningExperiment
 from alignment.pruning.experiments.layer_wise import LayerIsolatedPruningExperiment
 
 logger = logging.getLogger(__name__)

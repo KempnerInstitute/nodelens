@@ -56,11 +56,12 @@ from alignment.pruning import PruningConfig, get_pruning_strategy
 
 class SimpleNet(nn.Module):
     """Simple feedforward network for MNIST."""
+
     def __init__(self, hidden_sizes=[784, 256, 128, 10]):
         super().__init__()
         layers = []
         for i in range(len(hidden_sizes) - 1):
-            layers.append(nn.Linear(hidden_sizes[i], hidden_sizes[i+1]))
+            layers.append(nn.Linear(hidden_sizes[i], hidden_sizes[i + 1]))
             if i < len(hidden_sizes) - 2:  # No ReLU after last layer
                 layers.append(nn.ReLU())
         self.model = nn.Sequential(*layers)
@@ -70,13 +71,13 @@ class SimpleNet(nn.Module):
         return self.model(x)
 
 
-def train_model(model, train_loader, val_loader, epochs=10, device='cuda'):
+def train_model(model, train_loader, val_loader, epochs=10, device="cuda"):
     """Train the model."""
     model = model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    history = {'train_loss': [], 'val_acc': []}
+    history = {"train_loss": [], "val_acc": []}
 
     for epoch in range(epochs):
         # Training
@@ -102,17 +103,17 @@ def train_model(model, train_loader, val_loader, epochs=10, device='cuda'):
                 correct += pred.eq(target).sum().item()
 
         train_loss /= len(train_loader)
-        val_acc = 100. * correct / len(val_loader.dataset)
+        val_acc = 100.0 * correct / len(val_loader.dataset)
 
-        history['train_loss'].append(train_loss)
-        history['val_acc'].append(val_acc)
+        history["train_loss"].append(train_loss)
+        history["val_acc"].append(val_acc)
 
-        print(f'Epoch {epoch+1}/{epochs}: Loss: {train_loss:.4f}, Acc: {val_acc:.2f}%')
+        print(f"Epoch {epoch+1}/{epochs}: Loss: {train_loss:.4f}, Acc: {val_acc:.2f}%")
 
     return history
 
 
-def compute_alignment_metrics(model, data_loader, device='cuda'):
+def compute_alignment_metrics(model, data_loader, device="cuda"):
     """Compute various alignment metrics for the model."""
     model = model.to(device)
     wrapped_model = ModelWrapper(model.model)  # Wrap the sequential model
@@ -129,8 +130,8 @@ def compute_alignment_metrics(model, data_loader, device='cuda'):
 
     # Initialize metrics
     metrics = {
-        'rayleigh_quotient': get_metric('rayleigh_quotient')(),
-        'weight_cosine_similarity': get_metric('weight_cosine_similarity')(),
+        "rayleigh_quotient": get_metric("rayleigh_quotient")(),
+        "weight_cosine_similarity": get_metric("weight_cosine_similarity")(),
     }
 
     results = {}
@@ -144,30 +145,23 @@ def compute_alignment_metrics(model, data_loader, device='cuda'):
             layer_inputs = activations[f"{layer_name}_input"]
             layer_weights = weights[layer_name]
 
-            rq_scores = metrics['rayleigh_quotient'].compute(
-                inputs=layer_inputs,
-                weights=layer_weights
-            )
-            results[layer_name]['rayleigh_quotient'] = {
-                'mean': float(rq_scores.mean()),
-                'std': float(rq_scores.std()),
-                'min': float(rq_scores.min()),
-                'max': float(rq_scores.max())
+            rq_scores = metrics["rayleigh_quotient"].compute(inputs=layer_inputs, weights=layer_weights)
+            results[layer_name]["rayleigh_quotient"] = {
+                "mean": float(rq_scores.mean()),
+                "std": float(rq_scores.std()),
+                "min": float(rq_scores.min()),
+                "max": float(rq_scores.max()),
             }
 
         # Weight Cosine Similarity
         layer_weights = weights[layer_name]
-        sim_scores = metrics['weight_cosine_similarity'].compute(weights=layer_weights)
-        results[layer_name]['weight_similarity'] = {
-            'mean': float(sim_scores.mean()),
-            'std': float(sim_scores.std())
-        }
+        sim_scores = metrics["weight_cosine_similarity"].compute(weights=layer_weights)
+        results[layer_name]["weight_similarity"] = {"mean": float(sim_scores.mean()), "std": float(sim_scores.std())}
 
     return results
 
 
-def apply_pruning_experiment(model, val_loader, strategies=['magnitude', 'random'],
-                           sparsities=[0.1, 0.3, 0.5, 0.7, 0.9], device='cuda'):
+def apply_pruning_experiment(model, val_loader, strategies=["magnitude", "random"], sparsities=[0.1, 0.3, 0.5, 0.7, 0.9], device="cuda"):
     """Apply different pruning strategies and evaluate."""
     results = {}
 
@@ -181,7 +175,7 @@ def apply_pruning_experiment(model, val_loader, strategies=['magnitude', 'random
             pruned_model = pruned_model.to(device)
 
             # Apply pruning
-            config = PruningConfig(amount=sparsity, pruning_mode='low')
+            config = PruningConfig(amount=sparsity, pruning_mode="low")
             strategy = get_pruning_strategy(strategy_name, config=config)
 
             # Prune each linear layer
@@ -205,21 +199,17 @@ def apply_pruning_experiment(model, val_loader, strategies=['magnitude', 'random
                     pred = output.argmax(dim=1)
                     correct += pred.eq(target).sum().item()
 
-            accuracy = 100. * correct / len(val_loader.dataset)
+            accuracy = 100.0 * correct / len(val_loader.dataset)
             avg_loss = total_loss / len(val_loader)
 
-            results[strategy_name][sparsity] = {
-                'accuracy': accuracy,
-                'loss': avg_loss
-            }
+            results[strategy_name][sparsity] = {"accuracy": accuracy, "loss": avg_loss}
 
-            print(f"{strategy_name} - Sparsity {sparsity:.1%}: "
-                  f"Acc: {accuracy:.2f}%, Loss: {avg_loss:.4f}")
+            print(f"{strategy_name} - Sparsity {sparsity:.1%}: " f"Acc: {accuracy:.2f}%, Loss: {avg_loss:.4f}")
 
     return results
 
 
-def visualize_results(pruning_results, output_dir='results/standard_experiment'):
+def visualize_results(pruning_results, output_dir="results/standard_experiment"):
     """Generate visualizations of the results."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -229,17 +219,14 @@ def visualize_results(pruning_results, output_dir='results/standard_experiment')
     # Create performance comparison plot
     visualizer.plot_pruning_performance(
         pruning_results,
-        metrics=['accuracy', 'loss'],
-        save_path=output_dir / 'pruning_performance.png',
-        title='Pruning Strategy Comparison on MNIST',
-        show_confidence=False
+        metrics=["accuracy", "loss"],
+        save_path=output_dir / "pruning_performance.png",
+        title="Pruning Strategy Comparison on MNIST",
+        show_confidence=False,
     )
 
     # Create comprehensive comparison grid
-    visualizer.plot_pruning_comparison_grid(
-        pruning_results,
-        save_path=output_dir / 'comparison_grid.png'
-    )
+    visualizer.plot_pruning_comparison_grid(pruning_results, save_path=output_dir / "comparison_grid.png")
 
     print(f"\nVisualizations saved to {output_dir}")
 
@@ -251,18 +238,15 @@ def main():
     print("=" * 60)
 
     # Setup
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\nUsing device: {device}")
 
     # Data loading
     print("\nLoading MNIST dataset...")
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-    val_dataset = datasets.MNIST('./data', train=False, transform=transform)
+    train_dataset = datasets.MNIST("./data", train=True, download=True, transform=transform)
+    val_dataset = datasets.MNIST("./data", train=False, transform=transform)
 
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
@@ -277,10 +261,10 @@ def main():
     history = train_model(model, train_loader, val_loader, epochs=5, device=device)
 
     # Save training history
-    output_dir = Path('results/standard_experiment')
+    output_dir = Path("results/standard_experiment")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(output_dir / 'training_history.json', 'w') as f:
+    with open(output_dir / "training_history.json", "w") as f:
         json.dump(history, f, indent=2)
 
     # Compute alignment metrics
@@ -291,11 +275,11 @@ def main():
     for layer, layer_metrics in metrics.items():
         print(f"\nLayer {layer}:")
         for metric_name, values in layer_metrics.items():
-            if 'mean' in values:
+            if "mean" in values:
                 print(f"  {metric_name}: mean={values['mean']:.4f}, std={values['std']:.4f}")
 
     # Save metrics
-    with open(output_dir / 'alignment_metrics.json', 'w') as f:
+    with open(output_dir / "alignment_metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
 
     # Pruning experiments
@@ -304,14 +288,11 @@ def main():
     print("=" * 60)
 
     pruning_results = apply_pruning_experiment(
-        model, val_loader,
-        strategies=['magnitude', 'random'],
-        sparsities=[0.1, 0.3, 0.5, 0.7, 0.9],
-        device=device
+        model, val_loader, strategies=["magnitude", "random"], sparsities=[0.1, 0.3, 0.5, 0.7, 0.9], device=device
     )
 
     # Save pruning results
-    with open(output_dir / 'pruning_results.json', 'w') as f:
+    with open(output_dir / "pruning_results.json", "w") as f:
         json.dump(pruning_results, f, indent=2)
 
     # Generate visualizations
@@ -332,12 +313,12 @@ def main():
 
     # Print key findings
     print("\nKey Findings:")
-    baseline_acc = history['val_acc'][-1]
+    baseline_acc = history["val_acc"][-1]
     print(f"  - Baseline accuracy: {baseline_acc:.2f}%")
 
     for strategy in pruning_results:
-        acc_50 = pruning_results[strategy][0.5]['accuracy']
-        acc_90 = pruning_results[strategy][0.9]['accuracy']
+        acc_50 = pruning_results[strategy][0.5]["accuracy"]
+        acc_90 = pruning_results[strategy][0.9]["accuracy"]
         print(f"  - {strategy.capitalize()} pruning:")
         print(f"      50% sparsity: {acc_50:.2f}% (drop: {baseline_acc - acc_50:.2f}%)")
         print(f"      90% sparsity: {acc_90:.2f}% (drop: {baseline_acc - acc_90:.2f}%)")

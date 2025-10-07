@@ -181,7 +181,7 @@ class MyMetric(BaseMetric):
 ### Batch Processing
 
 ```python
-from alignment.data.processing import BatchMetricProcessor
+from alignment.dataops.processing import BatchMetricProcessor
 
 processor = BatchMetricProcessor(metrics=['rq', 'mi'])
 results = processor.process_dataset(dataloader, model)

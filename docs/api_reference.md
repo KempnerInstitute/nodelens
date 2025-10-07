@@ -306,7 +306,7 @@ layers = detect_trackable_layers(
 ### Covariance Estimation
 
 ```python
-from alignment.data.processing import estimate_covariance
+from alignment.dataops.processing import estimate_covariance
 
 cov = estimate_covariance(
     X,

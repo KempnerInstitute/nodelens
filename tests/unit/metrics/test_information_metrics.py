@@ -5,12 +5,7 @@ Unit tests for information-theoretic metrics.
 import pytest
 import torch
 
-from alignment.metrics.information import (
-    ConditionalMutualInformation,
-    MIProjectionVsMeanInput,
-    MutualInformationBinning,
-    MutualInformationGaussian,
-)
+from alignment.metrics.information import ConditionalMutualInformation, MIProjectionVsMeanInput, MutualInformationBinning, MutualInformationGaussian
 
 
 class TestMutualInformation:

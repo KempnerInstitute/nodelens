@@ -5,14 +5,7 @@ This module provides GPU-accelerated and JIT-compiled versions of common operati
 """
 
 # GPU-accelerated functions
-from .gpu import (
-    GPUAcceleratedMetrics,
-    gpu_conditional_entropy,
-    gpu_entropy,
-    gpu_histogram1d,
-    gpu_histogram2d,
-    gpu_mutual_information,
-)
+from .gpu import GPUAcceleratedMetrics, gpu_conditional_entropy, gpu_entropy, gpu_histogram1d, gpu_histogram2d, gpu_mutual_information
 
 # JIT-compiled functions
 from .jit import (

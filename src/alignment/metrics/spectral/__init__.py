@@ -1,20 +1,10 @@
 """Spectral alignment metrics for analyzing weight matrix properties."""
 
 # Phase 3 metrics
-from .spectral_alignment import (
-    EigenvalueAlignmentMetric,
-    PowerIterationAlignment,
-    SpectralClusteringAlignment,
-    SpectralGapMetric,
-)
+from .spectral_alignment import EigenvalueAlignmentMetric, PowerIterationAlignment, SpectralClusteringAlignment, SpectralGapMetric
 
 # Classic spectral metrics
-from .spectral_classic import (
-    EigenvalueEntropy,
-    SpectralAlignment,
-    SpectralClusteringScore,
-    SpectralNormRatio,
-)
+from .spectral_classic import EigenvalueEntropy, SpectralAlignment, SpectralClusteringScore, SpectralNormRatio
 
 __all__ = [
     # Phase 3 metrics
