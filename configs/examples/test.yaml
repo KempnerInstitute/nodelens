@@ -1,0 +1,46 @@
+experiment:
+  name: "llama3_alignment_analysis"
+  description: "LLM alignment and pruning experiment for Meta-Llama-3"
+  tags: ["llm", "alignment", "pruning"]
+  device: "cuda"
+  batch_size: 1
+  num_workers: 0
+  log_dir: "./logs"
+  checkpoint_dir: "./checkpoints"
+  do_train: false
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+  # pretrained: true
+  
+
+dataset:
+  dataset_name: "wikitext-2-v1"
+  split: "test"
+  # data_path: "./data"
+
+alignment:
+  metrics:
+    - "rayleigh_quotient"
+    - "mutual_information_gaussian"
+
+pruning:
+  enabled: true
+  algorithms:
+    - "alignment"
+  alignment_metric: "rayleigh_quotient"
+  sparsity_levels: [0.1, 0.3, 0.5]
+  mode: "low"
+
+importance_computation:
+  num_samples: 1
+
+wrapper:
+  name: "transformer_wrapper"
+  tracked_layers:
+    - "model.layers.*.mlp"
+
+logging:
+  log_interval: 50

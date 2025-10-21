@@ -62,7 +62,16 @@ class WikiTextDataset(Dataset):
     def __init__(self, tokenizer: Any, split: str = "test", max_length: int = 512, dataset_name: str = "wikitext-2-raw-v1"):
         from datasets import load_dataset
 
-        self.tokenizer = tokenizer
+        from transformers import AutoTokenizer
+
+        # Load the tokenizer object
+        hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
+        # If no pad token exists, set it to the eos token (common for causal LM)
+        if hf_tokenizer.pad_token is None:
+            hf_tokenizer.pad_token = hf_tokenizer.eos_token
+
+        self.tokenizer = hf_tokenizer
         self.max_length = max_length
 
         logger.info(f"Loading WikiText dataset: {dataset_name} ({split})")
@@ -174,7 +183,7 @@ def load_text_dataset(
 try:
     from ...core.registry import register_dataset
 
-    @register_dataset("wikitext")
+    @register_dataset("wikitext-2-v1")
     def create_wikitext(**kwargs):
         """Create WikiText dataset from config."""
         return WikiTextDataset(**kwargs)

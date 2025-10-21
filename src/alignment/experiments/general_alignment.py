@@ -2187,23 +2187,29 @@ class GeneralAlignmentExperiment(BaseExperiment):
         output_dir = Path(self.config.plots_dir) if hasattr(self.config, "plots_dir") else Path(self.config.log_dir) / "plots"
         output_dir.mkdir(exist_ok=True)
 
+        print("HELLO 0")
+
         # Training curves
         if self.train_results:
             # TODO: Plot training curves
-            pass
+            print("HELLO A")
+            # pass
 
         # Alignment evolution
         if "alignment" in self.train_results:
             # TODO: Plot alignment evolution
-            pass
+            print("HELLO B")
+            # pass
 
         # Dropout analysis
         if self.dropout_results:
             # TODO: Plot dropout results
-            pass
+            print("HELLO C")
+            # pass
 
         # Pruning experiments - now enhanced with before/after comparisons
         if self.pruning_results and "strategies" in self.pruning_results:
+            print("HELLO D")
             import matplotlib.pyplot as plt
 
             from alignment.analysis.visualization import UnifiedVisualizer
@@ -2470,7 +2476,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         logger.info(f"Using single network pruning for network {network_id} (fallback mode)")
 
         # This is a simplified fallback implementation
-        # In practice, this would only be used if tensorized pruning fails
+        # In practice, this would only be used if tensorized pruning failss
         results = {"strategies": {}, "final_model_performance": {}, "network_id": network_id}
 
         # For now, return empty results - the tensorized version should handle everything

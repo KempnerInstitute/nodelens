@@ -21,12 +21,12 @@ model_config:
 dataset_name: mnist
 dataset_config:
   root: ./data
-  train_batch_size: 128
-  val_batch_size: 256
+  # train_batch_size: 128
+  # val_batch_size: 256
   num_workers: 4
   download: true
   normalize: true
-  flatten: true  # Flatten images for MLP
+  # flatten: true  # Flatten images for MLP
 
 # Training configuration
 train_model: true

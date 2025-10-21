@@ -1,0 +1,32 @@
+name: "llama3_alignment"
+type: "llm_alignment"
+seed: 42
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+
+wrapper:
+  name: "transformer_wrapper"
+  tracked_layers:
+    - "model.layers.*.mlp"
+
+alignment:
+  metrics: ["rayleigh_quotient"]
+
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  alignment_metric: "rayleigh_quotient"
+  sparsity_levels: [0.1, 0.2]
+
+evaluation:
+  compute_perplexity: true
+  dataset: "wikitext"
+  num_samples: 20
+
+paths:
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
+  results_dir: "./results"

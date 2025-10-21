@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(current_dir, "src"))
 from alignment.experiments.general_alignment import GeneralAlignmentExperiment
 from alignment.pruning.experiments.cascading_layer import CascadingLayerPruningExperiment
 from alignment.pruning.experiments.layer_wise import LayerIsolatedPruningExperiment
+from alignment.experiments.llm_experiments import LLMAlignmentExperiment
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,9 @@ def create_experiment_config(unified_config):
         if dropout_enabled:
             config.dropout_rates = dropout_cfg.get("rates", [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
             logger.info(f"Dropout enabled: rates={config.dropout_rates}")
+
+        print("PARAMS:")
+        print(config)
 
     # Common configuration for all experiment types
     if not isinstance(config, GeneralAlignmentConfig):

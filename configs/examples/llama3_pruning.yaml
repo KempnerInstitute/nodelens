@@ -7,14 +7,16 @@ experiment:
   device: "cuda"
   output_dir: "./results/llama3_pruning"
 
-model:
-  name: "meta-llama/Meta-Llama-3-8B"
-  pretrained: true
-  tracked_layers: null  # Auto-detect FFN and attention layers
+model_name: hf_causal_lm
+model_config:
+  model_id: meta-llama/Llama-3.1-8B
+  # pretrained: true
+  # tracked_layers: null  # Auto-detect FFN and attention layers
 
 dataset:
   name: "wikitext"
-  data_path: "./data"
+  tokenizer: "meta-llama/Llama-3.1-8B"
+  # data_path: "./data"
   batch_size: 4
   num_workers: 2
   max_length: 512

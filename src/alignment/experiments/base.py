@@ -298,6 +298,13 @@ class BaseExperiment(CoreBaseExperiment):
         logger.info(f"Initialized model: {self.config.model_name}")
         logger.info(f"Tracked layers: {self.wrapped_model.tracked_layers}")
 
+        if self.config.model_name.lower() == "hf_causal_lm":
+            model_id = self.config.model_config.get("model_id")
+            if model_id is None:
+                raise ValueError("model_id must be set in model_config for hf_causal_lm")
+            self.tokenizer = model_id
+            logger.info(f"Loaded tokenizer for HF model '{model_id}'")
+
     def _initialize_dataset(self):
         """Initialize dataset and data loader."""
         # Get dataset class from registry (not instance)
@@ -323,6 +330,10 @@ class BaseExperiment(CoreBaseExperiment):
         # Keep download parameter as it's needed for torchvision datasets
         if self.config.data_path is not None and "data_path" not in dataset_kwargs:
             dataset_kwargs["data_path"] = self.config.data_path
+
+        # If model (e.g., HF model) has a tokenizer, include it
+        if hasattr(self, "tokenizer") and self.tokenizer is not None:
+            dataset_kwargs["tokenizer"] = self.tokenizer
 
         # Create dataset
         self.dataset = dataset_class(**dataset_kwargs)
