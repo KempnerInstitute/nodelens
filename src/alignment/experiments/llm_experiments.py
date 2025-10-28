@@ -41,6 +41,12 @@ class LLMAlignmentConfig(ExperimentConfig):
     # dataset
     dataset_name: str = "wikitext-2-v1"
 
+    # evaluation
+    evaluation_compute_perplexity: bool = False
+    evaluation_dataset: str = "wikitext"
+    evaluation_split: str = "test"
+    evaluation_num_samples: int = 100
+
     # Alignment
     importance_computation_texts: List[str] = field(default_factory=list)
     importance_num_samples: int = 1
@@ -104,12 +110,18 @@ class LLMAlignmentExperiment(BaseExperiment):
         Returns:
             Perplexity value
         """
-        from ..data.datasets.text_datasets import load_text_dataset
 
         logger.info(f"Evaluating perplexity on {dataset} ({split})...")
 
         # Load dataset
-        dataset_obj = load_text_dataset(dataset, self.tokenizer, split=split, max_samples=num_samples)
+        try:
+            from alignment.dataops.datasets.text_datasets import load_text_dataset
+        except Exception as e:
+            logger.error(f"Could not import text dataset loader: {e}")
+            raise
+
+        # Load calibration texts
+        dataset_obj = load_text_dataset(dataset, self.llm_config.model_id, split=split, max_samples=num_samples)
 
         # Compute perplexity
         self.model.eval()
@@ -121,8 +133,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                 if i >= num_samples:
                     break
 
-                input_ids = batch["input_ids"].unsqueeze(0).to(self.device)
-                labels = batch.get("labels", input_ids).to(self.device)
+                input_ids = batch["input_ids"].unsqueeze(0).to(self.llm_config.device)
+                labels = batch.get("labels", input_ids).to(self.llm_config.device)
 
                 try:
                     outputs = self.model(input_ids, labels=labels)
@@ -362,5 +374,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                 except Exception:
                     # if vals is non-tensor or empty
                     results["importance_scores"][layer_name][metric_name] = {"summary": "unavailable"}
+
+        if self.llm_config.evaluation_compute_perplexity:
+            baseline_ppl = self.evaluate_perplexity(dataset=self.llm_config.evaluation_dataset, num_samples=self.llm_config.evaluation_num_samples)
+            results["evaluation"]["baseline_perplexity"] = baseline_ppl
+
 
         return results

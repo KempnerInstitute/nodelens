@@ -71,7 +71,11 @@ def load_config(config_path: str) -> dict:
 
     # Evaluation (perplexity, etc.)
     if "evaluation" in config_data:
-        config["evaluation"] = config_data["evaluation"]
+        eval_cfg = config_data["evaluation"]
+        config["evaluation_compute_perplexity"] = eval_cfg.get("compute_perplexity", False)
+        config["evaluation_dataset"] = eval_cfg.get("dataset", "wikitext")
+        config["evaluation_split"] = eval_cfg.get("split", "test")
+        config["evaluation_num_samples"] = eval_cfg.get("num_samples", 100)
 
     # Importance computation
     if "importance_computation" in config_data:
