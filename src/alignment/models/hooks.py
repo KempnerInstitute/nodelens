@@ -113,6 +113,7 @@ class HookManager:
         finally:
             # Always cleanup, even if exception occurs
             self.cleanup()
+            torch.cuda.empty_cache()
 
     def __del__(self):
         """Ensure cleanup on object destruction."""
