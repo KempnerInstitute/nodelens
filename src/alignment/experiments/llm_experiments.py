@@ -134,17 +134,44 @@ class LLMAlignmentExperiment(BaseExperiment):
                     break
 
                 input_ids = batch["input_ids"].unsqueeze(0).to(self.llm_config.device)
-                labels = batch.get("labels", input_ids).to(self.llm_config.device)
+                
+                # Create labels and mask out padding tokens
+                labels = input_ids.clone()
+                
+                # Get pad token id (usually 128001 for Llama 3)
+                pad_token_id = self.tokenizer.pad_token_id
+                if pad_token_id is None:
+                    pad_token_id = self.tokenizer.eos_token_id
+                
+                # Set padding tokens to -100 (ignored in loss)
+                labels[labels == pad_token_id] = -100
+                
+                # Also ignore BOS token (128000) at start
+                if labels[0, 0] == 128000:
+                    labels[0, 0] = -100
 
                 try:
                     outputs = self.model(input_ids, labels=labels)
                     loss = outputs.loss
-                    nlls.append(loss * input_ids.size(1))
-                    total_length += input_ids.size(1)
+                    
+                    # Count only non-ignored tokens
+                    num_valid_tokens = (labels != -100).sum().item()
+                    
+                    if num_valid_tokens > 0:
+                        nlls.append(loss * num_valid_tokens)
+                        total_length += num_valid_tokens
+                        logger.info(f"Sample {i}: loss={loss.item():.4f}, valid_tokens={num_valid_tokens}")
+                    else:
+                        logger.warning(f"Sample {i}: No valid tokens!")
+                        
                 except Exception as e:
                     logger.warning(f"Error on sample {i}: {e}")
                     continue
 
+        if total_length == 0:
+            logger.error("No valid tokens processed!")
+            return float('inf')
+        
         ppl = torch.exp(torch.stack(nlls).sum() / total_length)
         perplexity = ppl.item()
 
