@@ -57,8 +57,7 @@ def load_config(config_path: str) -> dict:
     # Alignment metrics
     if "alignment" in config_data:
         align_cfg = config_data["alignment"]
-        config["metrics"] = align_cfg.get("metrics", ["rayleigh_quotient"])
-        config["alignment_methods"] = align_cfg.get("metrics", ["rayleigh_quotient"])
+        config["alignment_metrics"] = align_cfg.get("metrics", ["rayleigh_quotient"])
         config["metric_configs"] = align_cfg.get("metric_configs", {})
 
     # Pruning parameters
@@ -80,7 +79,7 @@ def load_config(config_path: str) -> dict:
 
     # Wrapper / tracked layers
     if "wrapper" in config_data:
-        config["tracked_layers"] = config_data["wrapper"].get("tracked_layers", None)
+        config["tracked_layer_patterns"] = config_data["wrapper"].get("tracked_layer_patterns", None)
 
     # Generic defaults
     config.setdefault("device", "cuda" if torch.cuda.is_available() else "cpu")

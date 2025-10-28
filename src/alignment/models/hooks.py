@@ -86,6 +86,7 @@ class HookManager:
             ...     conv1_acts = cache['conv1_output']
             ...     fc1_acts = cache['fc1_input']
         """
+        temp_cache = {}
         try:
             # Register hooks for specified layers
             for name, module in model.named_modules():
@@ -96,18 +97,18 @@ class HookManager:
                             if track_inputs and inp is not None:
                                 # Handle tuple inputs
                                 input_tensor = inp[0] if isinstance(inp, tuple) else inp
-                                self.cache[f"{layer_name}_input"] = input_tensor.detach()
+                                temp_cache[f"{layer_name}_input"] = input_tensor.detach()
 
                             if track_outputs and out is not None:
                                 # Handle tuple outputs
                                 output_tensor = out[0] if isinstance(out, tuple) else out
-                                self.cache[f"{layer_name}_output"] = output_tensor.detach()
+                                temp_cache[f"{layer_name}_output"] = output_tensor.detach()
 
                         return hook
 
                     self.register_forward_hook(module, make_hook(name), name=name)
-
-            yield self.cache
+                    
+            yield temp_cache
 
         finally:
             # Always cleanup, even if exception occurs

@@ -23,14 +23,13 @@ dataset:
 
 alignment:
   metrics:
-    - "rayleigh_quotient"
-    - "mutual_information_gaussian"
+    - "activation_l2_norm"
 
 pruning:
   enabled: true
   algorithms:
     - "alignment"
-  alignment_metric: "rayleigh_quotient"
+  alignment_metric: "activation_l2_norm"
   sparsity_levels: [0.1, 0.3, 0.5]
   mode: "low"
 
@@ -39,7 +38,7 @@ importance_computation:
 
 wrapper:
   name: "transformer_wrapper"
-  tracked_layers:
+  tracked_layer_patterns:
     - "model.layers.*.mlp"
 
 logging:
