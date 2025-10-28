@@ -34,7 +34,7 @@ class LLMAlignmentConfig(ExperimentConfig):
     tracked_layer_patterns: List[str] = field(default_factory=lambda: ["model.layers.*.mlp"])
 
     # Alignment
-    alignment_metrics: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
+    alignment_methods: List[str] = field(default_factory=lambda: ["activation_l2_norm"])
     importance_computation_texts: List[str] = field(default_factory=list)
     importance_num_samples: int = 1
 
@@ -92,31 +92,52 @@ class LLMAlignmentExperiment(BaseExperiment):
         print("underlying_model: ", underlying_model)
         print("expanded: ", expanded)
 
-    def run(self) -> Dict[str, Any]:
-        """Run the full LLM experiment pipeline: compute importance, optionally prune, evaluate."""
-        logger.info("Running LLMAlignmentExperiment...")
+    def evaluate_perplexity(self, dataset: str = "wikitext", split: str = "test", num_samples: int = 100) -> float:
+        """
+        Evaluate model perplexity on a dataset.
 
-        results: Dict[str, Any] = {"config": self.llm_config.to_dict(), "importance_scores": {}, "pruning_results": {}, "evaluation": {}}
+        Args:
+            dataset: Dataset name
+            split: Dataset split
+            num_samples: Number of samples to evaluate
 
-        scores = self.compute_importance_scores(
-            num_samples=self.llm_config.importance_num_samples
-        )
+        Returns:
+            Perplexity value
+        """
+        from ..data.datasets.text_datasets import load_text_dataset
 
-        for layer_name, layer_scores in scores.items():
-            results["importance_scores"][layer_name] = {}
-            for metric_name, vals in layer_scores.items():
+        logger.info(f"Evaluating perplexity on {dataset} ({split})...")
+
+        # Load dataset
+        dataset_obj = load_text_dataset(dataset, self.tokenizer, split=split, max_samples=num_samples)
+
+        # Compute perplexity
+        self.model.eval()
+        nlls = []
+        total_length = 0
+
+        with torch.no_grad():
+            for i, batch in enumerate(dataset_obj):
+                if i >= num_samples:
+                    break
+
+                input_ids = batch["input_ids"].unsqueeze(0).to(self.device)
+                labels = batch.get("labels", input_ids).to(self.device)
+
                 try:
-                    results["importance_scores"][layer_name][metric_name] = {
-                        "mean": float(vals.mean().item()),
-                        "std": float(vals.std().item()),
-                        "min": float(vals.min().item()),
-                        "max": float(vals.max().item()),
-                    }
-                except Exception:
-                    # if vals is non-tensor or empty
-                    results["importance_scores"][layer_name][metric_name] = {"summary": "unavailable"}
+                    outputs = self.model(input_ids, labels=labels)
+                    loss = outputs.loss
+                    nlls.append(loss * input_ids.size(1))
+                    total_length += input_ids.size(1)
+                except Exception as e:
+                    logger.warning(f"Error on sample {i}: {e}")
+                    continue
 
-        return results
+        ppl = torch.exp(torch.stack(nlls).sum() / total_length)
+        perplexity = ppl.item()
+
+        logger.info(f"Perplexity: {perplexity:.2f}")
+        return perplexity
 
     def _get_underlying_model(self) -> nn.Module:
         """
@@ -261,7 +282,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             all_activations = {key: values[0] for key, values in all_activations.items()}
 
         # Compute importance for each layer
-        metric_names = self.llm_config.alignment_metrics
+        metric_names = self.llm_config.alignment_methods
 
         for layer_name in self.wrapped_model._tracked_layers:
             logger.info(f"Computing scores for {layer_name}")
@@ -284,7 +305,13 @@ class LLMAlignmentExperiment(BaseExperiment):
             layer_scores = {}
             for metric_name in metric_names:
                 try:
-                    metric = get_metric(metric_name)
+                    # Use already-initialized metric from self.metrics if available
+                    if metric_name in self.metrics:
+                        metric = self.metrics[metric_name]
+                    else:
+                        # Otherwise get fresh from registry without extra params
+                        metric = get_metric(metric_name)
+
                     scores = metric.compute(inputs=layer_inputs, weights=weight)
                     layer_scores[metric_name] = scores
 
@@ -312,3 +339,28 @@ class LLMAlignmentExperiment(BaseExperiment):
                 return w if isinstance(w, torch.Tensor) else None
         return None
 
+    def run(self) -> Dict[str, Any]:
+        """Run the full LLM experiment pipeline: compute importance, optionally prune, evaluate."""
+        logger.info("Running LLMAlignmentExperiment...")
+
+        results: Dict[str, Any] = {"config": self.llm_config.to_dict(), "importance_scores": {}, "pruning_results": {}, "evaluation": {}}
+
+        scores = self.compute_importance_scores(
+            num_samples=self.llm_config.importance_num_samples
+        )
+
+        for layer_name, layer_scores in scores.items():
+            results["importance_scores"][layer_name] = {}
+            for metric_name, vals in layer_scores.items():
+                try:
+                    results["importance_scores"][layer_name][metric_name] = {
+                        "mean": float(vals.mean().item()),
+                        "std": float(vals.std().item()),
+                        "min": float(vals.min().item()),
+                        "max": float(vals.max().item()),
+                    }
+                except Exception:
+                    # if vals is non-tensor or empty
+                    results["importance_scores"][layer_name][metric_name] = {"summary": "unavailable"}
+
+        return results

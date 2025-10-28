@@ -14,7 +14,6 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   torch_dtype: "bfloat16"
   # pretrained: true
-  
 
 dataset:
   dataset_name: "wikitext-2-v1"
@@ -32,6 +31,11 @@ pruning:
   alignment_metric: "activation_l2_norm"
   sparsity_levels: [0.1, 0.3, 0.5]
   mode: "low"
+
+evaluation:
+  compute_perplexity: true
+  dataset: "wikitext"
+  num_samples: 20
 
 importance_computation:
   num_samples: 1

@@ -57,7 +57,7 @@ def load_config(config_path: str) -> dict:
     # Alignment metrics
     if "alignment" in config_data:
         align_cfg = config_data["alignment"]
-        config["alignment_metrics"] = align_cfg.get("metrics", ["rayleigh_quotient"])
+        config["alignment_methods"] = align_cfg.get("metrics", ["rayleigh_quotient"])
         config["metric_configs"] = align_cfg.get("metric_configs", {})
 
     # Pruning parameters
