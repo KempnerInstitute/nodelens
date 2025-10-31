@@ -30,7 +30,7 @@ pruning:
   #   - "alignment"
   alignment_metric: "activation_l2_norm"
   sparsity_levels: [0.1, 0.3, 0.5]
-  mode: "high" 
+  mode: "low" 
 
 evaluation:
   compute_perplexity: true
@@ -43,12 +43,54 @@ importance_computation:
 wrapper:
   name: "transformer_wrapper"
   tracked_layer_patterns:
-    - "model.layers.*.mlp.gate_proj"
-    - "model.layers.*.mlp.up_proj"
-    - "model.layers.*.mlp.down_proj"
+    # - "model.layers.*.mlp.up_proj"
+    - "model.layers.0.mlp.up_proj"
+    - "model.layers.1.mlp.up_proj"
+    - "model.layers.2.mlp.up_proj"
+    - "model.layers.3.mlp.up_proj"
+    - "model.layers.4.mlp.up_proj"
+    - "model.layers.5.mlp.up_proj"
+    - "model.layers.6.mlp.up_proj"
+    - "model.layers.7.mlp.up_proj"
+    - "model.layers.8.mlp.up_proj"
+    - "model.layers.9.mlp.up_proj"
+    - "model.layers.10.mlp.up_proj"
+    # - "model.layers.11.mlp.up_proj"
+    # - "model.layers.12.mlp.up_proj"
+    # - "model.layers.13.mlp.up_proj"
+    # - "model.layers.14.mlp.up_proj"
+    # - "model.layers.15.mlp.up_proj"
+    # - "model.layers.16.mlp.up_proj"
+    # - "model.layers.17.mlp.up_proj"
+    # - "model.layers.18.mlp.up_proj"
+    # - "model.layers.19.mlp.up_proj"
+    # - "model.layers.20.mlp.up_proj"
+    # - "model.layers.21.mlp.up_proj"
+    # - "model.layers.22.mlp.up_proj"
+    # - "model.layers.23.mlp.up_proj"
+    # - "model.layers.24.mlp.up_proj"
+    # - "model.layers.25.mlp.up_proj"
+    # - "model.layers.26.mlp.up_proj"
+    # - "model.layers.27.mlp.up_proj"
+    # - "model.layers.28.mlp.up_proj"
+    # - "model.layers.29.mlp.up_proj"
+    # - "model.layers.30.mlp.up_proj"
+    # - "model.layers.31.mlp.up_proj"
+
+    # - "model.layers.*.mlp.up_proj"
+    
+    # - "model.layers.*.mlp.up_proj"
 
 logging:
   log_interval: 50
+
+
+# Results saving
+# save_intermediate_results: true
+# save_networks: false
+# checkpoint_dir: ./checkpoints
+# log_dir: ./logs2
+# output_dir: ./results
 
 
 # add type of statistics to impose on batch/sequence
@@ -57,3 +99,30 @@ logging:
 # clean a bit to push to github
 # add pruning strategies
 # add visualization to llm (reference general alignment)
+
+
+# add pruning by which layer's importance scores (or aggregation) --- currently, it uses the first one that appears in the tracked layer patterns
+# prune non-uniformly (eg only layer 1)
+
+# pruning by gate and up are working but down is not
+
+
+#  "pruning_results": {
+  #   "sparsity_0.1": {
+  #     "perplexity": 17.3385066986084,
+  #     "sparsity": 0.1,
+  #     "num_pruned_layers": 96
+  #   },
+  #   "sparsity_0.3": {
+  #     "perplexity": 40.065093994140625,
+  #     "sparsity": 0.3,
+  #     "num_pruned_layers": 96
+  #   },
+  #   "sparsity_0.5": {
+  #     "perplexity": 162.7567901611328,
+  #     "sparsity": 0.5,
+  #     "num_pruned_layers": 96
+  #   }
+  # },
+  # "evaluation": {
+  #   "baseline_perplexity": 12.28649616241455
