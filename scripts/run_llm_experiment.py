@@ -57,7 +57,7 @@ def load_config(config_path: str) -> dict:
     # Alignment metrics
     if "alignment" in config_data:
         align_cfg = config_data["alignment"]
-        config["alignment_methods"] = align_cfg.get("metrics", ["rayleigh_quotient"])
+        config["alignment_methods"] = align_cfg.get("metrics", ["activation_l2_norm"])
         config["metric_configs"] = align_cfg.get("metric_configs", {})
 
     # Pruning parameters
@@ -67,7 +67,7 @@ def load_config(config_path: str) -> dict:
         config["pruning_algorithms"] = prune_cfg.get("algorithms", ["alignment"])
         config["pruning_sparsity_levels"] = prune_cfg.get("sparsity_levels", [0.1, 0.3])
         config["pruning_mode"] = prune_cfg.get("mode", "low")
-        config["pruning_alignment_metric"] = prune_cfg.get("alignment_metric", "rayleigh_quotient")
+        config["pruning_alignment_metric"] = prune_cfg.get("alignment_metric", "activation_l2_norm")
 
     # Evaluation (perplexity, etc.)
     if "evaluation" in config_data:
