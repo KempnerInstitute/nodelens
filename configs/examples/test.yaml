@@ -49,3 +49,11 @@ wrapper:
 
 logging:
   log_interval: 50
+
+
+# add type of statistics to impose on batch/sequence
+# check if weights are correctly extracted
+# ensure pruning fully works
+# clean a bit to push to github
+# add pruning strategies
+# add visualization to llm (reference general alignment)
