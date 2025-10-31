@@ -30,7 +30,7 @@ pruning:
   #   - "alignment"
   alignment_metric: "activation_l2_norm"
   sparsity_levels: [0.1, 0.3, 0.5]
-  # mode: "low" # not implemented yet
+  mode: "high" 
 
 evaluation:
   compute_perplexity: true

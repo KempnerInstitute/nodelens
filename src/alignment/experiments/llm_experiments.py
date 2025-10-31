@@ -385,56 +385,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                 return w if isinstance(w, torch.Tensor) else None
         return None
     
-    # def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
-    #     """
-    #     Apply pruning to the model based on importance scores.
-
-    #     Args:
-    #         sparsity: Fraction of neurons to prune
-    #         metric: Which importance metric to use
-    #         mode: 'low' to prune low-importance, 'high' for high-importance
-
-    #     Returns:
-    #         Dictionary of pruning masks
-    #     """
-    #     logger.info(f"Applying pruning: sparsity={sparsity}, metric={metric}, mode={mode}")
-
-    #     if not self.importance_scores:
-    #         raise ValueError("Must compute importance scores before pruning")
-
-    #     config = PruningConfig(amount=sparsity, structured=True, pruning_mode=mode)
-
-    #     pruner = AlignmentPruning(metric=metric, config=config)
-
-    #     masks = {}
-    #     for layer_name in self.importance_scores.keys():
-    #         if metric not in self.importance_scores[layer_name]:
-    #             continue
-
-    #         scores = self.importance_scores[layer_name][metric]
-    #         layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
-
-    #         # Get target module for pruning
-    #         if hasattr(layer_module, "gate_proj"):
-    #             target = layer_module.gate_proj
-    #         elif hasattr(layer_module, "up_proj"):
-    #             target = layer_module.up_proj
-    #         else:
-    #             continue
-
-    #         try:
-    #             mask = pruner.create_pruning_mask(scores)
-    #             pruner.apply_pruning(target, mask)
-    #             masks[layer_name] = mask
-
-    #             sparsity_achieved = (mask == 0).float().mean().item()
-    #             logger.info(f"  {layer_name}: {sparsity_achieved:.2%} sparsity")
-    #         except Exception as e:
-    #             logger.error(f"Error pruning {layer_name}: {e}")
-
-    #     self.pruning_masks = masks
-    #     return masks
-
     def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
         """
         Apply structured pruning to MLP layers.
@@ -553,9 +503,10 @@ class LLMAlignmentExperiment(BaseExperiment):
         if self.llm_config.pruning_enabled:
             sparsity_levels = self.llm_config.pruning_sparsity_levels
             metric = self.llm_config.pruning_alignment_metric
+            mode = self.llm_config.pruning_mode
 
             for sparsity in sparsity_levels:
-                masks = self.apply_pruning(sparsity=sparsity, metric=metric)
+                masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
 
                 # Evaluate pruned model
                 if self.llm_config.evaluation_compute_perplexity:

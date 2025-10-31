@@ -3,7 +3,7 @@
 Main entrypoint to run LLM alignment experiments.
 
 Usage:
-    python run_experiment.py --config configs/llm_alignment.yaml
+    python run_experiment.py --config configs/examples/llm_alignment.yaml
 """
 
 import argparse
