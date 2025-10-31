@@ -26,11 +26,11 @@ alignment:
 
 pruning:
   enabled: true
-  algorithms:
-    - "alignment"
+  # algorithms: # not implemented yet
+  #   - "alignment"
   alignment_metric: "activation_l2_norm"
   sparsity_levels: [0.1, 0.3, 0.5]
-  mode: "low"
+  # mode: "low" # not implemented yet
 
 evaluation:
   compute_perplexity: true
@@ -43,7 +43,9 @@ importance_computation:
 wrapper:
   name: "transformer_wrapper"
   tracked_layer_patterns:
-    - "model.layers.*.mlp"
+    - "model.layers.*.mlp.gate_proj"
+    - "model.layers.*.mlp.up_proj"
+    - "model.layers.*.mlp.down_proj"
 
 logging:
   log_interval: 50

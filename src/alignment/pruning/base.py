@@ -139,55 +139,131 @@ class BasePruningStrategy(ABC):
 
         return mask.float()
 
-    def apply_pruning(self, module: nn.Module, mask: torch.Tensor, make_permanent: bool = False):
+    # def apply_pruning(self, module: nn.Module, mask: torch.Tensor, make_permanent: bool = False):
+    #     """
+    #     Apply pruning mask to a module.
+
+    #     Args:
+    #         module: Module to prune
+    #         mask: Binary mask to apply
+    #         make_permanent: If True, makes pruning permanent (cannot be reverted)
+    #     """
+    #     if not hasattr(module, "weight"):
+    #         raise ValueError(f"Module {module} does not have a weight parameter")
+        
+    #     if not make_permanent:
+    #         # Store original weights BEFORE applying mask
+    #         if not hasattr(module, "_original_weight"):
+    #             module.register_buffer("_original_weight", module.weight.data.clone())
+
+    #         # Register mask as buffer for forward passes
+    #         module.register_buffer("weight_mask", mask)
+
+    #         # Apply mask to weights
+    #         module.weight.data *= mask
+
+    #         # Hook to apply mask during forward pass
+    #         def apply_mask_hook(mod, inputs):
+    #             # Apply mask to original weights to maintain pruning
+    #             mod.weight.data = mod._original_weight * mod.weight_mask
+    #             return inputs
+
+    #         # Hook to mask gradients during backward pass
+    #         # Capture the mask in the closure to avoid attribute access issues
+    #         weight_mask = module.weight_mask
+
+    #         def mask_gradient_hook(grad):
+    #             # Mask gradients to prevent updates to pruned weights
+    #             return grad * weight_mask
+
+    #         # Remove old hooks if exist
+    #         if hasattr(module, "_pruning_hook"):
+    #             module._pruning_hook.remove()
+    #         if hasattr(module, "_gradient_hook_handle"):
+    #             module._gradient_hook_handle.remove()
+
+    #         # Register hooks
+    #         module._pruning_hook = module.register_forward_pre_hook(apply_mask_hook)
+    #         module._gradient_hook_handle = module.weight.register_hook(mask_gradient_hook)
+    #     else:
+    #         # Apply mask permanently
+    #         module.weight.data *= mask
+
+    def apply_pruning(self, module: nn.Module, mask: torch.Tensor, make_permanent: bool = False, dim: str = "auto"):
         """
-        Apply pruning mask to a module.
+        Apply pruning mask to a module's weights.
 
         Args:
-            module: Module to prune
-            mask: Binary mask to apply
-            make_permanent: If True, makes pruning permanent (cannot be reverted)
+            module: Module to prune (must have .weight)
+            mask: Binary mask to apply (1D or same shape as weights)
+            make_permanent: If True, apply pruning permanently (no hooks)
+            dim: 'input', 'output', or 'auto' (default). 
+                - 'output': prunes rows (out_features)
+                - 'input': prunes columns (in_features)
+                - 'auto': infers based on mask size and weight shape
         """
         if not hasattr(module, "weight"):
             raise ValueError(f"Module {module} does not have a weight parameter")
 
-        if not make_permanent:
-            # Store original weights BEFORE applying mask
-            if not hasattr(module, "_original_weight"):
-                module.register_buffer("_original_weight", module.weight.data.clone())
+        weight = module.weight.data
 
-            # Register mask as buffer for forward passes
-            module.register_buffer("weight_mask", mask)
-
-            # Apply mask to weights
-            module.weight.data *= mask
-
-            # Hook to apply mask during forward pass
-            def apply_mask_hook(mod, inputs):
-                # Apply mask to original weights to maintain pruning
-                mod.weight.data = mod._original_weight * mod.weight_mask
-                return inputs
-
-            # Hook to mask gradients during backward pass
-            # Capture the mask in the closure to avoid attribute access issues
-            weight_mask = module.weight_mask
-
-            def mask_gradient_hook(grad):
-                # Mask gradients to prevent updates to pruned weights
-                return grad * weight_mask
-
-            # Remove old hooks if exist
-            if hasattr(module, "_pruning_hook"):
-                module._pruning_hook.remove()
-            if hasattr(module, "_gradient_hook_handle"):
-                module._gradient_hook_handle.remove()
-
-            # Register hooks
-            module._pruning_hook = module.register_forward_pre_hook(apply_mask_hook)
-            module._gradient_hook_handle = module.weight.register_hook(mask_gradient_hook)
+        # Handle dimension
+        if mask.dim() == 1:
+            if dim == "auto":
+                if mask.numel() == weight.size(0):
+                    dim = "output"
+                elif mask.numel() == weight.size(1):
+                    dim = "input"
+                else:
+                    raise ValueError(
+                        f"Mask length {mask.numel()} doesn't match weight shape {tuple(weight.shape)} "
+                        f"for module {module.__class__.__name__}"
+                    )
+            if dim == "output":
+                mask_applied = mask[:, None]  # broadcast along input dim
+            elif dim == "input":
+                mask_applied = mask[None, :]  # broadcast along output dim
+            else:
+                raise ValueError(f"Invalid dim='{dim}', must be 'input', 'output', or 'auto'")
+        elif mask.shape == weight.shape:
+            mask_applied = mask
         else:
-            # Apply mask permanently
-            module.weight.data *= mask
+            raise ValueError(
+                f"Mask shape {tuple(mask.shape)} not compatible with weight shape {tuple(weight.shape)}"
+            )
+
+        # Apply mask permanently or with hooks
+        if make_permanent:
+            weight *= mask_applied
+            return
+
+        # Store original weights if not already done
+        if not hasattr(module, "_original_weight"):
+            module.register_buffer("_original_weight", weight.clone())
+
+        module.register_buffer("weight_mask", mask_applied)
+
+        # Apply mask to weights immediately
+        weight *= mask_applied
+
+        # Define hooks
+        def apply_mask_hook(mod, inputs):
+            mod.weight.data = mod._original_weight * mod.weight_mask
+            return inputs
+
+        def mask_gradient_hook(grad):
+            return grad * module.weight_mask
+
+        # Clean up old hooks if they exist
+        if hasattr(module, "_pruning_hook"):
+            module._pruning_hook.remove()
+        if hasattr(module, "_gradient_hook_handle"):
+            module._gradient_hook_handle.remove()
+
+        # Register hooks
+        module._pruning_hook = module.register_forward_pre_hook(apply_mask_hook)
+        module._gradient_hook_handle = module.weight.register_hook(mask_gradient_hook)
+
 
     def remove_pruning(self, module: nn.Module):
         """

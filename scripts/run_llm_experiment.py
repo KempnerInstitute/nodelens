@@ -63,10 +63,10 @@ def load_config(config_path: str) -> dict:
     # Pruning parameters
     if "pruning" in config_data:
         prune_cfg = config_data["pruning"]
-        config["do_pruning_experiments"] = prune_cfg.get("enabled", False)
-        config["pruning_strategies"] = prune_cfg.get("algorithms", ["alignment"])
-        config["pruning_amounts"] = prune_cfg.get("sparsity_levels", [0.1, 0.3])
-        config["pruning_selection_mode"] = prune_cfg.get("mode", "low")
+        config["pruning_enabled"] = prune_cfg.get("enabled", False)
+        config["pruning_algorithms"] = prune_cfg.get("algorithms", ["alignment"])
+        config["pruning_sparsity_levels"] = prune_cfg.get("sparsity_levels", [0.1, 0.3])
+        config["pruning_mode"] = prune_cfg.get("mode", "low")
         config["pruning_alignment_metric"] = prune_cfg.get("alignment_metric", "rayleigh_quotient")
 
     # Evaluation (perplexity, etc.)

@@ -73,11 +73,17 @@ class AlignmentPruning(BasePruningStrategy):
 
         # Initialize the metric
         try:
-            metric_class = get_metric(metric)
-            if metric_class is None:
+            # metric_class = get_metric(metric)
+            # if metric_class is None:
+            #     raise ValueError(f"Metric '{metric}' not found in registry")
+            # # Instantiate the metric with any kwargs
+            # self.metric = metric_class(**metric_kwargs)
+
+            metric_instance = get_metric(metric)
+            if metric_instance is None:
                 raise ValueError(f"Metric '{metric}' not found in registry")
             # Instantiate the metric with any kwargs
-            self.metric = metric_class(**metric_kwargs)
+            self.metric = metric_instance
         except Exception as e:
             logger.error(f"Failed to initialize metric {metric}: {e}")
             raise

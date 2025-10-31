@@ -41,7 +41,7 @@ class LLMAlignmentConfig(ExperimentConfig):
     # dataset
     dataset_name: str = "wikitext-2-v1"
 
-    # evaluation
+    # Evaluation
     evaluation_compute_perplexity: bool = False
     evaluation_dataset: str = "wikitext"
     evaluation_split: str = "test"
@@ -50,6 +50,13 @@ class LLMAlignmentConfig(ExperimentConfig):
     # Alignment
     importance_computation_texts: List[str] = field(default_factory=list)
     importance_num_samples: int = 1
+
+    # Pruning
+    pruning_enabled: bool = False
+    pruning_algorithms: List[str] = field(default_factory=lambda: ["alignment"])
+    pruning_sparsity_levels: List[float] = field(default_factory=lambda: [0.1, 0.2, 0.3])
+    pruning_alignment_metric: str = "activation_l2_norm"
+    pruning_mode: str = "low"  # "low" or "high"
 
     # Misc
     tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -377,6 +384,142 @@ class LLMAlignmentExperiment(BaseExperiment):
                 # else maybe it's a tensor
                 return w if isinstance(w, torch.Tensor) else None
         return None
+    
+    # def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
+    #     """
+    #     Apply pruning to the model based on importance scores.
+
+    #     Args:
+    #         sparsity: Fraction of neurons to prune
+    #         metric: Which importance metric to use
+    #         mode: 'low' to prune low-importance, 'high' for high-importance
+
+    #     Returns:
+    #         Dictionary of pruning masks
+    #     """
+    #     logger.info(f"Applying pruning: sparsity={sparsity}, metric={metric}, mode={mode}")
+
+    #     if not self.importance_scores:
+    #         raise ValueError("Must compute importance scores before pruning")
+
+    #     config = PruningConfig(amount=sparsity, structured=True, pruning_mode=mode)
+
+    #     pruner = AlignmentPruning(metric=metric, config=config)
+
+    #     masks = {}
+    #     for layer_name in self.importance_scores.keys():
+    #         if metric not in self.importance_scores[layer_name]:
+    #             continue
+
+    #         scores = self.importance_scores[layer_name][metric]
+    #         layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
+
+    #         # Get target module for pruning
+    #         if hasattr(layer_module, "gate_proj"):
+    #             target = layer_module.gate_proj
+    #         elif hasattr(layer_module, "up_proj"):
+    #             target = layer_module.up_proj
+    #         else:
+    #             continue
+
+    #         try:
+    #             mask = pruner.create_pruning_mask(scores)
+    #             pruner.apply_pruning(target, mask)
+    #             masks[layer_name] = mask
+
+    #             sparsity_achieved = (mask == 0).float().mean().item()
+    #             logger.info(f"  {layer_name}: {sparsity_achieved:.2%} sparsity")
+    #         except Exception as e:
+    #             logger.error(f"Error pruning {layer_name}: {e}")
+
+    #     self.pruning_masks = masks
+    #     return masks
+
+    def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
+        """
+        Apply structured pruning to MLP layers.
+        Prunes gate_proj, up_proj (output dims), and down_proj (input dims) together.
+
+        Args:
+            sparsity: Fraction of neurons to prune
+            metric: Which importance metric to use
+            mode: 'low' to prune low-importance, 'high' for high-importance
+
+        Returns:
+            Dictionary of pruning masks
+        """
+        logger.info(f"Applying pruning: sparsity={sparsity}, metric={metric}, mode={mode}")
+
+        if not self.importance_scores:
+            raise ValueError("Must compute importance scores before pruning")
+
+        config = PruningConfig(amount=sparsity, structured=True, pruning_mode=mode)
+        pruner = AlignmentPruning(metric=metric, config=config)
+
+        masks = {}
+        processed_mlps = set()  # Track which MLPs we've already processed
+        
+        for layer_name in self.importance_scores.keys():
+            if metric not in self.importance_scores[layer_name]:
+                continue
+
+            # Extract layer index (e.g., "model.layers.0.mlp.gate_proj" → 0)
+            import re
+            match = re.search(r'layers\.(\d+)\.mlp', layer_name)
+            if not match:
+                continue
+            layer_idx = match.group(1)
+            
+            # Skip if we already processed this MLP
+            if layer_idx in processed_mlps:
+                continue
+            processed_mlps.add(layer_idx)
+            
+            # Get importance scores (should be for gate_proj)
+            scores = self.importance_scores[layer_name][metric]
+            
+            # Create mask based on importance scores
+            mask = pruner.create_pruning_mask(scores)
+            
+            # Get the MLP module
+            mlp_module = dict(self.wrapped_model._model.named_modules())[f"model.layers.{layer_idx}.mlp"]
+            
+            try:
+                # Verify we have the right modules
+                if not all(hasattr(mlp_module, attr) for attr in ['gate_proj', 'up_proj', 'down_proj']):
+                    logger.warning(f"Layer {layer_idx} MLP missing expected projections")
+                    continue
+                
+                # Verify mask shape matches intermediate dimension
+                expected_dim = mlp_module.gate_proj.out_features
+
+                if len(mask) != expected_dim:
+                    logger.error(f"Mask size {len(mask)} doesn't match intermediate dim {expected_dim}")
+                    continue
+                
+                # Prune gate_proj output dimension (rows of weight matrix)
+                pruner.apply_pruning(mlp_module.gate_proj, mask, dim="output")
+                masks[f"model.layers.{layer_idx}.mlp.gate_proj"] = mask
+                
+                # Prune up_proj output dimension (rows of weight matrix) - same mask
+                pruner.apply_pruning(mlp_module.up_proj, mask, dim="output")
+                masks[f"model.layers.{layer_idx}.mlp.up_proj"] = mask
+                
+                # Prune down_proj input dimension (columns of weight matrix)
+                pruner.apply_pruning(mlp_module.down_proj, mask, dim="input")
+                masks[f"model.layers.{layer_idx}.mlp.down_proj"] = mask
+                
+                sparsity_achieved = (mask == 0).float().mean().item()
+                logger.info(f"  Layer {layer_idx} MLP: {sparsity_achieved:.2%} sparsity across all projections")
+                
+            except Exception as e:
+                logger.error(f"Error pruning layer {layer_idx} MLP: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+
+        self.pruning_masks = masks
+        logger.info(f"Pruned {len(processed_mlps)} MLP layers with {sparsity:.1%} target sparsity")
+        return masks
 
     def run(self) -> Dict[str, Any]:
         """Run the full LLM experiment pipeline: compute importance, optionally prune, evaluate."""
@@ -406,5 +549,24 @@ class LLMAlignmentExperiment(BaseExperiment):
             baseline_ppl = self.evaluate_perplexity(dataset=self.llm_config.evaluation_dataset, num_samples=self.llm_config.evaluation_num_samples)
             results["evaluation"]["baseline_perplexity"] = baseline_ppl
 
+
+        if self.llm_config.pruning_enabled:
+            sparsity_levels = self.llm_config.pruning_sparsity_levels
+            metric = self.llm_config.pruning_alignment_metric
+
+            for sparsity in sparsity_levels:
+                masks = self.apply_pruning(sparsity=sparsity, metric=metric)
+
+                # Evaluate pruned model
+                if self.llm_config.evaluation_compute_perplexity:
+                    pruned_ppl = self.evaluate_perplexity(
+                        dataset=self.llm_config.evaluation_dataset, num_samples=self.llm_config.evaluation_num_samples
+                    )
+
+                    results["pruning_results"][f"sparsity_{sparsity}"] = {
+                        "perplexity": pruned_ppl,
+                        "sparsity": sparsity,
+                        "num_pruned_layers": len(masks),
+                    }
 
         return results
