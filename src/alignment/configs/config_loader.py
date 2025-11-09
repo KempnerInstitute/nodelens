@@ -59,6 +59,7 @@ def load_config(config_path: Union[str, Path]) -> ExperimentConfig:
         raise ValueError(f"Invalid configuration: {e}")
 
 
+
 def save_config(config: ExperimentConfig, save_path: Union[str, Path], format: str = "yaml") -> None:
     """
     Save configuration to a file.
@@ -212,6 +213,8 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["train_before_dropout"] = training.get("train_before_dropout", True)
 
     # Map alignment settings
+    flat_config["alignment_methods"] = nested_config.get("alignment_methods", ["rayleigh_quotient"])
+    flat_config["alignment_data_num_samples"] = nested_config.get("alignment_data_num_samples", 1)
     if "alignment_settings" in nested_config:
         alignment = nested_config["alignment_settings"]
         # Map metric names
@@ -253,6 +256,11 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["pruning_alignment_metric"] = pruning_block.get(
         "alignment_metric", nested_config.get("pruning_alignment_metric", "rayleigh_quotient")
     )
+
+    # Evaluation
+    flat_config["do_perplexity_computation"] = nested_config.get("do_perplexity_computation", False)
+    flat_config["evaluation_dataset"] = nested_config.get("evaluation_dataset", "wikitext")
+    flat_config["evaluation_num_samples"] = nested_config.get("evaluation_num_samples", 100)
 
     # Map visualization settings
     flat_config["generate_plots"] = nested_config.get("generate_plots", True)

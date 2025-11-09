@@ -30,27 +30,33 @@ class LLMAlignmentConfig(ExperimentConfig):
     hf_device_map: Optional[Dict[str, Union[str, int]]] = None  # for device_map if desired
 
     # wrapper/tracking
-    tracked_layers: List[str] = field(default_factory=lambda: ["model.layers.*.mlp"])
+    wrapper_name: str = "transformer_wrapper"
+    tracked_layer_patterns: List[str] = field(default_factory=lambda: ["model.layers.*.mlp"])
 
     # Alignment
     alignment_methods: List[str] = field(default_factory=lambda: ["activation_l2_norm"])
-    alignment_data_num_samples: int = 1
-    alignment_computation_texts: List[str] = field(default_factory=list)
+    importance_computation_texts: List[str] = field(default_factory=list)
+    importance_num_samples: int = 1
 
     # dataset
     dataset_name: str = "wikitext-2-v1"
 
     # Evaluation
-    do_perplexity_computation: bool = False
+    evaluation_compute_perplexity: bool = False
     evaluation_dataset: str = "wikitext"
-    # evaluation_num_samples: int = 100
+    evaluation_split: str = "test"
+    evaluation_num_samples: int = 100
+
+    # Alignment
+    importance_computation_texts: List[str] = field(default_factory=list)
+    importance_num_samples: int = 1
 
     # Pruning
-    do_pruning_experiments: bool = False
-    pruning_strategies: List[str] = field(default_factory=lambda: ["alignment"])
-    pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.2, 0.3])
+    pruning_enabled: bool = False
+    pruning_algorithms: List[str] = field(default_factory=lambda: ["alignment"])
+    pruning_sparsity_levels: List[float] = field(default_factory=lambda: [0.1, 0.2, 0.3])
     pruning_alignment_metric: str = "activation_l2_norm"
-    pruning_selection_mode: str = "low"  # "low" or "high"
+    pruning_mode: str = "low"  # "low" or "high"
 
     # Misc
     tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -63,44 +69,45 @@ class LLMAlignmentExperiment(BaseExperiment):
             config = LLMAlignmentConfig.from_dict(config) if isinstance(config, dict) else config
 
         super().__init__(config)
+        self.tokenizer = None
         self.importance_scores: Dict[str, Dict[str, torch.Tensor]] = {}
 
-    # @property
-    # def llm_config(self) -> LLMAlignmentConfig:
-    #     return self.config  # type: ignore[return-value]
+    @property
+    def llm_config(self) -> LLMAlignmentConfig:
+        return self.config  # type: ignore[return-value]
 
-    def setup(self):
-        """Setup LLM alignment experiment components."""
-        logger.info("Setting up LLM alignment experiment...")
+    # def setup(self):
+    #     """Setup LLM alignment experiment components."""
+    #     logger.info("Setting up LLM alignment experiment...")
 
-        # If using HuggingFace backend, load tokenizer & HF model then wrap
-        if self.config.model_config.get("model_backend") == "hf":
-            self._load_hf_tokenizer_and_model()
-        else:
-            # If not HF, rely on BaseExperiment's initialization (already called in __init__).
-            logger.info("Using registry or torchvision model; BaseExperiment has initialized it.")
+    #     # If using HuggingFace backend, load tokenizer & HF model then wrap
+    #     if self.llm_config.model_backend == "hf":
+    #         self._load_hf_tokenizer_and_model()
+    #     else:
+    #         # If not HF, rely on BaseExperiment's initialization (already called in __init__).
+    #         logger.info("Using registry or torchvision model; BaseExperiment has initialized it.")
 
-        # Expand tracked layer patterns into actual layer names for the wrapper
-        if self.config.tracked_layers is not None:
-            underlying_model = self._get_underlying_model()
-            expanded = self._expand_layer_patterns(self.config.tracked_layers, underlying_model)
+    #     # Expand tracked layer patterns into actual layer names for the wrapper
+    #     if self.llm_config.tracked_layer_patterns is not None:
+    #         underlying_model = self._get_underlying_model()
+    #         expanded = self._expand_layer_patterns(self.llm_config.tracked_layer_patterns, underlying_model)
 
-            if expanded:
-                # Directly set the internal storage for tracked layers
-                if hasattr(self.wrapped_model, "_tracked_layers"):
-                    self.wrapped_model._tracked_layers = expanded
-                else:
-                    # fallback if internal attribute differs
-                    setattr(self.wrapped_model, "_tracked_layers", expanded)
+    #         if expanded:
+    #             # Directly set the internal storage for tracked layers
+    #             if hasattr(self.wrapped_model, "_tracked_layers"):
+    #                 self.wrapped_model._tracked_layers = expanded
+    #             else:
+    #                 # fallback if internal attribute differs
+    #                 setattr(self.wrapped_model, "_tracked_layers", expanded)
 
-                logger.info(f"Tracked layers expanded to {len(expanded)} layers")
+    #             logger.info(f"Tracked layers expanded to {len(expanded)} layers")
 
-        # print("underlying_model: ", underlying_model)
-        print("expanded: ", expanded)
+    #     print("underlying_model: ", underlying_model)
+    #     print("expanded: ", expanded)
 
     def evaluate_perplexity(self, dataset: str = "wikitext", split: str = "test", num_samples: int = 100) -> float:
         """
-        Evaluate model perplexity on a dataset (bfloat16-safe).
+        Evaluate model perplexity on a dataset.
 
         Args:
             dataset: Dataset name
@@ -110,63 +117,73 @@ class LLMAlignmentExperiment(BaseExperiment):
         Returns:
             Perplexity value
         """
-        import torch
-        from torch import autocast
 
         logger.info(f"Evaluating perplexity on {dataset} ({split})...")
 
         # Load dataset
-        from alignment.dataops.datasets.text_datasets import load_text_dataset
-        dataset_obj = load_text_dataset(dataset, self.config.model_config.get("model_id"), split=split, max_samples=num_samples)
+        try:
+            from alignment.dataops.datasets.text_datasets import load_text_dataset
+        except Exception as e:
+            logger.error(f"Could not import text dataset loader: {e}")
+            raise
 
+        # Load calibration texts
+        dataset_obj = load_text_dataset(dataset, self.llm_config.model_id, split=split, max_samples=num_samples)
+
+        # Compute perplexity
         self.model.eval()
         nlls = []
         total_length = 0
-
-        device = torch.device(self.config.device)
-        model_dtype = getattr(torch, self.config.model_config.get("torch_dtype", "float32"))
 
         with torch.no_grad():
             for i, batch in enumerate(dataset_obj):
                 if i >= num_samples:
                     break
 
-                # Move input_ids to device (long, never bfloat16)
-                input_ids = batch["input_ids"].unsqueeze(0).to(device, dtype=torch.long)
-
-                # Prepare labels
+                input_ids = batch["input_ids"].unsqueeze(0).to(self.llm_config.device)
+                
+                # Create labels and mask out padding tokens
                 labels = input_ids.clone()
-                pad_token_id = getattr(self.tokenizer, "pad_token_id", None) or getattr(self.tokenizer, "eos_token_id", None)
+                
+                # Get pad token id (usually 128001 for Llama 3)
+                pad_token_id = self.tokenizer.pad_token_id
+                if pad_token_id is None:
+                    pad_token_id = self.tokenizer.eos_token_id
+                
+                # Set padding tokens to -100 (ignored in loss)
                 labels[labels == pad_token_id] = -100
-                if labels[0, 0] == 128000:  # ignore BOS token if needed
+                
+                # Also ignore BOS token (128000) at start
+                if labels[0, 0] == 128000:
                     labels[0, 0] = -100
 
                 try:
-                    # Use autocast for bfloat16-safe forward
-                    with autocast(device_type=self.config.device, dtype=model_dtype):
-                        outputs = self.model(input_ids, labels=labels)
-                        loss = outputs.loss
-
+                    outputs = self.model(input_ids, labels=labels)
+                    loss = outputs.loss
+                    
+                    # Count only non-ignored tokens
                     num_valid_tokens = (labels != -100).sum().item()
+                    
                     if num_valid_tokens > 0:
                         nlls.append(loss * num_valid_tokens)
                         total_length += num_valid_tokens
                         logger.info(f"Sample {i}: loss={loss.item():.4f}, valid_tokens={num_valid_tokens}")
                     else:
                         logger.warning(f"Sample {i}: No valid tokens!")
+                        
                 except Exception as e:
                     logger.warning(f"Error on sample {i}: {e}")
                     continue
 
         if total_length == 0:
             logger.error("No valid tokens processed!")
-            return float("inf")
-
+            return float('inf')
+        
         ppl = torch.exp(torch.stack(nlls).sum() / total_length)
         perplexity = ppl.item()
+
         logger.info(f"Perplexity: {perplexity:.2f}")
         return perplexity
-
 
     def _get_underlying_model(self) -> nn.Module:
         """
@@ -187,39 +204,39 @@ class LLMAlignmentExperiment(BaseExperiment):
         from transformers import AutoTokenizer, AutoModelForCausalLM
         from transformers import AutoConfig
 
-        model_id = self.config.model_config.get("model_id")
+        model_id = self.llm_config.model_id
         if not model_id:
             raise ValueError("LLMAlignmentExperiment requires config.model_id for HF backend")
 
         logger.info(f"Loading tokenizer for {model_id}")
-        tokenizer = AutoTokenizer.from_pretrained(model_id, **self.config.tokenizer_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, **self.llm_config.tokenizer_kwargs)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
         # load model config and model with dtype/device options
-        model_kwargs = dict(self.config.model_kwargs or {})
+        model_kwargs = dict(self.llm_config.model_kwargs or {})
         torch_dtype = None
-        if self.config.model_config.get("torch_dtype"):
+        if self.llm_config.torch_dtype:
             # map string to torch dtype if possible
             try:
-                torch_dtype = getattr(torch, self.config.model_config.get("torch_dtype"))
+                torch_dtype = getattr(torch, self.llm_config.torch_dtype)
             except Exception:
                 torch_dtype = None
 
         # Use device_map when provided; otherwise load to CPU/GPU according to config.device
-        device_map = self.config.model_config.get("hf_device_map")
+        device_map = self.llm_config.hf_device_map
 
-        logger.info(f"Loading HF model {model_id} with dtype={torch_dtype} device_map={device_map}")
+        logger.info(f"Loading HF model {model_id} with dtype={self.llm_config.torch_dtype} device_map={device_map}")
         hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, device_map=device_map, **model_kwargs)
 
         # Move model to explicit device if device_map not used
         if device_map is None:
-            device = torch.device(self.config.device)
+            device = torch.device(self.llm_config.device)
             hf_model = hf_model.to(device)
 
         # Wrap with TransformerWrapper (expects an nn.Module)
         # Wrapper constructor signature may vary; try to pass tracked layers and other opts
-        wrapper_kwargs = {"tracked_layers": getattr(self.config, "tracked_layers", None)}
+        wrapper_kwargs = {"tracked_layers": getattr(self.llm_config, "tracked_layer_patterns", None)}
         try:
             wrapped = TransformerWrapper(hf_model, **wrapper_kwargs)
         except Exception:
@@ -286,7 +303,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         calibration_texts = self.dataset.texts
         num_samples = min(num_samples, len(calibration_texts))
-        self.config.importance_computation_texts = calibration_texts[:num_samples]
+        self.llm_config.importance_computation_texts = calibration_texts[:num_samples]
 
         self.model.eval()
 
@@ -294,7 +311,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         for text in calibration_texts[:num_samples]:
             inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            inputs = {k: v.to(self.config.device) for k, v in inputs.items()}
+            inputs = {k: v.to(self.llm_config.device) for k, v in inputs.items()}
 
             outputs, activations = self.wrapped_model.forward_with_activations(inputs)
 
@@ -310,11 +327,11 @@ class LLMAlignmentExperiment(BaseExperiment):
         else:
             all_activations = {key: values[0] for key, values in all_activations.items()}
 
-        # for key, value in all_activations.items():
-        #     print(f"{key}: {value.shape}")
+        for key, value in all_activations.items():
+            print(f"{key}: {value.shape}")
 
         # Compute importance for each layer
-        metric_names = self.config.alignment_methods
+        metric_names = self.llm_config.alignment_methods
 
         for layer_name in self.wrapped_model._tracked_layers:
             logger.info(f"Computing scores for {layer_name}")
@@ -364,6 +381,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             self.importance_scores[layer_name] = layer_scores
         
+        print("LEN: ", len(self.importance_scores))
         return self.importance_scores
     
     def _get_layer_weights(self, layer_module: nn.Module) -> Optional[torch.Tensor]:
@@ -424,6 +442,9 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Get importance scores
             scores = self.importance_scores[layer_name][metric]
 
+            # print("LAYER NAME: ", layer_name)
+            # print("SCORES: ", scores.size())
+            
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
             
@@ -471,12 +492,10 @@ class LLMAlignmentExperiment(BaseExperiment):
         """Run the full LLM experiment pipeline: compute importance, optionally prune, evaluate."""
         logger.info("Running LLMAlignmentExperiment...")
 
-        self.setup()
-
-        results: Dict[str, Any] = {"config": self.config.to_dict(), "importance_scores": {}, "pruning_results": {}, "evaluation": {}}
+        results: Dict[str, Any] = {"config": self.llm_config.to_dict(), "importance_scores": {}, "pruning_results": {}, "evaluation": {}}
 
         scores = self.compute_importance_scores(
-            num_samples=self.config.alignment_data_num_samples
+            num_samples=self.llm_config.importance_num_samples
         )
 
         for layer_name, layer_scores in scores.items():
@@ -493,23 +512,23 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # if vals is non-tensor or empty
                     results["importance_scores"][layer_name][metric_name] = {"summary": "unavailable"}
 
-        if self.config.do_perplexity_computation:
-            baseline_ppl = self.evaluate_perplexity(dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples)
+        if self.llm_config.evaluation_compute_perplexity:
+            baseline_ppl = self.evaluate_perplexity(dataset=self.llm_config.evaluation_dataset, num_samples=self.llm_config.evaluation_num_samples)
             results["evaluation"]["baseline_perplexity"] = baseline_ppl
 
 
-        if self.config.do_pruning_experiments:
-            sparsity_levels = self.config.pruning_amounts
-            metric = self.config.pruning_alignment_metric
-            mode = self.config.pruning_selection_mode
+        if self.llm_config.pruning_enabled:
+            sparsity_levels = self.llm_config.pruning_sparsity_levels
+            metric = self.llm_config.pruning_alignment_metric
+            mode = self.llm_config.pruning_mode
 
             for sparsity in sparsity_levels:
                 masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
 
                 # Evaluate pruned model
-                if self.config.do_perplexity_computation:
+                if self.llm_config.evaluation_compute_perplexity:
                     pruned_ppl = self.evaluate_perplexity(
-                        dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples
+                        dataset=self.llm_config.evaluation_dataset, num_samples=self.llm_config.evaluation_num_samples
                     )
 
                     results["pruning_results"][f"sparsity_{sparsity}"] = {

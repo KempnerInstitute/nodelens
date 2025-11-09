@@ -77,6 +77,8 @@ class ExperimentConfig:
     save_alignment_history: bool = True
     measure_alignment_during_training: bool = True
     alignment_frequency: int = 1
+    alignment_data_num_samples: int = 1
+    alignment_computation_texts: List[str] = field(default_factory=list)
 
     # CNN-specific configuration
     cnn_mode: str = "unfold"  # Options: "unfold", "patchwise", "batch_patch_combined"
@@ -128,6 +130,16 @@ class ExperimentConfig:
     distributed: bool = False
     world_size: int = 1
     rank: int = 0
+
+    # Evaluation
+    do_perplexity_computation: bool = False
+    evaluation_dataset: str = "wikitext"
+    evaluation_num_samples: int = 100
+
+    # Misc
+    tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
+    model_kwargs: Dict[str, Any] = field(default_factory=dict)
+    
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -240,6 +252,7 @@ class BaseExperiment(CoreBaseExperiment):
                 # Remove other model-specific configs that don't apply to current model
                 model_kwargs.pop("cnn_config", None)
                 model_kwargs.pop("external_config", None)
+                model_kwargs.pop("model_backend", None)
 
                 # Special handling for MLP model
                 if self.config.model_name.lower() == "mlp":
