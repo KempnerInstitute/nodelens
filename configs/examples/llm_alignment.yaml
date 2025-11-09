@@ -43,18 +43,18 @@ importance_computation:
 wrapper:
   name: "transformer_wrapper"
   tracked_layer_patterns:
-    # - "model.layers.*.mlp.up_proj"
-    - "model.layers.0.mlp.up_proj"
-    - "model.layers.1.mlp.up_proj"
-    - "model.layers.2.mlp.up_proj"
-    - "model.layers.3.mlp.up_proj"
-    - "model.layers.4.mlp.up_proj"
-    - "model.layers.5.mlp.up_proj"
-    - "model.layers.6.mlp.up_proj"
-    - "model.layers.7.mlp.up_proj"
-    - "model.layers.8.mlp.up_proj"
-    - "model.layers.9.mlp.up_proj"
-    - "model.layers.10.mlp.up_proj"
+    - "model.layers.*.mlp.up_proj"
+    # - "model.layers.0.mlp.up_proj"
+    # - "model.layers.1.mlp.up_proj"
+    # - "model.layers.2.mlp.up_proj"
+    # - "model.layers.3.mlp.up_proj"
+    # - "model.layers.4.mlp.up_proj"
+    # - "model.layers.5.mlp.up_proj"
+    # - "model.layers.6.mlp.up_proj"
+    # - "model.layers.7.mlp.up_proj"
+    # - "model.layers.8.mlp.up_proj"
+    # - "model.layers.9.mlp.up_proj"
+    # - "model.layers.10.mlp.up_proj"
     # - "model.layers.11.mlp.up_proj"
     # - "model.layers.12.mlp.up_proj"
     # - "model.layers.13.mlp.up_proj"
@@ -106,23 +106,3 @@ logging:
 
 # pruning by gate and up are working but down is not
 
-
-#  "pruning_results": {
-  #   "sparsity_0.1": {
-  #     "perplexity": 17.3385066986084,
-  #     "sparsity": 0.1,
-  #     "num_pruned_layers": 96
-  #   },
-  #   "sparsity_0.3": {
-  #     "perplexity": 40.065093994140625,
-  #     "sparsity": 0.3,
-  #     "num_pruned_layers": 96
-  #   },
-  #   "sparsity_0.5": {
-  #     "perplexity": 162.7567901611328,
-  #     "sparsity": 0.5,
-  #     "num_pruned_layers": 96
-  #   }
-  # },
-  # "evaluation": {
-  #   "baseline_perplexity": 12.28649616241455

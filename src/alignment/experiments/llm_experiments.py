@@ -294,7 +294,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         return deduped
     
 
-    def compute_importance_scores(self, num_samples: int = 1) -> Dict[str, Dict[str, torch.Tensor]]:
+    def compute_importance_scores(self, num_samples: int = 1, dim="input") -> Dict[str, Dict[str, torch.Tensor]]:
         """
         Compute importance scores for tracked layers using configured metrics.
         Returns mapping {layer_name: {metric_name: scores_tensor}}
@@ -327,6 +327,9 @@ class LLMAlignmentExperiment(BaseExperiment):
         else:
             all_activations = {key: values[0] for key, values in all_activations.items()}
 
+        for key, value in all_activations.items():
+            print(f"{key}: {value.shape}")
+
         # Compute importance for each layer
         metric_names = self.llm_config.alignment_methods
 
@@ -334,13 +337,22 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.info(f"Computing scores for {layer_name}")
 
             layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
-            layer_input_key = f"{layer_name}_input"
 
-            if layer_input_key not in all_activations:
+            if "down" in layer_name:
+                layer_key = f"{layer_name}_output"
+            elif "gate" in layer_name or "up" in layer_name:
+                layer_key = f"{layer_name}_output"
+            else:
+                if dim == "input":
+                    layer_key = f"{layer_name}_input"
+                else:
+                    layer_key = f"{layer_name}_output"
+
+            if layer_key not in all_activations:
                 logger.warning(f"No activations for {layer_name}")
                 continue
 
-            layer_inputs = all_activations[layer_input_key]
+            layer_activations = all_activations[layer_key]
 
             # Get weight tensor (prefer gate_proj for MLP layers)
             weight = self._get_layer_weights(layer_module)
@@ -358,7 +370,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                         # Otherwise get fresh from registry without extra params
                         metric = get_metric(metric_name)
 
-                    scores = metric.compute(inputs=layer_inputs, weights=weight)
+                    # scores = metric.compute(inputs=layer_inputs, weights=weight)
+                    scores = metric.compute(outputs=layer_activations)
                     layer_scores[metric_name] = scores
 
                     logger.debug(f"  {metric_name}: " f"mean={scores.mean().item():.6f}, " f"std={scores.std().item():.6f}")
@@ -368,6 +381,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             self.importance_scores[layer_name] = layer_scores
         
+        print("LEN: ", len(self.importance_scores))
         return self.importance_scores
     
     def _get_layer_weights(self, layer_module: nn.Module) -> Optional[torch.Tensor]:
@@ -425,8 +439,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                 continue
             processed_mlps.add(layer_idx)
             
-            # Get importance scores (should be for gate_proj)
+            # Get importance scores
             scores = self.importance_scores[layer_name][metric]
+
+            # print("LAYER NAME: ", layer_name)
+            # print("SCORES: ", scores.size())
             
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
