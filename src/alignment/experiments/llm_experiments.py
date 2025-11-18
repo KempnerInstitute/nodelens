@@ -12,6 +12,9 @@ from alignment.models.transformers import TransformerWrapperEnhanced as Transfor
 from alignment.pruning import AlignmentPruning, PruningConfig
 from alignment.training.base import BaseTrainer  # kept for compatibility if used elsewhere
 
+import matplotlib.pyplot as plt
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -273,7 +276,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
 
             if "down" in layer_name:
-                layer_key = f"{layer_name}_output"
+                layer_key = f"{layer_name}_input"
             elif "gate" in layer_name or "up" in layer_name:
                 layer_key = f"{layer_name}_output"
             else:
@@ -430,6 +433,12 @@ class LLMAlignmentExperiment(BaseExperiment):
             num_samples=self.config.alignment_data_num_samples
         )
 
+        # self.plot_layer_importance_histogram(
+        #     layer_name="model.layers.1.mlp.up_proj",
+        #     importance_scores=scores,
+        #     plots_dir=self.config.plots_dir
+        # )
+
         for layer_name, layer_scores in scores.items():
             results["importance_scores"][layer_name] = {}
             for metric_name, vals in layer_scores.items():
@@ -470,3 +479,36 @@ class LLMAlignmentExperiment(BaseExperiment):
                     }
 
         return results
+    
+
+    def plot_layer_importance_histogram(layer_name, importance_scores, plots_dir):
+        """
+        Creates a histogram of importance scores for a specific layer.
+
+        Parameters:
+            layer_name (str): Name of the layer.
+            importance_scores (array-like): List or numpy array of importance values.
+            plots_dir (str or Path): Directory where the plot will be saved.
+        """
+
+        # Convert to numpy (if needed)
+        scores = np.array(importance_scores)
+
+        # Make sure directory exists
+        plots_dir = Path(plots_dir)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create histogram
+        plt.figure(figsize=(8, 5))
+        plt.hist(scores, bins=50, edgecolor="black")
+        plt.xlabel("Importance Score")
+        plt.ylabel("Frequency")
+        plt.title(f"Histogram of Importance Scores — {layer_name}")
+        plt.tight_layout()
+
+        # Save plot
+        save_path = plots_dir / f"{layer_name}_importance_histogram.png"
+        plt.savefig(save_path)
+        plt.close()
+
+        print(f"[Saved] Histogram for {layer_name}: {save_path}")
