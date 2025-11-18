@@ -15,59 +15,10 @@ from alignment.training.base import BaseTrainer  # kept for compatibility if use
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class LLMAlignmentConfig(ExperimentConfig):
-    """
-    LLM-specific configuration that extends the generic ExperimentConfig.
-    Keeps compatibility with the rest of your codebase while adding LLM fields.
-    """
-
-    # override some defaults useful for LLMs
-    model_name: str = "hf_causal_lm"  # special name to indicate HF causal LM
-    model_id: Optional[str] = None  # HuggingFace model id (e.g., "meta-llama/..." )
-    model_backend: str = "hf"  # "hf" (huggingface) or "registry" (use MODEL_REGISTRY)
-    torch_dtype: Optional[str] = None  # e.g. "bfloat16", "float16", "float32"
-    hf_device_map: Optional[Dict[str, Union[str, int]]] = None  # for device_map if desired
-
-    # wrapper/tracking
-    tracked_layers: List[str] = field(default_factory=lambda: ["model.layers.*.mlp"])
-
-    # Alignment
-    alignment_methods: List[str] = field(default_factory=lambda: ["activation_l2_norm"])
-    alignment_data_num_samples: int = 1
-    alignment_computation_texts: List[str] = field(default_factory=list)
-
-    # dataset
-    dataset_name: str = "wikitext-2-v1"
-
-    # Evaluation
-    do_perplexity_computation: bool = False
-    evaluation_dataset: str = "wikitext"
-    # evaluation_num_samples: int = 100
-
-    # Pruning
-    do_pruning_experiments: bool = False
-    pruning_strategies: List[str] = field(default_factory=lambda: ["alignment"])
-    pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.2, 0.3])
-    pruning_alignment_metric: str = "activation_l2_norm"
-    pruning_selection_mode: str = "low"  # "low" or "high"
-
-    # Misc
-    tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
-    model_kwargs: Dict[str, Any] = field(default_factory=dict)
-
-
 class LLMAlignmentExperiment(BaseExperiment):
-    def __init__(self, config: LLMAlignmentConfig):
-        if not isinstance(config, LLMAlignmentConfig):
-            config = LLMAlignmentConfig.from_dict(config) if isinstance(config, dict) else config
-
+    def __init__(self, config):
         super().__init__(config)
         self.importance_scores: Dict[str, Dict[str, torch.Tensor]] = {}
-
-    # @property
-    # def llm_config(self) -> LLMAlignmentConfig:
-    #     return self.config  # type: ignore[return-value]
 
     def setup(self):
         """Setup LLM alignment experiment components."""
