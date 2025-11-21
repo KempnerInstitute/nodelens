@@ -103,6 +103,19 @@ synergy = get_metric('synergy_gaussian_mmi', num_pairs=10)
 scores = synergy.compute(inputs, weights, targets=labels)
 ```
 
+### SCAR-style Supernode Metrics (LLMs)
+
+For large language models with LLaMA-style FFNs, `LLMAlignmentExperiment` can compute additional
+per-channel metrics inspired by the SCAR (Supernode-Constrained Allocation for Resource-aware pruning) method:
+
+- `scar_activation_power` – average squared post-gate activation E\[u_i²]
+- `scar_taylor` – first-order Taylor saliency E\[|g_{u,i} · u_i|]
+- `scar_curvature` – Rayleigh-style curvature E\[(v_iᵀ g_y)²] along the FFN output direction
+- `scar_loss_proxy` – second-order loss proxy 0.5 · E\[u_i²] · E\[(v_iᵀ g_y)²]
+
+These metrics are attached to `importance_scores[layer_name]` for each `mlp.down_proj` layer and can be used
+as pruning metrics (e.g. `pruning_alignment_metric: "scar_loss_proxy"` in LLM configs).
+
 ### Composite Scoring
 
 ```python
@@ -249,6 +262,13 @@ outputs = ffn_up(inputs_2d)
 redundancy = get_metric('pairwise_redundancy_gaussian', mode='output_based')
 scores = redundancy.compute(outputs=outputs)
 # [11008] - one per neuron
+```
+
+To run a full HF-based LLM alignment and pruning pipeline (including SCAR-style supernode metrics)
+use the unified experiment runner with the project config:
+
+```bash
+python scripts/run_experiment.py --config configs/projects/llm_supernode.yaml
 ```
 
 ## Configuration

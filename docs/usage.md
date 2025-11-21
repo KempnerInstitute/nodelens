@@ -40,6 +40,21 @@ python scripts/run_experiment.py --config configs/examples/llama3_pruning.yaml
 ```
 Prunes LLaMA model using information-theoretic importance scores.
 
+**LLaMA-3 Supernode Pruning (SCAR-style)**
+```bash
+python scripts/run_experiment.py --config configs/projects/llm_supernode.yaml
+```
+Runs the `LLMAlignmentExperiment` on a Hugging Face LLaMA-3.1 model, computes activation, redundancy,
+and SCAR-style supernode metrics (activation power, first-order saliency, curvature, loss proxy),
+and performs structured FFN pruning using the `scar_loss_proxy` metric while protecting a supernode core.
+
+**Vision Synergy / Redundancy Analysis (ResNet-18)**
+```bash
+python scripts/run_experiment.py --config configs/projects/vision_synergy.yaml
+```
+Analyzes alignment, Gaussian PID synergy, and pairwise redundancy in a pretrained ResNet-18 on CIFAR-10,
+then performs redundancy- and synergy-aware pruning using a composite alignment score.
+
 ## Command-Line Overrides
 
 Override configuration parameters from the command line:
