@@ -313,7 +313,7 @@ class BaseExperiment(CoreBaseExperiment):
             if device_map is None:
                 self.model = self.model.to(device)
         else:
-        self.model = self.model.to(device)
+            self.model = self.model.to(device)
 
         # Wrap model
         wrapper_kwargs = {"tracked_layers": self.config.tracked_layers}

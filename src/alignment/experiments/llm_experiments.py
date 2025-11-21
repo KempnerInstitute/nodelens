@@ -39,7 +39,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 logger.info("Reusing existing 'hf_causal_lm' model from registry for LLMAlignmentExperiment.")
                 self._wrap_existing_hf_model()
             else:
-            self._load_hf_tokenizer_and_model()
+                self._load_hf_tokenizer_and_model()
         else:
             # If not HF, rely on BaseExperiment's initialization (already called in __init__).
             logger.info("Using registry or torchvision model; BaseExperiment has initialized it.")
