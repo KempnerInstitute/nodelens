@@ -135,10 +135,15 @@ class ExperimentConfig:
     world_size: int = 1
     rank: int = 0
 
-    # Evaluation
+    # Evaluation / LLM
     do_perplexity_computation: bool = False
     evaluation_dataset: str = "wikitext"
     evaluation_num_samples: int = 100
+
+    # SCAR / supernode-specific options for LLMs
+    do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i)
+    scar_num_samples: int = 0      # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
+    scar_max_length: int = 512     # Max sequence length for SCAR calibration passes
 
     # Misc
     tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -301,7 +306,14 @@ class BaseExperiment(CoreBaseExperiment):
 
         # Move to device
         device = torch.device(self.config.device)
-        self.model = self.model.to(device)
+        if self.config.model_name.lower() == "hf_causal_lm":
+            # For HuggingFace causal LMs we may be using accelerate's device_map.
+            # Only move the model if no explicit device_map was provided.
+            device_map = self.config.model_config.get("device_map") or self.config.model_config.get("hf_device_map")
+            if device_map is None:
+                self.model = self.model.to(device)
+        else:
+            self.model = self.model.to(device)
 
         # Wrap model
         wrapper_kwargs = {"tracked_layers": self.config.tracked_layers}
@@ -324,8 +336,23 @@ class BaseExperiment(CoreBaseExperiment):
 
     def _initialize_dataset(self):
         """Initialize dataset and data loader."""
-        # Get dataset class from registry (not instance)
-        dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+        # Get dataset class from registry (not instance). Some experiment types
+        # (e.g., LLM alignment) manage their own text datasets, so we fall back
+        # gracefully if the dataset is not registered.
+        try:
+            dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+        except KeyError:
+            if self.config.experiment_type in {"llm_alignment", "llm_supernode", "llm"}:
+                logger.info(
+                    f"No registry dataset found for '{self.config.dataset_name}' in "
+                    f"LLM experiment '{self.config.experiment_type}'; dataset will "
+                    f"be initialized by the experiment class."
+                )
+                self.dataset = None
+                self.data_loader = None
+                return
+            # For non-LLM experiments, surface the original error
+            raise
 
         # Debug logging
         logger.info(f"Creating dataset with data_path: {self.config.data_path}")

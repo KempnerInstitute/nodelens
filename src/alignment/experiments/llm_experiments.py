@@ -28,9 +28,18 @@ class LLMAlignmentExperiment(BaseExperiment):
         """Setup LLM alignment experiment components."""
         logger.info("Setting up LLM alignment experiment...")
 
-        # If using HuggingFace backend, load tokenizer & HF model then wrap
+        # If using HuggingFace backend, (re)wrap the HF model and load tokenizer.
+        # Prefer reusing an already-initialized registry model (hf_causal_lm) to
+        # avoid double-loading large checkpoints.
         if self.config.model_config.get("model_backend") == "hf":
-            self._load_hf_tokenizer_and_model()
+            if (
+                getattr(self, "model", None) is not None
+                and self.config.model_name.lower() == "hf_causal_lm"
+            ):
+                logger.info("Reusing existing 'hf_causal_lm' model from registry for LLMAlignmentExperiment.")
+                self._wrap_existing_hf_model()
+            else:
+                self._load_hf_tokenizer_and_model()
         else:
             # If not HF, rely on BaseExperiment's initialization (already called in __init__).
             logger.info("Using registry or torchvision model; BaseExperiment has initialized it.")
@@ -55,6 +64,45 @@ class LLMAlignmentExperiment(BaseExperiment):
         if expanded is not None:
             # print("underlying_model: ", underlying_model)
             print("expanded: ", expanded)
+
+        # Ensure we have a text dataset for importance computation in LLM experiments.
+        # BaseExperiment may skip dataset initialization for LLM experiment types.
+        if getattr(self, "dataset", None) is None:
+            try:
+                from alignment.dataops.datasets.text_datasets import load_text_dataset
+            except ImportError as e:
+                logger.error(f"Unable to import text datasets for LLMAlignmentExperiment: {e}")
+                self.dataset = None
+            else:
+                # Use dataset_name if provided, otherwise fall back to evaluation_dataset.
+                dataset_name = getattr(self.config, "dataset_name", None) or getattr(
+                    self.config, "evaluation_dataset", "wikitext"
+                )
+                model_id = self.config.model_config.get("model_id")
+                logger.info(
+                    f"Creating text calibration dataset '{dataset_name}' for model '{model_id}' "
+                    f"with up to {self.config.alignment_data_num_samples} samples."
+                )
+                # We intentionally load a Dataset object with a .texts list so we can reuse
+                # the calibration texts for multiple metrics without repeatedly calling HF.
+                try:
+                    text_dataset = load_text_dataset(
+                        dataset_name,
+                        model_id,
+                        split="train",
+                        max_length=512,
+                        max_samples=self.config.alignment_data_num_samples,
+                    )
+                    # Many of our text datasets expose a `.texts` attribute for raw strings.
+                    if not hasattr(text_dataset, "texts"):
+                        logger.warning(
+                            f"Loaded text dataset '{dataset_name}' does not expose `.texts`; "
+                            f"LLM importance scores will fall back to iterating the dataset."
+                        )
+                    self.dataset = text_dataset
+                except Exception as e:
+                    logger.error(f"Failed to create text dataset '{dataset_name}': {e}")
+                    self.dataset = None
 
     def evaluate_perplexity(self, dataset: str = "wikitext", split: str = "test", num_samples: int = 100) -> float:
         """
@@ -140,10 +188,39 @@ class LLMAlignmentExperiment(BaseExperiment):
             return getattr(self.wrapped_model, "module")
         return self.wrapped_model  # type: ignore[return-value]
 
-    def _load_hf_tokenizer_and_model(self):
+    def _wrap_existing_hf_model(self) -> None:
+        """Reuse an HF Causal LM created via the model registry and wrap it."""
+        from transformers import AutoTokenizer
+
+        model_id = self.config.model_config.get("model_id")
+        if not model_id:
+            raise ValueError("LLMAlignmentExperiment requires config.model_id for HF backend")
+
+        logger.info(f"Loading tokenizer for existing HF causal LM '{model_id}'")
+        tokenizer = AutoTokenizer.from_pretrained(model_id, **self.config.tokenizer_kwargs)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Unwrap underlying HF model if we're holding a small wrapper (e.g., HFCausalLM)
+        hf_model = getattr(self.model, "model", self.model)
+
+        # Wrap with TransformerWrapper (expects an nn.Module)
+        wrapper_kwargs = {"tracked_layers": getattr(self.config, "tracked_layers", None)}
+        try:
+            wrapped = TransformerWrapper(hf_model, **wrapper_kwargs)
+        except Exception:
+            # Fallback to a minimal wrapper creation if signature differs
+            wrapped = TransformerWrapper(hf_model)
+
+        self.tokenizer = tokenizer
+        self.model = hf_model
+        self.wrapped_model = wrapped
+
+        logger.info("Reused HF causal LM from registry and wrapped with TransformerWrapperEnhanced.")
+
+    def _load_hf_tokenizer_and_model(self) -> None:
         """Load HuggingFace tokenizer + causal LM and wrap it."""
         from transformers import AutoTokenizer, AutoModelForCausalLM
-        from transformers import AutoConfig
 
         model_id = self.config.model_config.get("model_id")
         if not model_id:
@@ -165,7 +242,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 torch_dtype = None
 
         # Use device_map when provided; otherwise load to CPU/GPU according to config.device
-        device_map = self.config.model_config.get("hf_device_map")
+        device_map = self.config.model_config.get("hf_device_map", self.config.model_config.get("device_map"))
 
         logger.info(f"Loading HF model {model_id} with dtype={torch_dtype} device_map={device_map}")
         hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, device_map=device_map, **model_kwargs)
@@ -267,7 +344,43 @@ class LLMAlignmentExperiment(BaseExperiment):
         """
         logger.info("Computing importance scores for LLM tracked layers...")
 
-        calibration_texts = self.dataset.texts
+        # Build a list of calibration texts. Prefer a dataset with a `.texts` attribute;
+        # otherwise, fall back to iterating the dataset or raise if no dataset is available.
+        calibration_texts: List[str] = []
+        if getattr(self, "dataset", None) is not None:
+            if hasattr(self.dataset, "texts"):
+                calibration_texts = list(self.dataset.texts)
+            else:
+                logger.warning(
+                    "LLMAlignmentExperiment.dataset does not expose `.texts`; "
+                    "falling back to iterating the dataset to extract raw text."
+                )
+                try:
+                    for sample in self.dataset:
+                        # Try common text fields
+                        text = None
+                        if isinstance(sample, dict):
+                            for key in ("text", "raw_text", "input_text"):
+                                if key in sample:
+                                    text = sample[key]
+                                    break
+                        if isinstance(text, str) and text.strip():
+                            calibration_texts.append(text)
+                        if len(calibration_texts) >= num_samples:
+                            break
+                except Exception as e:
+                    logger.error(f"Failed to iterate over dataset for calibration texts: {e}")
+                    calibration_texts = []
+        else:
+            logger.error("No dataset available for LLM importance computation.")
+
+        if not calibration_texts:
+            raise RuntimeError(
+                "Unable to obtain calibration texts for LLM importance computation. "
+                "Ensure that `setup()` successfully created a text dataset with a `.texts` attribute "
+                "or that the dataset yields samples containing a 'text' field."
+            )
+
         num_samples = min(num_samples, len(calibration_texts))
         self.config.importance_computation_texts = calibration_texts[:num_samples]
 
@@ -445,6 +558,270 @@ class LLMAlignmentExperiment(BaseExperiment):
             self.importance_scores[layer_name] = layer_scores
         
         return self.importance_scores
+
+    def compute_scar_supernode_metrics(
+        self,
+        num_samples: Optional[int] = None,
+        max_length: Optional[int] = None,
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Compute SCAR-style supernode metrics (activation power, first-order saliency, curvature, loss proxy)
+        for FFN channels in transformer MLP layers.
+
+        This routine performs a small number of full forward+backward passes on a calibration stream and uses
+        lightweight hooks on the FFN down_proj modules:
+
+        - u:     input to down_proj (post-gate FFN activations)
+        - g_u:   gradient w.r.t. u
+        - g_y:   gradient w.r.t. down_proj output y
+        - W_down: down_proj weight
+
+        Metrics per channel i:
+            activation_power_i = E[u_i^2]
+            taylor_i           = E[ | (g_u_i * u_i) | ]            (first-order saliency)
+            curvature_i        = E[ (v_i^T g_y)^2 ]                (Rayleigh-style curvature along v_i)
+            loss_proxy_i       = 0.5 * activation_power_i * curvature_i
+        """
+        if not getattr(self.config, "do_scar_metrics", False):
+            logger.info("SCAR metrics disabled in config; skipping compute_scar_supernode_metrics.")
+            return {}
+
+        logger.info("Computing SCAR-style supernode metrics (T_i, R_i, L_i) for LLM FFN layers...")
+
+        # Determine calibration texts
+        # Prefer texts used for alignment importance if available
+        calibration_texts: List[str] = []
+        if getattr(self.config, "importance_computation_texts", None):
+            calibration_texts = list(self.config.importance_computation_texts)
+        else:
+            # Fallback: rebuild from dataset if possible
+            if getattr(self, "dataset", None) is not None:
+                if hasattr(self.dataset, "texts"):
+                    calibration_texts = list(self.dataset.texts)
+                else:
+                    logger.warning(
+                        "SCAR metrics: dataset does not expose `.texts`; "
+                        "falling back to iterating dataset for raw text."
+                    )
+                    try:
+                        for sample in self.dataset:
+                            text = None
+                            if isinstance(sample, dict):
+                                for key in ("text", "raw_text", "input_text"):
+                                    if key in sample:
+                                        text = sample[key]
+                                        break
+                            if isinstance(text, str) and text.strip():
+                                calibration_texts.append(text)
+                            if len(calibration_texts) >= (num_samples or self.config.alignment_data_num_samples):
+                                break
+                    except Exception as e:
+                        logger.error(f"SCAR metrics: failed to iterate over dataset for texts: {e}")
+                        calibration_texts = []
+
+        if not calibration_texts:
+            raise RuntimeError(
+                "SCAR metrics: no calibration texts available. "
+                "Run importance computation first or ensure the dataset provides raw texts."
+            )
+
+        # Limit number of samples and sequence length
+        if num_samples is None or num_samples <= 0:
+            num_samples = getattr(self.config, "scar_num_samples", 0) or self.config.alignment_data_num_samples
+        max_length = max_length or getattr(self.config, "scar_max_length", 512)
+
+        num_samples = min(num_samples, len(calibration_texts))
+        logger.info(f"SCAR metrics will use {num_samples} calibration samples (max_length={max_length}).")
+
+        device = torch.device(self.config.device)
+
+        # Get underlying HF model (nn.Module with .named_modules())
+        hf_model: nn.Module = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = getattr(hf_model, "model")
+
+        scar_state: Dict[str, Dict[str, Any]] = {}
+        hooks: List[Any] = []
+
+        # Create hooks on all FFN down_proj modules (LLaMA-style MLPs)
+        for layer_name, module in hf_model.named_modules():
+            if "mlp.down_proj" not in layer_name:
+                continue
+
+            scar_state[layer_name] = {
+                "u_sqr_sum": None,  # sum over tokens of u^2
+                "R_sum": None,      # sum over tokens of (v_i^T g_y)^2
+                "T_sum": None,      # sum over tokens of |g_u_i * u_i|
+                "count": 0,         # number of tokens seen
+            }
+
+            def make_hooks(name: str):
+                def fwd_hook(mod: nn.Module, inputs: Tuple[torch.Tensor, ...], output: torch.Tensor):
+                    # inputs[0] is u: post-gate FFN activations of shape [B, T, m] or [B*T, m]
+                    if not inputs:
+                        return
+                    u = inputs[0]
+                    if u is None:
+                        return
+                    # Ensure we track on the correct device/dtype
+                    u_flat = u.detach()
+                    if u_flat.ndim > 2:
+                        u_flat = u_flat.reshape(-1, u_flat.shape[-1])  # [N_tokens, m]
+
+                    state = scar_state[name]
+                    m = u_flat.shape[-1]
+                    if state["u_sqr_sum"] is None:
+                        state["u_sqr_sum"] = torch.zeros(m, device=u_flat.device, dtype=u_flat.dtype)
+                        state["R_sum"] = torch.zeros_like(state["u_sqr_sum"])
+                        state["T_sum"] = torch.zeros_like(state["u_sqr_sum"])
+
+                    state["u_sqr_sum"] += (u_flat * u_flat).sum(dim=0)
+                    state["count"] += u_flat.shape[0]
+
+                    # Store u for first-order saliency computation in backward
+                    mod._scar_last_u = u.detach()
+
+                def bwd_hook(mod: nn.Module, grad_input: Tuple[torch.Tensor, ...], grad_output: Tuple[torch.Tensor, ...]):
+                    state = scar_state[name]
+
+                    # Gradient w.r.t. module input (u)
+                    if not grad_input or grad_input[0] is None:
+                        return
+                    if not grad_output or grad_output[0] is None:
+                        return
+
+                    g_u = grad_input[0]
+                    g_y = grad_output[0]
+
+                    if not hasattr(mod, "weight"):
+                        return
+
+                    weight = mod.weight  # [hidden_dim, m]
+
+                    # Retrieve stored u from forward hook (if available)
+                    if not hasattr(mod, "_scar_last_u"):
+                        return
+
+                    u = mod._scar_last_u
+                    # Clean up to avoid holding onto large tensors longer than necessary
+                    delattr(mod, "_scar_last_u")
+
+                    # Flatten tensors to [N_tokens, *]
+                    if u.ndim > 2:
+                        u_flat = u.reshape(-1, u.shape[-1])
+                    else:
+                        u_flat = u.reshape(-1, u.shape[-1])
+
+                    if g_u.ndim > 2:
+                        g_u_flat = g_u.reshape(-1, g_u.shape[-1])
+                    else:
+                        g_u_flat = g_u.reshape(-1, g_u.shape[-1])
+
+                    if g_y.ndim > 2:
+                        g_y_flat = g_y.reshape(-1, g_y.shape[-1])
+                    else:
+                        g_y_flat = g_y.reshape(-1, g_y.shape[-1])
+
+                    # Ensure shapes are consistent
+                    if u_flat.shape != g_u_flat.shape:
+                        logger.warning(
+                            f"SCAR metrics: shape mismatch between u ({u_flat.shape}) and g_u ({g_u_flat.shape}) for layer {name}."
+                        )
+                        return
+
+                    # Curvature: R_i = E[ (v_i^T g_y)^2 ]
+                    # s = g_y * W_down  => [N_tokens, m]
+                    try:
+                        s_flat = torch.matmul(g_y_flat, weight)  # [N_tokens, m]
+                    except Exception as e:
+                        logger.error(f"SCAR metrics: failed to compute W_down^T g_y for layer {name}: {e}")
+                        return
+
+                    state["R_sum"] += (s_flat * s_flat).sum(dim=0)
+
+                    # First-order Taylor saliency: E[ |g_u_i * u_i| ]
+                    t_contrib = torch.abs(g_u_flat * u_flat).sum(dim=0)
+                    state["T_sum"] += t_contrib
+
+                return fwd_hook, bwd_hook
+
+            fwd_hook, bwd_hook = make_hooks(layer_name)
+            hooks.append(module.register_forward_hook(fwd_hook))
+            hooks.append(module.register_full_backward_hook(bwd_hook))
+
+        if not scar_state:
+            logger.warning("SCAR metrics: no 'mlp.down_proj' modules found; skipping.")
+            return {}
+
+        # Calibration loop: forward + backward on a small number of samples
+        self.model.eval()
+
+        try:
+            for idx, text in enumerate(calibration_texts[:num_samples]):
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=max_length,
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+
+                # Create labels for language modeling loss (ignore padding)
+                labels = inputs["input_ids"].clone()
+                pad_token_id = getattr(self.tokenizer, "pad_token_id", None) or getattr(
+                    self.tokenizer, "eos_token_id", None
+                )
+                labels[labels == pad_token_id] = -100
+                inputs["labels"] = labels
+
+                self.model.zero_grad(set_to_none=True)
+
+                outputs = self.model(**inputs)
+                loss = outputs.loss
+
+                loss.backward()
+
+                logger.info(f"SCAR metrics: processed calibration sample {idx+1}/{num_samples}, loss={loss.item():.4f}")
+
+        finally:
+            # Always remove hooks, even if an error occurs
+            for h in hooks:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+
+        # Aggregate metrics
+        scar_scores: Dict[str, Dict[str, torch.Tensor]] = {}
+
+        for layer_name, state in scar_state.items():
+            count = state["count"]
+            if count <= 0 or state["u_sqr_sum"] is None:
+                continue
+
+            u2_mean = state["u_sqr_sum"] / float(count)
+            R_vals = state["R_sum"] / float(count)
+            T_vals = state["T_sum"] / float(count)
+            loss_proxy = 0.5 * u2_mean * R_vals
+
+            scar_scores[layer_name] = {
+                "scar_activation_power": u2_mean,
+                "scar_taylor": T_vals,
+                "scar_curvature": R_vals,
+                "scar_loss_proxy": loss_proxy,
+            }
+
+            # Also attach these scores into importance_scores for later use in pruning
+            layer_scores = self.importance_scores.get(layer_name, {})
+            layer_scores["scar_activation_power"] = u2_mean
+            layer_scores["scar_taylor"] = T_vals
+            layer_scores["scar_curvature"] = R_vals
+            layer_scores["scar_loss_proxy"] = loss_proxy
+            self.importance_scores[layer_name] = layer_scores
+
+        logger.info(f"SCAR metrics: computed metrics for {len(scar_scores)} FFN layers.")
+
+        return scar_scores
     
     @staticmethod
     def _normalize_scores_tensor(scores: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -760,6 +1137,14 @@ class LLMAlignmentExperiment(BaseExperiment):
             num_samples=self.config.alignment_data_num_samples
         )
 
+        # Optional: SCAR-style supernode metrics (T_i, R_i, loss proxy) for FFN layers
+        scar_scores: Dict[str, Any] = {}
+        if getattr(self.config, "do_scar_metrics", False):
+            try:
+                scar_scores = self.compute_scar_supernode_metrics()
+            except Exception as e:
+                logger.error(f"Error while computing SCAR supernode metrics: {e}")
+
         # self.plot_layer_importance_histogram(
         #     layer_name="model.layers.1.mlp.up_proj",
         #     importance_scores=scores,
@@ -781,6 +1166,25 @@ class LLMAlignmentExperiment(BaseExperiment):
                         results["importance_scores"][layer_name][metric_name] = {"summary": "unavailable"}
                 else:
                     results["importance_scores"][layer_name][metric_name] = vals
+
+        # Add SCAR metrics summaries (if any)
+        if scar_scores:
+            results["scar_scores"] = {}
+            for layer_name, scar_layer_scores in scar_scores.items():
+                results["scar_scores"][layer_name] = {}
+                for metric_name, vals in scar_layer_scores.items():
+                    if torch.is_tensor(vals):
+                        try:
+                            results["scar_scores"][layer_name][metric_name] = {
+                                "mean": float(vals.mean().item()),
+                                "std": float(vals.std().item()),
+                                "min": float(vals.min().item()),
+                                "max": float(vals.max().item()),
+                            }
+                        except Exception:
+                            results["scar_scores"][layer_name][metric_name] = {"summary": "unavailable"}
+                    else:
+                        results["scar_scores"][layer_name][metric_name] = vals
 
         if self.config.do_perplexity_computation:
             baseline_ppl = self.evaluate_perplexity(dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples)
@@ -814,7 +1218,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         return results
     
 
-    def plot_layer_importance_histogram(layer_name, importance_scores, plots_dir):
+    def plot_layer_importance_histogram(self, layer_name, importance_scores, plots_dir):
         """
         Creates a histogram of importance scores for a specific layer.
 

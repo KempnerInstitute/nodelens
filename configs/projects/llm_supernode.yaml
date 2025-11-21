@@ -8,7 +8,7 @@ model_name: "hf_causal_lm"
 model_config:
   model_id: "meta-llama/Llama-3.1-8B"
   model_backend: "hf"
-  hf_device_map: null
+  device_map: null  # use 'auto' or an explicit map for multi-device; null => single-device
   torch_dtype: "bfloat16"
 
 dataset_name: "wikitext"
@@ -54,6 +54,11 @@ pruning:
     beta_synergy: 0.2
     gamma_redundancy: 0.4
     delta_rq: 0.4
+
+# Optional SCAR-style supernode metrics (first-order saliency, curvature, loss proxy)
+do_scar_metrics: true
+scar_num_samples: 4
+scar_max_length: 512
 
 do_perplexity_computation: true
 evaluation_dataset: "wikitext"
