@@ -18,6 +18,11 @@ Ready-to-use configurations in `examples/`:
 - `llama3_scoring.yaml` - Compute importance scores
 - `llama3_pruning.yaml` - Apply pruning
 
+Project-oriented pipelines live under `configs/projects/`:
+
+- `vision_synergy.yaml` – ResNet-18 alignment/synergy analysis with composite pruning
+- `llm_supernode.yaml` – LLaMA-3 supernode-aware pruning workflow
+
 ## Usage
 
 Run experiment:

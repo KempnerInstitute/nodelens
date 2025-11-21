@@ -33,6 +33,8 @@ class ExperimentConfig:
     description: str = ""
     tags: List[str] = field(default_factory=list)
 
+    experiment_type: str = "alignment_analysis"
+
     # Model configuration
     model_name: str = "resnet18"
     model_config: Dict[str, Any] = field(default_factory=dict)
@@ -79,6 +81,8 @@ class ExperimentConfig:
     alignment_frequency: int = 1
     alignment_data_num_samples: int = 1
     alignment_computation_texts: List[str] = field(default_factory=list)
+    alignment_composite_weights: Dict[str, float] = field(default_factory=dict)
+    supernode_config: Dict[str, Any] = field(default_factory=dict)
 
     # CNN-specific configuration
     cnn_mode: str = "unfold"  # Options: "unfold", "patchwise", "batch_patch_combined"

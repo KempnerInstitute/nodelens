@@ -129,8 +129,8 @@ def compute_alignment_metrics(model, data_loader, device='cuda'):
     
     # Initialize metrics
     metrics = {
-        'rayleigh_quotient': get_metric('rayleigh_quotient')(),
-        'weight_cosine_similarity': get_metric('weight_cosine_similarity')(),
+        'rayleigh_quotient': get_metric('rayleigh_quotient'),
+        'weight_cosine_similarity': get_metric('weight_cosine_similarity'),
     }
     
     results = {}

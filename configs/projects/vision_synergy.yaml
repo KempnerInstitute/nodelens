@@ -1,0 +1,64 @@
+experiment:
+  name: "vision_synergy_resnet18"
+  type: "vision_synergy"
+  seed: 42
+  device: "cuda"
+
+model:
+  name: "resnet18"
+  pretrained: true
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 256
+  num_workers: 8
+  augmentation: true
+
+alignment_methods:
+  - "rayleigh_quotient"
+  - "gaussian_pid_synergy_mmi"
+  - "pairwise_redundancy_gaussian"
+  - "activation_variance"
+
+alignment_data_num_samples: 8
+alignment_composite_weights:
+  rayleigh_quotient: 0.25
+  gaussian_pid_synergy_mmi: 0.3
+  pairwise_redundancy_gaussian: -0.25
+  activation_variance: 0.2
+
+pruning:
+  enabled: true
+  strategy: "composite"
+  target_sparsity: 0.6
+  sparsity_levels: [0.3, 0.5, 0.7]
+  distribution: "adaptive_sensitivity"
+  scoring: "composite"
+  direction: "low"
+  structured: true
+  dependency_aware: true
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0005
+  composite_weights:
+    alpha_mi: 0.3
+    beta_synergy: 0.3
+    gamma_redundancy: 0.2
+    delta_rq: 0.2
+
+analysis:
+  class_conditioned: true
+  save_scores: true
+  generate_plots: true
+
+visualization:
+  enabled: true
+  format: "png"
+  dpi: 300
+  style: "seaborn"
+
+log_dir: "./logs"
+checkpoint_dir: "./checkpoints"
+

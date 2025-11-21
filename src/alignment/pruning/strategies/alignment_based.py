@@ -67,19 +67,13 @@ class AlignmentPruning(BasePruningStrategy):
         self.metric_kwargs = metric_kwargs
 
         # Default to structured pruning for alignment-based methods
-        if config and not hasattr(config, "structured"):
+        if config and not config.structured:
             logger.info("AlignmentPruning defaulting to structured=True (neuron pruning)")
             config.structured = True
 
         # Initialize the metric
         try:
-            # metric_class = get_metric(metric)
-            # if metric_class is None:
-            #     raise ValueError(f"Metric '{metric}' not found in registry")
-            # # Instantiate the metric with any kwargs
-            # self.metric = metric_class(**metric_kwargs)
-
-            metric_instance = get_metric(metric)
+            metric_instance = get_metric(metric, **metric_kwargs)
             if metric_instance is None:
                 raise ValueError(f"Metric '{metric}' not found in registry")
             # Instantiate the metric with any kwargs

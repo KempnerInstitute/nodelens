@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from alignment.metrics import get_metric
 
 # Alignment framework
-from alignment.models.transformer_enhanced import LLaMAWrapper
+from alignment.models.transformers import LLaMAWrapper
 from alignment.services import (
     ActivationCaptureService,
     MaskOperations,

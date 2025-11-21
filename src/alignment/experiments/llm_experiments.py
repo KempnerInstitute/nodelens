@@ -11,6 +11,7 @@ from alignment.metrics import get_metric
 from alignment.models.transformers import TransformerWrapperEnhanced as TransformerWrapper
 from alignment.pruning import AlignmentPruning, PruningConfig
 from alignment.training.base import BaseTrainer  # kept for compatibility if used elsewhere
+from alignment.core.streaming import StreamingCovariance
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,6 +35,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             # If not HF, rely on BaseExperiment's initialization (already called in __init__).
             logger.info("Using registry or torchvision model; BaseExperiment has initialized it.")
 
+        expanded = None
+
         # Expand tracked layer patterns into actual layer names for the wrapper
         if self.config.tracked_layers is not None:
             underlying_model = self._get_underlying_model()
@@ -49,8 +52,9 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                 logger.info(f"Tracked layers expanded to {len(expanded)} layers")
 
-        # print("underlying_model: ", underlying_model)
-        print("expanded: ", expanded)
+        if expanded is not None:
+            # print("underlying_model: ", underlying_model)
+            print("expanded: ", expanded)
 
     def evaluate_perplexity(self, dataset: str = "wikitext", split: str = "test", num_samples: int = 100) -> float:
         """
@@ -229,12 +233,37 @@ class LLMAlignmentExperiment(BaseExperiment):
                 deduped.append(name)
                 seen.add(name)
         return deduped
-    
+
+    @staticmethod
+    def _normalize_activation(tensor: torch.Tensor) -> torch.Tensor:
+        """
+        Convert activations with arbitrary shape to [batch, features].
+        Handles variable sequence lengths by averaging across the sequence axis
+        and flattens higher dimensional tensors.
+        """
+        if tensor is None:
+            return None
+
+        tensor = tensor.detach()
+
+        if tensor.ndim == 3:
+            tensor = tensor.mean(dim=1)
+        elif tensor.ndim > 3:
+            tensor = tensor.view(tensor.shape[0], -1)
+
+        return tensor
+
 
     def compute_importance_scores(self, num_samples: int = 1, dim="input") -> Dict[str, Dict[str, torch.Tensor]]:
         """
         Compute importance scores for tracked layers using configured metrics.
         Returns mapping {layer_name: {metric_name: scores_tensor}}
+        
+        Supports two modes:
+        1. Standard: Collect all activations, then compute metrics (fast for small models).
+        2. Streaming: Compute metrics batch-by-batch (required for Llama-3 on 1M tokens).
+        
+        Also implements "Smart Redundancy": Only compute pairwise metrics for outlier candidates.
         """
         logger.info("Computing importance scores for LLM tracked layers...")
 
@@ -243,8 +272,23 @@ class LLMAlignmentExperiment(BaseExperiment):
         self.config.importance_computation_texts = calibration_texts[:num_samples]
 
         self.model.eval()
-
-        all_activations = {}
+        
+        # Check if we need streaming (heuristic: num_samples * context > 10k tokens for 8B model)
+        # Actually, let's stick to standard accumulation for simplicity unless configured otherwise
+        # But for Llama-3 SCAR, we usually run on ~500k tokens. That requires streaming for covariance.
+        
+        use_streaming = getattr(self.config, "use_streaming_metrics", False)
+        
+        # Initialize streaming objects if needed
+        streaming_covs = {}
+        if use_streaming:
+            for layer_name in self.wrapped_model._tracked_layers:
+                # We don't know dim yet, will init on first batch
+                streaming_covs[f"{layer_name}_input"] = None 
+        
+        all_activations = {} # For non-streaming metrics (like OutlierIndex which needs quantiles)
+        # Note: OutlierIndex usually needs full distribution. Streaming approx is hard. 
+        # We'll assume we can fit sampled activations for OI, but use streaming for Covariance/RQ.
 
         for text in calibration_texts[:num_samples]:
             inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
@@ -252,20 +296,25 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             outputs, activations = self.wrapped_model.forward_with_activations(inputs)
 
-            # Accumulate activations
+            # Process activations
             for key, value in activations.items():
+                normalized = self._normalize_activation(value)
+                if normalized is None:
+                    continue
+                
+                # Streaming Covariance Update
+                if use_streaming and "input" in key:
+                    if streaming_covs.get(key) is None:
+                        streaming_covs[key] = StreamingCovariance(normalized.shape[1], device=self.config.device)
+                    streaming_covs[key].update(normalized)
+                
+                # Store for other metrics (limit size if needed)
                 if key not in all_activations:
                     all_activations[key] = []
-                all_activations[key].append(value)
+                all_activations[key].append(normalized.cpu() if use_streaming else normalized)
 
-        # Average activations if multiple samples
-        if len(calibration_texts) > 1:
-            all_activations = {key: torch.cat(values, dim=0) for key, values in all_activations.items()}
-        else:
-            all_activations = {key: values[0] for key, values in all_activations.items()}
-
-        # for key, value in all_activations.items():
-        #     print(f"{key}: {value.shape}")
+        # Concatenate collected activations
+        all_activations = {key: torch.cat(values, dim=0).to(self.config.device) for key, values in all_activations.items()}
 
         # Compute importance for each layer
         metric_names = self.config.alignment_methods
@@ -275,30 +324,34 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
 
-            if "down" in layer_name:
-                layer_key = f"{layer_name}_input"
-            elif "gate" in layer_name or "up" in layer_name:
-                layer_key = f"{layer_name}_output"
-            else:
-                if dim == "input":
-                    layer_key = f"{layer_name}_input"
-                else:
-                    layer_key = f"{layer_name}_output"
+            layer_inputs = all_activations.get(f"{layer_name}_input")
+            layer_outputs = all_activations.get(f"{layer_name}_output")
 
-            if layer_key not in all_activations:
-                logger.warning(f"No activations for {layer_name}")
+            if layer_inputs is None and layer_outputs is None and not use_streaming:
+                logger.warning(f"No normalized activations for {layer_name}")
                 continue
-
-            layer_activations = all_activations[layer_key]
 
             # Get weight tensor (prefer gate_proj for MLP layers)
             weight = self._get_layer_weights(layer_module)
             if weight is None:
                 continue
 
+            default_activation = layer_inputs if dim == "input" else layer_outputs
+            if default_activation is None:
+                default_activation = layer_outputs if dim == "input" else layer_inputs
+
             # Compute scores with each metric
             layer_scores = {}
+            
+            # Candidates for redundancy (Smart Redundancy)
+            redundancy_candidates = None
+            
+            # Pass 1: Compute independent metrics (RQ, OI, Magnitude)
             for metric_name in metric_names:
+                # Skip pairwise for now
+                if "redundancy" in metric_name or "synergy" in metric_name:
+                    continue
+                    
                 try:
                     # Use already-initialized metric from self.metrics if available
                     if metric_name in self.metrics:
@@ -307,19 +360,186 @@ class LLMAlignmentExperiment(BaseExperiment):
                         # Otherwise get fresh from registry without extra params
                         metric = get_metric(metric_name)
 
-                    # scores = metric.compute(inputs=layer_inputs, weights=weight)
-                    scores = metric.compute(outputs=layer_activations)
+                    metric_args = {}
+
+                    if getattr(metric, "requires_inputs", False):
+                        if use_streaming and "rayleigh" in metric_name:
+                            # Use streaming covariance for RQ
+                            cov_key = f"{layer_name}_input"
+                            if streaming_covs.get(cov_key):
+                                metric_args["covariance"] = streaming_covs[cov_key].get_covariance()
+                            else:
+                                metric_args["inputs"] = layer_inputs
+                        else:
+                            metric_args["inputs"] = layer_inputs
+
+                    if getattr(metric, "requires_outputs", False):
+                        metric_args["outputs"] = layer_outputs
+
+                    if getattr(metric, "requires_weights", False):
+                        metric_args["weights"] = weight
+
+                    if "inputs" not in metric_args and "outputs" not in metric_args and default_activation is not None:
+                        metric_args["outputs"] = default_activation
+
+                    scores = metric.compute(**metric_args)
                     layer_scores[metric_name] = scores
 
                     logger.debug(f"  {metric_name}: " f"mean={scores.mean().item():.6f}, " f"std={scores.std().item():.6f}")
                 except Exception as e:
                     logger.error(f"Error computing {metric_name} for {layer_name}: {e}")
                     continue
+            
+            # Identify Supernode Candidates for Redundancy Reduction
+            # We want to check redundancy mainly among high-activation nodes
+            if "activation_outlier_index" in layer_scores:
+                oi_scores = layer_scores["activation_outlier_index"]
+                # Top 10% or threshold
+                k = int(oi_scores.numel() * 0.1)
+                _, redundancy_candidates = torch.topk(oi_scores, k)
+            
+            # Pass 2: Pairwise metrics (Redundancy/Synergy)
+            for metric_name in metric_names:
+                if "redundancy" not in metric_name and "synergy" not in metric_name:
+                    continue
+                    
+                try:
+                    if metric_name in self.metrics:
+                        metric = self.metrics[metric_name]
+                    else:
+                        metric = get_metric(metric_name)
+                        
+                    metric_args = {}
+                    
+                    # Add inputs/weights/outputs
+                    if getattr(metric, "requires_inputs", False):
+                        metric_args["inputs"] = layer_inputs
+                    if getattr(metric, "requires_outputs", False):
+                        metric_args["outputs"] = layer_outputs
+                    if getattr(metric, "requires_weights", False):
+                        metric_args["weights"] = weight
+                        
+                    # SMART REDUNDANCY: Pass target indices
+                    # Only compute redundancy for candidates
+                    if redundancy_candidates is not None and "redundancy" in metric_name:
+                        metric_args["target_indices"] = redundancy_candidates
+                        # Also restrict partners to candidates? Or all?
+                        # Usually we want to know if a candidate is redundant with ANYONE.
+                        # But checking against all is slow. Checking against other candidates is O(K^2).
+                        metric_args["allowed_partners"] = redundancy_candidates
+                        logger.info(f"  Computing {metric_name} for {len(redundancy_candidates)} candidates only")
+
+                    scores = metric.compute(**metric_args)
+                    layer_scores[metric_name] = scores
+                    
+                except Exception as e:
+                    logger.error(f"Error computing {metric_name} for {layer_name}: {e}")
+                    continue
+
+            composite_score = self._compute_composite_score(layer_scores)
+            if composite_score is not None:
+                layer_scores["composite"] = composite_score
+
+            self._apply_supernode_selection(layer_scores, composite_score)
 
             self.importance_scores[layer_name] = layer_scores
         
         return self.importance_scores
     
+    @staticmethod
+    def _normalize_scores_tensor(scores: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+        if scores.numel() == 0:
+            return scores
+        min_val = torch.min(scores)
+        max_val = torch.max(scores)
+        if torch.isclose(max_val, min_val):
+            return torch.zeros_like(scores)
+        return (scores - min_val) / (max_val - min_val + eps)
+
+    def _compute_composite_score(self, layer_scores: Dict[str, torch.Tensor]) -> Optional[torch.Tensor]:
+        weights = getattr(self.config, "alignment_composite_weights", {}) or {}
+        mode = getattr(self.config, "score_composition_mode", "sum")  # "sum" or "product"
+        
+        if not weights:
+            return None
+
+        composite = None
+        
+        if mode == "product":
+            # Start with 1.0
+            composite = None
+            for metric_name, weight in weights.items():
+                if weight == 0:
+                    continue
+                
+                metric_scores = layer_scores.get(metric_name)
+                if metric_scores is None:
+                    logger.debug(f"Composite score skipped metric '{metric_name}' (no data)")
+                    continue
+                
+                # For product, we treat weight as exponent
+                term = metric_scores.abs().pow(weight)
+                
+                if composite is None:
+                    composite = term
+                else:
+                    composite = composite * term
+                    
+        else:
+            # Sum mode (linear combination)
+            for metric_name, weight in weights.items():
+                if weight == 0:
+                    continue
+                metric_scores = layer_scores.get(metric_name)
+                if metric_scores is None:
+                    logger.debug(f"Composite score skipped metric '{metric_name}' (no data)")
+                    continue
+                
+                normalized = self._normalize_scores_tensor(metric_scores)
+                term = normalized * weight
+                composite = term if composite is None else composite + term
+
+        return composite
+
+    def _apply_supernode_selection(self, layer_scores: Dict[str, torch.Tensor], composite: Optional[torch.Tensor]) -> None:
+        config = getattr(self.config, "supernode_config", {}) or {}
+        if not config.get("enabled"):
+            return
+
+        metric_name = config.get("score_metric", "composite")
+        metric_scores = layer_scores.get(metric_name)
+        if metric_scores is None and metric_name == "composite":
+            metric_scores = composite
+
+        if metric_scores is None:
+            logger.warning(f"Supernode selection requested but metric '{metric_name}' is unavailable")
+            return
+
+        num_neurons = metric_scores.numel()
+        if num_neurons == 0:
+            return
+
+        top_k = config.get("top_k")
+        core_fraction = float(config.get("core_fraction", 0.1))
+        min_core = max(1, int(config.get("min_core_neurons", 1)))
+
+        if top_k is not None:
+            num_core = min(num_neurons, int(top_k))
+        else:
+            num_core = max(1, int(round(core_fraction * num_neurons)))
+
+        num_core = max(num_core, min_core)
+        num_core = min(num_core, num_neurons)
+
+        sorted_scores, sorted_indices = torch.sort(metric_scores, descending=True)
+        top_indices = sorted_indices[:num_core]
+        mask = torch.zeros_like(metric_scores, dtype=torch.bool)
+        mask[top_indices] = True
+
+        layer_scores["supernode_mask"] = mask
+        layer_scores["supernode_core_size"] = num_core
+        layer_scores["supernode_threshold"] = sorted_scores[min(num_core - 1, sorted_scores.shape[0] - 1)].item()
+
     def _get_layer_weights(self, layer_module: nn.Module) -> Optional[torch.Tensor]:
         """Find the weight tensor to use for importance/pruning decisions."""
         # common MLP naming
@@ -376,7 +596,16 @@ class LLMAlignmentExperiment(BaseExperiment):
             processed_mlps.add(layer_idx)
             
             # Get importance scores
-            scores = self.importance_scores[layer_name][metric]
+            scores = self.importance_scores[layer_name][metric].clone()
+
+            supernode_cfg = getattr(self.config, "supernode_config", {}) or {}
+            core_mask = self.importance_scores[layer_name].get("supernode_mask")
+            if supernode_cfg.get("enabled") and supernode_cfg.get("protect_core", True) and core_mask is not None:
+                margin = torch.abs(scores).max().detach().item() + 1.0
+                if mode == "low":
+                    scores[core_mask] = scores.max() + margin
+                elif mode == "high":
+                    scores[core_mask] = scores.min() - margin
 
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
@@ -420,6 +649,104 @@ class LLMAlignmentExperiment(BaseExperiment):
         self.pruning_masks = masks
         logger.info(f"Pruned {len(processed_mlps)} MLP layers with {sparsity:.1%} target sparsity")
         return masks
+    
+    def apply_minimal_repair(self, dataset_name: str = "wikitext", epochs: int = 1, lr: float = 1e-4) -> None:
+        """
+        Apply Minimal Repair (LoRA) to the pruned model.
+        Target supernode-adjacent weights or all MLP weights.
+        """
+        try:
+            from peft import get_peft_model, LoraConfig, TaskType
+        except ImportError:
+            logger.error("PEFT library not installed. Cannot run minimal repair.")
+            return
+
+        logger.info(f"Applying Minimal Repair (LoRA) for {epochs} epochs...")
+
+        # Configure LoRA
+        # We target the projection layers in MLPs.
+        target_modules = ["gate_proj", "up_proj", "down_proj"]
+        
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM, 
+            inference_mode=False, 
+            r=8, 
+            lora_alpha=32, 
+            lora_dropout=0.1,
+            target_modules=target_modules
+        )
+        
+        # Wrap model
+        # Note: We are wrapping the HUGGINGFACE model, not our wrapper
+        # Our wrapper wrapper_model.model or similar needs to be accessed
+        hf_model = self.model # This is the AutoModelForCausalLM
+        
+        # Enable gradients for LoRA
+        hf_model.enable_input_require_grads()
+        
+        model = get_peft_model(hf_model, peft_config)
+        model.print_trainable_parameters()
+        
+        # Create trainer
+        # Need a dataset loader
+        from alignment.dataops.datasets.text_datasets import load_text_dataset
+        from torch.utils.data import DataLoader
+        
+        # Minimal dataset for repair (calibration set)
+        dataset = load_text_dataset(dataset_name, self.config.model_config.get("model_id"), split="train", max_samples=1000)
+        
+        # Create a simple collator if needed, or use default
+        def collate_fn(batch):
+            input_ids = [b['input_ids'] for b in batch]
+            # Pad
+            from torch.nn.utils.rnn import pad_sequence
+            input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+            labels = input_ids.clone()
+            labels[labels == self.tokenizer.pad_token_id] = -100
+            return input_ids, labels
+
+        train_loader = DataLoader(dataset, batch_size=4, shuffle=True, collate_fn=collate_fn)
+        
+        # Simple training loop
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+        
+        model.train()
+        model.to(self.config.device)
+        
+        for epoch in range(epochs):
+            total_loss = 0
+            for step, (input_ids, labels) in enumerate(train_loader):
+                input_ids = input_ids.to(self.config.device)
+                labels = labels.to(self.config.device)
+                
+                outputs = model(input_ids, labels=labels)
+                loss = outputs.loss
+                
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                
+                total_loss += loss.item()
+                if step % 10 == 0:
+                    logger.info(f"Repair Epoch {epoch} Step {step}: Loss {loss.item():.4f}")
+            
+            avg_loss = total_loss / len(train_loader)
+            logger.info(f"Repair Epoch {epoch} Average Loss: {avg_loss:.4f}")
+            
+        # Merge LoRA weights back if desired, or keep as adapter
+        # For evaluation, we usually merge
+        model = model.merge_and_unload()
+        self.model = model # Update self.model to the repaired one
+        
+        # Update wrapper reference if needed (wrapper usually holds reference to self.model)
+        # Check if wrapper needs update
+        if hasattr(self.wrapped_model, "model"):
+             self.wrapped_model.model = model
+        elif hasattr(self.wrapped_model, "_model"):
+             self.wrapped_model._model = model
+
+        logger.info("Minimal Repair complete.")
+
 
     def run(self) -> Dict[str, Any]:
         """Run the full LLM experiment pipeline: compute importance, optionally prune, evaluate."""
@@ -442,16 +769,18 @@ class LLMAlignmentExperiment(BaseExperiment):
         for layer_name, layer_scores in scores.items():
             results["importance_scores"][layer_name] = {}
             for metric_name, vals in layer_scores.items():
-                try:
-                    results["importance_scores"][layer_name][metric_name] = {
-                        "mean": float(vals.mean().item()),
-                        "std": float(vals.std().item()),
-                        "min": float(vals.min().item()),
-                        "max": float(vals.max().item()),
-                    }
-                except Exception:
-                    # if vals is non-tensor or empty
-                    results["importance_scores"][layer_name][metric_name] = {"summary": "unavailable"}
+                if torch.is_tensor(vals):
+                    try:
+                        results["importance_scores"][layer_name][metric_name] = {
+                            "mean": float(vals.mean().item()),
+                            "std": float(vals.std().item()),
+                            "min": float(vals.min().item()),
+                            "max": float(vals.max().item()),
+                        }
+                    except Exception:
+                        results["importance_scores"][layer_name][metric_name] = {"summary": "unavailable"}
+                else:
+                    results["importance_scores"][layer_name][metric_name] = vals
 
         if self.config.do_perplexity_computation:
             baseline_ppl = self.evaluate_perplexity(dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples)
@@ -465,6 +794,10 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             for sparsity in sparsity_levels:
                 masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
+
+                # Optional: Minimal Repair
+                # if self.config.do_minimal_repair:
+                #     self.apply_minimal_repair()
 
                 # Evaluate pruned model
                 if self.config.do_perplexity_computation:

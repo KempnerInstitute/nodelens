@@ -98,16 +98,23 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     """
     flat_config = {}
 
-    # Map experiment metadata
-    if "experiment_name" in nested_config:
-        flat_config["name"] = nested_config["experiment_name"]
-    elif "name" in nested_config:
-        flat_config["name"] = nested_config["name"]
-    else:
-        flat_config["name"] = "default_experiment"
+    # Map experiment metadata (support nested "experiment" block)
+    experiment_block = nested_config.get("experiment", {})
+    name = (
+        nested_config.get("experiment_name")
+        or experiment_block.get("name")
+        or nested_config.get("name")
+        or "default_experiment"
+    )
+    flat_config["name"] = name
 
-    flat_config["description"] = nested_config.get("description", "")
-    flat_config["tags"] = nested_config.get("tags", [])
+    flat_config["experiment_type"] = nested_config.get(
+        "experiment_type",
+        experiment_block.get("type", "alignment_analysis"),
+    )
+
+    flat_config["description"] = nested_config.get("description", experiment_block.get("description", ""))
+    flat_config["tags"] = nested_config.get("tags", experiment_block.get("tags", []))
 
     # Map other top-level fields
     flat_config["pretrained"] = nested_config.get("pretrained", False)
@@ -235,9 +242,16 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         pruning = nested_config["pruning_settings"]
         flat_config["exclude_classification_layer"] = pruning.get("exclude_classification_layer", True)
 
-    # Map other settings
-    flat_config["device"] = nested_config.get("device", "cuda")
-    flat_config["seed"] = nested_config.get("seed", 42)
+    # Map other settings (experiment-level overrides take precedence)
+    flat_config["device"] = experiment_block.get("device", nested_config.get("device", "cuda"))
+    flat_config["seed"] = experiment_block.get("seed", nested_config.get("seed", 42))
+    flat_config["alignment_composite_weights"] = nested_config.get("alignment_composite_weights", {})
+    if "alignment" in nested_config and isinstance(nested_config["alignment"], dict):
+        alignment_block = nested_config["alignment"]
+        if "composite_weights" in alignment_block:
+            flat_config["alignment_composite_weights"] = alignment_block["composite_weights"]
+
+    flat_config["supernode_config"] = nested_config.get("supernode", {})
 
     # Map pruning configuration (check both top-level and nested 'pruning' block)
     pruning_block = nested_config.get("pruning", {})

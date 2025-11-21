@@ -1,0 +1,64 @@
+experiment:
+  name: "llm_supernode_llama3"
+  type: "llm_supernode"
+  seed: 42
+  device: "cuda"
+
+model_name: "hf_causal_lm"
+model_config:
+  model_id: "meta-llama/Llama-3.1-8B"
+  model_backend: "hf"
+  hf_device_map: null
+  torch_dtype: "bfloat16"
+
+dataset_name: "wikitext"
+batch_size: 1
+num_workers: 0
+
+alignment_methods:
+  - "activation_l2_norm"
+  - "activation_outlier_index"
+  - "rayleigh_quotient"
+  - "pairwise_redundancy_gaussian"
+
+alignment_data_num_samples: 4
+alignment_composite_weights:
+  activation_l2_norm: 0.35
+  activation_outlier_index: 0.25
+  rayleigh_quotient: 0.25
+  pairwise_redundancy_gaussian: -0.15
+
+supernode:
+  enabled: true
+  score_metric: "composite"
+  core_fraction: 0.12
+  min_core_neurons: 64
+  protect_core: true
+
+pruning:
+  enabled: true
+  strategy: "alignment"
+  target_sparsity: 0.4
+  sparsity_levels: [0.2, 0.4, 0.6]
+  distribution: "adaptive_sensitivity"
+  scoring: "composite"
+  direction: "low"
+  structured: true
+  dependency_aware: true
+  fine_tune:
+    enabled: true
+    epochs: 3
+    learning_rate: 5.0e-5
+  composite_weights:
+    alpha_mi: 0.0
+    beta_synergy: 0.2
+    gamma_redundancy: 0.4
+    delta_rq: 0.4
+
+do_perplexity_computation: true
+evaluation_dataset: "wikitext"
+evaluation_num_samples: 32
+
+log_dir: "./logs"
+checkpoint_dir: "./checkpoints"
+

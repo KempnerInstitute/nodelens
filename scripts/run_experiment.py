@@ -114,26 +114,21 @@ def main():
     print(f"Plots directory: {plots_dir}")
     print(f"{'='*60}\n")
 
-    # Use the inferred experiment type from config
-    experiment_type = getattr(config, "_inferred_experiment_type", "alignment_analysis")
-
+    # Determine experiment type
+    experiment_type = getattr(config, "experiment_type", "alignment_analysis")
     logger.info(f"Running {experiment_type} experiment")
-
-    # Create experiment based on inferred type
-    # if experiment_type == "llm_experiment":
-    #     experiment = LLMAlignmentExperiment(config)
-    # elif experiment_type in ["standard_pruning", "progressive_dropout", "alignment_analysis"]:
-    #     experiment = GeneralAlignmentExperiment(config)
-    # elif experiment_type == "layer_isolated_pruning":
-    #     experiment = LayerIsolatedPruningExperiment(config)
-    # elif experiment_type == "cascading_layer_pruning":
-    #     experiment = CascadingLayerPruningExperiment(config)
-    # else:
-    #     raise ValueError(f"Unknown experiment type: {experiment_type}")
-
     logger.info(config)
-    
-    experiment = LLMAlignmentExperiment(config)
+
+    if experiment_type in {"llm_alignment", "llm_supernode", "llm"}:
+        experiment = LLMAlignmentExperiment(config)
+    elif experiment_type in {"alignment_analysis", "vision_synergy", "general_alignment"}:
+        experiment = GeneralAlignmentExperiment(config)
+    elif experiment_type == "layer_isolated_pruning":
+        experiment = LayerIsolatedPruningExperiment(config)
+    elif experiment_type == "cascading_layer_pruning":
+        experiment = CascadingLayerPruningExperiment(config)
+    else:
+        raise ValueError(f"Unknown experiment type: {experiment_type}")
 
     # Run experiment
     results = experiment.run()

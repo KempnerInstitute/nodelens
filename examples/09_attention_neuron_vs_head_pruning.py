@@ -20,6 +20,7 @@ from transformers import AutoModelForCausalLM
 
 from alignment.metrics import get_metric
 from alignment.services import MaskOperations
+from alignment.services import MaskOperations
 
 
 def analyze_attention_structure(model):
