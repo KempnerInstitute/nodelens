@@ -335,6 +335,276 @@ class PruningVisualizer:
 
         return fig
 
+    # ------------------------------------------------------------------
+    # New SCAR-specific visualizations
+    # ------------------------------------------------------------------
+
+    def plot_metric_distributions_from_alignment(
+        self,
+        alignment_history: Dict[str, List[Dict[str, List[float]]]],
+        metric_mapping: Optional[Dict[str, str]] = None,
+        save_dir: Optional[Union[str, Path]] = None,
+        max_points: int = 1000,
+    ) -> None:
+        """
+        Generate layer-wise violin/box plots for single-node metrics such as OI/T/R.
+
+        Args:
+            alignment_history: train_results["alignment"] from results JSON.
+            metric_mapping: dict of metric_key -> pretty label.
+            save_dir: directory to save figures.
+            max_points: subsample per layer for plotting speed.
+        """
+        if not alignment_history:
+            logger.warning("plot_metric_distributions_from_alignment: empty alignment history.")
+            return
+
+        if metric_mapping is None:
+            metric_mapping = {
+                "activation_outlier_index": "Outlier Index (OI)",
+                "scar_taylor": "Taylor Saliency (T)",
+                "scar_curvature": "Curvature (R)",
+                "rayleigh_quotient": "Rayleigh Quotient",
+            }
+
+        if save_dir:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        for metric_key, metric_label in metric_mapping.items():
+            history = alignment_history.get(metric_key)
+            if not history:
+                continue
+
+            snapshot = history[0] if isinstance(history, list) else history
+            plot_rows = []
+            for layer_name, scores in snapshot.items():
+                try:
+                    layer_idx = int(layer_name.split("layers.")[1].split(".")[0])
+                except (IndexError, ValueError):
+                    layer_idx = layer_name
+
+                scores_arr = np.array(scores)
+                if len(scores_arr) > max_points:
+                    scores_arr = np.random.choice(scores_arr, max_points, replace=False)
+
+                for score in scores_arr:
+                    plot_rows.append({"Layer": layer_idx, "Score": score})
+
+            if not plot_rows:
+                continue
+
+            df = pd.DataFrame(plot_rows)
+            plt.figure(figsize=(12, 5))
+            if HAS_SEABORN:
+                sns.violinplot(data=df, x="Layer", y="Score", inner="quartile", linewidth=0.6, color="#7fc8f8")
+            else:
+                df.boxplot(column="Score", by="Layer")
+
+            plt.title(f"Layer-wise Distribution of {metric_label}")
+            plt.ylabel(metric_label)
+            plt.xlabel("Layer Index")
+            plt.tight_layout()
+
+            if save_dir:
+                filename = save_dir / f"distribution_{metric_key}.png"
+                plt.savefig(filename, dpi=300)
+                logger.info(f"Saved {filename}")
+            plt.close()
+
+    def plot_redundancy_synergy_scatter(
+        self,
+        redundancy_snapshot: Dict[str, List[float]],
+        synergy_snapshot: Dict[str, List[float]],
+        outlier_snapshot: Optional[Dict[str, List[float]]] = None,
+        layers_to_plot: Optional[List[str]] = None,
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """
+        Scatter plot of redundancy vs synergy for selected layers.
+        """
+        if not redundancy_snapshot or not synergy_snapshot:
+            logger.warning("plot_redundancy_synergy_scatter: missing redundancy/synergy data.")
+            return
+
+        layers = sorted(redundancy_snapshot.keys())
+        if not layers:
+            return
+
+        if layers_to_plot is None:
+            indices = [len(layers) // 4, len(layers) // 2, min(len(layers) - 1, 3 * len(layers) // 4)]
+            layers_to_plot = [layers[i] for i in indices if 0 <= i < len(layers)]
+
+        fig, axes = plt.subplots(1, len(layers_to_plot), figsize=(5 * len(layers_to_plot), 4), sharey=True)
+        if len(layers_to_plot) == 1:
+            axes = [axes]
+
+        for ax, layer in zip(axes, layers_to_plot):
+            r_vals = np.array(redundancy_snapshot.get(layer, []))
+            s_vals = np.array(synergy_snapshot.get(layer, []))
+            if r_vals.size == 0 or s_vals.size == 0:
+                continue
+
+            # Determine supernodes via outlier index (top 5%)
+            if outlier_snapshot and layer in outlier_snapshot:
+                oi_vals = np.array(outlier_snapshot[layer])
+                threshold = np.percentile(oi_vals, 95)
+                is_supernode = oi_vals > threshold
+            else:
+                is_supernode = np.zeros_like(r_vals, dtype=bool)
+
+            ax.scatter(r_vals[~is_supernode], s_vals[~is_supernode], s=20, alpha=0.5, label="Followers", c="#5dade2", edgecolors="none")
+            ax.scatter(r_vals[is_supernode], s_vals[is_supernode], s=35, alpha=0.9, label="Supernodes", c="#c0392b", edgecolors="white")
+
+            ax.set_title(layer)
+            ax.set_xlabel("Gaussian Redundancy")
+            if ax == axes[0]:
+                ax.set_ylabel("PID Synergy (logits)")
+            ax.grid(True, alpha=0.3)
+
+        axes[0].legend(loc="upper right")
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=300)
+            logger.info(f"Saved redundancy/synergy plot to {save_path}")
+        plt.close()
+
+    def plot_sparsity_perplexity_curves(
+        self,
+        df: pd.DataFrame,
+        x_col: str = "Sparsity",
+        y_col: str = "Perplexity",
+        hue: str = "Method",
+        save_path: Optional[Union[str, Path]] = None,
+        title: str = "Sparsity vs. Perplexity",
+        y_label: Optional[str] = None,
+    ) -> None:
+        """
+        Plot sparsity–metric curves from a tidy dataframe.
+
+        This is written generically so it can be used for both perplexity
+        (language models) and accuracy or loss (vision models) by changing
+        ``y_col`` and ``y_label``.
+        """
+        if df.empty:
+            logger.warning("plot_sparsity_perplexity_curves: empty dataframe.")
+            return
+
+        plt.figure(figsize=(8, 5))
+        if HAS_SEABORN:
+            sns.lineplot(data=df, x=x_col, y=y_col, hue=hue, marker="o", linewidth=2.5, palette="tab10")
+        else:
+            for method, subdf in df.groupby(hue):
+                plt.plot(subdf[x_col], subdf[y_col], "o-", label=method, linewidth=2.5)
+
+        plt.title(title)
+        plt.xlabel(x_col)
+        plt.ylabel(y_label or y_col)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.legend(title=hue)
+
+        if save_path:
+            plt.savefig(save_path, dpi=300)
+            logger.info(f"Saved sparsity-perplexity plot to {save_path}")
+        plt.close()
+
+    def plot_alignment_vs_synergy_scatter(
+        self,
+        rq_snapshot: Dict[str, List[float]],
+        synergy_snapshot: Dict[str, List[float]],
+        layers_to_plot: Optional[List[str]] = None,
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """
+        Scatter plot of alignment (Rayleigh Quotient) vs. Gaussian PID synergy.
+
+        Intended for vision experiments where we want to see how strongly
+        aligned channels (high RQ) contribute to label-conditional synergistic
+        information.
+        """
+        if not rq_snapshot or not synergy_snapshot:
+            logger.warning("plot_alignment_vs_synergy_scatter: missing RQ/synergy data.")
+            return
+
+        layers = sorted(rq_snapshot.keys())
+        if not layers:
+            return
+
+        if layers_to_plot is None:
+            # Pick roughly early / middle / late layers if available
+            indices = [len(layers) // 4, len(layers) // 2, min(len(layers) - 1, 3 * len(layers) // 4)]
+            layers_to_plot = [layers[i] for i in indices if 0 <= i < len(layers)]
+
+        fig, axes = plt.subplots(1, len(layers_to_plot), figsize=(5 * len(layers_to_plot), 4), sharey=True)
+        if len(layers_to_plot) == 1:
+            axes = [axes]
+
+        for ax, layer in zip(axes, layers_to_plot):
+            rq_vals = np.array(rq_snapshot.get(layer, []))
+            s_vals = np.array(synergy_snapshot.get(layer, []))
+            if rq_vals.size == 0 or s_vals.size == 0:
+                continue
+
+            ax.scatter(rq_vals, s_vals, s=20, alpha=0.5, c="#34495e", edgecolors="none")
+            ax.set_title(layer)
+            ax.set_xlabel("Rayleigh Quotient")
+            if ax == axes[0]:
+                ax.set_ylabel("PID Synergy (logits)")
+            ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=300)
+            logger.info(f"Saved alignment vs synergy plot to {save_path}")
+        plt.close()
+
+    def plot_ablation_summary(
+        self,
+        df: pd.DataFrame,
+        hue: str = "Variant",
+        value_col: str = "Perplexity",
+        sparsity_col: str = "Sparsity",
+        min_sparsity: float = 0.4,
+        save_path: Optional[Union[str, Path]] = None,
+        title: str = "Ablation Study at High Sparsity",
+    ) -> None:
+        """
+        Bar plot summarizing ablation variants at high sparsity.
+        """
+        if df.empty:
+            logger.warning("plot_ablation_summary: empty dataframe.")
+            return
+
+        df_filtered = df[df[sparsity_col] >= min_sparsity]
+        if df_filtered.empty:
+            logger.warning("plot_ablation_summary: no entries above min_sparsity.")
+            return
+
+        plt.figure(figsize=(8, 4))
+        if HAS_SEABORN:
+            sns.barplot(data=df_filtered, x=sparsity_col, y=value_col, hue=hue, palette="Dark2")
+        else:
+            for idx, (variant, subdf) in enumerate(df_filtered.groupby(hue)):
+                plt.bar(
+                    subdf[sparsity_col] + idx * 0.01,
+                    subdf[value_col],
+                    width=0.01,
+                    label=variant,
+                )
+
+        plt.title(title)
+        plt.xlabel("Sparsity")
+        plt.ylabel(value_col)
+        plt.grid(True, axis="y", alpha=0.3)
+        plt.tight_layout()
+        plt.legend(title=hue)
+
+        if save_path:
+            plt.savefig(save_path, dpi=300)
+            logger.info(f"Saved ablation summary plot to {save_path}")
+        plt.close()
+
     def _plot_metric_comparison(self, ax, results, metric, title):
         """Helper to plot metric comparison."""
         for strategy, strategy_results in results.items():

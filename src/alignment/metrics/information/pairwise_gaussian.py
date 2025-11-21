@@ -186,19 +186,21 @@ class PairwiseRedundancyGaussian(BaseMetric):
         # This can be slow if we check every pair.
         # Heuristic: if targets and sources are same (common case), mask diagonal
         if target_indices is None and allowed_partners is None:
-             R_matrix.fill_diagonal_(0)
+            # Simple diagonal mask when targets == sources == all neurons
+            R_matrix.fill_diagonal_(0)
+            mask = torch.eye(len(targets), len(sources), dtype=torch.bool, device=outputs.device)
         else:
-             # Create mask for identity pairs
-             # t_grid = targets.unsqueeze(1)  # [T, 1]
-             # s_grid = sources.unsqueeze(0)  # [1, S]
-             # mask = (t_grid == s_grid)
-             # R_matrix[mask] = 0
-             # This works but allocates [T, S] bool matrix.
-             # If T, S are small, it's fine. If T, S are huge (full layer), it's fine (same as before).
-             t_grid = targets.unsqueeze(1)
-             s_grid = sources.unsqueeze(0)
-             mask = (t_grid == s_grid)
-             R_matrix.masked_fill_(mask, 0.0)
+            # Create mask for identity pairs
+            # t_grid = targets.unsqueeze(1)  # [T, 1]
+            # s_grid = sources.unsqueeze(0)  # [1, S]
+            # mask = (t_grid == s_grid)
+            # R_matrix[mask] = 0
+            # This works but allocates [T, S] bool matrix.
+            # If T, S are small, it's fine. If T, S are huge (full layer), it's fine (same as before).
+            t_grid = targets.unsqueeze(1)
+            s_grid = sources.unsqueeze(0)
+            mask = (t_grid == s_grid)
+            R_matrix.masked_fill_(mask, 0.0)
 
         # Compute average redundancy per target
         # Result will be mapped back to full N-sized tensor

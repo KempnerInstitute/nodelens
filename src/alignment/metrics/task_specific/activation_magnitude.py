@@ -234,7 +234,8 @@ class ActivationOutlierIndex(BaseMetric):
         elif activations.ndim != 2:
             raise ValueError(f"Unsupported activation shape: {activations.shape}")
 
-        abs_vals = activations.abs()
+        # Ensure we use a dtype supported by torch.quantile (float32/float64)
+        abs_vals = activations.abs().to(torch.float32)
         high = torch.quantile(abs_vals, self.quantile, dim=0)
         mean = abs_vals.mean(dim=0)
 

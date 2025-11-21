@@ -602,19 +602,27 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         alignment_values = {}
 
-        # Get a batch of data
-        inputs, _ = next(iter(self.data_loader))
+        # Get a batch of data (inputs and targets)
+        inputs, targets = next(iter(self.data_loader))
         inputs = inputs.to(self.config.device)
+        if isinstance(targets, torch.Tensor):
+            targets = targets.to(self.config.device)
 
         # REFACTORED: Use ActivationCaptureService (eliminates redundancy)
         try:
             capture_service = ActivationCaptureService(wrapped_model_to_use, default_mode=self.config.cnn_mode)
 
             # Capture and preprocess in one call
-            activation_data = capture_service.capture(inputs, layers=wrapped_model_to_use.tracked_layers, include_weights=True, preprocess=True)
+            activation_data = capture_service.capture(
+                inputs,
+                layers=wrapped_model_to_use.tracked_layers,
+                include_weights=True,
+                preprocess=True,
+            )
 
             # Use captured data
             preprocessed_inputs = activation_data.inputs
+            preprocessed_outputs = activation_data.outputs
             weights = activation_data.weights
 
         except Exception as e:
@@ -635,14 +643,36 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 for layer_name in wrapped_model_to_use.tracked_layers
                 if activations.get(f"{layer_name}_input") is not None
             }
+            outputs_to_process = {
+                f"{layer_name}_output": activations.get(f"{layer_name}_output")
+                for layer_name in wrapped_model_to_use.tracked_layers
+                if activations.get(f"{layer_name}_output") is not None
+            }
 
-            preprocessed = preprocess_layer_activations(inputs_to_process, layer_modules, mode=self.config.cnn_mode)
+            preprocessed_inputs_raw = preprocess_layer_activations(
+                inputs_to_process, layer_modules, mode=self.config.cnn_mode
+            )
+            preprocessed_outputs_raw = preprocess_layer_activations(
+                outputs_to_process, layer_modules, mode=self.config.cnn_mode
+            )
 
             preprocessed_inputs = {
-                layer_name: preprocessed[f"{layer_name}_input"]
+                layer_name: preprocessed_inputs_raw[f"{layer_name}_input"]
                 for layer_name in wrapped_model_to_use.tracked_layers
-                if f"{layer_name}_input" in preprocessed
+                if f"{layer_name}_input" in preprocessed_inputs_raw
             }
+            preprocessed_outputs = {
+                layer_name: preprocessed_outputs_raw[f"{layer_name}_output"]
+                for layer_name in wrapped_model_to_use.tracked_layers
+                if f"{layer_name}_output" in preprocessed_outputs_raw
+            }
+
+        # Determine a target representation for synergy-style metrics (e.g., final layer outputs)
+        target_outputs = None
+        if wrapped_model_to_use.tracked_layers:
+            target_layer = wrapped_model_to_use.tracked_layers[-1]
+            if target_layer in preprocessed_outputs:
+                target_outputs = preprocessed_outputs[target_layer]
 
         # Compute each metric
         for method in self.config.alignment_methods:
@@ -654,11 +684,48 @@ class GeneralAlignmentExperiment(BaseExperiment):
             layer_values = {}
 
             for layer_name in wrapped_model_to_use.tracked_layers:
-                if layer_name not in preprocessed_inputs or layer_name not in weights:
+                if layer_name not in weights:
                     continue
 
+                metric_kwargs = {}
+
+                # Supply inputs/weights/outputs based on metric requirements
+                if getattr(metric, "requires_inputs", False):
+                    if layer_name not in preprocessed_inputs:
+                        continue
+                    metric_kwargs["inputs"] = preprocessed_inputs[layer_name]
+
+                if getattr(metric, "requires_weights", False):
+                    metric_kwargs["weights"] = weights[layer_name]
+
+                if getattr(metric, "requires_outputs", False):
+                    if layer_name not in preprocessed_outputs:
+                        continue
+                    metric_kwargs["outputs"] = preprocessed_outputs[layer_name]
+
+                # Synergy / redundancy metrics with Gaussian approximations
+                if method == "gaussian_pid_synergy_mmi":
+                    # Uses layer outputs and a continuous target representation (e.g., final logits)
+                    if target_outputs is None:
+                        logger.warning(
+                            "gaussian_pid_synergy_mmi: target_outputs not available; skipping "
+                            f"layer {layer_name}"
+                        )
+                        continue
+                    metric_kwargs["target_outputs"] = target_outputs
+
+                if method == "synergy_gaussian_mmi":
+                    # Uses discrete class labels
+                    if targets is None:
+                        logger.warning(
+                            "synergy_gaussian_mmi: targets not available; skipping "
+                            f"layer {layer_name}"
+                        )
+                        continue
+                    metric_kwargs["targets"] = targets
+
                 try:
-                    scores = metric.compute(inputs=preprocessed_inputs[layer_name], weights=weights[layer_name])
+                    scores = metric.compute(**metric_kwargs)
                     layer_values[layer_name] = scores.cpu().tolist()
                 except Exception as e:
                     logger.error(f"Error computing {method} for {layer_name}: {e}")
@@ -2407,7 +2474,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
         # Pruning experiments - now enhanced with before/after comparisons
         if self.pruning_results and "strategies" in self.pruning_results:
             print("HELLO D")
-            import matplotlib.pyplot as plt
 
             from alignment.analysis.visualization import UnifiedVisualizer
 

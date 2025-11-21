@@ -394,7 +394,15 @@ class BaseExperiment(CoreBaseExperiment):
         """Initialize metrics."""
         from alignment.core.registry import METRIC_REGISTRY
 
-        for metric_name in self.config.metrics:
+        # Combine primary metrics and alignment-specific methods so that
+        # alignment-only metrics (e.g., synergy / redundancy) are also
+        # instantiated and available during training.
+        metric_names = set(self.config.metrics)
+        alignment_methods = getattr(self.config, "alignment_methods", None)
+        if alignment_methods:
+            metric_names.update(alignment_methods)
+
+        for metric_name in metric_names:
             # Get the metric class from registry
             metric_class = METRIC_REGISTRY.get(metric_name)
             metric_config = self.config.metric_configs.get(metric_name, {})
