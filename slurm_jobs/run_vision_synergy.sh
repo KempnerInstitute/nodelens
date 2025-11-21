@@ -18,7 +18,8 @@ echo "Running on: $(hostname)"
 # Environment setup (conda env: networkAlignmentAnalysis)
 module purge
 module load cuda/12.2.0-fasrc01
-source activate networkAlignmentAnalysis || conda activate networkAlignmentAnalysis || true
+eval "$(conda shell.bash hook)"
+conda activate networkAlignmentAnalysis
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
 

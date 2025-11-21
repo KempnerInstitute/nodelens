@@ -340,7 +340,7 @@ class BaseExperiment(CoreBaseExperiment):
         # (e.g., LLM alignment) manage their own text datasets, so we fall back
         # gracefully if the dataset is not registered.
         try:
-        dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+            dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
         except KeyError:
             if self.config.experiment_type in {"llm_alignment", "llm_supernode", "llm"}:
                 logger.info(
