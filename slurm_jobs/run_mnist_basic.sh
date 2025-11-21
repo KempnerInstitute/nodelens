@@ -14,10 +14,10 @@ echo "Starting MNIST basic alignment experiment at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on: $(hostname)"
 
-# Environment setup (reuse working LSF/Kempner env)
+# Environment setup (conda env: networkAlignmentAnalysis)
 module purge
 module load cuda/12.2.0-fasrc01
-source activate diffuse_vine_cop || conda activate diffuse_vine_cop || true
+source activate networkAlignmentAnalysis || conda activate networkAlignmentAnalysis || true
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
 

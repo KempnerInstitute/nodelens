@@ -21,5 +21,9 @@ dependencies:
   - natsort
   - pip:
     - wandb
+    - transformers
+    - datasets
+    - accelerate
+    - peft
     - black
     - gitignore_parser
