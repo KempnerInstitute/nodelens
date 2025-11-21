@@ -23,9 +23,11 @@ from pathlib import Path
 
 import yaml
 
-# Add the src directory to Python path
+# Add the project root and src directory to Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(current_dir, "src"))
+repo_root = os.path.dirname(current_dir)
+sys.path.insert(0, repo_root)
+sys.path.insert(0, os.path.join(repo_root, "src"))
 
 # Import from the alignment package
 from alignment.experiments.general_alignment import GeneralAlignmentExperiment

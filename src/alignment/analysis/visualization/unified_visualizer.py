@@ -299,6 +299,110 @@ class UnifiedVisualizer:
 
         return fig
 
+    # ========== SCAR / Supernode Visualizations ==========
+
+    def plot_scar_layer_scores(
+        self,
+        scar_scores: Dict[str, Dict[str, Union[torch.Tensor, np.ndarray, List[float]]]],
+        metric_name: str = "scar_loss_proxy",
+        plot_type: str = "violin",
+        save_path: Optional[Union[str, Path]] = None,
+        show_statistics: bool = True,
+    ) -> Figure:
+        """
+        Convenience wrapper for visualizing SCAR-style supernode metrics (e.g. scar_loss_proxy)
+        across layers, using the same interface as plot_layer_scores.
+
+        Args:
+            scar_scores: Dict[layer_name -> Dict[metric_name -> scores_tensor]]
+            metric_name: Which SCAR metric to visualize
+                         (e.g. 'scar_loss_proxy', 'scar_activation_power', 'scar_curvature', 'scar_taylor')
+            plot_type:   'violin' | 'box' | 'bar'
+            save_path:   Optional path to save the figure
+            show_statistics: Whether to include mean/std text box when applicable
+        """
+        layer_to_scores: Dict[str, Union[torch.Tensor, np.ndarray, List[float]]] = {}
+        for layer_name, metrics in scar_scores.items():
+            if metric_name in metrics:
+                layer_to_scores[layer_name] = metrics[metric_name]
+
+        if not layer_to_scores:
+            logger.warning(f"No SCAR scores found for metric '{metric_name}'.")
+            # Fallback to an empty figure
+            fig, _ = plt.subplots(figsize=self.figsize)
+            return fig
+
+        return self.plot_layer_scores(
+            scores=layer_to_scores,
+            metric_name=metric_name,
+            plot_type=plot_type,
+            save_path=save_path,
+            show_statistics=show_statistics,
+        )
+
+    def plot_scar_heatmap(
+        self,
+        scar_scores: Dict[str, Dict[str, Union[torch.Tensor, np.ndarray, List[float]]]],
+        metrics: Optional[List[str]] = None,
+        title: str = "SCAR Metrics Heatmap",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Create a heatmap of mean SCAR metrics across layers.
+
+        Args:
+            scar_scores: Dict[layer_name -> Dict[metric_name -> scores_tensor]]
+            metrics:     List of metric names to include (default: all present keys)
+            title:       Plot title
+            save_path:   Optional path to save the figure
+        """
+        # Determine metrics to include
+        all_metric_names = sorted({m for layer_scores in scar_scores.values() for m in layer_scores.keys()})
+        if metrics is None:
+            metrics = all_metric_names
+        else:
+            metrics = [m for m in metrics if m in all_metric_names]
+
+        if not metrics:
+            logger.warning("plot_scar_heatmap: no SCAR metrics to plot.")
+            fig, _ = plt.subplots(figsize=self.figsize)
+            return fig
+
+        # Build nested dict layer -> metric -> mean value
+        layer_metric_means: Dict[str, Dict[str, float]] = {}
+        for layer_name, metric_dict in scar_scores.items():
+            layer_metric_means[layer_name] = {}
+            for metric_name in metrics:
+                vals = metric_dict.get(metric_name, None)
+                if vals is None:
+                    continue
+                if isinstance(vals, torch.Tensor):
+                    arr = vals.detach().cpu().numpy()
+                elif isinstance(vals, np.ndarray):
+                    arr = vals
+                else:
+                    arr = np.asarray(vals)
+                if arr.size == 0:
+                    continue
+                layer_metric_means[layer_name][metric_name] = float(np.mean(arr))
+
+        if not layer_metric_means:
+            logger.warning("plot_scar_heatmap: no non-empty SCAR metrics to plot.")
+            fig, _ = plt.subplots(figsize=self.figsize)
+            return fig
+
+        # Reuse generic heatmap helper (it will convert nested dict to DataFrame)
+        return self.plot_heatmap(
+            data=layer_metric_means,
+            title=title,
+            cmap="coolwarm",
+            annotate=True,
+            fmt=".3f",
+            xlabel="Metric",
+            ylabel="Layer",
+            save_path=save_path,
+        )
+
     # ========== Pruning Analysis ==========
 
     def plot_pruning_performance(

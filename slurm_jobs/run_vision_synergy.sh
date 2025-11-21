@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=4:00:00
-#SBATCH --mem=32GB
+#SBATCH --mem=64GB
 #SBATCH --partition=kempner_eng
 #SBATCH --account=kempner_dev
 
@@ -15,10 +15,10 @@ echo "Starting vision synergy / redundancy experiment at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on: $(hostname)"
 
-# Environment setup
+# Environment setup (reuse working LSF/Kempner env)
 module purge
 module load cuda/12.2.0-fasrc01
-source activate alignment || conda activate alignment || true
+source activate diffuse_vine_cop || conda activate diffuse_vine_cop || true
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
 

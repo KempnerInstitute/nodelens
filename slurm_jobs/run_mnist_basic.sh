@@ -4,9 +4,9 @@
 #SBATCH --error=logs/mnist_basic_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --time=0:30:00
-#SBATCH --mem=16GB
+#SBATCH --mem=32GB
 #SBATCH --partition=kempner_eng
 #SBATCH --account=kempner_dev
 
@@ -14,10 +14,10 @@ echo "Starting MNIST basic alignment experiment at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on: $(hostname)"
 
-# Environment setup
+# Environment setup (reuse working LSF/Kempner env)
 module purge
 module load cuda/12.2.0-fasrc01
-source activate alignment || conda activate alignment || true
+source activate diffuse_vine_cop || conda activate diffuse_vine_cop || true
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
 

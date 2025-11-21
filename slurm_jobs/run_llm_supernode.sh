@@ -15,10 +15,10 @@ echo "Starting LLM supernode / SCAR-style pruning experiment at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on: $(hostname)"
 
-# Environment setup
+# Environment setup (reuse working LSF/Kempner env)
 module purge
 module load cuda/12.2.0-fasrc01
-source activate alignment || conda activate alignment || true
+source activate diffuse_vine_cop || conda activate diffuse_vine_cop || true
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
 

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -665,6 +666,77 @@ class GeneralAlignmentExperiment(BaseExperiment):
             alignment_values[method] = layer_values
 
         return alignment_values
+
+    def _run_eigenfeature_analysis(self) -> Dict[str, Any]:
+        """
+        Compute eigenfeature statistics (top eigenvalues / explained variance) for each tracked layer.
+        """
+        if not getattr(self.config, "do_eigenfeature_analysis", False):
+            return {}
+
+        if self.data_loader is None:
+            logger.warning("Eigenfeature analysis skipped (no data loader available).")
+            return {}
+
+        if self.is_multi_network and self.networks and self.wrapped_networks:
+            model_to_use = self.networks[0]
+            wrapped_model_to_use = self.wrapped_networks[0]
+        else:
+            model_to_use = self.model
+            wrapped_model_to_use = self.wrapped_model
+
+        if model_to_use is None or wrapped_model_to_use is None:
+            logger.warning("Eigenfeature analysis skipped (model not initialized).")
+            return {}
+
+        try:
+            inputs, _ = next(iter(self.data_loader))
+        except StopIteration:
+            logger.warning("Eigenfeature analysis skipped (empty data loader).")
+            return {}
+
+        inputs = inputs.to(self.config.device)
+        eigenfeature_results: Dict[str, Any] = {}
+
+        try:
+            capture_service = ActivationCaptureService(wrapped_model_to_use, default_mode=self.config.cnn_mode)
+            activation_data = capture_service.capture(inputs, layers=wrapped_model_to_use.tracked_layers, include_weights=False, preprocess=True)
+        except Exception as e:
+            logger.error(f"Activation capture failed during eigenfeature analysis: {e}")
+            return {}
+
+        for layer_name, layer_inputs in activation_data.inputs.items():
+            if layer_inputs is None:
+                continue
+            data = layer_inputs
+            if data.dim() > 2:
+                data = data.reshape(data.size(0), -1)
+            if data.size(0) < 2 or data.size(1) == 0:
+                continue
+
+            centered = data - data.mean(dim=0, keepdim=True)
+            cov = (centered.T @ centered) / max(1, centered.shape[0] - 1)
+
+            try:
+                eigvals, eigvecs = torch.linalg.eigh(cov)
+            except RuntimeError as err:
+                logger.warning(f"Eigenvalue decomposition failed for layer {layer_name}: {err}")
+                continue
+
+            order = torch.argsort(eigvals, descending=True)
+            eigvals = eigvals[order]
+            eigvecs = eigvecs[:, order]
+
+            total_var = torch.clamp(eigvals.sum(), min=1e-12)
+            cum_var = torch.cumsum(eigvals, dim=0) / total_var
+            top_k = min(10, eigvals.numel())
+
+            eigenfeature_results[layer_name] = {
+                "top_eigenvalues": eigvals[:top_k].detach().cpu().tolist(),
+                "explained_variance": cum_var[:top_k].detach().cpu().tolist(),
+            }
+
+        return eigenfeature_results
 
     def _dropout_analysis(self) -> Dict[str, Any]:
         """Perform progressive dropout analysis."""
@@ -2124,7 +2196,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         # Pruning experiments
         self.pruning_results = self._pruning_experiments()
 
-        # TODO: Add eigenfeature analysis
+        # Eigenfeature analysis (optional)
+        self.eigenfeature_results = self._run_eigenfeature_analysis()
 
         # Combine all results
         all_results = {
@@ -2184,28 +2257,152 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
     def _generate_visualizations(self):
         """Generate comprehensive visualizations."""
-        output_dir = Path(self.config.plots_dir) if hasattr(self.config, "plots_dir") else Path(self.config.log_dir) / "plots"
-        output_dir.mkdir(exist_ok=True)
+        output_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        print("HELLO 0")
+        from alignment.analysis.visualization import UnifiedVisualizer
+
+        visualizer = UnifiedVisualizer()
 
         # Training curves
-        if self.train_results:
-            # TODO: Plot training curves
-            print("HELLO A")
-            # pass
+        train_losses = self.train_results.get("train_losses", [])
+        val_losses = self.train_results.get("val_losses", [])
+        train_accs = self.train_results.get("train_accs", [])
+        val_accs = self.train_results.get("val_accs", [])
+        epochs = list(range(1, len(train_losses) + 1))
+
+        if epochs:
+            loss_series = {}
+            if train_losses:
+                loss_series["Train Loss"] = train_losses
+            if val_losses and len(val_losses) == len(epochs):
+                loss_series["Val Loss"] = val_losses
+            if loss_series:
+                fig = visualizer.plot_metric_evolution(
+                    epochs,
+                    loss_series,
+                    title="Training Loss",
+                    xlabel="Epoch",
+                    ylabel="Loss",
+                    legend_title="Split",
+                    show_confidence=False,
+                    save_path=output_dir / "training_loss.png",
+                )
+                plt.close(fig)
+
+            acc_series = {}
+            if train_accs:
+                acc_series["Train Acc"] = train_accs
+            if val_accs and len(val_accs) == len(epochs):
+                acc_series["Val Acc"] = val_accs
+            if acc_series:
+                fig = visualizer.plot_metric_evolution(
+                    epochs,
+                    acc_series,
+                    title="Training Accuracy",
+                    xlabel="Epoch",
+                    ylabel="Accuracy (%)",
+                    legend_title="Split",
+                    show_confidence=False,
+                    save_path=output_dir / "training_accuracy.png",
+                )
+                plt.close(fig)
 
         # Alignment evolution
-        if "alignment" in self.train_results:
-            # TODO: Plot alignment evolution
-            print("HELLO B")
-            # pass
+        alignment_history = self.train_results.get("alignment", {})
+        for method, history in alignment_history.items():
+            summarized = []
+            for snapshot in history:
+                aggregated_scores = []
+                for layer_scores in snapshot.values():
+                    aggregated_scores.extend(layer_scores)
+                if aggregated_scores:
+                    summarized.append(float(np.mean(aggregated_scores)))
+            if summarized:
+                steps = list(range(1, len(summarized) + 1))
+                fig = visualizer.plot_metric_evolution(
+                    steps,
+                    {method: summarized},
+                    title=f"{method} Alignment Evolution",
+                    xlabel="Measurement Index",
+                    ylabel="Average Score",
+                    legend_title="Metric",
+                    show_confidence=False,
+                    save_path=output_dir / f"alignment_{method}.png",
+                )
+                plt.close(fig)
 
         # Dropout analysis
-        if self.dropout_results:
-            # TODO: Plot dropout results
-            print("HELLO C")
-            # pass
+        dropout_rates = self.dropout_results.get("dropout_rates", [])
+        if dropout_rates:
+            accuracy_curves = {}
+            loss_curves = {}
+
+            if "accuracies" in self.dropout_results:
+                for strategy, values in self.dropout_results["accuracies"].items():
+                    if values:
+                        accuracy_curves[strategy] = values
+            else:
+                for strategy in ["low", "high", "random"]:
+                    key = f"accuracies_{strategy}"
+                    if key in self.dropout_results:
+                        accuracy_curves[strategy] = self.dropout_results[key]
+
+            if "losses" in self.dropout_results:
+                for strategy, values in self.dropout_results["losses"].items():
+                    if values:
+                        loss_curves[strategy] = values
+            else:
+                for strategy in ["low", "high", "random"]:
+                    key = f"losses_{strategy}"
+                    if key in self.dropout_results:
+                        loss_curves[strategy] = self.dropout_results[key]
+
+            dropout_steps = [rate * 100.0 for rate in dropout_rates]
+
+            if accuracy_curves:
+                fig = visualizer.plot_metric_evolution(
+                    dropout_steps,
+                    accuracy_curves,
+                    title="Dropout Accuracy vs Rate",
+                    xlabel="Dropout (%)",
+                    ylabel="Accuracy (%)",
+                    legend_title="Strategy",
+                    show_confidence=False,
+                    save_path=output_dir / "dropout_accuracy.png",
+                )
+                plt.close(fig)
+
+            if loss_curves:
+                fig = visualizer.plot_metric_evolution(
+                    dropout_steps,
+                    loss_curves,
+                    title="Dropout Loss vs Rate",
+                    xlabel="Dropout (%)",
+                    ylabel="Loss",
+                    legend_title="Strategy",
+                    show_confidence=False,
+                    save_path=output_dir / "dropout_loss.png",
+                )
+                plt.close(fig)
+
+        # Eigenfeature analysis visualizations
+        if self.eigenfeature_results:
+            eigen_heatmap_data = {}
+            for layer_name, info in self.eigenfeature_results.items():
+                eigenvalues = info.get("top_eigenvalues", [])
+                if eigenvalues:
+                    eigen_heatmap_data[layer_name] = {f"eig{i+1}": val for i, val in enumerate(eigenvalues)}
+
+            if eigen_heatmap_data:
+                fig = visualizer.plot_heatmap(
+                    data=eigen_heatmap_data,
+                    title="Top Eigenvalues per Layer",
+                    xlabel="Eigenvalue Index",
+                    ylabel="Layer",
+                    save_path=output_dir / "eigenvalues_heatmap.png",
+                )
+                plt.close(fig)
 
         # Pruning experiments - now enhanced with before/after comparisons
         if self.pruning_results and "strategies" in self.pruning_results:
@@ -2566,10 +2763,77 @@ class GeneralAlignmentExperiment(BaseExperiment):
     def _apply_dropout_and_evaluate(
         self, dropout_rate: float, strategy: str, alignment_values: Dict[str, Dict[str, List[float]]]
     ) -> Tuple[float, float]:
-        """Apply targeted dropout and evaluate (fallback for compatibility)."""
-        # For now, return dummy values
-        # TODO: Implement targeted dropout based on alignment scores
-        return 0.0, 100.0 * (1 - dropout_rate)
+        """Apply targeted dropout (low/high/random) based on alignment scores and evaluate."""
+        if dropout_rate <= 0 or not alignment_values:
+            return self._evaluate()
+
+        metric_name = next((m for m, layers in alignment_values.items() if layers), None)
+        if metric_name is None:
+            logger.warning("No alignment values available for targeted dropout; running baseline evaluation.")
+            return self._evaluate()
+
+        saved_weights: Dict[str, torch.Tensor] = {}
+        saved_biases: Dict[str, torch.Tensor] = {}
+        modules = dict(self.model.named_modules())
+        layer_scores = alignment_values[metric_name]
+
+        try:
+            for layer_name, scores in layer_scores.items():
+                if layer_name not in modules or not scores:
+                    continue
+
+                module = modules[layer_name]
+                if not hasattr(module, "weight"):
+                    continue
+
+                weight = module.weight
+                num_units = weight.shape[0]
+                if num_units == 0:
+                    continue
+
+                scores_tensor = torch.as_tensor(scores, device=weight.device, dtype=weight.dtype)
+                if scores_tensor.numel() < num_units:
+                    # Pad scores if needed
+                    pad = num_units - scores_tensor.numel()
+                    scores_tensor = torch.nn.functional.pad(scores_tensor, (0, pad), value=scores_tensor.mean().item())
+                elif scores_tensor.numel() > num_units:
+                    scores_tensor = scores_tensor[:num_units]
+
+                count = max(1, int(round(dropout_rate * num_units)))
+                if count >= num_units:
+                    count = num_units - 1
+                if count <= 0:
+                    continue
+
+                if strategy == "high":
+                    _, indices = torch.topk(scores_tensor, count, largest=True)
+                elif strategy == "low":
+                    _, indices = torch.topk(scores_tensor, count, largest=False)
+                else:  # random
+                    perm = torch.randperm(num_units, device=weight.device)
+                    indices = perm[:count]
+
+                saved_weights[layer_name] = weight.detach().clone()
+                if hasattr(module, "bias") and module.bias is not None:
+                    saved_biases[layer_name] = module.bias.detach().clone()
+
+                with torch.no_grad():
+                    weight[indices] = 0
+                    if hasattr(module, "bias") and module.bias is not None:
+                        module.bias[indices] = 0
+
+            loss, acc = self._evaluate()
+        finally:
+            for layer_name, tensor in saved_weights.items():
+                if layer_name in modules and hasattr(modules[layer_name], "weight"):
+                    with torch.no_grad():
+                        modules[layer_name].weight.copy_(tensor)
+            for layer_name, tensor in saved_biases.items():
+                if layer_name in modules and hasattr(modules[layer_name], "bias") and modules[layer_name].bias is not None:
+                    with torch.no_grad():
+                        modules[layer_name].bias.copy_(tensor)
+
+        return loss, acc
 
     def _pruning_experiments_multi_sequential(self) -> Dict[str, Any]:
         """Perform pruning experiments on multiple networks sequentially (original slow method)."""

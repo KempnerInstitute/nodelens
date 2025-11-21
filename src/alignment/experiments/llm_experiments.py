@@ -39,7 +39,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 logger.info("Reusing existing 'hf_causal_lm' model from registry for LLMAlignmentExperiment.")
                 self._wrap_existing_hf_model()
             else:
-                self._load_hf_tokenizer_and_model()
+            self._load_hf_tokenizer_and_model()
         else:
             # If not HF, rely on BaseExperiment's initialization (already called in __init__).
             logger.info("Using registry or torchvision model; BaseExperiment has initialized it.")
@@ -1144,6 +1144,41 @@ class LLMAlignmentExperiment(BaseExperiment):
                 scar_scores = self.compute_scar_supernode_metrics()
             except Exception as e:
                 logger.error(f"Error while computing SCAR supernode metrics: {e}")
+            else:
+                if scar_scores and getattr(self.config, "generate_plots", True):
+                    try:
+                        from alignment.analysis.visualization import UnifiedVisualizer
+
+                        plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+                        plots_dir.mkdir(parents=True, exist_ok=True)
+
+                        viz = UnifiedVisualizer()
+
+                        # Layer-wise SCAR loss proxy distributions
+                        fig = viz.plot_scar_layer_scores(
+                            scar_scores,
+                            metric_name="scar_loss_proxy",
+                            plot_type="violin",
+                            save_path=plots_dir / "scar_loss_proxy_layers.png",
+                        )
+                        plt.close(fig)
+
+                        # Heatmap of SCAR metrics (activation power, curvature, loss proxy, etc.)
+                        scar_metric_list = [
+                            "scar_activation_power",
+                            "scar_taylor",
+                            "scar_curvature",
+                            "scar_loss_proxy",
+                        ]
+                        fig = viz.plot_scar_heatmap(
+                            scar_scores,
+                            metrics=scar_metric_list,
+                            title="SCAR Metrics per Layer",
+                            save_path=plots_dir / "scar_metrics_heatmap.png",
+                        )
+                        plt.close(fig)
+                    except Exception as viz_err:
+                        logger.error(f"Failed to generate SCAR visualizations: {viz_err}")
 
         # self.plot_layer_importance_histogram(
         #     layer_name="model.layers.1.mlp.up_proj",
