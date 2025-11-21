@@ -55,6 +55,10 @@ pruning:
     gamma_redundancy: 0.4
     delta_rq: 0.4
 
+# Use SCAR loss proxy as the primary pruning metric
+pruning_alignment_metric: "scar_loss_proxy"
+pruning_selection_mode: "low"
+
 # Optional SCAR-style supernode metrics (first-order saliency, curvature, loss proxy)
 do_scar_metrics: true
 scar_num_samples: 4
