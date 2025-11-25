@@ -1,32 +1,36 @@
 # Analysis Module
 
-Tools for analyzing experiment results, aggregating metrics, and creating visualizations.
+Result analysis, visualization, and reporting.
 
 ## Components
 
-- **Aggregation**: Collect and summarize results across experiments
-- **Unified Visualizer**: Create plots and interactive visualizations  
-- **Unified Reporter**: Generate reports in HTML, Markdown, and JSON formats
+- `AnalysisRunner` - Unified entry point for analysis tasks
+- `UnifiedVisualizer` - Plot generation
+- `UnifiedReporter` - Report generation (HTML, Markdown, JSON)
+- `ResultAggregator` - Result collection and summarization
 
-## Quick Usage
+## Usage
 
 ```python
-from alignment.analysis import ResultAggregator, UnifiedVisualizer, UnifiedReporter
+from alignment.analysis import AnalysisRunner, AnalysisConfig
 
-# Aggregate results
-aggregator = ResultAggregator()
-aggregator.load_from_directory("./results/")
-
-# Create visualizations
-visualizer = UnifiedVisualizer()
-visualizer.plot_metric_evolution(steps, values, save_path="plot.png")
-
-# Generate reports
-reporter = UnifiedReporter(title="Experiment Results")
-reporter.add_dataframe("Metrics", results_df)
-reporter.generate("report.html")
+config = AnalysisConfig(
+    results_dir="./results",
+    output_dir="./plots",
+    analyses=["histograms", "pruning_curves"],
+)
+runner = AnalysisRunner(config)
+runner.run()
 ```
 
-## Integration
+```bash
+python scripts/run_analysis.py --results-dir ./results --output-dir ./plots --quick
+```
 
-Works seamlessly with the experiment framework for automatic analysis and reporting. 
+## Available Analyses
+
+- `histograms` - Importance score distributions
+- `scatter_plots` - Metric correlations
+- `heatmaps` - Layer-metric heatmaps
+- `pruning_curves` - Sparsity vs performance
+- `scar_analysis` - SCAR metrics (LLM)

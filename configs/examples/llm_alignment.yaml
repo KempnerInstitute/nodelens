@@ -1,0 +1,66 @@
+# LLM Alignment Analysis Example
+# Comprehensive alignment and supernode analysis for LLaMA models
+
+experiment:
+  name: "llama3_alignment_analysis"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llm_alignment"
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  
+  # LLaMA FFN: input(4096) -> gate_proj/up_proj(14336) -> down_proj -> output(4096)
+  # Note: HFCausalLM wraps LlamaForCausalLM, so paths include both 'model.' prefixes
+  tracked_layers:
+    - "model.model.layers.10.mlp.up_proj"     # 14336 intermediate neurons
+    - "model.model.layers.10.mlp.down_proj"   # For SCAR: hooks capture 14336-dim input
+
+dataset:
+  name: "wikitext-2-v1"
+  batch_size: 1
+  num_workers: 0
+
+metrics:
+  enabled:
+    - "activation_l2_norm"
+    - "activation_outlier_index"
+  num_samples: 4
+
+# LLM-specific settings
+llm:
+  scar_metrics: true
+  scar_num_samples: 4
+  scar_max_length: 512
+  evaluate_perplexity: true
+  evaluation_dataset: "wikitext"
+  evaluation_num_samples: 50
+
+# Supernode identification and cross-layer analysis
+supernode:
+  enabled: true
+  score_metric: "scar_activation_power"
+  core_fraction: 0.01
+  min_core_neurons: 32
+  protect_core: true
+  
+  # Cross-layer analysis
+  cross_layer_analysis: true
+  follower_fraction: 0.10
+  compare_by_connection: true
+
+pruning:
+  enabled: true
+  strategy: "alignment"
+  sparsity_levels: [0.1, 0.3, 0.5]
+  scoring: "activation_l2_norm"
+  direction: "low"
+  structured: true
+
+visualization:
+  format: "png"
+  dpi: 300

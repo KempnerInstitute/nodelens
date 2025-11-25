@@ -33,6 +33,8 @@ class ExperimentConfig:
     description: str = ""
     tags: List[str] = field(default_factory=list)
 
+    experiment_type: str = "alignment_analysis"
+
     # Model configuration
     model_name: str = "resnet18"
     model_config: Dict[str, Any] = field(default_factory=dict)
@@ -77,6 +79,10 @@ class ExperimentConfig:
     save_alignment_history: bool = True
     measure_alignment_during_training: bool = True
     alignment_frequency: int = 1
+    alignment_data_num_samples: int = 1
+    alignment_computation_texts: List[str] = field(default_factory=list)
+    alignment_composite_weights: Dict[str, float] = field(default_factory=dict)
+    supernode_config: Dict[str, Any] = field(default_factory=dict)
 
     # CNN-specific configuration
     cnn_mode: str = "unfold"  # Options: "unfold", "patchwise", "batch_patch_combined"
@@ -106,11 +112,17 @@ class ExperimentConfig:
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
+    dependency_aware_pruning: bool = False  # Propagate masks across dependent layers
 
     # Plotting and visualization
     generate_plots: bool = True
     plot_format: str = "png"
     plot_dpi: int = 300
+    visualization_options: Dict[str, Any] = field(default_factory=dict)
+    
+    # Post-experiment analysis (runs after experiment completes)
+    # When set, AnalysisRunner generates additional visualizations from results
+    post_analysis: Dict[str, Any] = field(default_factory=dict)
 
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
@@ -128,6 +140,22 @@ class ExperimentConfig:
     distributed: bool = False
     world_size: int = 1
     rank: int = 0
+
+    # Evaluation / LLM
+    do_perplexity_computation: bool = False
+    evaluation_dataset: str = "wikitext"
+    evaluation_num_samples: int = 100
+
+    # SCAR / supernode-specific options for LLMs
+    do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i)
+    scar_num_samples: int = 0      # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
+    scar_max_length: int = 512     # Max sequence length for SCAR calibration passes
+
+    # Misc
+    tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
+    model_kwargs: Dict[str, Any] = field(default_factory=dict)
+    analysis_options: Dict[str, Any] = field(default_factory=dict)
+    
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -240,6 +268,7 @@ class BaseExperiment(CoreBaseExperiment):
                 # Remove other model-specific configs that don't apply to current model
                 model_kwargs.pop("cnn_config", None)
                 model_kwargs.pop("external_config", None)
+                model_kwargs.pop("model_backend", None)
 
                 # Special handling for MLP model
                 if self.config.model_name.lower() == "mlp":
@@ -284,7 +313,14 @@ class BaseExperiment(CoreBaseExperiment):
 
         # Move to device
         device = torch.device(self.config.device)
-        self.model = self.model.to(device)
+        if self.config.model_name.lower() == "hf_causal_lm":
+            # For HuggingFace causal LMs we may be using accelerate's device_map.
+            # Only move the model if no explicit device_map was provided.
+            device_map = self.config.model_config.get("device_map") or self.config.model_config.get("hf_device_map")
+            if device_map is None:
+                self.model = self.model.to(device)
+        else:
+            self.model = self.model.to(device)
 
         # Wrap model
         wrapper_kwargs = {"tracked_layers": self.config.tracked_layers}
@@ -298,10 +334,37 @@ class BaseExperiment(CoreBaseExperiment):
         logger.info(f"Initialized model: {self.config.model_name}")
         logger.info(f"Tracked layers: {self.wrapped_model.tracked_layers}")
 
+        if self.config.model_name.lower() == "hf_causal_lm":
+            model_id = self.config.model_config.get("model_id")
+            if model_id is None:
+                raise ValueError("model_id must be set in model_config for hf_causal_lm")
+            try:
+                from transformers import AutoTokenizer
+                self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+                logger.info(f"Loaded tokenizer for HF model '{model_id}'")
+            except ImportError:
+                logger.warning("transformers not installed; tokenizer not loaded")
+                self.tokenizer = None
+
     def _initialize_dataset(self):
         """Initialize dataset and data loader."""
-        # Get dataset class from registry (not instance)
-        dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+        # Get dataset class from registry (not instance). Some experiment types
+        # (e.g., LLM alignment) manage their own text datasets, so we fall back
+        # gracefully if the dataset is not registered.
+        try:
+            dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+        except KeyError:
+            if self.config.experiment_type in {"llm_alignment", "llm_supernode", "llm"}:
+                logger.info(
+                    f"No registry dataset found for '{self.config.dataset_name}' in "
+                    f"LLM experiment '{self.config.experiment_type}'; dataset will "
+                    f"be initialized by the experiment class."
+                )
+                self.dataset = None
+                self.data_loader = None
+                return
+            # For non-LLM experiments, surface the original error
+            raise
 
         # Debug logging
         logger.info(f"Creating dataset with data_path: {self.config.data_path}")
@@ -324,6 +387,10 @@ class BaseExperiment(CoreBaseExperiment):
         if self.config.data_path is not None and "data_path" not in dataset_kwargs:
             dataset_kwargs["data_path"] = self.config.data_path
 
+        # If model (e.g., HF model) has a tokenizer, include it
+        if hasattr(self, "tokenizer") and self.tokenizer is not None:
+            dataset_kwargs["tokenizer"] = self.tokenizer
+
         # Create dataset
         self.dataset = dataset_class(**dataset_kwargs)
 
@@ -337,20 +404,50 @@ class BaseExperiment(CoreBaseExperiment):
 
     def _initialize_metrics(self):
         """Initialize metrics."""
+        import inspect
         from alignment.core.registry import METRIC_REGISTRY
 
-        for metric_name in self.config.metrics:
+        # Combine primary metrics and alignment-specific methods so that
+        # alignment-only metrics (e.g., synergy / redundancy) are also
+        # instantiated and available during training.
+        metric_names = set(self.config.metrics)
+        alignment_methods = getattr(self.config, "alignment_methods", None)
+        if alignment_methods:
+            metric_names.update(alignment_methods)
+
+        for metric_name in metric_names:
             # Get the metric class from registry
             metric_class = METRIC_REGISTRY.get(metric_name)
-            metric_config = self.config.metric_configs.get(metric_name, {})
+            metric_config = self.config.metric_configs.get(metric_name, {}).copy()
 
-            # Add global metric options if not already specified
-            if "scale_by_norm" not in metric_config:
-                metric_config["scale_by_norm"] = self.config.scale_by_norm
-            if "force_cpu" not in metric_config:
-                metric_config["force_cpu"] = self.config.force_cpu_for_large_metric_ops
-            if "aggregation_op" not in metric_config and "cnn" in metric_name.lower():
-                metric_config["aggregation_op"] = self.config.cnn_rq_aggregation_op
+            # Get the parameters accepted by this metric's __init__
+            try:
+                sig = inspect.signature(metric_class.__init__)
+                accepted_params = set(sig.parameters.keys()) - {"self"}
+                # Check if metric accepts **kwargs
+                accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
+                )
+            except (ValueError, TypeError):
+                # If we can't inspect, assume it accepts everything
+                accepted_params = set()
+                accepts_kwargs = True
+
+            # Only add global options if the metric accepts them
+            if accepts_kwargs or "scale_by_norm" in accepted_params:
+                if "scale_by_norm" not in metric_config:
+                    metric_config["scale_by_norm"] = self.config.scale_by_norm
+            if accepts_kwargs or "force_cpu" in accepted_params:
+                if "force_cpu" not in metric_config:
+                    metric_config["force_cpu"] = self.config.force_cpu_for_large_metric_ops
+            if accepts_kwargs or "aggregation_op" in accepted_params:
+                if "aggregation_op" not in metric_config and "cnn" in metric_name.lower():
+                    metric_config["aggregation_op"] = self.config.cnn_rq_aggregation_op
+
+            # Filter out any config keys not accepted by this metric
+            if not accepts_kwargs and accepted_params:
+                metric_config = {k: v for k, v in metric_config.items() if k in accepted_params}
 
             # Create metric instance
             self.metrics[metric_name] = metric_class(**metric_config)

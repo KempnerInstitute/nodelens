@@ -1,0 +1,48 @@
+# Vision Pruning Test
+# Comprehensive metrics (RQ, MI, Redundancy) with high/low/random pruning strategies
+
+experiment:
+  name: "vision_pruning_test"
+  type: "alignment_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision_pruning_test"
+
+model:
+  name: "resnet18"
+  pretrained: true
+  tracked_layers: null            # Auto-detect conv layers
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 64
+  num_workers: 4
+
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+    - "pairwise_redundancy_gaussian"
+    - "mutual_information_gaussian"
+  num_samples: 256
+
+# Pruning experiments
+# Strategies: magnitude, alignment, random
+# Selection modes: low (prune lowest), high (prune highest)
+pruning:
+  enabled: true
+  algorithms:
+    - "magnitude"
+    - "alignment"
+    - "random"
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5]
+  selection_modes: ["low", "high"]
+  alignment_metric: "rayleigh_quotient"
+  structured: true
+  dependency_aware: true
+
+visualization:
+  format: "png"
+  dpi: 300
+

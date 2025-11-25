@@ -193,3 +193,50 @@ class ActivationVariance(BaseMetric):
         variance = activations.var(dim=0)
 
         return variance
+
+
+@register_metric("activation_outlier_index")
+class ActivationOutlierIndex(BaseMetric):
+    """
+    Compute an outlier index for each neuron/channel.
+
+    Defined as the ratio between a high-percentile activation magnitude
+    (default 99.9th) and the mean absolute activation. This highlights
+    "supernode" style channels whose activations spike far above their mean.
+    """
+
+    name = "activation_outlier_index"
+    requires_inputs = False
+    requires_weights = False
+    requires_outputs = True
+
+    def __init__(self, quantile: float = 0.999, eps: float = 1e-6):
+        super().__init__()
+        if not (0.0 < quantile < 1.0):
+            raise ValueError("quantile must be in (0, 1)")
+        self.quantile = quantile
+        self.eps = eps
+
+    def compute(
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
+    ) -> torch.Tensor:
+        if outputs is None:
+            if inputs is None or weights is None:
+                raise ValueError("activation_outlier_index requires outputs or (inputs + weights)")
+            if inputs.ndim == 2:
+                outputs = torch.matmul(inputs, weights.T)
+            else:
+                outputs = torch.matmul(inputs, weights.T)
+
+        activations = outputs
+        if activations.ndim == 3:
+            activations = activations.reshape(-1, activations.shape[-1])
+        elif activations.ndim != 2:
+            raise ValueError(f"Unsupported activation shape: {activations.shape}")
+
+        # Ensure we use a dtype supported by torch.quantile (float32/float64)
+        abs_vals = activations.abs().to(torch.float32)
+        high = torch.quantile(abs_vals, self.quantile, dim=0)
+        mean = abs_vals.mean(dim=0)
+
+        return high / (mean + self.eps)

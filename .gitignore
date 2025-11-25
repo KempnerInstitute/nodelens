@@ -1,6 +1,14 @@
 # Archive and draft directories
 _arxiv/
 drafts/
+checkpoints/
+results/
+logs/
+runs/
+outputs/
+results/
+experiments/
+
 
 # Backup files
 *.bak

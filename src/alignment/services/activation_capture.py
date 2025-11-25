@@ -80,7 +80,19 @@ class ActivationCaptureService:
 
         # Capture activations using model wrapper
         try:
+            # Prefer passing explicit layers where supported
             output, activations = self.model_wrapper.forward_with_activations(input_batch, layers=layers)
+        except TypeError as e:
+            # Backwards compatibility: some wrappers don't accept 'layers' kwarg
+            if "unexpected keyword argument 'layers'" in str(e):
+                logger.warning(
+                    "Model wrapper.forward_with_activations does not accept 'layers'; "
+                    "capturing activations for all tracked layers instead."
+                )
+                output, activations = self.model_wrapper.forward_with_activations(input_batch)
+            else:
+                logger.error(f"Failed to capture activations: {e}")
+                raise
         except Exception as e:
             logger.error(f"Failed to capture activations: {e}")
             raise
@@ -105,7 +117,11 @@ class ActivationCaptureService:
         # Capture weights if requested
         weights = {}
         if include_weights:
-            weights = self.model_wrapper.get_layer_weights(layers=layers)
+            try:
+                weights = self.model_wrapper.get_layer_weights(layers=layers)
+            except TypeError:
+                # Older wrappers may not support 'layers' kwarg
+                weights = self.model_wrapper.get_layer_weights()
 
         return ActivationData(inputs=inputs, outputs=outputs, weights=weights, layer_names=layers)
 

@@ -1,19 +1,12 @@
 # Alignment Framework
 
-Neural network alignment analysis and intelligent pruning framework.
+Neural network alignment analysis and pruning framework.
 
 ## Overview
 
-This framework provides tools for analyzing neural networks through information-theoretic metrics and performing redundancy-aware pruning and quantization.
+Tools for analyzing and pruning neural networks using alignment metrics, information theory, and structured pruning strategies.
 
-Key capabilities:
-- Alignment metrics for analyzing neural network weight-input relationships
-- Information-theoretic analysis tools
-- Pruning strategies with multiple scoring methods
-- Quantization with alignment-guided precision selection
-- Architecture support for MLPs, CNNs, Transformers, and LLMs
-- Data loading for vision and text datasets
-- Evaluation and visualization tools
+**Supported architectures**: MLPs, CNNs (ResNet, VGG), Transformers, LLMs (LLaMA, Mistral)
 
 ## Installation
 
@@ -25,53 +18,110 @@ conda activate alignment
 pip install -e .
 ```
 
-See [docs/installation.md](docs/installation.md) for details.
+## Quick Start
 
-## Usage
-
-Run experiments using configuration files:
+### Run Experiments
 
 ```bash
+# Vision model analysis
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+
+# CNN pruning
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+
+# LLM importance scoring
+python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
 ```
 
-The framework supports:
-- Training networks from scratch or loading pre-trained models
-- Computing alignment and information-theoretic scores
-- Applying pruning with different strategies and distributions
-- Quantization with various precision settings
+### Programmatic Usage
 
-Example configurations are available in `configs/examples/`:
-- `mnist_basic.yaml` - Basic alignment analysis on MNIST
-- `resnet_pruning.yaml` - Pruning ResNet on CIFAR-10
-- `llama3_scoring.yaml` - Computing scores for LLaMA models
-- `llama3_pruning.yaml` - Pruning transformer networks
+```python
+from alignment import ModelWrapper, get_metric
 
-See `configs/template.yaml` for all available configuration options.
+wrapper = ModelWrapper(model)
+rq = get_metric('rayleigh_quotient')
+
+outputs, activations = wrapper.forward_with_activations(inputs)
+weights = wrapper.get_layer_weights()
+scores = rq.compute(activations['layer_input'], weights['layer'])
+```
+
+## Configuration
+
+Experiments use YAML configuration files:
+
+```yaml
+model:
+  name: "resnet18"
+  pretrained: true
+
+dataset:
+  name: "cifar10"
+  batch_size: 128
+
+alignment_methods:
+  - "rayleigh_quotient"
+  - "pairwise_redundancy_gaussian"
+
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.3, 0.5, 0.7]
+  structured: true
+```
+
+See `configs/template.yaml` for all parameters.
+
+## Metrics
+
+| Category | Metrics |
+|----------|---------|
+| Activation | `activation_l2_norm`, `activation_variance`, `activation_outlier_index` |
+| Alignment | `rayleigh_quotient`, `delta_alignment` |
+| Information | `mutual_information_gaussian`, `pairwise_redundancy_gaussian`, `gaussian_pid_synergy_mmi` |
+| SCAR (LLM) | `scar_activation_power`, `scar_taylor`, `scar_curvature`, `scar_loss_proxy` |
+
+## Pruning Strategies
+
+| Strategy | Description |
+|----------|-------------|
+| `magnitude` | Prune by weight magnitude |
+| `alignment` | Prune by alignment score |
+| `hybrid` | Combine magnitude and alignment |
+| `random` | Random baseline |
+| `global` | Cross-layer pruning |
+
+## Project Structure
+
+```
+alignment/
+├── configs/           # YAML configuration files
+│   ├── examples/      # Example experiments
+│   └── template.yaml  # Parameter reference
+├── scripts/           # Entry points
+│   ├── run_experiment.py
+│   └── run_analysis.py
+├── src/alignment/     # Main package
+│   ├── analysis/      # Visualization
+│   ├── experiments/   # Experiment classes
+│   ├── metrics/       # Alignment metrics
+│   ├── models/        # Model wrappers
+│   └── pruning/       # Pruning strategies
+├── tests/             # Unit tests
+└── docs/              # Documentation
+```
 
 ## Documentation
 
-- [Usage Guide](docs/usage.md) - Running experiments with configs
-- [User Guide](docs/user_guide.md) - Detailed framework documentation
-- [API Reference](docs/api_reference.md) - API documentation
-- [Quick Reference](docs/quick_reference.md) - Code examples
-
-## Examples
-
-Python scripts demonstrating framework capabilities:
-
-```bash
-python examples/07_mnist_intelligent_pruning.py
-python examples/08_llama_ffn_pruning.py
-python examples/09_attention_neuron_vs_head_pruning.py
-```
-
-
+- [Usage Guide](docs/usage.md) - Running experiments and configuration
+- [API Reference](docs/api_reference.md) - Core classes and functions
+- [LLM Guide](docs/llm_guide.md) - LLM-specific analysis and pruning
 
 ## Testing
 
 ```bash
 pytest tests/
+pytest tests/unit/ -v
 ```
 
 ## License

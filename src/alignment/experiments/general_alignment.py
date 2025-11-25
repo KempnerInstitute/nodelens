@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -27,6 +28,7 @@ from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
+from alignment.pruning.dependency_aware import DependencyAwarePruning
 from alignment.pruning.strategies import MagnitudePruning, ParallelBatchPruning, RandomPruning
 from alignment.services import ActivationCaptureService, MaskOperations
 
@@ -599,21 +601,33 @@ class GeneralAlignmentExperiment(BaseExperiment):
             model_to_use = self.model
             wrapped_model_to_use = self.wrapped_model
 
+        analysis_opts = getattr(self.config, "analysis_options", {}) or {}
+        save_scores = analysis_opts.get("save_scores", True)
+        class_conditioned = analysis_opts.get("class_conditioned", False)
+
         alignment_values = {}
 
-        # Get a batch of data
-        inputs, _ = next(iter(self.data_loader))
+        # Get a batch of data (inputs and targets)
+        inputs, targets = next(iter(self.data_loader))
         inputs = inputs.to(self.config.device)
+        if isinstance(targets, torch.Tensor):
+            targets = targets.to(self.config.device)
 
         # REFACTORED: Use ActivationCaptureService (eliminates redundancy)
         try:
             capture_service = ActivationCaptureService(wrapped_model_to_use, default_mode=self.config.cnn_mode)
 
             # Capture and preprocess in one call
-            activation_data = capture_service.capture(inputs, layers=wrapped_model_to_use.tracked_layers, include_weights=True, preprocess=True)
+            activation_data = capture_service.capture(
+                inputs,
+                layers=wrapped_model_to_use.tracked_layers,
+                include_weights=True,
+                preprocess=True,
+            )
 
             # Use captured data
             preprocessed_inputs = activation_data.inputs
+            preprocessed_outputs = activation_data.outputs
             weights = activation_data.weights
 
         except Exception as e:
@@ -634,14 +648,36 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 for layer_name in wrapped_model_to_use.tracked_layers
                 if activations.get(f"{layer_name}_input") is not None
             }
+            outputs_to_process = {
+                f"{layer_name}_output": activations.get(f"{layer_name}_output")
+                for layer_name in wrapped_model_to_use.tracked_layers
+                if activations.get(f"{layer_name}_output") is not None
+            }
 
-            preprocessed = preprocess_layer_activations(inputs_to_process, layer_modules, mode=self.config.cnn_mode)
+            preprocessed_inputs_raw = preprocess_layer_activations(
+                inputs_to_process, layer_modules, mode=self.config.cnn_mode
+            )
+            preprocessed_outputs_raw = preprocess_layer_activations(
+                outputs_to_process, layer_modules, mode=self.config.cnn_mode
+            )
 
             preprocessed_inputs = {
-                layer_name: preprocessed[f"{layer_name}_input"]
+                layer_name: preprocessed_inputs_raw[f"{layer_name}_input"]
                 for layer_name in wrapped_model_to_use.tracked_layers
-                if f"{layer_name}_input" in preprocessed
+                if f"{layer_name}_input" in preprocessed_inputs_raw
             }
+            preprocessed_outputs = {
+                layer_name: preprocessed_outputs_raw[f"{layer_name}_output"]
+                for layer_name in wrapped_model_to_use.tracked_layers
+                if f"{layer_name}_output" in preprocessed_outputs_raw
+            }
+
+        # Determine a target representation for synergy-style metrics (e.g., final layer outputs)
+        target_outputs = None
+        if wrapped_model_to_use.tracked_layers:
+            target_layer = wrapped_model_to_use.tracked_layers[-1]
+            if target_layer in preprocessed_outputs:
+                target_outputs = preprocessed_outputs[target_layer]
 
         # Compute each metric
         for method in self.config.alignment_methods:
@@ -653,18 +689,166 @@ class GeneralAlignmentExperiment(BaseExperiment):
             layer_values = {}
 
             for layer_name in wrapped_model_to_use.tracked_layers:
-                if layer_name not in preprocessed_inputs or layer_name not in weights:
+                if layer_name not in weights:
                     continue
 
+                metric_kwargs = {}
+
+                # Supply inputs/weights/outputs based on metric requirements
+                if getattr(metric, "requires_inputs", False):
+                    if layer_name not in preprocessed_inputs:
+                        continue
+                    metric_kwargs["inputs"] = preprocessed_inputs[layer_name]
+
+                if getattr(metric, "requires_weights", False):
+                    metric_kwargs["weights"] = weights[layer_name]
+
+                if getattr(metric, "requires_outputs", False):
+                    if layer_name not in preprocessed_outputs:
+                        continue
+                    metric_kwargs["outputs"] = preprocessed_outputs[layer_name]
+
+                # Synergy / redundancy metrics with Gaussian approximations
+                if method == "gaussian_pid_synergy_mmi":
+                    # Uses layer outputs and a continuous target representation (e.g., final logits)
+                    if target_outputs is None:
+                        logger.warning(
+                            "gaussian_pid_synergy_mmi: target_outputs not available; skipping "
+                            f"layer {layer_name}"
+                        )
+                        continue
+                    metric_kwargs["target_outputs"] = target_outputs
+
+                if method == "synergy_gaussian_mmi":
+                    # Uses discrete class labels
+                    if targets is None:
+                        logger.warning(
+                            "synergy_gaussian_mmi: targets not available; skipping "
+                            f"layer {layer_name}"
+                        )
+                        continue
+                    metric_kwargs["targets"] = targets
+
                 try:
-                    scores = metric.compute(inputs=preprocessed_inputs[layer_name], weights=weights[layer_name])
-                    layer_values[layer_name] = scores.cpu().tolist()
+                    scores = metric.compute(**metric_kwargs)
+                    scores_cpu = scores.detach().cpu()
+                    if save_scores:
+                        layer_values[layer_name] = scores_cpu.tolist()
+                    else:
+                        layer_values[layer_name] = float(scores_cpu.mean().item())
                 except Exception as e:
                     logger.error(f"Error computing {method} for {layer_name}: {e}")
 
             alignment_values[method] = layer_values
 
+        if class_conditioned:
+            rq_metric = self.metrics.get("rayleigh_quotient")
+            if rq_metric is None:
+                logger.warning("Class-conditioned analysis requested, but 'rayleigh_quotient' metric is not initialized.")
+            elif targets is None:
+                logger.warning("Class-conditioned analysis requested, but no targets were provided.")
+            else:
+                cc_values = {}
+                delta_values = {}
+                for layer_name in wrapped_model_to_use.tracked_layers:
+                    if layer_name not in weights or layer_name not in preprocessed_inputs:
+                        continue
+                    try:
+                        cc_result = rq_metric.compute_class_conditioned(
+                            inputs=preprocessed_inputs[layer_name],
+                            weights=weights[layer_name],
+                            targets=targets,
+                            return_delta_rq=True,
+                        )
+                        cond_scores = cc_result["rq_cond"].detach().cpu()
+                        delta_scores = cc_result["delta_rq"].detach().cpu()
+
+                        if save_scores:
+                            cc_values[layer_name] = cond_scores.tolist()
+                            delta_values[layer_name] = delta_scores.tolist()
+                        else:
+                            cc_values[layer_name] = float(cond_scores.mean().item())
+                            delta_values[layer_name] = float(delta_scores.mean().item())
+                    except Exception as e:
+                        logger.error(f"Error computing class-conditioned RQ for {layer_name}: {e}")
+
+                if cc_values:
+                    alignment_values["rayleigh_quotient_class_conditioned"] = cc_values
+                if delta_values:
+                    alignment_values["rayleigh_quotient_delta"] = delta_values
+
         return alignment_values
+
+    def _run_eigenfeature_analysis(self) -> Dict[str, Any]:
+        """
+        Compute eigenfeature statistics (top eigenvalues / explained variance) for each tracked layer.
+        """
+        if not getattr(self.config, "do_eigenfeature_analysis", False):
+            return {}
+
+        if self.data_loader is None:
+            logger.warning("Eigenfeature analysis skipped (no data loader available).")
+            return {}
+
+        if self.is_multi_network and self.networks and self.wrapped_networks:
+            model_to_use = self.networks[0]
+            wrapped_model_to_use = self.wrapped_networks[0]
+        else:
+            model_to_use = self.model
+            wrapped_model_to_use = self.wrapped_model
+
+        if model_to_use is None or wrapped_model_to_use is None:
+            logger.warning("Eigenfeature analysis skipped (model not initialized).")
+            return {}
+
+        try:
+            inputs, _ = next(iter(self.data_loader))
+        except StopIteration:
+            logger.warning("Eigenfeature analysis skipped (empty data loader).")
+            return {}
+
+        inputs = inputs.to(self.config.device)
+        eigenfeature_results: Dict[str, Any] = {}
+
+        try:
+            capture_service = ActivationCaptureService(wrapped_model_to_use, default_mode=self.config.cnn_mode)
+            activation_data = capture_service.capture(inputs, layers=wrapped_model_to_use.tracked_layers, include_weights=False, preprocess=True)
+        except Exception as e:
+            logger.error(f"Activation capture failed during eigenfeature analysis: {e}")
+            return {}
+
+        for layer_name, layer_inputs in activation_data.inputs.items():
+            if layer_inputs is None:
+                continue
+            data = layer_inputs
+            if data.dim() > 2:
+                data = data.reshape(data.size(0), -1)
+            if data.size(0) < 2 or data.size(1) == 0:
+                continue
+
+            centered = data - data.mean(dim=0, keepdim=True)
+            cov = (centered.T @ centered) / max(1, centered.shape[0] - 1)
+
+            try:
+                eigvals, eigvecs = torch.linalg.eigh(cov)
+            except RuntimeError as err:
+                logger.warning(f"Eigenvalue decomposition failed for layer {layer_name}: {err}")
+                continue
+
+            order = torch.argsort(eigvals, descending=True)
+            eigvals = eigvals[order]
+            eigvecs = eigvecs[:, order]
+
+            total_var = torch.clamp(eigvals.sum(), min=1e-12)
+            cum_var = torch.cumsum(eigvals, dim=0) / total_var
+            top_k = min(10, eigvals.numel())
+
+            eigenfeature_results[layer_name] = {
+                "top_eigenvalues": eigvals[:top_k].detach().cpu().tolist(),
+                "explained_variance": cum_var[:top_k].detach().cpu().tolist(),
+            }
+
+        return eigenfeature_results
 
     def _dropout_analysis(self) -> Dict[str, Any]:
         """Perform progressive dropout analysis."""
@@ -912,6 +1096,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         if not isinstance(selection_modes, list):
             selection_modes = [selection_modes]
 
+        dependency_aware_enabled = bool(getattr(self.config, "dependency_aware_pruning", False)) and self.config.pruning_scope == "layer"
+
         for strategy_name in self.config.pruning_strategies:
             logger.info(f"Testing pruning strategy: {strategy_name}")
 
@@ -958,6 +1144,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         structured=False,  # We handle structured pruning differently for alignment
                         global_pruning=(self.config.pruning_scope == "global"),
                     )
+
+                    if dependency_aware_enabled and not pruning_config.structured:
+                        pruning_config.structured = True
 
                     # For alignment-based pruning, override structured setting
                     if strategy_name == "alignment" and self.config.alignment_structured_pruning:
@@ -1114,35 +1303,48 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         zero_params = sum((mask == 0).sum().item() for mask in masks.values())
                         overall_sparsity = zero_params / total_params if total_params > 0 else 0
                     else:
-                        # Layer-wise pruning (current behavior)
-                        layer_sparsities = {}
-                        for name, module in self.model.named_modules():
-                            if hasattr(module, "weight") and len(module.weight.shape) >= 2:
-                                # For alignment-based pruning, we need layer inputs
-                                layer_inputs = None
-                                if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
-                                    if name in layer_inputs_dict:
-                                        layer_inputs = layer_inputs_dict[name]
-                                    else:
-                                        # This should not happen if hooks worked correctly
-                                        logger.error(f"No captured inputs for layer {name} - this will cause incorrect pruning!")
-                                        continue  # Skip this layer rather than using wrong inputs
+                        dependency_result = None
+                        if dependency_aware_enabled:
+                            dependency_result = self._run_dependency_aware_pruning(
+                                strategy=strategy,
+                                strategy_name=strategy_name,
+                                selection_mode=selection_mode,
+                                amount=amount,
+                                layer_inputs=layer_inputs_dict,
+                            )
 
-                                # Prune this layer
-                                strategy.prune(module, inputs=layer_inputs)
-                                # Get sparsity
-                                sparsity = strategy.get_sparsity(module)
-                                layer_sparsities[name] = sparsity
+                        if dependency_result is not None:
+                            layer_stats = dependency_result.get("stats", {})
+                            layer_details = layer_stats.get("layers", {})
+                            layer_sparsities = {
+                                layer_name: stats.get("sparsity", 0.0) for layer_name, stats in layer_details.items()
+                            }
+                            overall_sparsity = layer_stats.get("overall_sparsity", 0.0)
+                        else:
+                            # Layer-wise pruning (fallback behavior)
+                            layer_sparsities = {}
+                            for name, module in self.model.named_modules():
+                                if hasattr(module, "weight") and len(module.weight.shape) >= 2:
+                                    layer_inputs = None
+                                    if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
+                                        if name in layer_inputs_dict:
+                                            layer_inputs = layer_inputs_dict[name]
+                                        else:
+                                            logger.error(f"No captured inputs for layer {name} - skipping structured pruning for this layer")
+                                            continue
 
-                        # Calculate overall sparsity
-                        total_params = 0
-                        zero_params = 0
-                        for module in self.model.modules():
-                            if hasattr(module, "weight"):
-                                total_params += module.weight.numel()
-                                zero_params += (module.weight == 0).sum().item()
+                                    strategy.prune(module, inputs=layer_inputs)
+                                    sparsity = strategy.get_sparsity(module)
+                                    layer_sparsities[name] = sparsity
 
-                        overall_sparsity = zero_params / total_params if total_params > 0 else 0
+                            total_params = 0
+                            zero_params = 0
+                            for module in self.model.modules():
+                                if hasattr(module, "weight"):
+                                    total_params += module.weight.numel()
+                                    zero_params += (module.weight == 0).sum().item()
+
+                            overall_sparsity = zero_params / total_params if total_params > 0 else 0
 
                     # Evaluate pruned model BEFORE fine-tuning
                     test_loss_before, test_acc_before = self._evaluate()
@@ -1819,6 +2021,81 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         return zero_params / total_params if total_params > 0 else 0.0
 
+    def _reduce_scores_to_output_neurons(self, module: nn.Module, scores: torch.Tensor) -> Optional[torch.Tensor]:
+        """
+        Collapse importance scores to a 1D tensor aligned with the module's output channels.
+        """
+        if scores is None:
+            return None
+
+        if scores.dim() == 1:
+            reduced = scores
+        else:
+            dims = tuple(range(1, scores.dim()))
+            reduced = scores.abs()
+            if dims:
+                reduced = reduced.mean(dim=dims)
+
+        expected = module.weight.shape[0]
+        if reduced.numel() != expected:
+            logger.warning(
+                f"Dependency-aware pruning: score length {reduced.numel()} does not match output dim {expected} "
+                f"for layer {module.__class__.__name__}; skipping."
+            )
+            return None
+
+        return reduced.reshape(expected)
+
+    def _run_dependency_aware_pruning(
+        self,
+        strategy,
+        strategy_name: str,
+        selection_mode: str,
+        amount: float,
+        layer_inputs: Dict[str, torch.Tensor],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Apply dependency-aware pruning by converting per-layer scores into masks that respect
+        downstream dependencies (e.g., Conv blocks, residual connections).
+        """
+        layer_scores: Dict[str, torch.Tensor] = {}
+
+        for name, module in self.model.named_modules():
+            if not hasattr(module, "weight") or module.weight.dim() < 2:
+                continue
+
+            inputs = None
+            if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
+                inputs = layer_inputs.get(name)
+                if inputs is None:
+                    logger.debug(f"Dependency-aware pruning: missing inputs for {name}, skipping.")
+                    continue
+
+            try:
+                scores = strategy.compute_importance_scores(module, inputs=inputs)
+            except Exception as exc:
+                logger.error(f"Dependency-aware pruning: failed to compute scores for {name}: {exc}")
+                continue
+
+            neuron_scores = self._reduce_scores_to_output_neurons(module, scores)
+            if neuron_scores is None:
+                continue
+
+            layer_scores[name] = neuron_scores
+
+        if not layer_scores:
+            logger.warning("Dependency-aware pruning requested but no valid layer scores were computed.")
+            return None
+
+        dep_pruner = DependencyAwarePruning(self.model)
+        try:
+            result = dep_pruner.prune(layer_scores, amount=amount, mode=selection_mode)
+        except ValueError as exc:
+            logger.error(f"Dependency-aware pruning failed validation: {exc}")
+            return None
+
+        return result
+
     def _tensorized_alignment_pruning_batch(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> Dict[str, torch.Tensor]:
         """
         Handle alignment-based pruning with tensorized evaluation and proper state preservation.
@@ -2124,7 +2401,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         # Pruning experiments
         self.pruning_results = self._pruning_experiments()
 
-        # TODO: Add eigenfeature analysis
+        # Eigenfeature analysis (optional)
+        self.eigenfeature_results = self._run_eigenfeature_analysis()
 
         # Combine all results
         all_results = {
@@ -2184,27 +2462,165 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
     def _generate_visualizations(self):
         """Generate comprehensive visualizations."""
-        output_dir = Path(self.config.plots_dir) if hasattr(self.config, "plots_dir") else Path(self.config.log_dir) / "plots"
-        output_dir.mkdir(exist_ok=True)
+        output_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        from alignment.analysis.visualization import UnifiedVisualizer
+
+        visualizer = UnifiedVisualizer()
+
+        # Optional fine-grained visualization control via config.visualization_options
+        viz_opts: Dict[str, Any] = getattr(self.config, "visualization_options", {}) or {}
+        show_training = viz_opts.get("training_curves", True)
+        show_alignment = viz_opts.get("alignment_curves", True)
+        show_dropout = viz_opts.get("dropout_plots", True)
+        show_eigen = viz_opts.get("eigen_plots", True)
+        show_pruning = viz_opts.get("pruning_plots", True)
 
         # Training curves
-        if self.train_results:
-            # TODO: Plot training curves
-            pass
+        train_losses = self.train_results.get("train_losses", [])
+        val_losses = self.train_results.get("val_losses", [])
+        train_accs = self.train_results.get("train_accs", [])
+        val_accs = self.train_results.get("val_accs", [])
+        epochs = list(range(1, len(train_losses) + 1))
+
+        if epochs and show_training:
+            loss_series = {}
+            if train_losses:
+                loss_series["Train Loss"] = train_losses
+            if val_losses and len(val_losses) == len(epochs):
+                loss_series["Val Loss"] = val_losses
+            if loss_series:
+                fig = visualizer.plot_metric_evolution(
+                    epochs,
+                    loss_series,
+                    title="Training Loss",
+                    xlabel="Epoch",
+                    ylabel="Loss",
+                    legend_title="Split",
+                    show_confidence=False,
+                    save_path=output_dir / "training_loss.png",
+                )
+                plt.close(fig)
+
+            acc_series = {}
+            if train_accs:
+                acc_series["Train Acc"] = train_accs
+            if val_accs and len(val_accs) == len(epochs):
+                acc_series["Val Acc"] = val_accs
+            if acc_series:
+                fig = visualizer.plot_metric_evolution(
+                    epochs,
+                    acc_series,
+                    title="Training Accuracy",
+                    xlabel="Epoch",
+                    ylabel="Accuracy (%)",
+                    legend_title="Split",
+                    show_confidence=False,
+                    save_path=output_dir / "training_accuracy.png",
+                )
+                plt.close(fig)
 
         # Alignment evolution
-        if "alignment" in self.train_results:
-            # TODO: Plot alignment evolution
-            pass
+        alignment_history = self.train_results.get("alignment", {})
+        if show_alignment and alignment_history:
+            for method, history in alignment_history.items():
+                summarized = []
+                for snapshot in history:
+                    aggregated_scores = []
+                    for layer_scores in snapshot.values():
+                        aggregated_scores.extend(layer_scores)
+                    if aggregated_scores:
+                        summarized.append(float(np.mean(aggregated_scores)))
+                if summarized:
+                    steps = list(range(1, len(summarized) + 1))
+                    fig = visualizer.plot_metric_evolution(
+                        steps,
+                        {method: summarized},
+                        title=f"{method} Alignment Evolution",
+                        xlabel="Measurement Index",
+                        ylabel="Average Score",
+                        legend_title="Metric",
+                        show_confidence=False,
+                        save_path=output_dir / f"alignment_{method}.png",
+                    )
+                    plt.close(fig)
 
         # Dropout analysis
-        if self.dropout_results:
-            # TODO: Plot dropout results
-            pass
+        dropout_rates = self.dropout_results.get("dropout_rates", [])
+        if dropout_rates and show_dropout:
+            accuracy_curves = {}
+            loss_curves = {}
+
+            if "accuracies" in self.dropout_results:
+                for strategy, values in self.dropout_results["accuracies"].items():
+                    if values:
+                        accuracy_curves[strategy] = values
+            else:
+                for strategy in ["low", "high", "random"]:
+                    key = f"accuracies_{strategy}"
+                    if key in self.dropout_results:
+                        accuracy_curves[strategy] = self.dropout_results[key]
+
+            if "losses" in self.dropout_results:
+                for strategy, values in self.dropout_results["losses"].items():
+                    if values:
+                        loss_curves[strategy] = values
+            else:
+                for strategy in ["low", "high", "random"]:
+                    key = f"losses_{strategy}"
+                    if key in self.dropout_results:
+                        loss_curves[strategy] = self.dropout_results[key]
+
+            dropout_steps = [rate * 100.0 for rate in dropout_rates]
+
+            if accuracy_curves:
+                fig = visualizer.plot_metric_evolution(
+                    dropout_steps,
+                    accuracy_curves,
+                    title="Dropout Accuracy vs Rate",
+                    xlabel="Dropout (%)",
+                    ylabel="Accuracy (%)",
+                    legend_title="Strategy",
+                    show_confidence=False,
+                    save_path=output_dir / "dropout_accuracy.png",
+                )
+                plt.close(fig)
+
+            if loss_curves:
+                fig = visualizer.plot_metric_evolution(
+                    dropout_steps,
+                    loss_curves,
+                    title="Dropout Loss vs Rate",
+                    xlabel="Dropout (%)",
+                    ylabel="Loss",
+                    legend_title="Strategy",
+                    show_confidence=False,
+                    save_path=output_dir / "dropout_loss.png",
+                )
+                plt.close(fig)
+
+        # Eigenfeature analysis visualizations
+        if self.eigenfeature_results and show_eigen:
+            eigen_heatmap_data = {}
+            for layer_name, info in self.eigenfeature_results.items():
+                eigenvalues = info.get("top_eigenvalues", [])
+                if eigenvalues:
+                    eigen_heatmap_data[layer_name] = {f"eig{i+1}": val for i, val in enumerate(eigenvalues)}
+
+            if eigen_heatmap_data:
+                fig = visualizer.plot_heatmap(
+                    data=eigen_heatmap_data,
+                    title="Top Eigenvalues per Layer",
+                    xlabel="Eigenvalue Index",
+                    ylabel="Layer",
+                    save_path=output_dir / "eigenvalues_heatmap.png",
+                )
+                plt.close(fig)
 
         # Pruning experiments - now enhanced with before/after comparisons
-        if self.pruning_results and "strategies" in self.pruning_results:
-            import matplotlib.pyplot as plt
+        if self.pruning_results and "strategies" in self.pruning_results and show_pruning:
+            print("HELLO D")
 
             from alignment.analysis.visualization import UnifiedVisualizer
 
@@ -2247,174 +2663,35 @@ class GeneralAlignmentExperiment(BaseExperiment):
             # Create visualizer
             visualizer = UnifiedVisualizer()
 
-            # Generate plots for each algorithm
+            # Generate plots for each algorithm using UnifiedVisualizer
             for algorithm, results in algorithm_results.items():
-                # Only create comparison plots if we have multiple selection modes
-                if len(results["before"]) > 1:
-                    # Create before/after comparison plots using matplotlib directly
-                    # Before fine-tuning plot
-                    fig_before, ax_before = plt.subplots(figsize=(10, 6))
-                    for mode, accuracies in results["before"].items():
-                        x_values = [s * 100 for s in results["sparsities"]]
-                        # Check if we have error bars
-                        if "before_std" in results and mode in results["before_std"]:
-                            yerr = results["before_std"][mode]
-                            ax_before.errorbar(
-                                x_values, accuracies, yerr=yerr, fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8, capsize=5, capthick=2
-                            )
-                        else:
-                            ax_before.plot(x_values, accuracies, "o-", label=f"{mode} mode", linewidth=2.5, markersize=8)
-                    ax_before.set_xlabel("Pruning %", fontsize=12)
-                    ax_before.set_ylabel("Accuracy (%)", fontsize=12)
-                    ax_before.set_title(f"{algorithm.capitalize()} Pruning - Before Fine-tuning", fontsize=14, fontweight="bold")
-                    ax_before.grid(True, alpha=0.3)
-                    ax_before.legend(loc="best")
-                    ax_before.set_xlim(0, 100)
-                    ax_before.set_ylim(0, 105)
-                    fig_before.tight_layout()
-                    fig_before.savefig(output_dir / f"pruning_{algorithm}_accuracy_before.png", dpi=self.config.plot_dpi, bbox_inches="tight")
-                    plt.close(fig_before)
-
-                    # After fine-tuning plot
-                    fig_after, ax_after = plt.subplots(figsize=(10, 6))
-                    for mode, accuracies in results["after"].items():
-                        x_values = [s * 100 for s in results["sparsities"]]
-                        # Check if we have error bars
-                        if "after_std" in results and mode in results["after_std"]:
-                            yerr = results["after_std"][mode]
-                            ax_after.errorbar(
-                                x_values, accuracies, yerr=yerr, fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8, capsize=5, capthick=2
-                            )
-                        else:
-                            ax_after.plot(x_values, accuracies, "o-", label=f"{mode} mode", linewidth=2.5, markersize=8)
-                    ax_after.set_xlabel("Pruning %", fontsize=12)
-                    ax_after.set_ylabel("Accuracy (%)", fontsize=12)
-                    ax_after.set_title(f"{algorithm.capitalize()} Pruning - After Fine-tuning", fontsize=14, fontweight="bold")
-                    ax_after.grid(True, alpha=0.3)
-                    ax_after.legend(loc="best")
-                    ax_after.set_xlim(0, 100)
-                    ax_after.set_ylim(0, 105)
-                    fig_after.tight_layout()
-                    fig_after.savefig(output_dir / f"pruning_{algorithm}_accuracy_after.png", dpi=self.config.plot_dpi, bbox_inches="tight")
-                    plt.close(fig_after)
-                else:
-                    # Single selection mode - create simple plot
-                    selection_mode = list(results["before"].keys())[0]
-
-                    fig, ax = plt.subplots(figsize=(10, 6))
-
-                    x_values = [s * 100 for s in results["sparsities"]]
-
-                    # Check if we have error bars
-                    if "before_std" in results and selection_mode in results["before_std"]:
-                        yerr_before = results["before_std"][selection_mode]
-                        yerr_after = (
-                            results["after_std"][selection_mode] if "after_std" in results and selection_mode in results["after_std"] else None
-                        )
-
-                        # Plot before with error bars
-                        ax.errorbar(
-                            x_values,
-                            results["before"][selection_mode],
-                            yerr=yerr_before,
-                            fmt="o-",
-                            label="Before Fine-tuning",
-                            color="#FF6B6B",
-                            linewidth=2.5,
-                            markersize=8,
-                            capsize=5,
-                            capthick=2,
-                        )
-
-                        # Plot after with error bars if available
-                        if yerr_after is not None:
-                            ax.errorbar(
-                                x_values,
-                                results["after"][selection_mode],
-                                yerr=yerr_after,
-                                fmt="o-",
-                                label="After Fine-tuning",
-                                color="#4ECDC4",
-                                linewidth=2.5,
-                                markersize=8,
-                                capsize=5,
-                                capthick=2,
-                            )
-                        else:
-                            ax.plot(
-                                x_values,
-                                results["after"][selection_mode],
-                                "o-",
-                                label="After Fine-tuning",
-                                color="#4ECDC4",
-                                linewidth=2.5,
-                                markersize=8,
-                            )
-                    else:
-                        # Plot without error bars
-                        ax.plot(
-                            x_values,
-                            results["before"][selection_mode],
-                            "o-",
-                            label="Before Fine-tuning",
-                            color="#FF6B6B",
-                            linewidth=2.5,
-                            markersize=8,
-                        )
-                        ax.plot(
-                            x_values, results["after"][selection_mode], "o-", label="After Fine-tuning", color="#4ECDC4", linewidth=2.5, markersize=8
-                        )
-
-                    ax.set_xlabel("Pruning %", fontsize=12)
-                    ax.set_ylabel("Accuracy (%)", fontsize=12)
-                    ax.set_title(f"{algorithm.capitalize()} Pruning ({selection_mode} mode)", fontsize=14, fontweight="bold")
-                    ax.grid(True, alpha=0.3)
-                    ax.legend(loc="best", frameon=True, fancybox=True, shadow=True)
-                    ax.set_xlim(0, 100)
-                    ax.set_ylim(0, 105)
-
-                    fig.tight_layout()
-                    fig.savefig(output_dir / f"pruning_{algorithm}_accuracy.png", dpi=self.config.plot_dpi, bbox_inches="tight")
+                # Create before/after comparison plots
+                figs = visualizer.plot_pruning_before_after(
+                    sparsities=results["sparsities"],
+                    before_accuracies=results["before"],
+                    after_accuracies=results["after"],
+                    before_std=results.get("before_std"),
+                    after_std=results.get("after_std"),
+                    algorithm=algorithm.capitalize(),
+                    save_dir=output_dir,
+                    dpi=self.config.plot_dpi,
+                )
+                for fig in figs:
                     plt.close(fig)
 
-                # Also create improvement plot for each selection mode
+                # Create improvement plots for each selection mode
                 for selection_mode in results["before"]:
                     if selection_mode in results["after"]:
-                        improvements = [after - before for before, after in zip(results["before"][selection_mode], results["after"][selection_mode])]
-
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        bars = ax.bar(
-                            range(len(improvements)),
-                            improvements,
-                            tick_label=[f"{s:.0%}" for s in results["sparsities"]],
-                            color=["#4ECDC4" if imp >= 0 else "#FF6B6B" for imp in improvements],
-                            alpha=0.8,
-                        )
-
-                        # Add value labels on bars
-                        for bar, imp in zip(bars, improvements):
-                            height = bar.get_height()
-                            ax.text(
-                                bar.get_x() + bar.get_width() / 2.0,
-                                height,
-                                f"{imp:+.1f}%",
-                                ha="center",
-                                va="bottom" if height >= 0 else "top",
-                                fontsize=10,
-                                fontweight="bold",
-                            )
-
-                        ax.set_xlabel("Sparsity Level", fontsize=12)
-                        ax.set_ylabel("Accuracy Improvement (%)", fontsize=12)
-                        ax.set_title(
-                            f"{algorithm.capitalize()} Pruning ({selection_mode} mode): Fine-tuning Improvement", fontsize=14, fontweight="bold"
-                        )
-                        ax.grid(True, alpha=0.3, axis="y")
-                        ax.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
-
-                        fig.tight_layout()
                         suffix = f"_{selection_mode}" if len(results["before"]) > 1 else ""
-                        fig.savefig(output_dir / f"pruning_{algorithm}_improvement{suffix}.png", dpi=self.config.plot_dpi, bbox_inches="tight")
+                        fig = visualizer.plot_pruning_improvement(
+                            sparsities=results["sparsities"],
+                            before_accuracies=results["before"][selection_mode],
+                            after_accuracies=results["after"][selection_mode],
+                            algorithm=algorithm.capitalize(),
+                            selection_mode=selection_mode,
+                            save_path=output_dir / f"pruning_{algorithm}_improvement{suffix}.png",
+                            dpi=self.config.plot_dpi,
+                        )
                         plt.close(fig)
 
         logger.info(f"Saved visualizations to {output_dir}")
@@ -2470,7 +2747,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         logger.info(f"Using single network pruning for network {network_id} (fallback mode)")
 
         # This is a simplified fallback implementation
-        # In practice, this would only be used if tensorized pruning fails
+        # In practice, this would only be used if tensorized pruning failss
         results = {"strategies": {}, "final_model_performance": {}, "network_id": network_id}
 
         # For now, return empty results - the tensorized version should handle everything
@@ -2560,10 +2837,77 @@ class GeneralAlignmentExperiment(BaseExperiment):
     def _apply_dropout_and_evaluate(
         self, dropout_rate: float, strategy: str, alignment_values: Dict[str, Dict[str, List[float]]]
     ) -> Tuple[float, float]:
-        """Apply targeted dropout and evaluate (fallback for compatibility)."""
-        # For now, return dummy values
-        # TODO: Implement targeted dropout based on alignment scores
-        return 0.0, 100.0 * (1 - dropout_rate)
+        """Apply targeted dropout (low/high/random) based on alignment scores and evaluate."""
+        if dropout_rate <= 0 or not alignment_values:
+            return self._evaluate()
+
+        metric_name = next((m for m, layers in alignment_values.items() if layers), None)
+        if metric_name is None:
+            logger.warning("No alignment values available for targeted dropout; running baseline evaluation.")
+            return self._evaluate()
+
+        saved_weights: Dict[str, torch.Tensor] = {}
+        saved_biases: Dict[str, torch.Tensor] = {}
+        modules = dict(self.model.named_modules())
+        layer_scores = alignment_values[metric_name]
+
+        try:
+            for layer_name, scores in layer_scores.items():
+                if layer_name not in modules or not scores:
+                    continue
+
+                module = modules[layer_name]
+                if not hasattr(module, "weight"):
+                    continue
+
+                weight = module.weight
+                num_units = weight.shape[0]
+                if num_units == 0:
+                    continue
+
+                scores_tensor = torch.as_tensor(scores, device=weight.device, dtype=weight.dtype)
+                if scores_tensor.numel() < num_units:
+                    # Pad scores if needed
+                    pad = num_units - scores_tensor.numel()
+                    scores_tensor = torch.nn.functional.pad(scores_tensor, (0, pad), value=scores_tensor.mean().item())
+                elif scores_tensor.numel() > num_units:
+                    scores_tensor = scores_tensor[:num_units]
+
+                count = max(1, int(round(dropout_rate * num_units)))
+                if count >= num_units:
+                    count = num_units - 1
+                if count <= 0:
+                    continue
+
+                if strategy == "high":
+                    _, indices = torch.topk(scores_tensor, count, largest=True)
+                elif strategy == "low":
+                    _, indices = torch.topk(scores_tensor, count, largest=False)
+                else:  # random
+                    perm = torch.randperm(num_units, device=weight.device)
+                    indices = perm[:count]
+
+                saved_weights[layer_name] = weight.detach().clone()
+                if hasattr(module, "bias") and module.bias is not None:
+                    saved_biases[layer_name] = module.bias.detach().clone()
+
+                with torch.no_grad():
+                    weight[indices] = 0
+                    if hasattr(module, "bias") and module.bias is not None:
+                        module.bias[indices] = 0
+
+            loss, acc = self._evaluate()
+        finally:
+            for layer_name, tensor in saved_weights.items():
+                if layer_name in modules and hasattr(modules[layer_name], "weight"):
+                    with torch.no_grad():
+                        modules[layer_name].weight.copy_(tensor)
+            for layer_name, tensor in saved_biases.items():
+                if layer_name in modules and hasattr(modules[layer_name], "bias") and modules[layer_name].bias is not None:
+                    with torch.no_grad():
+                        modules[layer_name].bias.copy_(tensor)
+
+        return loss, acc
 
     def _pruning_experiments_multi_sequential(self) -> Dict[str, Any]:
         """Perform pruning experiments on multiple networks sequentially (original slow method)."""

@@ -77,22 +77,30 @@ class RayleighQuotient(BaseMetric):
         weights: Optional[torch.Tensor] = None,
         outputs: Optional[torch.Tensor] = None,
         targets: Optional[torch.Tensor] = None,
+        covariance: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute Rayleigh Quotient values for each neuron.
 
         Args:
-            inputs: Input activations [batch_size, input_features] or [batch_size, features, patches]
+            inputs: Input activations [batch_size, input_features]
             weights: Layer weights [output_features, input_features]
-            outputs: Not used for this metric
+            covariance: Pre-computed covariance matrix (optional, overrides inputs)
             **kwargs: Additional parameters
 
         Returns:
             RQ values for each output neuron [output_features]
         """
-        if inputs is None or weights is None:
-            raise ValueError("RayleighQuotient requires both inputs and weights")
+        if weights is None:
+            raise ValueError("RayleighQuotient requires weights")
+            
+        # Use pre-computed covariance if provided (Streaming mode)
+        if covariance is not None:
+            return self._compute_from_covariance(covariance, weights)
+
+        if inputs is None:
+            raise ValueError("RayleighQuotient requires inputs (or pre-computed covariance)")
 
         # Handle patchwise inputs (3D tensors)
         if inputs.ndim == 3:
@@ -158,9 +166,13 @@ class RayleighQuotient(BaseMetric):
             inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
             cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
 
+        return self._compute_from_covariance(cov, weights)
+
+    def _compute_from_covariance(self, cov: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+        """Helper to compute RQ from covariance matrix."""
         # Add regularization to diagonal for numerical stability
         if self.regularization > 0:
-            cov = cov + self.regularization * torch.eye(input_features, device=cov.device, dtype=cov.dtype)
+            cov = cov + self.regularization * torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
 
         # Scale covariance by norm if requested
         if self.scale_by_norm:
@@ -189,10 +201,6 @@ class RayleighQuotient(BaseMetric):
                 rq_values = rq_values / trace_cov
             else:
                 logger.warning("RQ: Covariance trace near zero, cannot compute relative RQ")
-
-        # Move back to original device
-        if compute_device != weights.device:
-            rq_values = rq_values.to(weights.device)
 
         # Handle any numerical issues
         rq_values = torch.nan_to_num(rq_values, nan=0.0, posinf=0.0, neginf=0.0)

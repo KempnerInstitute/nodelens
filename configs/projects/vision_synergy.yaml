@@ -1,0 +1,67 @@
+# Vision Synergy Analysis Project
+# Redundancy-synergy analysis and pruning for ResNet
+
+experiment:
+  name: "vision_synergy_resnet18"
+  type: "alignment_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision_synergy"
+
+model:
+  name: "resnet18"
+  pretrained: true
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 256
+  num_workers: 8
+
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "synergy_gaussian_mmi"
+    - "pairwise_redundancy_gaussian"
+    - "activation_l2_norm"
+  num_samples: 8
+  
+  composite_weights:
+    rayleigh_quotient: 0.25
+    synergy_gaussian_mmi: 0.3
+    pairwise_redundancy_gaussian: -0.25
+    activation_l2_norm: 0.2
+
+pruning:
+  enabled: true
+  strategy: "alignment"
+  target_sparsity: 0.6
+  sparsity_levels: [0.3, 0.5, 0.7]
+  distribution: "adaptive_sensitivity"
+  scoring: "composite"
+  direction: "low"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0005
+
+analysis:
+  class_conditioned: true
+  save_scores: true
+  generate_plots: true
+  
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+  
+  scatter_pairs:
+    - ["pairwise_redundancy_gaussian", "synergy_gaussian_mmi"]
+    - ["rayleigh_quotient", "synergy_gaussian_mmi"]
+
+visualization:
+  format: "png"
+  dpi: 300

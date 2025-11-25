@@ -1,67 +1,80 @@
-# LLaMA-3 Pruning Example
-# Redundancy-aware pruning of LLaMA-3 model
+# Llama-3 Pruning Experiment
+# Prune MLP layers based on activation or RQ metrics with supernode protection
 
 experiment:
-  name: "llama3_redundancy_aware_pruning"
+  name: "llama3_pruning"
+  type: "llm_alignment"
   seed: 42
   device: "cuda"
   output_dir: "./results/llama3_pruning"
 
 model:
-  name: "meta-llama/Meta-Llama-3-8B"
-  pretrained: true
-  tracked_layers: null  # Auto-detect FFN and attention layers
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  
+  # LLaMA MLP: up_proj has 14336 intermediate neurons (pruning target)
+  # Note: HFCausalLM wraps LlamaForCausalLM, so paths include 'model.model.'
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
 
 dataset:
   name: "wikitext"
-  data_path: "./data"
-  batch_size: 4
-  num_workers: 2
-  max_length: 512
+  batch_size: 1
+  num_workers: 0
 
 metrics:
-  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian', 'synergy_gaussian_mmi']
+  enabled:
+    - "activation_l2_norm"
+    - "rayleigh_quotient"
+    - "activation_outlier_index"
+  num_samples: 128
   
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
-  
-  pairwise_redundancy_gaussian:
-    mode: 'output_based'  # Required for efficiency on LLMs
-    num_pairs: 20
-  
-  synergy_gaussian_mmi:
-    num_pairs: 10
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 64
+  scar_max_length: 512
+  evaluate_perplexity: true
+  evaluation_num_samples: 100
+
+supernode:
+  enabled: true
+  score_metric: "activation_l2_norm"
+  core_fraction: 0.01
+  min_core_neurons: 32
+  protect_core: true
 
 pruning:
   enabled: true
-  strategy: 'ultimate'  # Multi-stage: magnitude -> alignment -> composite
-  target_sparsity: 0.3  # Prune 30% of neurons (conservative for LLMs)
-  distribution: 'adaptive_sensitivity'  # Per-layer amounts based on importance
-  scoring: 'composite'  # Redundancy-aware: RQ + redundancy + synergy
-  direction: 'low'  # Prune low-importance neurons
-  structured: true  # Neuron-level pruning
-  dependency_aware: true  # Handle FFN up_proj <-> down_proj dependencies
+  strategy: "alignment"
+  target_sparsity: 0.3
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5]
+  scoring: "activation_l2_norm"
+  direction: "low"
+  structured: true
   
   fine_tune:
-    enabled: true
-    epochs: 5  # Short fine-tuning for LLMs
-    learning_rate: 1.0e-5  # Low LR for fine-tuning
-  
-  composite_weights:
-    alpha_mi: 0.0
-    beta_synergy: 0.3
-    gamma_redundancy: 0.4  # Remove redundant neurons
-    delta_rq: 0.3
+    enabled: false
+    epochs: 1
+    learning_rate: 1.0e-5
 
-layer_config:
-  transformer:
-    track_qkv: true
-    aggregation: 'sequence_mean'
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    supernode_analysis: true
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
 
-evaluation:
-  task: 'language_modeling'  # Use perplexity for LLMs
-  metrics: ['perplexity', 'loss']
-
-# Run with: python scripts/run_experiment.py --config configs/examples/llama3_pruning.yaml
-
+visualization:
+  format: "png"
+  dpi: 300

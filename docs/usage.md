@@ -2,275 +2,245 @@
 
 ## Running Experiments
 
-The framework uses YAML configuration files to specify experiments. This approach allows reproducible experiments and easy parameter management.
-
-### Basic Usage
+Experiments are configured via YAML files:
 
 ```bash
-conda activate alignment
-cd /path/to/alignment
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 ```
+
+### Command-Line Options
+
+| Option | Description |
+|--------|-------------|
+| `--config PATH` | YAML configuration file (required) |
+| `--device STRING` | Override device (cuda:0, cpu) |
+| `--seed INT` | Override random seed |
+| `--output-dir PATH` | Override output directory |
+| `--analysis-only` | Regenerate plots from existing results |
+| `--experiment-dir PATH` | Existing experiment directory (with --analysis-only) |
 
 ### Example Configurations
 
-The `configs/examples/` directory contains pre-configured experiments:
+| Config | Description |
+|--------|-------------|
+| `configs/examples/mnist_basic.yaml` | MLP on MNIST |
+| `configs/examples/resnet_pruning.yaml` | ResNet-18 pruning on CIFAR-10 |
+| `configs/examples/llm_alignment.yaml` | LLM importance scoring |
 
-**MNIST Basic Analysis**
-```bash
-python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+## Configuration Structure
+
+```yaml
+experiment:
+  name: "my_experiment"
+  type: "general_alignment"  # or "llm_alignment"
+  seed: 42
+  device: "cuda"
+
+model:
+  name: "resnet18"
+  pretrained: true
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 128
+
+alignment_methods:
+  - "rayleigh_quotient"
+  - "pairwise_redundancy_gaussian"
+
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.3, 0.5, 0.7]
+  selection_modes: ["low"]
+  structured: true
+  dependency_aware: true
+
+visualization:
+  enabled: true
+  format: "png"
+  dpi: 300
 ```
-Trains an MLP on MNIST and computes alignment scores.
 
-**ResNet Pruning**
+See `configs/template.yaml` for all parameters.
+
+## Pruning Configuration
+
+### Basic Pruning
+
+```yaml
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.3, 0.5, 0.7]
+  alignment_metric: "rayleigh_quotient"
+```
+
+### Structured Pruning
+
+Removes entire neurons/channels (maintains dense tensors):
+
+```yaml
+pruning:
+  structured: true
+  dependency_aware: true  # For models with skip connections
+```
+
+### Available Algorithms
+
+| Algorithm | Description |
+|-----------|-------------|
+| `magnitude` | Prune by weight magnitude |
+| `alignment` | Prune by alignment score |
+| `hybrid` | Combine magnitude and alignment |
+| `random` | Random baseline |
+| `gradient` | Gradient-based importance |
+
+### Selection Modes
+
+- `low`: Prune low-scoring neurons (standard)
+- `high`: Prune high-scoring neurons (ablation)
+- `random`: Random pruning (baseline)
+
+## Analysis
+
+### Standalone Analysis
+
+Generate visualizations from existing results:
+
+```bash
+python scripts/run_analysis.py --results-dir ./results --output-dir ./plots --quick
+
+python scripts/run_analysis.py --config configs/analysis_template.yaml \
+    --analyses histograms pruning_curves
+```
+
+### Programmatic Analysis
+
+```python
+from alignment.analysis import AnalysisRunner, AnalysisConfig
+
+config = AnalysisConfig(
+    results_dir="./results",
+    output_dir="./plots",
+    analyses=["histograms", "pruning_curves"],
+)
+runner = AnalysisRunner(config)
+outputs = runner.run()
+```
+
+### Available Analyses
+
+| Analysis | Description |
+|----------|-------------|
+| `histograms` | Importance score distributions |
+| `scatter_plots` | Metric correlations |
+| `heatmaps` | Layer-metric heatmaps |
+| `pruning_curves` | Sparsity vs performance |
+| `scar_analysis` | SCAR metrics (LLM) |
+| `supernode_analysis` | Supernode identification and cross-layer analysis |
+
+## Output Structure
+
+```
+results/experiment_YYYYMMDD_HHMMSS/
+├── experiment_config.yaml
+├── experiment.log
+├── results_YYYYMMDD_HHMMSS.json
+├── checkpoints/
+└── plots/
+    ├── training_loss.png
+    ├── pruning_accuracy.png
+    └── ...
+```
+
+## Workflow Examples
+
+### Vision Experiment
+
 ```bash
 python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 ```
-Applies pruning to ResNet-18 on CIFAR-10 using alignment-based importance scores.
 
-**LLaMA-3 Scoring**
+### LLM Analysis
+
 ```bash
-python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
+python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
 ```
-Computes per-neuron importance scores for LLaMA model feed-forward layers.
 
-**LLaMA-3 Pruning**
-```bash
-python scripts/run_experiment.py --config configs/examples/llama3_pruning.yaml
+## Supernode Analysis (LLM)
+
+Supernode analysis identifies high-importance neurons and traces their influence across layers.
+
+### Architecture Context (LLaMA FFN)
+
 ```
-Prunes LLaMA model using information-theoretic importance scores.
+input(4096) → gate_proj/up_proj(14336) → down_proj → output(4096) → next layer
+              ↑                          ↑
+              INTERMEDIATE neurons       OUTPUT to residual stream
+              (supernodes identified)    (cross-layer analysis)
+```
 
-## Command-Line Overrides
+### Analysis Workflow
 
-Override configuration parameters from the command line:
+1. **Compute metrics** on intermediate neurons (14336 dim) using the selected `score_metric`
+2. **Identify supernodes** as top neurons by the metric (e.g., top 1%)
+3. **Trace outgoing weights** from supernodes through `down_proj`
+4. **Cross-layer analysis** (optional): Analyze next layer's input neurons
+   - Identify neurons with high weight connections from supernodes
+   - Compare metrics (RQ, MI, redundancy) between high vs low connected neurons
+
+### Configuration
+
+```yaml
+supernode:
+  enabled: true
+  
+  # Supernode identification (in intermediate dimension)
+  score_metric: "scar_activation_power"  # Options: scar_activation_power, scar_taylor,
+                                         #          scar_loss_proxy, rayleigh_quotient,
+                                         #          mutual_information, activation_l2_norm
+  core_fraction: 0.01                    # Top 1% as supernodes
+  
+  # Cross-layer analysis
+  cross_layer_analysis: true             # Enable next-layer analysis
+  follower_fraction: 0.10                # Top 10% by weight from supernodes
+  
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+  
+  compare_by_connection: true            # Compare high vs low connected neurons
+  
+  # Target layers (optional)
+  # If not specified: uses tracked_layers from config
+  # If empty list []: analyzes ALL layers
+  # target_layers:
+  #   - "model.layers.10.mlp.down_proj"
+```
+
+### Generated Plots
+
+| Plot | Description |
+|------|-------------|
+| `supernode_score_dist_*.png` | Distribution of supernode scores with threshold |
+| `supernode_outgoing_weights_*.png` | Histogram of weights from supernodes |
+| `supernode_influence_*.png` | Influence of supernodes on output neurons |
+| `next_layer_correlation_*.png` | Correlation matrix of high-connection neurons |
+| `next_layer_redundancy_hist_*.png` | Redundancy distribution (next layer input) |
+| `next_layer_rq_hist_*.png` | RQ distribution (next layer input) |
+| `next_layer_mi_hist_*.png` | MI distribution (next layer input) |
+| `next_layer_rq_vs_mi_*.png` | RQ vs MI scatter (next layer input) |
+| `redundancy_comparison_*.png` | High vs low connected neuron comparison |
+
+### Regenerate Plots
 
 ```bash
 python scripts/run_experiment.py \
   --config configs/examples/resnet_pruning.yaml \
-  --device cuda:1 \
-  --batch-size 64 \
-  --target-sparsity 0.5
+  --analysis-only \
+  --experiment-dir results/previous_run
 ```
-
-Common override options:
-- `--device cuda:0` - Select GPU device
-- `--batch-size 64` - Set batch size
-- `--target-sparsity 0.7` - Set pruning target
-- `--epochs 50` - Set training epochs
-- `--output-dir ./results` - Set output directory
-
-## Creating Custom Configurations
-
-### From Template
-
-Copy the template and modify for your needs:
-
-```bash
-cp configs/template.yaml configs/my_experiment.yaml
-# Edit my_experiment.yaml with desired parameters
-python scripts/run_experiment.py --config configs/my_experiment.yaml
-```
-
-### From Existing Example
-
-Start with an example configuration:
-
-```bash
-cp configs/examples/resnet_pruning.yaml configs/my_resnet.yaml
-# Modify specific parameters
-python scripts/run_experiment.py --config configs/my_resnet.yaml
-```
-
-## Configuration Structure
-
-All configuration files follow the same structure:
-
-```yaml
-```yaml
-experiment:
-  name: "my_experiment"
-  device: "cuda"
-  
-model:
-  name: "resnet18"
-  pretrained: true
-  
-dataset:
-  name: "cifar10"
-  batch_size: 128
-
-metrics:
-  enabled: ['rayleigh_quotient']
-
-pruning:
-  enabled: false
-```
-
-See `configs/template.yaml` for all available parameters.
-
-## Experiment Types
-
-### Computing Metrics
-
-Compute alignment and information-theoretic scores:
-
-```yaml
-metrics:
-  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian', 'synergy_gaussian_mmi']
-  
-  rayleigh_quotient:
-    relative: true
-    regularization: 1.0e-6
-  
-  pairwise_redundancy_gaussian:
-    mode: 'output_based'
-    num_pairs: 10
-
-training:
-  enabled: false
-pruning:
-  enabled: false
-```
-
-### Training Networks
-
-Train from scratch with optional metric tracking:
-
-```yaml
-training:
-  enabled: true
-  epochs: 100
-  learning_rate: 0.001
-  optimizer: 'adam'
-  compute_metrics_during_training: false
-```
-
-### Pruning Networks
-
-Apply pruning with specified strategy:
-
-```yaml
-pruning:
-  enabled: true
-  strategy: 'composite'
-  target_sparsity: 0.7
-  distribution: 'adaptive_sensitivity'
-  scoring: 'rayleigh_quotient'
-  structured: true
-  
-  fine_tune:
-    enabled: true
-    epochs: 20
-    learning_rate: 0.0001
-```
-
-### Multi-Level Pruning
-
-Test multiple sparsity levels:
-
-```yaml
-pruning:
-  enabled: true
-  sparsity_levels: [0.3, 0.5, 0.7, 0.9]
-  strategy: 'magnitude'
-```
-
-## Output Structure
-
-Results are saved to the specified output directory:
-
-```
-results/[experiment_name]/
-├── config.yaml           # Configuration used
-├── results.json          # Numerical results
-├── scores/               # Per-layer importance scores
-├── plots/                # Visualizations
-└── checkpoints/          # Model checkpoints
-```
-
-## Workflow
-
-1. Create or select configuration file
-2. Activate environment: `conda activate alignment`
-3. Run experiment: `python scripts/run_experiment.py --config [path]`
-4. Results saved to output directory
-5. Analyze results and visualizations
-```
-
-See `configs/template.yaml` for complete parameter reference.
-
----
-
-## Output
-
-Results saved to experiment output directory:
-
-```
-results/
-└── [experiment_name]/
-    ├── config.yaml (saved configuration)
-    ├── results.json (numerical results)
-    ├── scores/ (per-layer scores)
-    ├── plots/ (visualizations)
-    └── checkpoints/ (model checkpoints)
-```
-
----
-
-## Examples for Different Tasks
-
-### Compute Metrics Only
-
-```yaml
-metrics:
-  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian']
-training:
-  enabled: false
-pruning:
-  enabled: false
-```
-
-### Training with Metric Tracking
-
-```yaml
-training:
-  enabled: true
-  epochs: 50
-  compute_metrics_during_training: true
-  metric_frequency: 100
-```
-
-### Pruning Experiments
-
-```yaml
-pruning:
-  enabled: true
-  strategy: 'ultimate'  # or 'magnitude', 'composite', etc.
-  target_sparsity: 0.7
-  distribution: 'adaptive_sensitivity'
-  scoring: 'composite'
-```
-
-### Multi-Sparsity Comparison
-
-```yaml
-pruning:
-  enabled: true
-  sparsity_levels: [0.3, 0.5, 0.7, 0.9]
-  # Automatically tests all levels
-```
-
----
-
-## Workflow
-
-1. Choose or create config file
-2. Activate environment: `conda activate alignment`
-3. Run: `python scripts/run_experiment.py --config [path]`
-4. Results saved to `results/[experiment_name]/`
-5. View plots in `results/[experiment_name]/plots/`
-
----
-
-This single script handles ALL experiment types through YAML configuration.
-

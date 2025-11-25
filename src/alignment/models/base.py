@@ -284,32 +284,38 @@ class BaseModelWrapper(BaseModel):
             delattr(self, "_original_weights")
 
     def forward_with_activations(
-        self, inputs: torch.Tensor, layers: Optional[List[str]] = None, **kwargs  # Allow additional kwargs for compatibility
+        self,
+        inputs: Union[torch.Tensor, Dict[str, torch.Tensor]],
+        layers: Optional[List[str]] = None,
+        **kwargs,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Forward pass with automatic activation capture using HookManager.
 
         Args:
-            inputs: Input tensor
+            inputs: Either a tensor or a dict of tensors (e.g., {'input_ids': ..., 'attention_mask': ...})
             layers: Layers to capture (None = all tracked layers)
-            **kwargs: Additional arguments (for compatibility)
+            **kwargs: Additional arguments for compatibility
 
         Returns:
             Tuple of (model_output, activations_dict)
-
-        Example:
-            >>> outputs, acts = wrapper.forward_with_activations(x)
-            >>> conv1_input = acts['conv1_input']
-            >>> conv1_output = acts['conv1_output']
         """
         layers = layers or self._tracked_layers
 
-        # Use HookManager's context manager for automatic cleanup
-        with self.hook_manager.temporary_hooks(self._model, layers, track_inputs=self.track_inputs, track_outputs=self.track_outputs) as activations:
-            outputs = self._model(inputs)
+        with self.hook_manager.temporary_hooks(
+            self._model,
+            layers,
+            track_inputs=self.track_inputs,
+            track_outputs=self.track_outputs,
+        ) as activations:
+            # Handle both dict and tensor input types
+            if isinstance(inputs, dict):
+                outputs = self._model(**inputs, **kwargs)
+            else:
+                outputs = self._model(inputs, **kwargs)
 
-        # activations are automatically cleaned up after context
         return outputs, activations.copy()
+
 
     def capture_activations_safe(self, inputs: torch.Tensor, layers: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """

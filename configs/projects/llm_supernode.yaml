@@ -1,0 +1,66 @@
+# LLM Supernode Analysis Project
+# Supernode detection and pruning for LLaMA models
+
+experiment:
+  name: "llm_supernode_llama3"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llm_supernode"
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+metrics:
+  enabled:
+    - "activation_l2_norm"
+    - "activation_outlier_index"
+  num_samples: 4
+  
+  composite_weights:
+    activation_l2_norm: 0.35
+    activation_outlier_index: 0.25
+    rayleigh_quotient: 0.25
+    pairwise_redundancy_gaussian: -0.15
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 4
+  scar_max_length: 512
+  evaluate_perplexity: true
+  evaluation_num_samples: 32
+
+supernode:
+  enabled: true
+  score_metric: "composite"
+  core_fraction: 0.12
+  min_core_neurons: 64
+  protect_core: true
+
+pruning:
+  enabled: true
+  strategy: "alignment"
+  target_sparsity: 0.4
+  sparsity_levels: [0.2, 0.4, 0.6]
+  distribution: "adaptive_sensitivity"
+  scoring: "scar_loss_proxy"
+  direction: "low"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 3
+    learning_rate: 5.0e-5
+
+visualization:
+  format: "png"
+  dpi: 300

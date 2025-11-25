@@ -1,27 +1,37 @@
 # Scripts
 
-Scripts for running experiments.
+Entry points for experiments and analysis.
 
-## Main Script
+## run_experiment.py
 
-`run_experiment.py` - Experiment runner with YAML configuration support.
+Run experiments from YAML configuration:
 
-Usage:
 ```bash
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
 ```
 
-The script handles:
-- Model loading (pretrained or training from scratch)
-- Metric computation
-- Pruning with various strategies
-- Evaluation and visualization
+Options:
+- `--config PATH` - Configuration file (required)
+- `--device STRING` - Override device
+- `--seed INT` - Override random seed
+- `--output-dir PATH` - Override output directory
+- `--analysis-only` - Regenerate plots from existing results
+- `--experiment-dir PATH` - Existing experiment directory
 
-## Configuration
+## run_analysis.py
 
-Experiments are configured via YAML files. See `configs/template.yaml` for all parameters and `configs/examples/` for working examples.
+Generate visualizations from results:
 
-## Examples vs Scripts
+```bash
+python scripts/run_analysis.py --results-dir ./results --output-dir ./plots --quick
+python scripts/run_analysis.py --config configs/analysis_template.yaml
+```
 
-- `examples/` - Standalone demonstration scripts
-- `scripts/` - Configuration-based experiment runner 
+Options:
+- `--config PATH` - Analysis config file
+- `--results-dir PATH` - Results directory
+- `--output-dir PATH` - Output directory
+- `--analyses LIST` - Specific analyses to run
+- `--quick` - Run all analyses with defaults

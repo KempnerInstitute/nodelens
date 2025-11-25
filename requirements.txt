@@ -4,6 +4,7 @@ torchvision>=0.13.0
 transformers>=4.20.0
 datasets>=2.0.0
 accelerate>=0.20.0
+peft>=0.9.0
 
 # Scientific computing
 numpy>=1.21.0
