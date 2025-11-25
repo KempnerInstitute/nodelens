@@ -2287,24 +2287,62 @@ class LLMAlignmentExperiment(BaseExperiment):
             if isinstance(mode, list):
                 mode = mode[0]
 
+            # Collect pruning results for visualization
+            pruning_data = {
+                "sparsity_levels": [],
+                "perplexities": [],
+                "baseline_perplexity": results.get("evaluation", {}).get("baseline_perplexity", None),
+            }
+
             for sparsity in sparsity_levels:
+                logger.info(f"Applying pruning: sparsity={sparsity}, metric={metric}, mode={mode}")
                 masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
 
-                # Optional: Minimal Repair
-                # if self.config.do_minimal_repair:
-                #     self.apply_minimal_repair()
+                pruning_data["sparsity_levels"].append(sparsity)
 
                 # Evaluate pruned model
                 if self.config.do_perplexity_computation:
                     pruned_ppl = self.evaluate_perplexity(
                         dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples
                     )
+                    pruning_data["perplexities"].append(pruned_ppl)
 
                     results["pruning_results"][f"sparsity_{sparsity}"] = {
                         "perplexity": pruned_ppl,
                         "sparsity": sparsity,
                         "num_pruned_layers": len(masks),
                     }
+                else:
+                    pruning_data["perplexities"].append(None)
+
+            # Generate pruning visualization
+            if getattr(self.config, "generate_plots", True) and pruning_data["perplexities"]:
+                try:
+                    import matplotlib.pyplot as plt
+                    plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+                    plots_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    viz = UnifiedVisualizer()
+                    
+                    # Filter out None values for plotting
+                    valid_data = [(s, p) for s, p in zip(pruning_data["sparsity_levels"], pruning_data["perplexities"]) if p is not None]
+                    if valid_data:
+                        sparsities, perplexities = zip(*valid_data)
+                        
+                        # Plot perplexity vs sparsity curve
+                        save_path = plots_dir / f"pruning_curve_{metric}_{mode}.png"
+                        fig = viz.plot_sparsity_performance(
+                            sparsities=list(sparsities),
+                            perplexities=list(perplexities),
+                            strategy_name=f"{metric} ({mode})",
+                            baseline_ppl=pruning_data["baseline_perplexity"],
+                            title=f"Pruning Performance: Perplexity vs Sparsity",
+                            save_path=save_path,
+                        )
+                        plt.close(fig)
+                        logger.info(f"Saved pruning curve to {save_path}")
+                except Exception as e:
+                    logger.error(f"Failed to generate pruning visualization: {e}")
 
         return results
     
