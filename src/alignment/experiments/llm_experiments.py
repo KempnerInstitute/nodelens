@@ -311,24 +311,43 @@ class LLMAlignmentExperiment(BaseExperiment):
                 seen.add(name)
         return deduped
 
-    @staticmethod
-    def _normalize_activation(tensor: torch.Tensor) -> torch.Tensor:
+    def _normalize_activation(self, tensor: torch.Tensor, hidden_dim: Optional[int] = None) -> torch.Tensor:
         """
-        Convert activations with arbitrary shape to [batch, features].
-        Handles variable sequence lengths by averaging across the sequence axis
-        and flattens higher dimensional tensors.
+        Convert LLM activations to [1, hidden_dim] by averaging over sequence.
+        
+        For LLM linear layers (up_proj, down_proj, etc.):
+        - Raw activation might be flattened to [batch, seq*hidden] or [seq*hidden]
+        - If hidden_dim is provided, we reshape and average properly
+        - Otherwise we try to infer from tensor shape
+        
+        This ensures consistent feature dimensions regardless of input sequence length.
         """
         if tensor is None:
             return None
 
         tensor = tensor.detach()
-
-        if tensor.ndim == 3:
-            tensor = tensor.mean(dim=1)
-        elif tensor.ndim > 3:
-            tensor = tensor.view(tensor.shape[0], -1)
-
-        return tensor
+        
+        # If hidden_dim is provided, use it to properly reshape
+        if hidden_dim is not None:
+            # Flatten everything and reshape to [N, hidden_dim]
+            flat = tensor.reshape(-1)
+            num_elements = flat.numel()
+            if num_elements % hidden_dim == 0:
+                # Reshape to [seq_or_batch*seq, hidden_dim] and average
+                reshaped = flat.reshape(-1, hidden_dim)
+                result = reshaped.mean(dim=0, keepdim=True)  # [1, hidden_dim]
+                return result
+        
+        # Fallback: assume last dimension is hidden_dim (works for 3D tensors)
+        if tensor.ndim >= 2:
+            hidden_dim = tensor.shape[-1]
+            flat = tensor.reshape(-1, hidden_dim)
+            result = flat.mean(dim=0, keepdim=True)
+            return result
+        elif tensor.ndim == 1:
+            return tensor.unsqueeze(0)
+        
+        return tensor.reshape(1, -1)
 
 
     def compute_importance_scores(self, num_samples: int = 1, dim="input") -> Dict[str, Dict[str, torch.Tensor]]:
@@ -403,6 +422,23 @@ class LLMAlignmentExperiment(BaseExperiment):
         # Note: OutlierIndex usually needs full distribution. Streaming approx is hard. 
         # We'll assume we can fit sampled activations for OI, but use streaming for Covariance/RQ.
 
+        # Pre-compute hidden dimensions for each tracked layer
+        layer_dims = {}
+        underlying_model = self._get_underlying_model()
+        for layer_name in self.wrapped_model._tracked_layers:
+            try:
+                module = dict(underlying_model.named_modules()).get(layer_name)
+                if module is not None and hasattr(module, 'weight'):
+                    # For Linear: weight shape is [out_features, in_features]
+                    in_dim = module.weight.shape[1]
+                    out_dim = module.weight.shape[0]
+                    layer_dims[f"{layer_name}_input"] = in_dim
+                    layer_dims[f"{layer_name}_output"] = out_dim
+                    layer_dims[layer_name] = out_dim  # Default for layer itself
+                    logger.debug(f"Layer {layer_name}: in_dim={in_dim}, out_dim={out_dim}")
+            except Exception as e:
+                logger.warning(f"Could not get dims for {layer_name}: {e}")
+
         for text in calibration_texts[:num_samples]:
             inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
             inputs = {k: v.to(self.config.device) for k, v in inputs.items()}
@@ -411,9 +447,14 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             # Process activations
             for key, value in activations.items():
-                normalized = self._normalize_activation(value)
+                logger.debug(f"Raw activation {key}: shape={value.shape}, ndim={value.ndim}")
+                # Get expected hidden_dim for this activation
+                hidden_dim = layer_dims.get(key)
+                normalized = self._normalize_activation(value, hidden_dim=hidden_dim)
                 if normalized is None:
+                    logger.warning(f"Normalization returned None for {key}")
                     continue
+                logger.debug(f"Normalized activation {key}: shape={normalized.shape}")
                 
                 # Streaming Covariance Update
                 if use_streaming and "input" in key:
@@ -427,6 +468,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                 all_activations[key].append(normalized.cpu() if use_streaming else normalized)
 
         # Concatenate collected activations
+        # Debug: check shapes before concatenation
+        for key, values in all_activations.items():
+            shapes = [v.shape for v in values[:5]]  # First 5 shapes
+            logger.info(f"Before concat {key}: first 5 shapes = {shapes}, total = {len(values)} tensors")
+        
         all_activations = {key: torch.cat(values, dim=0).to(self.config.device) for key, values in all_activations.items()}
 
         # Compute importance for each layer
@@ -1764,8 +1810,20 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
             
-            # Get the MLP module
-            mlp_module = dict(self.wrapped_model._model.named_modules())[f"model.layers.{layer_idx}.mlp"]
+            # Get the MLP module - use underlying model to handle HFCausalLM wrapper
+            underlying_model = self._get_underlying_model()
+            module_dict = dict(underlying_model.named_modules())
+            
+            # Try different module path patterns for compatibility
+            mlp_path = f"model.layers.{layer_idx}.mlp"
+            if mlp_path not in module_dict:
+                # Try without 'model.' prefix (for direct HF models)
+                mlp_path = f"layers.{layer_idx}.mlp"
+            if mlp_path not in module_dict:
+                logger.warning(f"Could not find MLP module for layer {layer_idx}")
+                continue
+            
+            mlp_module = module_dict[mlp_path]
             
             try:
                 # Verify we have the right modules

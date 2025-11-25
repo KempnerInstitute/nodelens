@@ -1,101 +1,189 @@
-# Alignment Framework Configuration Template
-# All available parameters with options documented inline
+# =============================================================================
+# Alignment Framework - Configuration Template
+# =============================================================================
+# All available options documented. Copy and modify for your experiments.
+# Usage: python scripts/run_experiment.py --config configs/template.yaml
+# =============================================================================
 
+# -----------------------------------------------------------------------------
+# EXPERIMENT
+# -----------------------------------------------------------------------------
 experiment:
-  name: "my_experiment"  # Experiment identifier
-  seed: 42  # Random seed for reproducibility
-  device: "cuda"  # Device: 'cpu', 'cuda', 'cuda:0', etc.
+  name: "my_experiment"           # Experiment identifier
+  type: "alignment_analysis"      # "alignment_analysis" (vision/MLP) or "llm_alignment" (LLMs)
+  seed: 42                        # Random seed
+  device: "cuda"                  # "cpu", "cuda", "cuda:0"
+  output_dir: "./results"         # Output directory
 
+# -----------------------------------------------------------------------------
+# MODEL
+# -----------------------------------------------------------------------------
 model:
-  name: "resnet18"  # Options: 'resnet18', 'resnet50', 'vgg16', 'mlp', 'gpt2', 'meta-llama/Meta-Llama-3-8B', etc.
-  pretrained: true  # Use pretrained weights
-  checkpoint_path: null  # Path to custom checkpoint (optional)
-  tracked_layers: null  # Layer names to track (null=auto-detect)
-  track_inputs: true  # Capture layer inputs
-  track_outputs: true  # Capture layer outputs
+  # Model name:
+  #   Vision: "resnet18", "resnet50", "vgg16", "alexnet", "mobilenet_v2"
+  #   Custom: "mlp", "cnn"
+  #   LLM: "hf_causal_lm" (set model_id below)
+  name: "resnet18"
+  pretrained: true
+  
+  # Layers to track (null = auto-detect)
+  # Vision: ["layer1", "layer2", "layer3", "layer4"]
+  # LLM (HFCausalLM): ["model.model.layers.*.mlp.up_proj"]
+  #   Note: HFCausalLM wraps LlamaForCausalLM, so paths have 'model.model.' prefix
+  tracked_layers: null
+  
+  # HuggingFace config (for LLMs only)
+  model_id: null                  # e.g., "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"         # "float32", "float16", "bfloat16"
+  device_map: "auto"              # "auto", null, or explicit mapping
 
+# -----------------------------------------------------------------------------
+# DATASET
+# -----------------------------------------------------------------------------
 dataset:
-  name: "cifar10"  # Options: 'mnist', 'cifar10', 'cifar100', 'imagenet', 'wikitext', 'c4'
-  data_path: "./data"  # Data directory
-  batch_size: 128  # Batch size
-  num_workers: 4  # Number of data loading workers
-  augmentation: true  # Data augmentation (vision only)
+  name: "cifar10"                 # Vision: mnist, cifar10, cifar100 | LLM: wikitext, c4
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
 
+# -----------------------------------------------------------------------------
+# METRICS
+# -----------------------------------------------------------------------------
+# Metrics to compute for alignment analysis
+# Available: rayleigh_quotient, activation_l2_norm, activation_outlier_index,
+#            pairwise_redundancy_gaussian, synergy_gaussian_mmi,
+#            mutual_information_gaussian, weight_cosine_similarity
 metrics:
   enabled:
     - "rayleigh_quotient"
+    - "activation_l2_norm"
     - "pairwise_redundancy_gaussian"
   
+  # Number of data samples for metric computation
+  num_samples: 128
+  
+  # Metric-specific settings
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
-    min_samples: 2
   
   pairwise_redundancy_gaussian:
-    mode: "output_based"     # 'output_based' or 'covariance_based'
+    mode: "output_based"          # "output_based" (fast) or "covariance_based"
     num_pairs: 10
-    sampling_strategy: "random"
-    aggregation: "mean"
   
   synergy_gaussian_mmi:
     num_pairs: 10
-    sampling_strategy: "random"
+  
+  # Composite score weights (for combining metrics into single importance score)
+  # Used when pruning.scoring: "composite" or supernode.score_metric: "composite"
+  composite_weights:
+    activation_l2_norm: 0.2
+    rayleigh_quotient: 0.3
+    pairwise_redundancy_gaussian: -0.2   # Negative = penalize redundancy
+    synergy_gaussian_mmi: 0.2
 
+# -----------------------------------------------------------------------------
+# TRAINING (optional)
+# -----------------------------------------------------------------------------
 training:
-  enabled: false  # Enable training
-  epochs: 100  # Number of epochs
-  learning_rate: 0.001  # Learning rate
-  optimizer: 'adam'  # Options: 'sgd', 'adam', 'adamw'
-  scheduler: 'cosine'  # Options: 'none', 'step', 'cosine', 'exponential'
-  compute_metrics_during_training: false  # Track metrics during training
-  metric_frequency: 100  # Compute metrics every N steps
-  metric_sample_size: 512  # Batch subset size for efficiency
+  enabled: false                  # Set true to train model
+  epochs: 100
+  learning_rate: 0.001
+  optimizer: "adam"               # "sgd", "adam", "adamw"
+  scheduler: "cosine"             # "none", "step", "cosine"
 
+# -----------------------------------------------------------------------------
+# SUPERNODE DETECTION
+# -----------------------------------------------------------------------------
+supernode:
+  enabled: false
+  score_metric: "activation_l2_norm"  # Metric to identify supernodes
+  core_fraction: 0.01             # Top X% as supernodes
+  min_core_neurons: 32
+  protect_core: true              # Prevent pruning supernodes
+  
+  # Cross-layer analysis (LLM only)
+  cross_layer_analysis: false
+  follower_fraction: 0.10
+
+# -----------------------------------------------------------------------------
+# PRUNING
+# -----------------------------------------------------------------------------
 pruning:
   enabled: false
-  algorithms: ["alignment"]        # Options: 'magnitude', 'random', 'alignment', 'hybrid', ...
-  sparsity_levels: [0.3, 0.5, 0.7]
-  selection_modes: ["low"]         # 'low', 'high', or 'random'
-  alignment_metric: "rayleigh_quotient"
-  scopes: "layer"                  # 'layer', 'global', or 'cascading'
-  structured: true
-  dependency_aware: false          # Propagate masks across dependent layers (ResNet blocks, etc.)
+  
+  # Strategy: "magnitude", "alignment", "hybrid", "random", "gradient"
+  strategy: "alignment"
+  
+  # Sparsity
+  target_sparsity: 0.5
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7]
+  
+  # How to distribute sparsity across layers
+  # "uniform", "global_threshold", "adaptive_sensitivity", "cascading"
+  distribution: "uniform"
+  
+  # Scoring metric for importance (uses metrics.composite_weights if "composite")
+  scoring: "rayleigh_quotient"
+  
+  # Direction: "low" = prune low-importance, "high" = prune high-importance
+  direction: "low"
+  
+  structured: true                # Prune entire neurons/channels
+  dependency_aware: false         # Handle ResNet/transformer dependencies
   
   fine_tune:
     enabled: true
     epochs: 20
     learning_rate: 0.0001
-  
-  composite_weights:
-    alpha_mi: 0.0
-    beta_synergy: 0.3
-    gamma_redundancy: 0.4
-    delta_rq: 0.3
 
+# -----------------------------------------------------------------------------
+# LLM-SPECIFIC (only for experiment.type: "llm_alignment")
+# -----------------------------------------------------------------------------
+llm:
+  # SCAR metrics for FFN analysis
+  scar_metrics: false             # Enable SCAR (activation power, curvature, loss proxy)
+  scar_num_samples: 64
+  scar_max_length: 512
+  
+  # Perplexity evaluation
+  evaluate_perplexity: false
+  evaluation_dataset: "wikitext"
+  evaluation_num_samples: 100
+
+# -----------------------------------------------------------------------------
+# CNN-SPECIFIC
+# -----------------------------------------------------------------------------
+cnn:
+  mode: "unfold"                  # "unfold", "patchwise", "channel_variance"
+
+# -----------------------------------------------------------------------------
+# ANALYSIS & VISUALIZATION
+# -----------------------------------------------------------------------------
 analysis:
-  class_conditioned: false
   save_scores: true
+  generate_plots: true
+  class_conditioned: false        # Class-conditioned metrics (vision)
+  
+  # Plots to generate
+  plots:
+    histograms: true
+    scatter_plots: true
+    heatmaps: true
+    pruning_curves: true
+    supernode_analysis: true
+  
+  histogram_bins: 100
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["pairwise_redundancy_gaussian", "synergy_gaussian_mmi"]
 
 visualization:
-  enabled: true
-  format: "png"
+  format: "png"                   # "png", "pdf", "svg"
   dpi: 300
-  training_curves: true
-  alignment_curves: true
-  dropout_plots: false
-  eigen_plots: true
-  pruning_plots: true
 
-# Post-experiment analysis (optional)
-# Runs AnalysisRunner after experiment completes to generate additional visualizations
-post_analysis:
-  analyses:
-    - histograms
-    - scatter_plots
-    - pruning_curves
-  histograms:
-    bins: 100
-    top_k: 5
-  scatter_plots:
-    pairs:
-      - ["activation_l2_norm", "rayleigh_quotient"]
+# -----------------------------------------------------------------------------
+# OUTPUT PATHS
+# -----------------------------------------------------------------------------
+log_dir: "./logs"
+checkpoint_dir: "./checkpoints"

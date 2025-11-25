@@ -338,8 +338,13 @@ class BaseExperiment(CoreBaseExperiment):
             model_id = self.config.model_config.get("model_id")
             if model_id is None:
                 raise ValueError("model_id must be set in model_config for hf_causal_lm")
-            self.tokenizer = model_id
-            logger.info(f"Loaded tokenizer for HF model '{model_id}'")
+            try:
+                from transformers import AutoTokenizer
+                self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+                logger.info(f"Loaded tokenizer for HF model '{model_id}'")
+            except ImportError:
+                logger.warning("transformers not installed; tokenizer not loaded")
+                self.tokenizer = None
 
     def _initialize_dataset(self):
         """Initialize dataset and data loader."""

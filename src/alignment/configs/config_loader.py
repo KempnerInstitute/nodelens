@@ -175,6 +175,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         model_name = model.get("name", model.get("model_name", "mlp"))
         flat_config["model_name"] = model_name
         flat_config["model_config"] = {}
+        
+        # Handle tracked_layers from model block
+        if "tracked_layers" in model:
+            flat_config["tracked_layers"] = model["tracked_layers"]
 
         # Handle different model types
         if "mlp_params" in model:
@@ -187,6 +191,15 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             if external.get("source") == "torchvision":
                 flat_config["model_name"] = external.get("name_or_path", "resnet18")
                 flat_config["pretrained"] = external.get("pretrained", False)
+        
+        # Handle HuggingFace model config (for LLMs)
+        hf_fields = ["model_id", "model_backend", "torch_dtype", "device_map"]
+        for field in hf_fields:
+            if field in model:
+                flat_config["model_config"][field] = model[field]
+        # Map hf_device_map -> device_map for backward compatibility
+        if "hf_device_map" in model:
+            flat_config["model_config"]["device_map"] = model["hf_device_map"]
 
         # Add common model params
         if "output_dim" in model:
@@ -230,14 +243,42 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map training configuration
     if "training" in nested_config:
         training = nested_config["training"]
+        # Handle both 'enabled' (new) and 'do_train' (old) keys
+        if "enabled" in training:
+            flat_config["do_train"] = training.get("enabled", False)
+        elif "do_train" in training:
+            flat_config["do_train"] = training.get("do_train", False)
         flat_config["training_epochs"] = training.get("epochs", 10)
         flat_config["learning_rate"] = training.get("learning_rate", 0.001)
         flat_config["optimizer"] = training.get("optimizer", "Adam").lower()
         flat_config["train_before_dropout"] = training.get("train_before_dropout", True)
+        if "scheduler" in training:
+            flat_config["scheduler"] = training.get("scheduler", "none")
 
-    # Map alignment settings
+    # Map alignment/metrics settings
+    # Priority: metrics.enabled > alignment.methods > alignment_methods > default
     flat_config["alignment_methods"] = nested_config.get("alignment_methods", ["rayleigh_quotient"])
     flat_config["alignment_data_num_samples"] = nested_config.get("alignment_data_num_samples", 1)
+    
+    # Handle metrics block (new cleaner format)
+    metrics_block = nested_config.get("metrics", {})
+    if isinstance(metrics_block, dict):
+        if "enabled" in metrics_block:
+            flat_config["alignment_methods"] = metrics_block["enabled"]
+        if "num_samples" in metrics_block:
+            flat_config["alignment_data_num_samples"] = metrics_block["num_samples"]
+        # Composite weights from metrics block
+        if "composite_weights" in metrics_block:
+            flat_config["alignment_composite_weights"] = metrics_block["composite_weights"]
+    
+    # Handle nested alignment block (backward compatibility)
+    if "alignment" in nested_config and isinstance(nested_config["alignment"], dict):
+        alignment_block = nested_config["alignment"]
+        if "data_num_samples" in alignment_block:
+            flat_config["alignment_data_num_samples"] = alignment_block["data_num_samples"]
+        if "methods" in alignment_block:
+            flat_config["alignment_methods"] = alignment_block["methods"]
+    
     if "alignment_settings" in nested_config:
         alignment = nested_config["alignment_settings"]
         # Map metric names
@@ -253,6 +294,17 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["force_cpu_for_large_metric_ops"] = alignment.get("force_cpu_for_large_metric_ops", False)
         flat_config["cnn_rq_aggregation_op"] = alignment.get("cnn_rq_aggregation_op", "mean")
 
+    # Handle CNN-specific settings
+    cnn_block = nested_config.get("cnn", {})
+    if isinstance(cnn_block, dict):
+        if "mode" in cnn_block:
+            flat_config["cnn_rq_aggregation_op"] = cnn_block["mode"]
+    # Also check layer_config block (backward compatibility)
+    layer_config_block = nested_config.get("layer_config", {})
+    if isinstance(layer_config_block, dict):
+        if "cnn_mode" in layer_config_block:
+            flat_config["cnn_rq_aggregation_op"] = layer_config_block["cnn_mode"]
+
     # Map pruning settings
     if "pruning_settings" in nested_config:
         pruning = nested_config["pruning_settings"]
@@ -261,7 +313,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map other settings (experiment-level overrides take precedence)
     flat_config["device"] = experiment_block.get("device", nested_config.get("device", "cuda"))
     flat_config["seed"] = experiment_block.get("seed", nested_config.get("seed", 42))
-    flat_config["alignment_composite_weights"] = nested_config.get("alignment_composite_weights", {})
+    
+    # Composite weights: metrics.composite_weights > alignment.composite_weights > top-level
+    if "alignment_composite_weights" not in flat_config:
+        flat_config["alignment_composite_weights"] = nested_config.get("alignment_composite_weights", {})
     if "alignment" in nested_config and isinstance(nested_config["alignment"], dict):
         alignment_block = nested_config["alignment"]
         if "composite_weights" in alignment_block:
@@ -323,15 +378,41 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         "dependency_aware", nested_config.get("dependency_aware_pruning", False)
     )
 
-    # Evaluation
+    # Evaluation settings
     flat_config["do_perplexity_computation"] = nested_config.get("do_perplexity_computation", False)
     flat_config["evaluation_dataset"] = nested_config.get("evaluation_dataset", "wikitext")
     flat_config["evaluation_num_samples"] = nested_config.get("evaluation_num_samples", 100)
 
-    # SCAR metrics (LLM-specific)
+    # SCAR metrics (LLM-specific) - check both old top-level and new llm block
     flat_config["do_scar_metrics"] = nested_config.get("do_scar_metrics", False)
     flat_config["scar_num_samples"] = nested_config.get("scar_num_samples", 0)
     flat_config["scar_max_length"] = nested_config.get("scar_max_length", 512)
+    
+    # Handle new llm block (cleaner format)
+    llm_block = nested_config.get("llm", {})
+    if isinstance(llm_block, dict):
+        if "scar_metrics" in llm_block:
+            flat_config["do_scar_metrics"] = llm_block["scar_metrics"]
+        if "scar_num_samples" in llm_block:
+            flat_config["scar_num_samples"] = llm_block["scar_num_samples"]
+        if "scar_max_length" in llm_block:
+            flat_config["scar_max_length"] = llm_block["scar_max_length"]
+        if "evaluate_perplexity" in llm_block:
+            flat_config["do_perplexity_computation"] = llm_block["evaluate_perplexity"]
+        if "evaluation_dataset" in llm_block:
+            flat_config["evaluation_dataset"] = llm_block["evaluation_dataset"]
+        if "evaluation_num_samples" in llm_block:
+            flat_config["evaluation_num_samples"] = llm_block["evaluation_num_samples"]
+    
+    # Also check evaluation block (backward compatibility)
+    eval_block = nested_config.get("evaluation", {})
+    if isinstance(eval_block, dict):
+        if "do_perplexity_computation" in eval_block:
+            flat_config["do_perplexity_computation"] = eval_block["do_perplexity_computation"]
+        if "evaluation_dataset" in eval_block:
+            flat_config["evaluation_dataset"] = eval_block["evaluation_dataset"]
+        if "evaluation_num_samples" in eval_block:
+            flat_config["evaluation_num_samples"] = eval_block["evaluation_num_samples"]
 
     # Map visualization settings
     flat_config["generate_plots"] = nested_config.get("generate_plots", True)

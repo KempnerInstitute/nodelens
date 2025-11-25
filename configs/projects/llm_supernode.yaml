@@ -1,33 +1,43 @@
+# LLM Supernode Analysis Project
+# Supernode detection and pruning for LLaMA models
+
 experiment:
   name: "llm_supernode_llama3"
-  type: "llm_supernode"
+  type: "llm_alignment"
   seed: 42
   device: "cuda"
+  output_dir: "./results/llm_supernode"
 
-model_name: "hf_causal_lm"
-model_config:
+model:
+  name: "hf_causal_lm"
   model_id: "meta-llama/Llama-3.1-8B"
-  model_backend: "hf"
-  device_map: null  # use 'auto' or an explicit map for multi-device; null => single-device
   torch_dtype: "bfloat16"
+  device_map: "auto"
 
-dataset_name: "wikitext"
-batch_size: 1
-num_workers: 0
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
 
-alignment_methods:
-  - "activation_l2_norm"
-  - "activation_outlier_index"
-#  - "rayleigh_quotient"
-#  - "pairwise_redundancy_gaussian"
-
-alignment_data_num_samples: 4
-alignment_composite_weights:
-  activation_l2_norm: 0.35
-  activation_outlier_index: 0.25
-  rayleigh_quotient: 0.25
-  pairwise_redundancy_gaussian: -0.15
+metrics:
+  enabled:
+    - "activation_l2_norm"
+    - "activation_outlier_index"
+  num_samples: 4
   
+  composite_weights:
+    activation_l2_norm: 0.35
+    activation_outlier_index: 0.25
+    rayleigh_quotient: 0.25
+    pairwise_redundancy_gaussian: -0.15
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 4
+  scar_max_length: 512
+  evaluate_perplexity: true
+  evaluation_num_samples: 32
+
 supernode:
   enabled: true
   score_metric: "composite"
@@ -41,56 +51,16 @@ pruning:
   target_sparsity: 0.4
   sparsity_levels: [0.2, 0.4, 0.6]
   distribution: "adaptive_sensitivity"
-  scoring: "composite"
+  scoring: "scar_loss_proxy"
   direction: "low"
   structured: true
   dependency_aware: true
+  
   fine_tune:
     enabled: true
     epochs: 3
     learning_rate: 5.0e-5
-  composite_weights:
-    alpha_mi: 0.0
-    beta_synergy: 0.2
-    gamma_redundancy: 0.4
-    delta_rq: 0.4
-
-# Use SCAR loss proxy as the primary pruning metric
-pruning_alignment_metric: "scar_loss_proxy"
-pruning_selection_mode: "low"
-
-# Optional SCAR-style supernode metrics (first-order saliency, curvature, loss proxy)
-do_scar_metrics: true
-scar_num_samples: 4
-scar_max_length: 512
-
-do_perplexity_computation: true
-evaluation_dataset: "wikitext"
-evaluation_num_samples: 32
-
-log_dir: "./logs"
-checkpoint_dir: "./checkpoints"
 
 visualization:
-  enabled: true
   format: "png"
   dpi: 300
-  style: "seaborn-v0_8-paper"
-  output_dir: "./llm_plots"
-  figures:
-    # Fig. 1 / 2-style alignment and SCAR metric distributions
-    - id: "scar_metric_distributions"
-      enabled: true
-    # Redundancy–synergy scatter and halo visualization
-    - id: "scar_redundancy_synergy_scatter"
-      enabled: true
-      filename: "fig2_redundancy_halos.png"
-    # Sparsity–perplexity curves for pruning strategies
-    - id: "scar_sparsity_perplexity"
-      enabled: true
-      filename: "fig3_sparsity_perplexity.png"
-    # SCAR ablation summary at high sparsity
-    - id: "scar_ablation"
-      enabled: true
-      filename: "fig4_ablation.png"
-
