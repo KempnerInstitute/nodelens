@@ -1,35 +1,14 @@
 # Usage Guide
 
-This document describes how to run experiments, configure analysis and pruning, and generate visualizations.
-
 ## Running Experiments
 
-Experiments are driven by YAML configuration files:
+Experiments are configured via YAML files:
 
 ```bash
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 ```
 
-Example configurations:
-
-| Config | Description |
-|--------|-------------|
-| `configs/examples/mnist_basic.yaml` | MLP on MNIST with alignment metrics |
-| `configs/examples/resnet_pruning.yaml` | ResNet-18 pruning on CIFAR-10 |
-| `configs/examples/llama3_scoring.yaml` | LLaMA importance scoring |
-| `configs/examples/llama3_pruning.yaml` | LLaMA pruning |
-| `configs/projects/llm_supernode.yaml` | LLM SCAR analysis |
-| `configs/projects/vision_synergy.yaml` | Vision redundancy/synergy analysis |
-
-## Command-Line Options
-
-```bash
-python scripts/run_experiment.py \
-  --config configs/examples/resnet_pruning.yaml \
-  --device cuda:0 \
-  --seed 42 \
-  --output-dir results/my_run
-```
+### Command-Line Options
 
 | Option | Description |
 |--------|-------------|
@@ -40,12 +19,20 @@ python scripts/run_experiment.py \
 | `--analysis-only` | Regenerate plots from existing results |
 | `--experiment-dir PATH` | Existing experiment directory (with --analysis-only) |
 
+### Example Configurations
+
+| Config | Description |
+|--------|-------------|
+| `configs/examples/mnist_basic.yaml` | MLP on MNIST |
+| `configs/examples/resnet_pruning.yaml` | ResNet-18 pruning on CIFAR-10 |
+| `configs/examples/llm_alignment.yaml` | LLM importance scoring |
+
 ## Configuration Structure
 
 ```yaml
 experiment:
   name: "my_experiment"
-  type: "general_alignment"
+  type: "general_alignment"  # or "llm_alignment"
   seed: 42
   device: "cuda"
 
@@ -69,93 +56,65 @@ pruning:
   selection_modes: ["low"]
   structured: true
   dependency_aware: true
-  fine_tune_after_pruning: true
 
 visualization:
   enabled: true
   format: "png"
   dpi: 300
-  training_curves: true
-  pruning_plots: true
-
-# Post-experiment analysis (optional)
-post_analysis:
-  analyses:
-    - histograms
-    - scatter_plots
-    - pruning_curves
-  histograms:
-    bins: 100
-    top_k: 5
 ```
 
-See `configs/template.yaml` for all available options.
+See `configs/template.yaml` for all parameters.
 
-## Visualization Options
+## Pruning Configuration
 
-### Inline Visualization (visualization block)
-
-Controls plots generated during experiment execution:
-
-| Option | Description |
-|--------|-------------|
-| `enabled` | Enable/disable plot generation |
-| `format` | Output format (png, pdf, svg) |
-| `dpi` | Resolution |
-| `training_curves` | Training loss/accuracy plots |
-| `alignment_curves` | Alignment metric evolution |
-| `dropout_plots` | Dropout analysis plots |
-| `eigen_plots` | Eigenvalue heatmaps |
-| `pruning_plots` | Pruning performance plots |
-
-### Post-Experiment Analysis (post_analysis block)
-
-Runs additional analysis after experiment completes:
+### Basic Pruning
 
 ```yaml
-post_analysis:
-  analyses:
-    - histograms        # Importance score distributions
-    - scatter_plots     # Metric correlations
-    - heatmaps          # Layer-metric heatmaps
-    - layer_distributions  # Violin/box plots
-    - pruning_curves    # Sparsity vs performance
-    - scar_analysis     # SCAR metrics (LLM)
-  
-  histograms:
-    bins: 100
-    top_k: 5
-    metrics: ["rayleigh_quotient", "activation_l2_norm"]
-  
-  scatter_plots:
-    pairs:
-      - ["activation_l2_norm", "rayleigh_quotient"]
+pruning:
+  enabled: true
+  algorithms: ["alignment"]
+  sparsity_levels: [0.3, 0.5, 0.7]
+  alignment_metric: "rayleigh_quotient"
 ```
 
-## Standalone Analysis
+### Structured Pruning
 
-For analysis of existing results without running experiments:
+Removes entire neurons/channels (maintains dense tensors):
+
+```yaml
+pruning:
+  structured: true
+  dependency_aware: true  # For models with skip connections
+```
+
+### Available Algorithms
+
+| Algorithm | Description |
+|-----------|-------------|
+| `magnitude` | Prune by weight magnitude |
+| `alignment` | Prune by alignment score |
+| `hybrid` | Combine magnitude and alignment |
+| `random` | Random baseline |
+| `gradient` | Gradient-based importance |
+
+### Selection Modes
+
+- `low`: Prune low-scoring neurons (standard)
+- `high`: Prune high-scoring neurons (ablation)
+- `random`: Random pruning (baseline)
+
+## Analysis
+
+### Standalone Analysis
+
+Generate visualizations from existing results:
 
 ```bash
-# Run analysis from config
-python scripts/run_analysis.py --config configs/analysis/vision_figures.yaml
-
-# Quick analysis
 python scripts/run_analysis.py --results-dir ./results --output-dir ./plots --quick
 
-# Specific analyses
-python scripts/run_analysis.py --results-dir ./results \
-    --analyses histograms pruning_curves \
-    --output-dir ./custom_plots
+python scripts/run_analysis.py --config configs/analysis_template.yaml \
+    --analyses histograms pruning_curves
 ```
-
-### Analysis Configuration Files
-
-| Config | Description |
-|--------|-------------|
-| `configs/analysis/llm_paper_figures.yaml` | LLM paper figures |
-| `configs/analysis/vision_figures.yaml` | Vision experiment figures |
-| `configs/analysis/llm_layer_analysis.yaml` | LLM layer analysis |
 
 ### Programmatic Analysis
 
@@ -171,39 +130,16 @@ runner = AnalysisRunner(config)
 outputs = runner.run()
 ```
 
-## Pruning Configuration
+### Available Analyses
 
-### Basic Pruning
-
-```yaml
-pruning:
-  enabled: true
-  algorithms: ["alignment"]
-  sparsity_levels: [0.3, 0.5, 0.7]
-  selection_modes: ["low"]
-  alignment_metric: "rayleigh_quotient"
-```
-
-### Dependency-Aware Pruning
-
-For models with skip connections (ResNet, DenseNet):
-
-```yaml
-pruning:
-  enabled: true
-  structured: true
-  dependency_aware: true
-```
-
-### Available Algorithms
-
-| Algorithm | Description |
-|-----------|-------------|
-| `magnitude` | Prune by weight magnitude |
-| `alignment` | Prune by alignment score |
-| `hybrid` | Combine magnitude and alignment |
-| `random` | Random baseline |
-| `gradient` | Gradient-based importance |
+| Analysis | Description |
+|----------|-------------|
+| `histograms` | Importance score distributions |
+| `scatter_plots` | Metric correlations |
+| `heatmaps` | Layer-metric heatmaps |
+| `pruning_curves` | Sparsity vs performance |
+| `scar_analysis` | SCAR metrics (LLM) |
+| `supernode_analysis` | Supernode identification and cross-layer analysis |
 
 ## Output Structure
 
@@ -213,43 +149,98 @@ results/experiment_YYYYMMDD_HHMMSS/
 ├── experiment.log
 ├── results_YYYYMMDD_HHMMSS.json
 ├── checkpoints/
-├── plots/
-│   ├── training_loss.png
-│   ├── pruning_accuracy.png
-│   └── ...
-└── analysis/           # From post_analysis
-    ├── histograms/
-    ├── scatter_plots/
+└── plots/
+    ├── training_loss.png
+    ├── pruning_accuracy.png
     └── ...
 ```
 
 ## Workflow Examples
 
-### Basic Vision Experiment
+### Vision Experiment
 
 ```bash
-# Run experiment with pruning
 python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
-
-# Results in results/resnet_pruning_YYYYMMDD_HHMMSS/
 ```
 
 ### LLM Analysis
 
 ```bash
-# Compute importance scores
-python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
-
-# Generate analysis figures
-python scripts/run_analysis.py --config configs/analysis/llm_paper_figures.yaml
+python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
 ```
+
+## Supernode Analysis (LLM)
+
+Supernode analysis identifies high-importance neurons and traces their influence across layers.
+
+### Architecture Context (LLaMA FFN)
+
+```
+input(4096) → gate_proj/up_proj(14336) → down_proj → output(4096) → next layer
+              ↑                          ↑
+              INTERMEDIATE neurons       OUTPUT to residual stream
+              (supernodes identified)    (cross-layer analysis)
+```
+
+### Analysis Workflow
+
+1. **Compute metrics** on intermediate neurons (14336 dim) using the selected `score_metric`
+2. **Identify supernodes** as top neurons by the metric (e.g., top 1%)
+3. **Trace outgoing weights** from supernodes through `down_proj`
+4. **Cross-layer analysis** (optional): Analyze next layer's input neurons
+   - Identify neurons with high weight connections from supernodes
+   - Compare metrics (RQ, MI, redundancy) between high vs low connected neurons
+
+### Configuration
+
+```yaml
+supernode:
+  enabled: true
+  
+  # Supernode identification (in intermediate dimension)
+  score_metric: "scar_activation_power"  # Options: scar_activation_power, scar_taylor,
+                                         #          scar_loss_proxy, rayleigh_quotient,
+                                         #          mutual_information, activation_l2_norm
+  core_fraction: 0.01                    # Top 1% as supernodes
+  
+  # Cross-layer analysis
+  cross_layer_analysis: true             # Enable next-layer analysis
+  follower_fraction: 0.10                # Top 10% by weight from supernodes
+  
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+  
+  compare_by_connection: true            # Compare high vs low connected neurons
+  
+  # Target layers (optional)
+  # If not specified: uses tracked_layers from config
+  # If empty list []: analyzes ALL layers
+  # target_layers:
+  #   - "model.layers.10.mlp.down_proj"
+```
+
+### Generated Plots
+
+| Plot | Description |
+|------|-------------|
+| `supernode_score_dist_*.png` | Distribution of supernode scores with threshold |
+| `supernode_outgoing_weights_*.png` | Histogram of weights from supernodes |
+| `supernode_influence_*.png` | Influence of supernodes on output neurons |
+| `next_layer_correlation_*.png` | Correlation matrix of high-connection neurons |
+| `next_layer_redundancy_hist_*.png` | Redundancy distribution (next layer input) |
+| `next_layer_rq_hist_*.png` | RQ distribution (next layer input) |
+| `next_layer_mi_hist_*.png` | MI distribution (next layer input) |
+| `next_layer_rq_vs_mi_*.png` | RQ vs MI scatter (next layer input) |
+| `redundancy_comparison_*.png` | High vs low connected neuron comparison |
 
 ### Regenerate Plots
 
 ```bash
-# Regenerate plots from existing experiment
 python scripts/run_experiment.py \
   --config configs/examples/resnet_pruning.yaml \
   --analysis-only \
-  --experiment-dir results/resnet_pruning_20240101_120000
+  --experiment-dir results/previous_run
 ```

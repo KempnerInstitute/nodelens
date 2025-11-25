@@ -57,6 +57,7 @@ class UnifiedVisualizer:
                 plt.style.use("default")
 
         self.figsize = figsize
+        self.dpi = 300  # Default DPI for saved figures
 
         # Define color palettes
         if HAS_SEABORN:
@@ -338,8 +339,12 @@ class UnifiedVisualizer:
         values: Union[torch.Tensor, np.ndarray, List[float]],
         title: str = "Histogram",
         xlabel: str = "value",
+        ylabel: str = "Count",
         bins: int = 100,
         logx: bool = False,
+        color: Optional[str] = None,
+        vline: Optional[float] = None,
+        vline_label: Optional[str] = None,
         save_path: Optional[Union[str, Path]] = None,
     ) -> Figure:
         """
@@ -349,8 +354,12 @@ class UnifiedVisualizer:
             values: 1D tensor/array/list of scalar values.
             title:  Plot title.
             xlabel: X-axis label.
+            ylabel: Y-axis label.
             bins:   Number of histogram bins.
             logx:   If True, plot log10 of positive values.
+            color:  Bar color.
+            vline:  Optional vertical line position.
+            vline_label: Label for vertical line.
             save_path: Optional path to save the figure.
         """
         if isinstance(values, torch.Tensor):
@@ -376,10 +385,19 @@ class UnifiedVisualizer:
             arr = np.log10(arr)
 
         fig, ax = plt.subplots(figsize=self.figsize)
-        ax.hist(arr, bins=bins, alpha=0.7, edgecolor="black")
+        hist_kwargs = {"bins": bins, "alpha": 0.7, "edgecolor": "black"}
+        if color:
+            hist_kwargs["color"] = color
+        ax.hist(arr, **hist_kwargs)
+        
+        if vline is not None:
+            ax.axvline(vline, color='r', linestyle='--', linewidth=2, label=vline_label)
+            if vline_label:
+                ax.legend()
+        
         ax.set_title(title)
         ax.set_xlabel("log10(value)" if logx else xlabel)
-        ax.set_ylabel("Count")
+        ax.set_ylabel(ylabel)
         ax.grid(True, alpha=0.2)
         plt.tight_layout()
 
@@ -448,6 +466,179 @@ class UnifiedVisualizer:
             save_path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(save_path, dpi=300, bbox_inches="tight")
             logger.info(f"Saved scatter plot to {save_path}")
+
+        return fig
+
+    def plot_supernode_comparison(
+        self,
+        scores: Dict[str, Union[torch.Tensor, np.ndarray]],
+        supernode_mask: Union[torch.Tensor, np.ndarray],
+        metrics: List[str],
+        layer_name: str = "",
+        save_dir: Optional[Union[str, Path]] = None,
+    ) -> List[Figure]:
+        """
+        Plot comparison of metrics between supernodes and non-supernodes.
+
+        Creates violin plots, histograms, and summary statistics comparing
+        supernode neurons to regular neurons for each metric.
+
+        Args:
+            scores: Dictionary mapping metric names to score arrays [num_neurons]
+            supernode_mask: Boolean mask indicating supernodes [num_neurons]
+            metrics: List of metric names to compare
+            layer_name: Name of the layer for plot titles
+            save_dir: Directory to save plots
+
+        Returns:
+            List of generated figures
+        """
+        def _to_array(z):
+            if isinstance(z, torch.Tensor):
+                return z.detach().cpu().to(torch.float32).numpy()
+            return np.asarray(z, dtype=np.float32)
+
+        mask = _to_array(supernode_mask).astype(bool)
+        figures = []
+
+        if save_dir is not None:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        for metric_name in metrics:
+            if metric_name not in scores:
+                logger.warning(f"Metric '{metric_name}' not found in scores, skipping.")
+                continue
+
+            vals = _to_array(scores[metric_name])
+            if vals.shape[0] != mask.shape[0]:
+                logger.warning(f"Score shape {vals.shape} doesn't match mask shape {mask.shape}, skipping {metric_name}.")
+                continue
+
+            supernode_vals = vals[mask]
+            non_supernode_vals = vals[~mask]
+
+            if len(supernode_vals) == 0 or len(non_supernode_vals) == 0:
+                logger.warning(f"Empty group for {metric_name}, skipping.")
+                continue
+
+            # Create figure with two subplots
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+            # Violin/box plot comparison
+            ax = axes[0]
+            data = [supernode_vals, non_supernode_vals]
+            labels = [f"Supernodes\n(n={len(supernode_vals)})", f"Non-supernodes\n(n={len(non_supernode_vals)})"]
+            
+            bp = ax.boxplot(data, labels=labels, patch_artist=True, notch=True)
+            bp['boxes'][0].set_facecolor('coral')
+            bp['boxes'][1].set_facecolor('steelblue')
+            ax.set_ylabel(metric_name)
+            ax.set_title(f"{metric_name}: Supernodes vs Non-supernodes")
+            
+            # Add mean markers
+            for i, d in enumerate(data):
+                ax.scatter([i + 1], [np.mean(d)], color='darkred', marker='D', s=50, zorder=3, label='Mean' if i == 0 else '')
+            ax.legend()
+
+            # Histogram comparison
+            ax = axes[1]
+            bins = np.linspace(min(vals.min(), 0), vals.max(), 50)
+            ax.hist(supernode_vals, bins=bins, alpha=0.6, color='coral', 
+                   label=f"Supernodes (mean={np.mean(supernode_vals):.4f})", density=True)
+            ax.hist(non_supernode_vals, bins=bins, alpha=0.6, color='steelblue',
+                   label=f"Non-supernodes (mean={np.mean(non_supernode_vals):.4f})", density=True)
+            ax.axvline(np.mean(supernode_vals), color='darkred', linestyle='--', linewidth=2)
+            ax.axvline(np.mean(non_supernode_vals), color='darkblue', linestyle='--', linewidth=2)
+            ax.set_xlabel(metric_name)
+            ax.set_ylabel("Density")
+            ax.set_title(f"{metric_name} Distribution Comparison")
+            ax.legend()
+
+            layer_suffix = f" - {layer_name}" if layer_name else ""
+            fig.suptitle(f"Supernode Analysis{layer_suffix}", fontsize=12)
+            plt.tight_layout()
+
+            if save_dir is not None:
+                safe_metric = metric_name.replace("/", "_").replace(" ", "_")
+                safe_layer = layer_name.replace(".", "_").replace("/", "_") if layer_name else "all"
+                save_path = save_dir / f"supernode_comparison_{safe_metric}_{safe_layer}.png"
+                fig.savefig(save_path, dpi=300, bbox_inches="tight")
+                logger.info(f"Saved supernode comparison to {save_path}")
+
+            figures.append(fig)
+
+        return figures
+
+    def plot_scatter_with_groups(
+        self,
+        x: Union[torch.Tensor, np.ndarray],
+        y: Union[torch.Tensor, np.ndarray],
+        group_mask: Union[torch.Tensor, np.ndarray],
+        xlabel: str,
+        ylabel: str,
+        title: str,
+        group_labels: Tuple[str, str] = ("Supernodes", "Non-supernodes"),
+        save_path: Optional[Union[str, Path]] = None,
+        show_regression: bool = True,
+    ) -> Figure:
+        """
+        Scatter plot with two groups highlighted differently.
+
+        Args:
+            x: X-axis values
+            y: Y-axis values
+            group_mask: Boolean mask for group 1 (True) vs group 2 (False)
+            xlabel: X-axis label
+            ylabel: Y-axis label
+            title: Plot title
+            group_labels: Labels for the two groups
+            save_path: Path to save figure
+            show_regression: Whether to show regression lines
+
+        Returns:
+            Matplotlib figure
+        """
+        def _to_array(z):
+            if isinstance(z, torch.Tensor):
+                return z.detach().cpu().to(torch.float32).numpy()
+            return np.asarray(z, dtype=np.float32)
+
+        x_arr = _to_array(x)
+        y_arr = _to_array(y)
+        mask = _to_array(group_mask).astype(bool)
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+
+        # Plot non-supernodes first (background)
+        ax.scatter(x_arr[~mask], y_arr[~mask], s=15, alpha=0.4, c='steelblue',
+                  label=group_labels[1], edgecolors='none')
+        # Plot supernodes on top
+        ax.scatter(x_arr[mask], y_arr[mask], s=40, alpha=0.8, c='coral',
+                  label=group_labels[0], edgecolors='darkred', linewidths=0.5)
+
+        if show_regression:
+            # Regression for all data
+            finite_mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+            if finite_mask.sum() > 2:
+                from scipy import stats
+                slope, intercept, r_value, _, _ = stats.linregress(x_arr[finite_mask], y_arr[finite_mask])
+                x_line = np.linspace(x_arr[finite_mask].min(), x_arr[finite_mask].max(), 100)
+                ax.plot(x_line, slope * x_line + intercept, 'k--', alpha=0.5,
+                       label=f"r={r_value:.3f}")
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path is not None:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Saved grouped scatter to {save_path}")
 
         return fig
 
@@ -1200,6 +1391,416 @@ Generated visualization report for alignment analysis.
             fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
+
+    # ========== Supernode Analysis Plots ==========
+
+    def plot_supernode_activation_distribution(
+        self,
+        activation_values: Union[torch.Tensor, np.ndarray],
+        threshold_value: float,
+        threshold_percentile: float,
+        layer_name: str = "",
+        metric_name: str = "scar_activation_power",
+        save_path: Optional[Union[str, Path]] = None,
+        log_scale: bool = True,
+    ) -> Figure:
+        """
+        Plot distribution of supernode scores with threshold.
+
+        Args:
+            activation_values: Array of score values for all neurons
+            threshold_value: The threshold value separating supernodes
+            threshold_percentile: Percentile of threshold (e.g., 0.01 for top 1%)
+            layer_name: Layer name for title
+            metric_name: Name of the metric used for supernode identification
+            save_path: Path to save figure
+            log_scale: Whether to use log scale on y-axis
+
+        Returns:
+            Matplotlib figure
+        """
+        vals = self._to_numpy(activation_values)
+        
+        # Format metric name for display
+        metric_display = metric_name.replace("_", " ").replace("scar ", "").title()
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+        ax.hist(vals, bins=100, alpha=0.7, color='steelblue', edgecolor='none')
+        ax.axvline(threshold_value, color='coral', linestyle='--', linewidth=2,
+                   label=f"Supernode threshold (top {threshold_percentile*100:.1f}%)")
+        ax.set_xlabel(metric_display)
+        ax.set_ylabel("Count")
+        title = f"Supernode Score Distribution ({metric_display})"
+        if layer_name:
+            title += f"\n{layer_name}"
+        ax.set_title(title)
+        ax.legend()
+        if log_scale:
+            ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved supernode score distribution to {save_path}")
+
+        return fig
+
+    def plot_outgoing_weights_distribution(
+        self,
+        weights: Union[torch.Tensor, np.ndarray],
+        layer_name: str = "",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot histogram of outgoing weights from supernodes.
+
+        Args:
+            weights: Flattened array of weight values
+            layer_name: Layer name for title
+            save_path: Path to save figure
+
+        Returns:
+            Matplotlib figure
+        """
+        vals = self._to_numpy(weights).flatten()
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+        ax.hist(vals, bins=100, alpha=0.7, color='steelblue', edgecolor='none')
+        ax.set_xlabel("Weight Value")
+        ax.set_ylabel("Count")
+        title = "Outgoing Weights from Supernodes"
+        if layer_name:
+            title += f" - {layer_name}"
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved outgoing weights distribution to {save_path}")
+
+        return fig
+
+    def plot_supernode_influence(
+        self,
+        influence_values: Union[torch.Tensor, np.ndarray],
+        threshold_value: float,
+        threshold_percentile: float,
+        layer_name: str = "",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot distribution of supernode influence on downstream neurons.
+
+        Args:
+            influence_values: Total weight from supernodes for each output neuron
+            threshold_value: Threshold for "follower" neurons
+            threshold_percentile: Percentile of threshold
+            layer_name: Layer name for title
+            save_path: Path to save figure
+
+        Returns:
+            Matplotlib figure
+        """
+        vals = self._to_numpy(influence_values)
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+        ax.hist(vals, bins=100, alpha=0.7, color='steelblue', edgecolor='none',
+                label="All output neurons")
+        ax.axvline(threshold_value, color='coral', linestyle='--', linewidth=2,
+                   label=f"Follower threshold (top {threshold_percentile*100:.1f}%)")
+        ax.set_xlabel("Total Weight from Supernodes")
+        ax.set_ylabel("Count")
+        title = "Supernode Influence on Output Neurons"
+        if layer_name:
+            title += f" - {layer_name}"
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved supernode influence distribution to {save_path}")
+
+        return fig
+
+    def plot_correlation_matrix(
+        self,
+        corr_matrix: Union[torch.Tensor, np.ndarray],
+        title: str = "Correlation Matrix",
+        xlabel: str = "Neuron Index",
+        ylabel: str = "Neuron Index",
+        save_path: Optional[Union[str, Path]] = None,
+        vmin: float = -1,
+        vmax: float = 1,
+    ) -> Figure:
+        """
+        Plot a correlation matrix as a heatmap.
+
+        Args:
+            corr_matrix: Square correlation matrix
+            title: Plot title
+            xlabel: X-axis label
+            ylabel: Y-axis label
+            save_path: Path to save figure
+            vmin: Minimum value for colormap
+            vmax: Maximum value for colormap
+
+        Returns:
+            Matplotlib figure
+        """
+        matrix = self._to_numpy(corr_matrix)
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        im = ax.imshow(matrix, cmap='RdBu_r', vmin=vmin, vmax=vmax, aspect='auto')
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        plt.colorbar(im, ax=ax, label="Correlation")
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved correlation matrix to {save_path}")
+
+        return fig
+
+    def plot_redundancy_comparison(
+        self,
+        high_redundancy: Union[torch.Tensor, np.ndarray],
+        low_redundancy: Union[torch.Tensor, np.ndarray],
+        high_mean: float,
+        low_mean: float,
+        layer_name: str = "",
+        follower_fraction: float = 0.1,
+        save_dir: Optional[Union[str, Path]] = None,
+    ) -> List[Figure]:
+        """
+        Create comparison plots for redundancy between high and low supernode-connected neurons.
+
+        Args:
+            high_redundancy: Pairwise correlations for high-connected neurons
+            low_redundancy: Pairwise correlations for low-connected neurons
+            high_mean: Mean redundancy for high-connected group
+            low_mean: Mean redundancy for low-connected group
+            layer_name: Layer name for titles
+            follower_fraction: Fraction used to define high/low groups
+            save_dir: Directory to save figures
+
+        Returns:
+            List of matplotlib figures
+        """
+        high_vals = self._to_numpy(high_redundancy)
+        low_vals = self._to_numpy(low_redundancy)
+
+        figures = []
+        if save_dir:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        layer_suffix = layer_name.replace('.', '_') if layer_name else "layer"
+
+        # Plot 1: Side-by-side histograms
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        axes[0].hist(high_vals, bins=50, alpha=0.7, color='coral', edgecolor='darkred')
+        axes[0].axvline(high_mean, color='darkred', linestyle='--', linewidth=2,
+                        label=f"Mean: {high_mean:.4f}")
+        axes[0].set_xlabel("Absolute Pairwise Correlation")
+        axes[0].set_ylabel("Count")
+        axes[0].set_title(f"High Supernode-Connected Neurons\n(top {follower_fraction*100:.0f}%)")
+        axes[0].legend()
+        axes[0].set_xlim(0, 1)
+
+        axes[1].hist(low_vals, bins=50, alpha=0.7, color='steelblue', edgecolor='darkblue')
+        axes[1].axvline(low_mean, color='darkblue', linestyle='--', linewidth=2,
+                        label=f"Mean: {low_mean:.4f}")
+        axes[1].set_xlabel("Absolute Pairwise Correlation")
+        axes[1].set_ylabel("Count")
+        axes[1].set_title(f"Low Supernode-Connected Neurons\n(bottom {follower_fraction*100:.0f}%)")
+        axes[1].legend()
+        axes[1].set_xlim(0, 1)
+
+        plt.suptitle(f"Redundancy Comparison: High vs Low Supernode Connection - {layer_name}", fontsize=12)
+        plt.tight_layout()
+
+        if save_dir:
+            fig.savefig(save_dir / f"redundancy_comparison_sidebyside_{layer_suffix}.png",
+                        dpi=self.dpi, bbox_inches='tight')
+        figures.append(fig)
+
+        # Plot 2: Overlaid histograms
+        fig, ax = plt.subplots(figsize=self.figsize)
+        ax.hist(high_vals, bins=50, alpha=0.6, color='coral',
+                label=f"High-connected (mean={high_mean:.4f})")
+        ax.hist(low_vals, bins=50, alpha=0.6, color='steelblue',
+                label=f"Low-connected (mean={low_mean:.4f})")
+        ax.axvline(high_mean, color='darkred', linestyle='--', linewidth=2)
+        ax.axvline(low_mean, color='darkblue', linestyle='--', linewidth=2)
+        ax.set_xlabel("Absolute Pairwise Correlation (Redundancy)")
+        ax.set_ylabel("Count")
+        ax.set_title(f"Redundancy: High vs Low Supernode-Connected Neurons\n{layer_name}")
+        ax.legend()
+        ax.set_xlim(0, 1)
+        plt.tight_layout()
+
+        if save_dir:
+            fig.savefig(save_dir / f"redundancy_comparison_overlay_{layer_suffix}.png",
+                        dpi=self.dpi, bbox_inches='tight')
+        figures.append(fig)
+
+        # Plot 3: Box plot comparison
+        fig, ax = plt.subplots(figsize=(8, 6))
+        bp = ax.boxplot([high_vals, low_vals], labels=['High-connected', 'Low-connected'],
+                        patch_artist=True, notch=True)
+        bp['boxes'][0].set_facecolor('coral')
+        bp['boxes'][1].set_facecolor('steelblue')
+        ax.set_ylabel("Absolute Pairwise Correlation (Redundancy)")
+
+        # Compute effect size
+        pooled_std = np.sqrt((np.std(high_vals)**2 + np.std(low_vals)**2) / 2)
+        effect_size = (high_mean - low_mean) / (pooled_std + 1e-8)
+        ax.set_title(f"Redundancy Distribution Comparison\n{layer_name}\n(Effect size: {effect_size:.3f})")
+        plt.tight_layout()
+
+        if save_dir:
+            fig.savefig(save_dir / f"redundancy_comparison_boxplot_{layer_suffix}.png",
+                        dpi=self.dpi, bbox_inches='tight')
+        figures.append(fig)
+
+        return figures
+
+    def plot_metric_scatter_by_group(
+        self,
+        x_values: Union[torch.Tensor, np.ndarray],
+        y_values: Union[torch.Tensor, np.ndarray],
+        group_labels: Union[torch.Tensor, np.ndarray, List[str]],
+        xlabel: str,
+        ylabel: str,
+        title: str,
+        save_path: Optional[Union[str, Path]] = None,
+        colors: Optional[Dict[str, str]] = None,
+    ) -> Figure:
+        """
+        Scatter plot with points colored by group.
+
+        Args:
+            x_values: X-axis values
+            y_values: Y-axis values
+            group_labels: Group label for each point
+            xlabel: X-axis label
+            ylabel: Y-axis label
+            title: Plot title
+            save_path: Path to save figure
+            colors: Optional mapping of group names to colors
+
+        Returns:
+            Matplotlib figure
+        """
+        x = self._to_numpy(x_values)
+        y = self._to_numpy(y_values)
+
+        if isinstance(group_labels, (torch.Tensor, np.ndarray)):
+            labels = self._to_numpy(group_labels)
+        else:
+            labels = np.array(group_labels)
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+
+        unique_groups = np.unique(labels)
+        default_colors = {'High': 'coral', 'Low': 'steelblue', 'high': 'coral', 'low': 'steelblue'}
+        colors = colors or default_colors
+
+        for group in unique_groups:
+            mask = labels == group
+            color = colors.get(str(group), None)
+            ax.scatter(x[mask], y[mask], alpha=0.6, label=str(group), c=color, s=20)
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved grouped scatter to {save_path}")
+
+        return fig
+
+    def plot_rq_vs_mi(
+        self,
+        rq_scores: Union[torch.Tensor, np.ndarray],
+        mi_scores: Union[torch.Tensor, np.ndarray],
+        redundancy_scores: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        layer_name: str = "",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Scatter plot of Rayleigh Quotient vs Mutual Information.
+
+        Args:
+            rq_scores: RQ values per neuron
+            mi_scores: MI values per neuron
+            redundancy_scores: Optional redundancy values for coloring
+            layer_name: Layer name for title
+            save_path: Path to save figure
+
+        Returns:
+            Matplotlib figure
+        """
+        rq = self._to_numpy(rq_scores)
+        mi = self._to_numpy(mi_scores)
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+
+        if redundancy_scores is not None:
+            redundancy = self._to_numpy(redundancy_scores)
+            # Ensure same length
+            min_len = min(len(rq), len(mi), len(redundancy))
+            scatter = ax.scatter(rq[:min_len], mi[:min_len], c=redundancy[:min_len],
+                                 cmap='viridis', alpha=0.6, s=30)
+            plt.colorbar(scatter, ax=ax, label="Redundancy")
+        else:
+            ax.scatter(rq, mi, alpha=0.6, s=30, c='steelblue')
+
+        ax.set_xlabel("Rayleigh Quotient")
+        ax.set_ylabel("Mutual Information")
+        title = "RQ vs MI"
+        if layer_name:
+            title += f" - {layer_name}"
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved RQ vs MI plot to {save_path}")
+
+        return fig
+
+    def _to_numpy(self, data: Union[torch.Tensor, np.ndarray, List]) -> np.ndarray:
+        """Convert data to numpy array."""
+        if isinstance(data, torch.Tensor):
+            return data.detach().cpu().to(torch.float32).numpy()
+        if isinstance(data, np.ndarray):
+            return data.astype(np.float32, copy=False)
+        return np.asarray(data, dtype=np.float32)
 
 
 # Convenience functions for quick plotting

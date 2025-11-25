@@ -1,18 +1,12 @@
 # Alignment Framework
 
-Neural network alignment analysis and pruning framework for vision models and LLMs.
+Neural network alignment analysis and pruning framework.
 
 ## Overview
 
-This framework provides tools for:
+Tools for analyzing and pruning neural networks using alignment metrics, information theory, and structured pruning strategies.
 
-- Computing alignment metrics between neural network weights and activations
-- Information-theoretic analysis (redundancy, synergy, mutual information)
-- Structured and unstructured pruning with multiple scoring methods
-- Dependency-aware pruning for architectures with skip connections
-- LLM-specific analysis including SCAR metrics and attention head pruning
-
-Supported architectures: MLPs, CNNs (ResNet, VGG), Transformers, LLMs (LLaMA, Mistral).
+**Supported architectures**: MLPs, CNNs (ResNet, VGG), Transformers, LLMs (LLaMA, Mistral)
 
 ## Installation
 
@@ -26,28 +20,17 @@ pip install -e .
 
 ## Quick Start
 
-### Running Experiments
+### Run Experiments
 
 ```bash
-# Vision model alignment analysis
+# Vision model analysis
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
-# ResNet pruning on CIFAR-10
+# CNN pruning
 python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 
 # LLM importance scoring
-python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
-```
-
-### Standalone Analysis
-
-```bash
-# Generate visualizations from experiment results
-python scripts/run_analysis.py --results-dir ./results --output-dir ./plots --quick
-
-# Run specific analyses
-python scripts/run_analysis.py --config configs/analysis_template.yaml \
-    --analyses histograms pruning_curves
+python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
 ```
 
 ### Programmatic Usage
@@ -55,18 +38,17 @@ python scripts/run_analysis.py --config configs/analysis_template.yaml \
 ```python
 from alignment import ModelWrapper, get_metric
 
-# Wrap model and compute alignment scores
 wrapper = ModelWrapper(model)
-rq_metric = get_metric('rayleigh_quotient')
+rq = get_metric('rayleigh_quotient')
 
 outputs, activations = wrapper.forward_with_activations(inputs)
 weights = wrapper.get_layer_weights()
-scores = rq_metric.compute(activations['layer_input'], weights['layer'])
+scores = rq.compute(activations['layer_input'], weights['layer'])
 ```
 
 ## Configuration
 
-Experiments are configured via YAML files. Key sections:
+Experiments use YAML configuration files:
 
 ```yaml
 model:
@@ -88,9 +70,9 @@ pruning:
   structured: true
 ```
 
-See `configs/template.yaml` for all options.
+See `configs/template.yaml` for all parameters.
 
-## Available Metrics
+## Metrics
 
 | Category | Metrics |
 |----------|---------|
@@ -101,26 +83,26 @@ See `configs/template.yaml` for all options.
 
 ## Pruning Strategies
 
-- **Magnitude**: Prune by weight magnitude
-- **Alignment**: Prune by alignment score (low or high)
-- **Hybrid**: Combine magnitude and alignment
-- **Random**: Random baseline
-- **Global**: Cross-layer pruning
-- **Dependency-aware**: Maintain shape compatibility in skip connections
+| Strategy | Description |
+|----------|-------------|
+| `magnitude` | Prune by weight magnitude |
+| `alignment` | Prune by alignment score |
+| `hybrid` | Combine magnitude and alignment |
+| `random` | Random baseline |
+| `global` | Cross-layer pruning |
 
 ## Project Structure
 
 ```
 alignment/
-├── configs/           # Configuration files
+├── configs/           # YAML configuration files
 │   ├── examples/      # Example experiments
-│   ├── projects/      # Project-specific configs
-│   └── template.yaml  # Full parameter reference
+│   └── template.yaml  # Parameter reference
 ├── scripts/           # Entry points
 │   ├── run_experiment.py
 │   └── run_analysis.py
 ├── src/alignment/     # Main package
-│   ├── analysis/      # Visualization and reporting
+│   ├── analysis/      # Visualization
 │   ├── experiments/   # Experiment classes
 │   ├── metrics/       # Alignment metrics
 │   ├── models/        # Model wrappers
@@ -131,16 +113,15 @@ alignment/
 
 ## Documentation
 
-- [Usage Guide](docs/usage.md) - Running experiments
-- [LLM Experiments Guide](docs/LLM_EXPERIMENTS_GUIDE.md) - LLM-specific analysis
-- [Pruning Guide](docs/PRUNING_CONFIGURATION_GUIDE.md) - Pruning configuration
-- [API Reference](docs/api_reference.md) - API documentation
+- [Usage Guide](docs/usage.md) - Running experiments and configuration
+- [API Reference](docs/api_reference.md) - Core classes and functions
+- [LLM Guide](docs/llm_guide.md) - LLM-specific analysis and pruning
 
 ## Testing
 
 ```bash
 pytest tests/
-pytest tests/unit/ -v  # Unit tests only
+pytest tests/unit/ -v
 ```
 
 ## License

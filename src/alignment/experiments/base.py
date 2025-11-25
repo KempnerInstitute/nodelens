@@ -399,6 +399,7 @@ class BaseExperiment(CoreBaseExperiment):
 
     def _initialize_metrics(self):
         """Initialize metrics."""
+        import inspect
         from alignment.core.registry import METRIC_REGISTRY
 
         # Combine primary metrics and alignment-specific methods so that
@@ -412,15 +413,36 @@ class BaseExperiment(CoreBaseExperiment):
         for metric_name in metric_names:
             # Get the metric class from registry
             metric_class = METRIC_REGISTRY.get(metric_name)
-            metric_config = self.config.metric_configs.get(metric_name, {})
+            metric_config = self.config.metric_configs.get(metric_name, {}).copy()
 
-            # Add global metric options if not already specified
-            if "scale_by_norm" not in metric_config:
-                metric_config["scale_by_norm"] = self.config.scale_by_norm
-            if "force_cpu" not in metric_config:
-                metric_config["force_cpu"] = self.config.force_cpu_for_large_metric_ops
-            if "aggregation_op" not in metric_config and "cnn" in metric_name.lower():
-                metric_config["aggregation_op"] = self.config.cnn_rq_aggregation_op
+            # Get the parameters accepted by this metric's __init__
+            try:
+                sig = inspect.signature(metric_class.__init__)
+                accepted_params = set(sig.parameters.keys()) - {"self"}
+                # Check if metric accepts **kwargs
+                accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
+                )
+            except (ValueError, TypeError):
+                # If we can't inspect, assume it accepts everything
+                accepted_params = set()
+                accepts_kwargs = True
+
+            # Only add global options if the metric accepts them
+            if accepts_kwargs or "scale_by_norm" in accepted_params:
+                if "scale_by_norm" not in metric_config:
+                    metric_config["scale_by_norm"] = self.config.scale_by_norm
+            if accepts_kwargs or "force_cpu" in accepted_params:
+                if "force_cpu" not in metric_config:
+                    metric_config["force_cpu"] = self.config.force_cpu_for_large_metric_ops
+            if accepts_kwargs or "aggregation_op" in accepted_params:
+                if "aggregation_op" not in metric_config and "cnn" in metric_name.lower():
+                    metric_config["aggregation_op"] = self.config.cnn_rq_aggregation_op
+
+            # Filter out any config keys not accepted by this metric
+            if not accepts_kwargs and accepted_params:
+                metric_config = {k: v for k, v in metric_config.items() if k in accepted_params}
 
             # Create metric instance
             self.metrics[metric_name] = metric_class(**metric_config)

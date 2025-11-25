@@ -2663,174 +2663,35 @@ class GeneralAlignmentExperiment(BaseExperiment):
             # Create visualizer
             visualizer = UnifiedVisualizer()
 
-            # Generate plots for each algorithm
+            # Generate plots for each algorithm using UnifiedVisualizer
             for algorithm, results in algorithm_results.items():
-                # Only create comparison plots if we have multiple selection modes
-                if len(results["before"]) > 1:
-                    # Create before/after comparison plots using matplotlib directly
-                    # Before fine-tuning plot
-                    fig_before, ax_before = plt.subplots(figsize=(10, 6))
-                    for mode, accuracies in results["before"].items():
-                        x_values = [s * 100 for s in results["sparsities"]]
-                        # Check if we have error bars
-                        if "before_std" in results and mode in results["before_std"]:
-                            yerr = results["before_std"][mode]
-                            ax_before.errorbar(
-                                x_values, accuracies, yerr=yerr, fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8, capsize=5, capthick=2
-                            )
-                        else:
-                            ax_before.plot(x_values, accuracies, "o-", label=f"{mode} mode", linewidth=2.5, markersize=8)
-                    ax_before.set_xlabel("Pruning %", fontsize=12)
-                    ax_before.set_ylabel("Accuracy (%)", fontsize=12)
-                    ax_before.set_title(f"{algorithm.capitalize()} Pruning - Before Fine-tuning", fontsize=14, fontweight="bold")
-                    ax_before.grid(True, alpha=0.3)
-                    ax_before.legend(loc="best")
-                    ax_before.set_xlim(0, 100)
-                    ax_before.set_ylim(0, 105)
-                    fig_before.tight_layout()
-                    fig_before.savefig(output_dir / f"pruning_{algorithm}_accuracy_before.png", dpi=self.config.plot_dpi, bbox_inches="tight")
-                    plt.close(fig_before)
-
-                    # After fine-tuning plot
-                    fig_after, ax_after = plt.subplots(figsize=(10, 6))
-                    for mode, accuracies in results["after"].items():
-                        x_values = [s * 100 for s in results["sparsities"]]
-                        # Check if we have error bars
-                        if "after_std" in results and mode in results["after_std"]:
-                            yerr = results["after_std"][mode]
-                            ax_after.errorbar(
-                                x_values, accuracies, yerr=yerr, fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8, capsize=5, capthick=2
-                            )
-                        else:
-                            ax_after.plot(x_values, accuracies, "o-", label=f"{mode} mode", linewidth=2.5, markersize=8)
-                    ax_after.set_xlabel("Pruning %", fontsize=12)
-                    ax_after.set_ylabel("Accuracy (%)", fontsize=12)
-                    ax_after.set_title(f"{algorithm.capitalize()} Pruning - After Fine-tuning", fontsize=14, fontweight="bold")
-                    ax_after.grid(True, alpha=0.3)
-                    ax_after.legend(loc="best")
-                    ax_after.set_xlim(0, 100)
-                    ax_after.set_ylim(0, 105)
-                    fig_after.tight_layout()
-                    fig_after.savefig(output_dir / f"pruning_{algorithm}_accuracy_after.png", dpi=self.config.plot_dpi, bbox_inches="tight")
-                    plt.close(fig_after)
-                else:
-                    # Single selection mode - create simple plot
-                    selection_mode = list(results["before"].keys())[0]
-
-                    fig, ax = plt.subplots(figsize=(10, 6))
-
-                    x_values = [s * 100 for s in results["sparsities"]]
-
-                    # Check if we have error bars
-                    if "before_std" in results and selection_mode in results["before_std"]:
-                        yerr_before = results["before_std"][selection_mode]
-                        yerr_after = (
-                            results["after_std"][selection_mode] if "after_std" in results and selection_mode in results["after_std"] else None
-                        )
-
-                        # Plot before with error bars
-                        ax.errorbar(
-                            x_values,
-                            results["before"][selection_mode],
-                            yerr=yerr_before,
-                            fmt="o-",
-                            label="Before Fine-tuning",
-                            color="#FF6B6B",
-                            linewidth=2.5,
-                            markersize=8,
-                            capsize=5,
-                            capthick=2,
-                        )
-
-                        # Plot after with error bars if available
-                        if yerr_after is not None:
-                            ax.errorbar(
-                                x_values,
-                                results["after"][selection_mode],
-                                yerr=yerr_after,
-                                fmt="o-",
-                                label="After Fine-tuning",
-                                color="#4ECDC4",
-                                linewidth=2.5,
-                                markersize=8,
-                                capsize=5,
-                                capthick=2,
-                            )
-                        else:
-                            ax.plot(
-                                x_values,
-                                results["after"][selection_mode],
-                                "o-",
-                                label="After Fine-tuning",
-                                color="#4ECDC4",
-                                linewidth=2.5,
-                                markersize=8,
-                            )
-                    else:
-                        # Plot without error bars
-                        ax.plot(
-                            x_values,
-                            results["before"][selection_mode],
-                            "o-",
-                            label="Before Fine-tuning",
-                            color="#FF6B6B",
-                            linewidth=2.5,
-                            markersize=8,
-                        )
-                        ax.plot(
-                            x_values, results["after"][selection_mode], "o-", label="After Fine-tuning", color="#4ECDC4", linewidth=2.5, markersize=8
-                        )
-
-                    ax.set_xlabel("Pruning %", fontsize=12)
-                    ax.set_ylabel("Accuracy (%)", fontsize=12)
-                    ax.set_title(f"{algorithm.capitalize()} Pruning ({selection_mode} mode)", fontsize=14, fontweight="bold")
-                    ax.grid(True, alpha=0.3)
-                    ax.legend(loc="best", frameon=True, fancybox=True, shadow=True)
-                    ax.set_xlim(0, 100)
-                    ax.set_ylim(0, 105)
-
-                    fig.tight_layout()
-                    fig.savefig(output_dir / f"pruning_{algorithm}_accuracy.png", dpi=self.config.plot_dpi, bbox_inches="tight")
+                # Create before/after comparison plots
+                figs = visualizer.plot_pruning_before_after(
+                    sparsities=results["sparsities"],
+                    before_accuracies=results["before"],
+                    after_accuracies=results["after"],
+                    before_std=results.get("before_std"),
+                    after_std=results.get("after_std"),
+                    algorithm=algorithm.capitalize(),
+                    save_dir=output_dir,
+                    dpi=self.config.plot_dpi,
+                )
+                for fig in figs:
                     plt.close(fig)
 
-                # Also create improvement plot for each selection mode
+                # Create improvement plots for each selection mode
                 for selection_mode in results["before"]:
                     if selection_mode in results["after"]:
-                        improvements = [after - before for before, after in zip(results["before"][selection_mode], results["after"][selection_mode])]
-
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        bars = ax.bar(
-                            range(len(improvements)),
-                            improvements,
-                            tick_label=[f"{s:.0%}" for s in results["sparsities"]],
-                            color=["#4ECDC4" if imp >= 0 else "#FF6B6B" for imp in improvements],
-                            alpha=0.8,
-                        )
-
-                        # Add value labels on bars
-                        for bar, imp in zip(bars, improvements):
-                            height = bar.get_height()
-                            ax.text(
-                                bar.get_x() + bar.get_width() / 2.0,
-                                height,
-                                f"{imp:+.1f}%",
-                                ha="center",
-                                va="bottom" if height >= 0 else "top",
-                                fontsize=10,
-                                fontweight="bold",
-                            )
-
-                        ax.set_xlabel("Sparsity Level", fontsize=12)
-                        ax.set_ylabel("Accuracy Improvement (%)", fontsize=12)
-                        ax.set_title(
-                            f"{algorithm.capitalize()} Pruning ({selection_mode} mode): Fine-tuning Improvement", fontsize=14, fontweight="bold"
-                        )
-                        ax.grid(True, alpha=0.3, axis="y")
-                        ax.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
-
-                        fig.tight_layout()
                         suffix = f"_{selection_mode}" if len(results["before"]) > 1 else ""
-                        fig.savefig(output_dir / f"pruning_{algorithm}_improvement{suffix}.png", dpi=self.config.plot_dpi, bbox_inches="tight")
+                        fig = visualizer.plot_pruning_improvement(
+                            sparsities=results["sparsities"],
+                            before_accuracies=results["before"][selection_mode],
+                            after_accuracies=results["after"][selection_mode],
+                            algorithm=algorithm.capitalize(),
+                            selection_mode=selection_mode,
+                            save_path=output_dir / f"pruning_{algorithm}_improvement{suffix}.png",
+                            dpi=self.config.plot_dpi,
+                        )
                         plt.close(fig)
 
         logger.info(f"Saved visualizations to {output_dir}")

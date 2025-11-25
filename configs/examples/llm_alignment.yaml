@@ -1,8 +1,13 @@
 # Example configuration for llm alignment experiment
 # This experiment performs comprehensive alignment analysis with training, dropout analysis, and pruning
 
-name: "llama3_alignment_analysis"
-description: "LLM alignment and pruning experiment for Meta-Llama-3"
+experiment:
+  name: "llama3_alignment_analysis"
+  type: "llm_alignment"  # Use LLMAlignmentExperiment for text/LLM models
+  description: "LLM alignment and pruning experiment for Meta-Llama-3"
+  seed: 42
+  device: "cuda"
+
 tags: ["llm", "alignment", "pruning"]
 
 
@@ -36,7 +41,73 @@ dataset_name: "wikitext-2-v1"
 # ============================================================================
 alignment_methods:
   - "activation_l2_norm"
-alignment_data_num_samples: 1
+  - "activation_outlier_index"
+alignment_data_num_samples: 4
+
+
+# ============================================================================
+# SCAR METRICS (enables visualization)
+# ============================================================================
+do_scar_metrics: true
+scar_num_samples: 4
+scar_max_length: 512
+
+# ============================================================================
+# SUPERNODE ANALYSIS
+#
+# Architecture: LLaMA FFN
+#   input(4096) -> gate_proj/up_proj(14336) -> down_proj -> output(4096)
+#   
+# Analysis workflow:
+#   1) Compute metrics (activation, RQ, MI, etc.) on INTERMEDIATE neurons (14336)
+#      based on the selected score_metric
+#   2) Identify supernodes as top neurons by score_metric
+#   3) Trace outgoing weights from supernodes through down_proj
+#   4) Optionally analyze NEXT layer's input (4096) neurons:
+#      - Identify neurons with high weight connections from supernodes
+#      - Compare metrics between high vs low connected neurons
+# ============================================================================
+supernode:
+  enabled: true
+  
+  # --------------------------------------------------------------------------
+  # Step 1: Supernode Identification
+  # Supernodes are identified in the INTERMEDIATE dimension (14336 neurons)
+  # --------------------------------------------------------------------------
+  score_metric: "scar_activation_power"   # Metric to rank neurons for supernode selection
+                                          # Options: scar_activation_power, scar_taylor,
+                                          #          scar_loss_proxy, rayleigh_quotient,
+                                          #          mutual_information, activation_l2_norm
+  core_fraction: 0.01                     # Top X% as supernodes (by score_metric)
+  min_core_neurons: 32
+  protect_core: true                      # Protect supernodes during pruning
+  
+  # --------------------------------------------------------------------------
+  # Step 2: Cross-Layer Analysis (optional)
+  # Analyzes how the NEXT layer's neurons relate to supernodes
+  # The output of down_proj (4096) feeds into the next transformer block
+  # --------------------------------------------------------------------------
+  cross_layer_analysis: true              # Enable next-layer analysis
+  follower_fraction: 0.10                 # Top X% of neurons by weight from supernodes
+  
+  # Metrics to compute for neurons with high supernode connections
+  compute_metrics:
+    - "activation"                        # Mean activation magnitude
+    - "rayleigh_quotient"                 # RQ score (alignment to input covariance)
+    - "mutual_information"                # MI (Gaussian approximation)
+    - "redundancy"                        # Pairwise correlation-based redundancy
+  
+  # Compare high vs low supernode-connected neurons
+  compare_by_connection: true             # Compare metrics grouped by connection strength
+  
+  # --------------------------------------------------------------------------
+  # Target Layers (optional)
+  # If not specified, uses tracked_layers from config
+  # If empty list [], analyzes ALL layers with SCAR scores
+  # --------------------------------------------------------------------------
+  # target_layers:                        # Uncomment to override tracked_layers
+  #   - "model.layers.10.mlp.down_proj"   # Specific layer
+  #   - "model.layers.15"                 # Pattern matching (matches down_proj in layer 15)
 
 
 # ============================================================================
@@ -53,14 +124,34 @@ pruning_selection_mode: "low"
 # ============================================================================
 do_perplexity_computation: true
 evaluation_dataset: "wikitext"
-evaluation_num_samples: 100
+evaluation_num_samples: 50
 
 
 # ============================================================================
-# WRAPPER
+# TRACKED LAYERS
+# LLaMA FFN structure: input(4096) → gate_proj/up_proj(14336) → down_proj → output(4096)
+#
+# SCAR metrics (when do_scar_metrics=true) automatically hook into down_proj
+# and capture the INPUT to down_proj (14336 intermediate neurons), computing:
+#   - activation_power: E[u_i^2] for each intermediate neuron
+#   - taylor_saliency: E[|g_u_i * u_i|] first-order importance
+#   - curvature: E[(v_i^T g_y)^2] second-order sensitivity
+#   - loss_proxy: combined metric for supernode identification
+#
+# This allows identifying supernodes from the 14336 intermediate activations
+# even though down_proj output is 4096.
 # ============================================================================
 tracked_layers:
-  - "model.layers.10.mlp.down_proj"
+  - "model.layers.10.mlp.up_proj"    # 14336 intermediate neurons
+  - "model.layers.10.mlp.down_proj"  # For SCAR: hooks capture 14336-dim input
+
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+generate_plots: true
+plot_format: "png"
+plot_dpi: 300
 
 
 # ============================================================================

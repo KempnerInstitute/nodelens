@@ -1,0 +1,172 @@
+# Comprehensive Vision Experiment
+# Full alignment analysis, information metrics, and pruning with all visualizations
+
+experiment:
+  name: "vision_comprehensive_analysis"
+  type: "general_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision_comprehensive"
+
+model:
+  name: "resnet18"  # Options: resnet18, resnet34, alexnet, vgg16
+  pretrained: true
+  tracked_layers: null  # Auto-detect all conv and linear layers
+
+dataset:
+  name: "cifar10"
+  data_path: "./data"
+  batch_size: 128
+  num_workers: 4
+  augmentation: false
+
+# Alignment metrics to compute
+alignment_methods:
+  - "rayleigh_quotient"
+  - "activation_l2_norm"
+  - "activation_variance"
+  - "pairwise_redundancy_gaussian"
+  - "gaussian_pid_synergy_mmi"
+  - "mutual_information_gaussian"
+
+# Metric-specific configuration
+metrics:
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+  
+  pairwise_redundancy_gaussian:
+    mode: 'output_based'
+    num_pairs: 10
+    sampling_strategy: 'random'
+  
+  gaussian_pid_synergy_mmi:
+    num_pairs: 10
+  
+  mutual_information_gaussian:
+    use_pc_reference: true
+
+# Supernode detection (applies to vision too)
+supernode:
+  enabled: true
+  score_metric: "activation_l2_norm"  # Use activation magnitude for supernodes
+  core_fraction: 0.05  # Top 5% are supernodes
+  min_core_neurons: 8
+  protect_core: true
+  follower_fraction: 0.1  # Top 10% influenced by supernodes
+
+# Pruning configuration
+pruning:
+  enabled: true
+  strategy: 'composite'
+  algorithms: ["magnitude", "alignment", "hybrid", "random"]
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  selection_modes: ["low"]
+  alignment_metric: "rayleigh_quotient"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0001
+  
+  composite_weights:
+    alpha_mi: 0.2
+    beta_synergy: 0.2
+    gamma_redundancy: 0.3
+    delta_rq: 0.3
+
+# CNN-specific settings
+layer_config:
+  cnn_mode: 'unfold'
+  cnn_rq_aggregation_op: 'mean'
+
+# Analysis options
+analysis:
+  class_conditioned: true
+  save_scores: true
+  generate_plots: true
+
+# Visualization settings
+visualization:
+  enabled: true
+  format: 'png'
+  dpi: 300
+  training_curves: true
+  alignment_curves: true
+  pruning_plots: true
+  
+  # Histogram settings
+  histograms:
+    enabled: true
+    bins: 100
+    top_k: 10
+    metrics: ["rayleigh_quotient", "activation_l2_norm", "pairwise_redundancy_gaussian"]
+  
+  # Scatter plot settings (MI vs activation, RQ vs activation, etc.)
+  scatter_plots:
+    enabled: true
+    pairs:
+      - ["activation_l2_norm", "rayleigh_quotient"]
+      - ["activation_l2_norm", "mutual_information_gaussian"]
+      - ["activation_l2_norm", "pairwise_redundancy_gaussian"]
+      - ["rayleigh_quotient", "pairwise_redundancy_gaussian"]
+      - ["rayleigh_quotient", "gaussian_pid_synergy_mmi"]
+      - ["pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+  
+  # Layer distribution plots
+  layer_distributions:
+    enabled: true
+    plot_type: "violin"  # Options: violin, box, swarm
+    metrics: ["rayleigh_quotient", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+  
+  # Supernode analysis plots
+  supernode_plots:
+    enabled: true
+    compare_to_non_supernodes: true
+    metrics: ["rayleigh_quotient", "mutual_information_gaussian", "activation_l2_norm", "pairwise_redundancy_gaussian"]
+
+# Post-experiment analysis
+post_analysis:
+  analyses:
+    - histograms
+    - scatter_plots
+    - heatmaps
+    - layer_distributions
+    - pruning_curves
+    - supernode_comparison
+  
+  histograms:
+    bins: 100
+    top_k: 10
+    log_scale: true
+  
+  scatter_plots:
+    pairs:
+      - ["activation_l2_norm", "rayleigh_quotient"]
+      - ["activation_l2_norm", "mutual_information_gaussian"]
+      - ["rayleigh_quotient", "pairwise_redundancy_gaussian"]
+      - ["pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+    add_regression: true
+    show_correlation: true
+  
+  heatmaps:
+    metrics: ["rayleigh_quotient", "pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+    normalize: true
+  
+  pruning_curves:
+    strategies: ["magnitude", "alignment", "hybrid", "random"]
+    show_error_bars: true
+  
+  supernode_comparison:
+    enabled: true
+    metrics: ["rayleigh_quotient", "mutual_information_gaussian", "activation_l2_norm", "pairwise_redundancy_gaussian"]
+    plot_types: ["violin", "histogram", "scatter"]
+
+evaluation:
+  task: 'classification'
+  metrics: ['accuracy', 'loss']
+
+# Run: python scripts/run_experiment.py --config configs/examples/vision_comprehensive.yaml
+

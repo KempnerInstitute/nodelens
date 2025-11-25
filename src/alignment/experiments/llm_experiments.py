@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import numpy as np
 
 from alignment.experiments.base import ExperimentConfig, BaseExperiment
 from alignment.metrics import get_metric
@@ -13,9 +14,7 @@ from alignment.pruning import AlignmentPruning, PruningConfig
 from alignment.services import MaskOperations
 from alignment.training.base import BaseTrainer  # kept for compatibility if used elsewhere
 from alignment.core.streaming import StreamingCovariance
-
-import matplotlib.pyplot as plt
-import numpy as np
+from alignment.analysis.visualization import UnifiedVisualizer
 
 logger = logging.getLogger(__name__)
 
@@ -918,6 +917,783 @@ class LLMAlignmentExperiment(BaseExperiment):
         layer_scores["supernode_core_size"] = num_core
         layer_scores["supernode_threshold"] = sorted_scores[min(num_core - 1, sorted_scores.shape[0] - 1)].item()
 
+    def analyze_supernode_connections(
+        self,
+        scar_scores: Dict[str, Dict[str, torch.Tensor]],
+        supernode_fraction: float = 0.01,
+        follower_fraction: float = 0.10,
+        plots_dir: Optional[Union[str, Path]] = None,
+        supernode_metric: str = "scar_activation_power",
+        cross_layer_analysis: bool = True,
+        compute_metrics: Optional[List[str]] = None,
+        compare_by_connection: bool = True,
+        target_layers: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Analyze supernode connections and their influence on downstream neurons.
+        
+        This analysis has two parts:
+        
+        1. **Same-Layer Analysis (down_proj):**
+           - Identify supernodes in the INTERMEDIATE neurons (14336 dim) based on `supernode_metric`
+           - These are the neurons INSIDE the FFN, before down_proj projects to hidden dim
+           - Compute metrics (activation, RQ, MI, redundancy) for these intermediate neurons
+           - Analyze outgoing weights from supernodes to the hidden dimension
+        
+        2. **Cross-Layer Analysis (optional, when cross_layer_analysis=True):**
+           - Trace how supernodes influence the NEXT layer's input
+           - The output of down_proj (4096 dim) feeds into the next transformer block
+           - Identify "follower" neurons in the next layer's up_proj input
+           - Compare metrics between high vs low supernode-connected neurons
+
+        Args:
+            scar_scores: SCAR metrics per layer (from compute_scar_supernode_metrics)
+            supernode_fraction: Fraction of neurons to consider as supernodes (top by score)
+            follower_fraction: Fraction of next-layer neurons to analyze by connection strength
+            plots_dir: Directory to save plots
+            supernode_metric: Metric to rank neurons for supernode identification
+                Options: scar_activation_power, scar_taylor, scar_loss_proxy, 
+                         rayleigh_quotient, mutual_information, activation_l2_norm
+            cross_layer_analysis: Whether to analyze next layer's neurons
+            compute_metrics: List of metrics to compute (activation, rayleigh_quotient, 
+                           mutual_information, redundancy)
+            compare_by_connection: Whether to compare high vs low connected neurons
+            target_layers: List of layer names to analyze. If None or empty, analyzes all layers.
+                         Can use patterns like "model.layers.10" or full names like 
+                         "model.layers.10.mlp.down_proj"
+
+        Returns:
+            Dictionary with supernode analysis results
+        """
+        if compute_metrics is None:
+            compute_metrics = ["activation", "rayleigh_quotient", "mutual_information", "redundancy"]
+        
+        logger.info(f"Analyzing supernode connections:")
+        logger.info(f"  - Supernode metric: {supernode_metric}")
+        logger.info(f"  - Supernode fraction: top {supernode_fraction*100:.1f}%")
+        logger.info(f"  - Cross-layer analysis: {cross_layer_analysis}")
+        if cross_layer_analysis:
+            logger.info(f"  - Follower fraction: top {follower_fraction*100:.1f}%")
+        if target_layers:
+            logger.info(f"  - Target layers: {target_layers}")
+        else:
+            logger.info(f"  - Target layers: all layers with SCAR scores")
+
+        if plots_dir is None:
+            plots_dir = Path(getattr(self.config, "plots_dir", "./plots"))
+        plots_dir = Path(plots_dir)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        results = {}
+
+        # Get the underlying HF model
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+
+        # Process each layer with SCAR scores
+        for layer_name, layer_metrics in scar_scores.items():
+            if "mlp.down_proj" not in layer_name:
+                continue
+            
+            # Filter by target_layers if specified
+            if target_layers:
+                # Check if this layer matches any of the target patterns
+                layer_matches = False
+                for target in target_layers:
+                    # Support both exact match and partial match (e.g., "model.layers.10" matches "model.layers.10.mlp.down_proj")
+                    if target in layer_name or layer_name in target:
+                        layer_matches = True
+                        break
+                if not layer_matches:
+                    continue
+
+            # Get the metric for supernode identification (configurable)
+            supernode_scores = layer_metrics.get(supernode_metric)
+            if supernode_scores is None:
+                # Fallback to activation power if requested metric not available
+                supernode_scores = layer_metrics.get("scar_activation_power")
+                if supernode_scores is None:
+                    logger.warning(f"  {layer_name}: No {supernode_metric} or fallback metric available, skipping")
+                    continue
+                logger.info(f"  {layer_name}: Using scar_activation_power as fallback (requested: {supernode_metric})")
+
+            supernode_scores = supernode_scores.float().cpu()
+            num_neurons = supernode_scores.numel()
+
+            # Identify supernodes (top neurons by the selected metric)
+            num_supernodes = max(1, int(supernode_fraction * num_neurons))
+            sorted_vals, sorted_indices = torch.sort(supernode_scores, descending=True)
+            supernode_indices = sorted_indices[:num_supernodes].numpy()
+            supernode_scores_top = sorted_vals[:num_supernodes].numpy()
+
+            logger.info(f"  {layer_name}: {num_supernodes} supernodes identified (by {supernode_metric})")
+
+            # Get the down_proj weight matrix
+            # down_proj has shape [hidden_dim, intermediate_dim] = [4096, 14336]
+            # Each column corresponds to one intermediate neuron
+            layer_idx = None
+            for name, module in hf_model.named_modules():
+                if name == layer_name or name.endswith(layer_name):
+                    if hasattr(module, "weight"):
+                        down_proj_weight = module.weight.detach().float().cpu()
+                        # Extract layer index from name
+                        import re
+                        match = re.search(r"layers\.(\d+)", layer_name)
+                        if match:
+                            layer_idx = int(match.group(1))
+                        break
+            else:
+                logger.warning(f"  Could not find weight for {layer_name}")
+                continue
+
+            # down_proj_weight: [hidden_dim=4096, intermediate_dim=14336]
+            # Columns are the outgoing weights from each intermediate neuron
+
+            # Get outgoing weights from supernodes
+            supernode_weights = down_proj_weight[:, supernode_indices]  # [4096, num_supernodes]
+
+            # Aggregate: for each output neuron, sum of absolute weights from supernodes
+            supernode_influence = torch.abs(supernode_weights).sum(dim=1)  # [4096]
+
+            # Identify "follower" neurons: those with highest total weight from supernodes
+            num_followers = max(1, int(follower_fraction * supernode_influence.numel()))
+            follower_vals, follower_indices = torch.sort(supernode_influence, descending=True)
+            follower_indices = follower_indices[:num_followers].numpy()
+            follower_weights = follower_vals[:num_followers].numpy()
+
+            # Store results
+            layer_results = {
+                "num_supernodes": num_supernodes,
+                "supernode_indices": supernode_indices.tolist(),
+                "supernode_scores": supernode_scores_top.tolist(),
+                "supernode_metric": supernode_metric,
+                "num_followers": num_followers,
+                "follower_indices": follower_indices.tolist(),
+                "follower_weights": follower_weights.tolist(),
+            }
+
+            # Use UnifiedVisualizer for all plots
+            viz = UnifiedVisualizer()
+            layer_suffix = layer_name.replace('.', '_')
+
+            # Plot 1: Distribution of supernode scores (based on selected metric)
+            try:
+                fig = viz.plot_supernode_activation_distribution(
+                    activation_values=supernode_scores,
+                    threshold_value=sorted_vals[num_supernodes-1].item(),
+                    threshold_percentile=supernode_fraction,
+                    layer_name=layer_name,
+                    metric_name=supernode_metric,
+                    save_path=plots_dir / f"supernode_score_dist_{layer_suffix}.png",
+                )
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"  Failed to plot supernode score distribution: {e}")
+
+            # Plot 2: Histogram of outgoing weights from supernodes
+            try:
+                fig = viz.plot_outgoing_weights_distribution(
+                    weights=supernode_weights,
+                    layer_name=layer_name,
+                    save_path=plots_dir / f"supernode_outgoing_weights_{layer_suffix}.png",
+                )
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"  Failed to plot outgoing weights: {e}")
+
+            # Plot 3: Supernode influence on output neurons
+            try:
+                fig = viz.plot_supernode_influence(
+                    influence_values=supernode_influence,
+                    threshold_value=follower_vals[num_followers-1].item(),
+                    threshold_percentile=follower_fraction,
+                    layer_name=layer_name,
+                    save_path=plots_dir / f"supernode_influence_{layer_suffix}.png",
+                )
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"  Failed to plot supernode influence: {e}")
+
+            # =====================================================================
+            # Cross-Layer Analysis (optional)
+            # Analyze how supernodes in THIS layer influence NEXT layer's neurons
+            # =====================================================================
+            if cross_layer_analysis and layer_idx is not None and layer_idx < 31:
+                next_layer_idx = layer_idx + 1
+                next_layer_name = f"model.layers.{next_layer_idx}.mlp.up_proj"
+                
+                logger.info(f"  Cross-layer analysis: {layer_name} -> layer {next_layer_idx}")
+                
+                # Compute metrics for neurons in the NEXT layer, grouped by their
+                # connection strength to supernodes in THIS layer
+                try:
+                    # follower_indices are indices into the hidden dimension (4096)
+                    # These are the output positions of down_proj that have high weights from supernodes
+                    # They become the INPUT to the next transformer block
+                    next_layer_results = self._compute_next_layer_metrics(
+                        follower_indices=follower_indices,
+                        current_layer_name=layer_name,
+                        next_layer_idx=next_layer_idx,
+                        plots_dir=plots_dir,
+                        compute_metrics=compute_metrics,
+                    )
+                    layer_results["next_layer_analysis"] = next_layer_results
+                except Exception as e:
+                    logger.error(f"  Failed to compute next layer metrics: {e}")
+                
+                # Compare metrics between high vs low supernode-connected neurons
+                if compare_by_connection:
+                    try:
+                        comparison_results = self._compare_redundancy_by_supernode_connection(
+                            supernode_influence=supernode_influence,
+                            down_proj_weight=down_proj_weight,
+                            layer_name=layer_name,
+                            plots_dir=plots_dir,
+                            follower_fraction=follower_fraction,
+                        )
+                        layer_results["connection_comparison"] = comparison_results
+                    except Exception as e:
+                        logger.error(f"  Failed to compute connection comparison: {e}")
+
+            results[layer_name] = layer_results
+
+        return results
+
+    def _compute_next_layer_metrics(
+        self,
+        follower_indices: np.ndarray,
+        current_layer_name: str,
+        next_layer_idx: int,
+        plots_dir: Path,
+        compute_metrics: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute metrics for neurons that receive high input from supernodes.
+        
+        Architecture context for LLaMA FFN:
+        - Current layer: down_proj outputs to hidden dimension (4096)
+        - These outputs are added to the residual stream
+        - The residual feeds into the NEXT transformer block
+        - Next block's up_proj receives the residual as input
+        
+        The `follower_indices` identify positions in the hidden dimension (4096)
+        that have high total weight from supernodes in the intermediate dimension.
+        We analyze how these positions behave as inputs to the next layer.
+        
+        Args:
+            follower_indices: Indices into hidden dim with high supernode connection
+            current_layer_name: Name of current layer (for logging/plotting)
+            next_layer_idx: Index of the next transformer layer
+            plots_dir: Directory to save plots
+            compute_metrics: List of metrics to compute
+            
+        Returns:
+            Dictionary with computed metrics and statistics
+        """
+        if compute_metrics is None:
+            compute_metrics = ["activation", "rayleigh_quotient", "mutual_information", "redundancy"]
+            
+        logger.info(f"  Computing metrics for {len(follower_indices)} high-connection positions "
+                    f"(inputs to layer {next_layer_idx})...")
+
+        # We need to capture activations at the follower indices
+        # These are the outputs of down_proj, which are inputs to the next transformer block
+        
+        # Get calibration texts
+        calibration_texts = []
+        if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+            calibration_texts = list(self.dataset.texts)[:8]
+        
+        if not calibration_texts:
+            return {"error": "No calibration texts available"}
+
+        # Capture activations at the residual stream (after down_proj output is added)
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+
+        follower_activations = []
+        input_activations = []  # For RQ computation (inputs to down_proj)
+        
+        # Hook to capture activations
+        def capture_hook(module, inputs, outputs):
+            # inputs[0] is the input to down_proj (intermediate activations)
+            # outputs is the result after down_proj
+            if inputs and inputs[0] is not None:
+                inp = inputs[0].detach().float()
+                if inp.ndim == 3:
+                    inp = inp.reshape(-1, inp.shape[-1])
+                input_activations.append(inp.cpu())
+            
+            if outputs is not None:
+                out = outputs.detach().float()
+                if out.ndim == 3:  # [B, T, D]
+                    out = out.reshape(-1, out.shape[-1])  # [B*T, D]
+                # Select only follower indices
+                follower_acts = out[:, follower_indices]  # [B*T, num_followers]
+                follower_activations.append(follower_acts.cpu())
+
+        # Find the down_proj module
+        hook_handle = None
+        for name, module in hf_model.named_modules():
+            if "mlp.down_proj" in name and name in current_layer_name:
+                hook_handle = module.register_forward_hook(capture_hook)
+                break
+
+        if hook_handle is None:
+            return {"error": f"Could not find module for {current_layer_name}"}
+
+        # Run forward passes
+        self.model.eval()
+        with torch.no_grad():
+            for text in calibration_texts[:4]:
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=256,
+                    padding=False,
+                )
+                inputs = {k: v.to(self.config.device) for k, v in inputs.items()}
+                try:
+                    self.model(**inputs)
+                except Exception:
+                    pass
+
+        hook_handle.remove()
+
+        if not follower_activations:
+            return {"error": "No activations captured"}
+
+        # Concatenate all activations
+        all_acts = torch.cat(follower_activations, dim=0)  # [total_tokens, num_followers]
+        all_inputs = torch.cat(input_activations, dim=0) if input_activations else None  # [total_tokens, intermediate_dim]
+        
+        num_tokens = all_acts.shape[0]
+        num_followers = all_acts.shape[1]
+        
+        # =====================================================================
+        # Compute Covariance and Correlation matrices
+        # =====================================================================
+        acts_centered = all_acts - all_acts.mean(dim=0, keepdim=True)
+        cov_matrix = (acts_centered.T @ acts_centered) / (num_tokens - 1)
+        
+        # Compute correlation matrix
+        std = torch.sqrt(torch.diag(cov_matrix) + 1e-8)
+        corr_matrix = cov_matrix / (std.unsqueeze(0) * std.unsqueeze(1) + 1e-8)
+        corr_matrix = torch.clamp(corr_matrix, -1, 1)
+
+        # Compute redundancy: average pairwise correlation (excluding diagonal)
+        n = corr_matrix.shape[0]
+        mask = ~torch.eye(n, dtype=torch.bool)
+        pairwise_corr = corr_matrix[mask].abs()
+        mean_redundancy = pairwise_corr.mean().item()
+        max_redundancy = pairwise_corr.max().item()
+
+        # =====================================================================
+        # Compute Rayleigh Quotient (RQ) for each follower neuron
+        # RQ_i = (w_i^T C_x w_i) / ||w_i||^2
+        # where C_x is the input covariance and w_i is the weight vector for neuron i
+        # =====================================================================
+        rq_scores = torch.zeros(num_followers)
+        
+        # Get down_proj weights
+        down_proj_weight = None
+        for name, module in hf_model.named_modules():
+            if "mlp.down_proj" in name and name in current_layer_name:
+                if hasattr(module, "weight"):
+                    down_proj_weight = module.weight.detach().float().cpu()
+                    break
+        
+        if down_proj_weight is not None and all_inputs is not None:
+            # down_proj_weight: [hidden_dim=4096, intermediate_dim=14336]
+            # Each row is the weight vector for one output neuron
+            
+            # Compute input covariance
+            inputs_centered = all_inputs - all_inputs.mean(dim=0, keepdim=True)
+            input_cov = (inputs_centered.T @ inputs_centered) / (num_tokens - 1)
+            
+            # Regularize for numerical stability
+            input_cov = input_cov + 1e-6 * torch.eye(input_cov.shape[0])
+            
+            # For each follower neuron, compute RQ
+            for i, idx in enumerate(follower_indices):
+                w = down_proj_weight[idx, :]  # [intermediate_dim]
+                w_norm_sq = (w * w).sum() + 1e-8
+                # RQ = w^T C_x w / ||w||^2
+                wCw = w @ input_cov @ w
+                rq_scores[i] = (wCw / w_norm_sq).item()
+        
+        # =====================================================================
+        # Compute Gaussian Mutual Information (MI) for each follower neuron
+        # MI_i = 0.5 * log(var(x_i) / var(x_i | others))
+        # Approximated using correlation: MI ≈ -0.5 * log(1 - r^2)
+        # =====================================================================
+        mi_scores = torch.zeros(num_followers)
+        
+        # Compute variance of each follower
+        variances = torch.var(all_acts, dim=0)
+        
+        # For MI, we compute how much each neuron's variance is explained by others
+        # Using the average squared correlation as a proxy
+        for i in range(num_followers):
+            # Get correlations of neuron i with all others
+            corr_with_others = corr_matrix[i, :].clone()
+            corr_with_others[i] = 0  # Exclude self
+            
+            # Average squared correlation (R^2)
+            r_squared = (corr_with_others ** 2).mean()
+            
+            # MI approximation: higher R^2 means more information shared
+            # MI = -0.5 * log(1 - R^2) for Gaussian
+            mi_scores[i] = -0.5 * torch.log(1 - r_squared.clamp(max=0.999) + 1e-8)
+        
+        # =====================================================================
+        # Plot results
+        # =====================================================================
+        
+        # Use UnifiedVisualizer for all plots
+        viz = UnifiedVisualizer()
+        layer_suffix = current_layer_name.replace('.', '_')
+        import matplotlib.pyplot as plt
+        
+        # Create descriptive title prefix
+        title_prefix = f"High-Connection Neurons (Layer {next_layer_idx} input)"
+
+        # Plot correlation matrix
+        try:
+            fig = viz.plot_correlation_matrix(
+                corr_matrix=corr_matrix,
+                title=f"{title_prefix}\nPairwise Correlations (Mean |r|={mean_redundancy:.3f})",
+                xlabel="Neuron Index (high supernode connection)",
+                ylabel="Neuron Index (high supernode connection)",
+                save_path=plots_dir / f"next_layer_correlation_{layer_suffix}.png",
+            )
+            plt.close(fig)
+        except Exception as e:
+            logger.error(f"  Failed to plot correlation matrix: {e}")
+
+        # Plot histogram of pairwise correlations (redundancy)
+        try:
+            fig = viz.plot_1d_histogram(
+                values=pairwise_corr,
+                xlabel="Absolute Pairwise Correlation",
+                ylabel="Count",
+                title=f"{title_prefix}\nRedundancy Distribution",
+                vline=mean_redundancy,
+                vline_label=f"Mean: {mean_redundancy:.3f}",
+                save_path=plots_dir / f"next_layer_redundancy_hist_{layer_suffix}.png",
+            )
+            plt.close(fig)
+        except Exception as e:
+            logger.error(f"  Failed to plot redundancy histogram: {e}")
+
+        # Plot RQ distribution
+        try:
+            fig = viz.plot_1d_histogram(
+                values=rq_scores,
+                xlabel="Rayleigh Quotient",
+                ylabel="Count",
+                title=f"{title_prefix}\nRQ Distribution",
+                vline=rq_scores.mean().item(),
+                vline_label=f"Mean: {rq_scores.mean().item():.4f}",
+                color='green',
+                save_path=plots_dir / f"next_layer_rq_hist_{layer_suffix}.png",
+            )
+            plt.close(fig)
+        except Exception as e:
+            logger.error(f"  Failed to plot RQ histogram: {e}")
+
+        # Plot MI distribution
+        try:
+            fig = viz.plot_1d_histogram(
+                values=mi_scores,
+                xlabel="Mutual Information (Gaussian approx)",
+                ylabel="Count",
+                title=f"{title_prefix}\nMI Distribution",
+                vline=mi_scores.mean().item(),
+                vline_label=f"Mean: {mi_scores.mean().item():.4f}",
+                color='purple',
+                save_path=plots_dir / f"next_layer_mi_hist_{layer_suffix}.png",
+            )
+            plt.close(fig)
+        except Exception as e:
+            logger.error(f"  Failed to plot MI histogram: {e}")
+
+        # Plot combined metrics: RQ vs MI scatter
+        try:
+            redundancy_for_color = pairwise_corr[:num_followers] if len(pairwise_corr) >= num_followers else None
+            fig = viz.plot_rq_vs_mi(
+                rq_scores=rq_scores,
+                mi_scores=mi_scores,
+                redundancy_scores=redundancy_for_color,
+                layer_name=f"{title_prefix}",
+                save_path=plots_dir / f"next_layer_rq_vs_mi_{layer_suffix}.png",
+            )
+            plt.close(fig)
+        except Exception as e:
+            logger.error(f"  Failed to plot RQ vs MI: {e}")
+
+        # Summary statistics
+        results = {
+            "description": f"Metrics for neurons with high supernode connection (layer {next_layer_idx} input)",
+            "source_layer": current_layer_name,
+            "target_layer_idx": next_layer_idx,
+            "num_high_connection_neurons": len(follower_indices),
+            "num_tokens_analyzed": num_tokens,
+            "redundancy": {
+                "mean": mean_redundancy,
+                "max": max_redundancy,
+                "std": pairwise_corr.std().item(),
+            },
+            "rayleigh_quotient": {
+                "mean": rq_scores.mean().item(),
+                "std": rq_scores.std().item(),
+                "min": rq_scores.min().item(),
+                "max": rq_scores.max().item(),
+            },
+            "mutual_information": {
+                "mean": mi_scores.mean().item(),
+                "std": mi_scores.std().item(),
+                "min": mi_scores.min().item(),
+                "max": mi_scores.max().item(),
+            },
+        }
+        
+        logger.info(f"    Metrics for high-connection neurons (next layer input):")
+        logger.info(f"      Redundancy: mean={mean_redundancy:.4f}")
+        logger.info(f"      RQ: mean={rq_scores.mean().item():.4f}, std={rq_scores.std().item():.4f}")
+        logger.info(f"      MI: mean={mi_scores.mean().item():.4f}, std={mi_scores.std().item():.4f}")
+
+        return results
+
+    def _compare_redundancy_by_supernode_connection(
+        self,
+        supernode_influence: torch.Tensor,
+        down_proj_weight: torch.Tensor,
+        layer_name: str,
+        plots_dir: Path,
+        follower_fraction: float = 0.1,
+    ) -> Dict[str, Any]:
+        """
+        Compare redundancy between neurons with high vs low weight connections to supernodes.
+        
+        This analysis helps understand whether neurons strongly connected to supernodes
+        exhibit different redundancy patterns compared to neurons weakly connected.
+        
+        Args:
+            supernode_influence: Total absolute weight from supernodes for each output neuron [hidden_dim]
+            down_proj_weight: Weight matrix of down_proj [hidden_dim, intermediate_dim]
+            layer_name: Name of the layer for logging/plotting
+            plots_dir: Directory to save plots
+            follower_fraction: Fraction of neurons to consider as "high" or "low" connected
+            
+        Returns:
+            Dictionary with comparison results
+        """
+        logger.info(f"  Comparing redundancy: high vs low supernode-connected neurons...")
+        
+        hidden_dim = supernode_influence.numel()
+        num_group = max(1, int(follower_fraction * hidden_dim))
+        
+        # Sort neurons by supernode influence
+        sorted_influence, sorted_indices = torch.sort(supernode_influence, descending=True)
+        
+        # High-connected neurons (top follower_fraction)
+        high_indices = sorted_indices[:num_group].numpy()
+        high_influence_values = sorted_influence[:num_group].numpy()
+        
+        # Low-connected neurons (bottom follower_fraction)
+        low_indices = sorted_indices[-num_group:].numpy()
+        low_influence_values = sorted_influence[-num_group:].numpy()
+        
+        logger.info(f"    High-connected group: {num_group} neurons, influence range [{high_influence_values[-1]:.4f}, {high_influence_values[0]:.4f}]")
+        logger.info(f"    Low-connected group: {num_group} neurons, influence range [{low_influence_values[-1]:.4f}, {low_influence_values[0]:.4f}]")
+        
+        # Capture activations for both groups
+        calibration_texts = []
+        if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+            calibration_texts = list(self.dataset.texts)[:8]
+        
+        if not calibration_texts:
+            return {"error": "No calibration texts available"}
+        
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+        
+        high_activations = []
+        low_activations = []
+        
+        def capture_hook(module, inputs, outputs):
+            if outputs is not None:
+                out = outputs.detach().float()
+                if out.ndim == 3:
+                    out = out.reshape(-1, out.shape[-1])
+                high_activations.append(out[:, high_indices].cpu())
+                low_activations.append(out[:, low_indices].cpu())
+        
+        # Find and hook the down_proj module
+        hook_handle = None
+        for name, module in hf_model.named_modules():
+            if "mlp.down_proj" in name and name in layer_name:
+                hook_handle = module.register_forward_hook(capture_hook)
+                break
+        
+        if hook_handle is None:
+            return {"error": f"Could not find module for {layer_name}"}
+        
+        # Run forward passes
+        self.model.eval()
+        with torch.no_grad():
+            for text in calibration_texts[:4]:
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=256,
+                    padding=False,
+                )
+                inputs = {k: v.to(self.config.device) for k, v in inputs.items()}
+                try:
+                    self.model(**inputs)
+                except Exception:
+                    pass
+        
+        hook_handle.remove()
+        
+        if not high_activations or not low_activations:
+            return {"error": "No activations captured"}
+        
+        # Concatenate activations
+        high_acts = torch.cat(high_activations, dim=0)  # [total_tokens, num_group]
+        low_acts = torch.cat(low_activations, dim=0)    # [total_tokens, num_group]
+        
+        num_tokens = high_acts.shape[0]
+        
+        # =====================================================================
+        # Compute pairwise redundancy (correlation) for each group
+        # =====================================================================
+        def compute_group_redundancy(acts: torch.Tensor) -> Tuple[torch.Tensor, float, float]:
+            """Compute pairwise correlation stats for a group of neurons."""
+            acts_centered = acts - acts.mean(dim=0, keepdim=True)
+            cov = (acts_centered.T @ acts_centered) / (num_tokens - 1)
+            std = torch.sqrt(torch.diag(cov) + 1e-8)
+            corr = cov / (std.unsqueeze(0) * std.unsqueeze(1) + 1e-8)
+            corr = torch.clamp(corr, -1, 1)
+            
+            n = corr.shape[0]
+            mask = ~torch.eye(n, dtype=torch.bool)
+            pairwise = corr[mask].abs()
+            return pairwise, pairwise.mean().item(), pairwise.std().item()
+        
+        high_pairwise, high_mean_redundancy, high_std_redundancy = compute_group_redundancy(high_acts)
+        low_pairwise, low_mean_redundancy, low_std_redundancy = compute_group_redundancy(low_acts)
+        
+        logger.info(f"    High-connected redundancy: mean={high_mean_redundancy:.4f}, std={high_std_redundancy:.4f}")
+        logger.info(f"    Low-connected redundancy: mean={low_mean_redundancy:.4f}, std={low_std_redundancy:.4f}")
+        
+        # =====================================================================
+        # Statistical comparison
+        # =====================================================================
+        redundancy_diff = high_mean_redundancy - low_mean_redundancy
+        
+        # Effect size (Cohen's d approximation)
+        pooled_std = np.sqrt((high_std_redundancy**2 + low_std_redundancy**2) / 2)
+        effect_size = redundancy_diff / (pooled_std + 1e-8)
+        
+        logger.info(f"    Redundancy difference (high - low): {redundancy_diff:.4f}")
+        logger.info(f"    Effect size (Cohen's d): {effect_size:.4f}")
+        
+        # =====================================================================
+        # Plot comparison using UnifiedVisualizer
+        # =====================================================================
+        viz = UnifiedVisualizer()
+        import matplotlib.pyplot as plt
+        
+        # Plots 1-3: Redundancy comparison (side-by-side, overlay, boxplot)
+        try:
+            figs = viz.plot_redundancy_comparison(
+                high_redundancy=high_pairwise,
+                low_redundancy=low_pairwise,
+                high_mean=high_mean_redundancy,
+                low_mean=low_mean_redundancy,
+                layer_name=layer_name,
+                follower_fraction=follower_fraction,
+                save_dir=plots_dir,
+            )
+            for fig in figs:
+                plt.close(fig)
+        except Exception as e:
+            logger.error(f"  Failed to plot redundancy comparison: {e}")
+        
+        # Plot 4: Scatter plot - supernode influence vs mean redundancy per neuron
+        try:
+            # For each neuron, compute its mean correlation with others in its group
+            # High group: per-neuron mean correlation
+            high_centered = high_acts - high_acts.mean(dim=0, keepdim=True)
+            high_cov = (high_centered.T @ high_centered) / (num_tokens - 1)
+            high_std = torch.sqrt(torch.diag(high_cov) + 1e-8)
+            high_corr = high_cov / (high_std.unsqueeze(0) * high_std.unsqueeze(1) + 1e-8)
+            high_corr = torch.clamp(high_corr, -1, 1)
+            high_corr.fill_diagonal_(0)  # Exclude self
+            high_per_neuron_redundancy = high_corr.abs().mean(dim=1).numpy()
+            
+            # Low group: per-neuron mean correlation
+            low_centered = low_acts - low_acts.mean(dim=0, keepdim=True)
+            low_cov = (low_centered.T @ low_centered) / (num_tokens - 1)
+            low_std = torch.sqrt(torch.diag(low_cov) + 1e-8)
+            low_corr = low_cov / (low_std.unsqueeze(0) * low_std.unsqueeze(1) + 1e-8)
+            low_corr = torch.clamp(low_corr, -1, 1)
+            low_corr.fill_diagonal_(0)
+            low_per_neuron_redundancy = low_corr.abs().mean(dim=1).numpy()
+            
+            # Combine data for grouped scatter
+            all_influence = np.concatenate([high_influence_values, low_influence_values])
+            all_redundancy = np.concatenate([high_per_neuron_redundancy, low_per_neuron_redundancy])
+            all_labels = ['High'] * len(high_influence_values) + ['Low'] * len(low_influence_values)
+            
+            fig = viz.plot_metric_scatter_by_group(
+                x_values=all_influence,
+                y_values=all_redundancy,
+                group_labels=all_labels,
+                xlabel="Supernode Influence (Total Abs Weight)",
+                ylabel="Mean Redundancy (Avg |Correlation| with Group)",
+                title=f"Supernode Influence vs Redundancy per Neuron\n{layer_name}",
+                save_path=plots_dir / f"redundancy_vs_influence_scatter_{layer_name.replace('.', '_')}.png",
+            )
+            plt.close(fig)
+        except Exception as e:
+            logger.error(f"  Failed to plot scatter comparison: {e}")
+        
+        # =====================================================================
+        # Results
+        # =====================================================================
+        results = {
+            "high_connected": {
+                "num_neurons": num_group,
+                "influence_range": [float(high_influence_values[-1]), float(high_influence_values[0])],
+                "redundancy_mean": high_mean_redundancy,
+                "redundancy_std": high_std_redundancy,
+            },
+            "low_connected": {
+                "num_neurons": num_group,
+                "influence_range": [float(low_influence_values[-1]), float(low_influence_values[0])],
+                "redundancy_mean": low_mean_redundancy,
+                "redundancy_std": low_std_redundancy,
+            },
+            "comparison": {
+                "redundancy_difference": redundancy_diff,
+                "effect_size_cohens_d": effect_size,
+            },
+        }
+        
+        return results
+
     def _get_layer_weights(self, layer_module: nn.Module) -> Optional[torch.Tensor]:
         """Find the weight tensor to use for importance/pruning decisions."""
         # common MLP naming
@@ -1321,16 +2097,26 @@ class LLMAlignmentExperiment(BaseExperiment):
             else:
                 if scar_scores and getattr(self.config, "generate_plots", True):
                     try:
-                        from alignment.analysis.visualization import UnifiedVisualizer
+                        import matplotlib.pyplot as plt
 
                         plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
                         plots_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Convert bfloat16 tensors to float32 for matplotlib compatibility
+                        scar_scores_float32 = {}
+                        for layer_name, layer_metrics in scar_scores.items():
+                            scar_scores_float32[layer_name] = {}
+                            for metric_name, values in layer_metrics.items():
+                                if torch.is_tensor(values):
+                                    scar_scores_float32[layer_name][metric_name] = values.float()
+                                else:
+                                    scar_scores_float32[layer_name][metric_name] = values
 
                         viz = UnifiedVisualizer()
 
                         # Layer-wise SCAR loss proxy distributions
                         fig = viz.plot_scar_layer_scores(
-                            scar_scores,
+                            scar_scores_float32,
                             metric_name="scar_loss_proxy",
                             plot_type="violin",
                             save_path=plots_dir / "scar_loss_proxy_layers.png",
@@ -1345,7 +2131,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             "scar_loss_proxy",
                         ]
                         fig = viz.plot_scar_heatmap(
-                            scar_scores,
+                            scar_scores_float32,
                             metrics=scar_metric_list,
                             title="SCAR Metrics per Layer",
                             save_path=plots_dir / "scar_metrics_heatmap.png",
@@ -1353,6 +2139,40 @@ class LLMAlignmentExperiment(BaseExperiment):
                         plt.close(fig)
                     except Exception as viz_err:
                         logger.error(f"Failed to generate SCAR visualizations: {viz_err}")
+
+                    # Run supernode connection analysis
+                    try:
+                        supernode_config = getattr(self.config, "supernode_config", {}) or {}
+                        supernode_fraction = supernode_config.get("core_fraction", 0.01)
+                        follower_fraction = supernode_config.get("follower_fraction", 0.10)
+                        supernode_metric = supernode_config.get("score_metric", "scar_activation_power")
+                        cross_layer_analysis = supernode_config.get("cross_layer_analysis", True)
+                        compute_metrics = supernode_config.get("compute_metrics", 
+                            ["activation", "rayleigh_quotient", "mutual_information", "redundancy"])
+                        compare_by_connection = supernode_config.get("compare_by_connection", True)
+                        
+                        # Get target layers from config - use tracked_layers if not specified
+                        # If target_layers is empty list or None, analyze all layers
+                        target_layers = supernode_config.get("target_layers", None)
+                        if target_layers is None:
+                            # Use tracked layers from config as default
+                            target_layers = getattr(self.config, "tracked_layers", None)
+                        
+                        supernode_analysis = self.analyze_supernode_connections(
+                            scar_scores=scar_scores,
+                            supernode_fraction=supernode_fraction,
+                            follower_fraction=follower_fraction,
+                            plots_dir=plots_dir,
+                            supernode_metric=supernode_metric,
+                            cross_layer_analysis=cross_layer_analysis,
+                            compute_metrics=compute_metrics,
+                            compare_by_connection=compare_by_connection,
+                            target_layers=target_layers,
+                        )
+                        results["supernode_analysis"] = supernode_analysis
+                        logger.info("Supernode connection analysis complete")
+                    except Exception as sn_err:
+                        logger.error(f"Failed supernode connection analysis: {sn_err}")
 
         # Example: per-layer histogram with top-5 annotations
         # self.plot_layer_importance_histogram(
