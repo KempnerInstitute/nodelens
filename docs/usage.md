@@ -1,291 +1,255 @@
 # Usage Guide
 
+This document describes how to run experiments, configure analysis and pruning, and generate visualizations.
+
 ## Running Experiments
 
-The framework uses YAML configuration files to specify experiments. This approach allows reproducible experiments and easy parameter management.
-
-### Basic Usage
+Experiments are driven by YAML configuration files:
 
 ```bash
-conda activate alignment
-cd /path/to/alignment
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 ```
 
-### Example Configurations
+Example configurations:
 
-The `configs/examples/` directory contains pre-configured experiments:
+| Config | Description |
+|--------|-------------|
+| `configs/examples/mnist_basic.yaml` | MLP on MNIST with alignment metrics |
+| `configs/examples/resnet_pruning.yaml` | ResNet-18 pruning on CIFAR-10 |
+| `configs/examples/llama3_scoring.yaml` | LLaMA importance scoring |
+| `configs/examples/llama3_pruning.yaml` | LLaMA pruning |
+| `configs/projects/llm_supernode.yaml` | LLM SCAR analysis |
+| `configs/projects/vision_synergy.yaml` | Vision redundancy/synergy analysis |
 
-**MNIST Basic Analysis**
-```bash
-python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
-```
-Trains an MLP on MNIST and computes alignment scores.
-
-**ResNet Pruning**
-```bash
-python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
-```
-Applies pruning to ResNet-18 on CIFAR-10 using alignment-based importance scores.
-
-**LLaMA-3 Scoring**
-```bash
-python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
-```
-Computes per-neuron importance scores for LLaMA model feed-forward layers.
-
-**LLaMA-3 Pruning**
-```bash
-python scripts/run_experiment.py --config configs/examples/llama3_pruning.yaml
-```
-Prunes LLaMA model using information-theoretic importance scores.
-
-**LLaMA-3 Supernode Pruning (SCAR-style)**
-```bash
-python scripts/run_experiment.py --config configs/projects/llm_supernode.yaml
-```
-Runs the `LLMAlignmentExperiment` on a Hugging Face LLaMA-3.1 model, computes activation, redundancy,
-and SCAR-style supernode metrics (activation power, first-order saliency, curvature, loss proxy),
-and performs structured FFN pruning using the `scar_loss_proxy` metric while protecting a supernode core.
-
-**Vision Synergy / Redundancy Analysis (ResNet-18)**
-```bash
-python scripts/run_experiment.py --config configs/projects/vision_synergy.yaml
-```
-Analyzes alignment, Gaussian PID synergy, and pairwise redundancy in a pretrained ResNet-18 on CIFAR-10,
-then performs redundancy- and synergy-aware pruning using a composite alignment score.
-
-## Command-Line Overrides
-
-Override configuration parameters from the command line:
+## Command-Line Options
 
 ```bash
 python scripts/run_experiment.py \
   --config configs/examples/resnet_pruning.yaml \
-  --device cuda:1 \
-  --batch-size 64 \
-  --target-sparsity 0.5
+  --device cuda:0 \
+  --seed 42 \
+  --output-dir results/my_run
 ```
 
-Common override options:
-- `--device cuda:0` - Select GPU device
-- `--batch-size 64` - Set batch size
-- `--target-sparsity 0.7` - Set pruning target
-- `--epochs 50` - Set training epochs
-- `--output-dir ./results` - Set output directory
-
-## Creating Custom Configurations
-
-### From Template
-
-Copy the template and modify for your needs:
-
-```bash
-cp configs/template.yaml configs/my_experiment.yaml
-# Edit my_experiment.yaml with desired parameters
-python scripts/run_experiment.py --config configs/my_experiment.yaml
-```
-
-### From Existing Example
-
-Start with an example configuration:
-
-```bash
-cp configs/examples/resnet_pruning.yaml configs/my_resnet.yaml
-# Modify specific parameters
-python scripts/run_experiment.py --config configs/my_resnet.yaml
-```
+| Option | Description |
+|--------|-------------|
+| `--config PATH` | YAML configuration file (required) |
+| `--device STRING` | Override device (cuda:0, cpu) |
+| `--seed INT` | Override random seed |
+| `--output-dir PATH` | Override output directory |
+| `--analysis-only` | Regenerate plots from existing results |
+| `--experiment-dir PATH` | Existing experiment directory (with --analysis-only) |
 
 ## Configuration Structure
 
-All configuration files follow the same structure:
-
-```yaml
 ```yaml
 experiment:
   name: "my_experiment"
+  type: "general_alignment"
+  seed: 42
   device: "cuda"
-  
+
 model:
   name: "resnet18"
   pretrained: true
-  
+
 dataset:
   name: "cifar10"
+  data_path: "./data"
   batch_size: 128
 
-metrics:
-  enabled: ['rayleigh_quotient']
+alignment_methods:
+  - "rayleigh_quotient"
+  - "pairwise_redundancy_gaussian"
 
-pruning:
-  enabled: false
-```
-
-See `configs/template.yaml` for all available parameters.
-
-## Experiment Types
-
-### Computing Metrics
-
-Compute alignment and information-theoretic scores:
-
-```yaml
-metrics:
-  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian', 'synergy_gaussian_mmi']
-  
-  rayleigh_quotient:
-    relative: true
-    regularization: 1.0e-6
-  
-  pairwise_redundancy_gaussian:
-    mode: 'output_based'
-    num_pairs: 10
-
-training:
-  enabled: false
-pruning:
-  enabled: false
-```
-
-### Training Networks
-
-Train from scratch with optional metric tracking:
-
-```yaml
-training:
-  enabled: true
-  epochs: 100
-  learning_rate: 0.001
-  optimizer: 'adam'
-  compute_metrics_during_training: false
-```
-
-### Pruning Networks
-
-Apply pruning with specified strategy:
-
-```yaml
 pruning:
   enabled: true
-  strategy: 'composite'
-  target_sparsity: 0.7
-  distribution: 'adaptive_sensitivity'
-  scoring: 'rayleigh_quotient'
+  algorithms: ["alignment"]
+  sparsity_levels: [0.3, 0.5, 0.7]
+  selection_modes: ["low"]
   structured: true
-  
-  fine_tune:
-    enabled: true
-    epochs: 20
-    learning_rate: 0.0001
+  dependency_aware: true
+  fine_tune_after_pruning: true
+
+visualization:
+  enabled: true
+  format: "png"
+  dpi: 300
+  training_curves: true
+  pruning_plots: true
+
+# Post-experiment analysis (optional)
+post_analysis:
+  analyses:
+    - histograms
+    - scatter_plots
+    - pruning_curves
+  histograms:
+    bins: 100
+    top_k: 5
 ```
 
-### Multi-Level Pruning
+See `configs/template.yaml` for all available options.
 
-Test multiple sparsity levels:
+## Visualization Options
+
+### Inline Visualization (visualization block)
+
+Controls plots generated during experiment execution:
+
+| Option | Description |
+|--------|-------------|
+| `enabled` | Enable/disable plot generation |
+| `format` | Output format (png, pdf, svg) |
+| `dpi` | Resolution |
+| `training_curves` | Training loss/accuracy plots |
+| `alignment_curves` | Alignment metric evolution |
+| `dropout_plots` | Dropout analysis plots |
+| `eigen_plots` | Eigenvalue heatmaps |
+| `pruning_plots` | Pruning performance plots |
+
+### Post-Experiment Analysis (post_analysis block)
+
+Runs additional analysis after experiment completes:
+
+```yaml
+post_analysis:
+  analyses:
+    - histograms        # Importance score distributions
+    - scatter_plots     # Metric correlations
+    - heatmaps          # Layer-metric heatmaps
+    - layer_distributions  # Violin/box plots
+    - pruning_curves    # Sparsity vs performance
+    - scar_analysis     # SCAR metrics (LLM)
+  
+  histograms:
+    bins: 100
+    top_k: 5
+    metrics: ["rayleigh_quotient", "activation_l2_norm"]
+  
+  scatter_plots:
+    pairs:
+      - ["activation_l2_norm", "rayleigh_quotient"]
+```
+
+## Standalone Analysis
+
+For analysis of existing results without running experiments:
+
+```bash
+# Run analysis from config
+python scripts/run_analysis.py --config configs/analysis/vision_figures.yaml
+
+# Quick analysis
+python scripts/run_analysis.py --results-dir ./results --output-dir ./plots --quick
+
+# Specific analyses
+python scripts/run_analysis.py --results-dir ./results \
+    --analyses histograms pruning_curves \
+    --output-dir ./custom_plots
+```
+
+### Analysis Configuration Files
+
+| Config | Description |
+|--------|-------------|
+| `configs/analysis/llm_paper_figures.yaml` | LLM paper figures |
+| `configs/analysis/vision_figures.yaml` | Vision experiment figures |
+| `configs/analysis/llm_layer_analysis.yaml` | LLM layer analysis |
+
+### Programmatic Analysis
+
+```python
+from alignment.analysis import AnalysisRunner, AnalysisConfig
+
+config = AnalysisConfig(
+    results_dir="./results",
+    output_dir="./plots",
+    analyses=["histograms", "pruning_curves"],
+)
+runner = AnalysisRunner(config)
+outputs = runner.run()
+```
+
+## Pruning Configuration
+
+### Basic Pruning
 
 ```yaml
 pruning:
   enabled: true
-  sparsity_levels: [0.3, 0.5, 0.7, 0.9]
-  strategy: 'magnitude'
+  algorithms: ["alignment"]
+  sparsity_levels: [0.3, 0.5, 0.7]
+  selection_modes: ["low"]
+  alignment_metric: "rayleigh_quotient"
 ```
+
+### Dependency-Aware Pruning
+
+For models with skip connections (ResNet, DenseNet):
+
+```yaml
+pruning:
+  enabled: true
+  structured: true
+  dependency_aware: true
+```
+
+### Available Algorithms
+
+| Algorithm | Description |
+|-----------|-------------|
+| `magnitude` | Prune by weight magnitude |
+| `alignment` | Prune by alignment score |
+| `hybrid` | Combine magnitude and alignment |
+| `random` | Random baseline |
+| `gradient` | Gradient-based importance |
 
 ## Output Structure
 
-Results are saved to the specified output directory:
-
 ```
-results/[experiment_name]/
-├── config.yaml           # Configuration used
-├── results.json          # Numerical results
-├── scores/               # Per-layer importance scores
-├── plots/                # Visualizations
-└── checkpoints/          # Model checkpoints
-```
-
-## Workflow
-
-1. Create or select configuration file
-2. Activate environment: `conda activate alignment`
-3. Run experiment: `python scripts/run_experiment.py --config [path]`
-4. Results saved to output directory
-5. Analyze results and visualizations
+results/experiment_YYYYMMDD_HHMMSS/
+├── experiment_config.yaml
+├── experiment.log
+├── results_YYYYMMDD_HHMMSS.json
+├── checkpoints/
+├── plots/
+│   ├── training_loss.png
+│   ├── pruning_accuracy.png
+│   └── ...
+└── analysis/           # From post_analysis
+    ├── histograms/
+    ├── scatter_plots/
+    └── ...
 ```
 
-See `configs/template.yaml` for complete parameter reference.
+## Workflow Examples
 
----
+### Basic Vision Experiment
 
-## Output
+```bash
+# Run experiment with pruning
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 
-Results saved to experiment output directory:
-
-```
-results/
-└── [experiment_name]/
-    ├── config.yaml (saved configuration)
-    ├── results.json (numerical results)
-    ├── scores/ (per-layer scores)
-    ├── plots/ (visualizations)
-    └── checkpoints/ (model checkpoints)
+# Results in results/resnet_pruning_YYYYMMDD_HHMMSS/
 ```
 
----
+### LLM Analysis
 
-## Examples for Different Tasks
+```bash
+# Compute importance scores
+python scripts/run_experiment.py --config configs/examples/llama3_scoring.yaml
 
-### Compute Metrics Only
-
-```yaml
-metrics:
-  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian']
-training:
-  enabled: false
-pruning:
-  enabled: false
+# Generate analysis figures
+python scripts/run_analysis.py --config configs/analysis/llm_paper_figures.yaml
 ```
 
-### Training with Metric Tracking
+### Regenerate Plots
 
-```yaml
-training:
-  enabled: true
-  epochs: 50
-  compute_metrics_during_training: true
-  metric_frequency: 100
+```bash
+# Regenerate plots from existing experiment
+python scripts/run_experiment.py \
+  --config configs/examples/resnet_pruning.yaml \
+  --analysis-only \
+  --experiment-dir results/resnet_pruning_20240101_120000
 ```
-
-### Pruning Experiments
-
-```yaml
-pruning:
-  enabled: true
-  strategy: 'ultimate'  # or 'magnitude', 'composite', etc.
-  target_sparsity: 0.7
-  distribution: 'adaptive_sensitivity'
-  scoring: 'composite'
-```
-
-### Multi-Sparsity Comparison
-
-```yaml
-pruning:
-  enabled: true
-  sparsity_levels: [0.3, 0.5, 0.7, 0.9]
-  # Automatically tests all levels
-```
-
----
-
-## Workflow
-
-1. Choose or create config file
-2. Activate environment: `conda activate alignment`
-3. Run: `python scripts/run_experiment.py --config [path]`
-4. Results saved to `results/[experiment_name]/`
-5. View plots in `results/[experiment_name]/plots/`
-
----
-
-This single script handles ALL experiment types through YAML configuration.
-

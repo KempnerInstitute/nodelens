@@ -71,3 +71,26 @@ evaluation_num_samples: 32
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
+visualization:
+  enabled: true
+  format: "png"
+  dpi: 300
+  style: "seaborn-v0_8-paper"
+  output_dir: "./llm_plots"
+  figures:
+    # Fig. 1 / 2-style alignment and SCAR metric distributions
+    - id: "scar_metric_distributions"
+      enabled: true
+    # Redundancy–synergy scatter and halo visualization
+    - id: "scar_redundancy_synergy_scatter"
+      enabled: true
+      filename: "fig2_redundancy_halos.png"
+    # Sparsity–perplexity curves for pruning strategies
+    - id: "scar_sparsity_perplexity"
+      enabled: true
+      filename: "fig3_sparsity_perplexity.png"
+    # SCAR ablation summary at high sparsity
+    - id: "scar_ablation"
+      enabled: true
+      filename: "fig4_ablation.png"
+

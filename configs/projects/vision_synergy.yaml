@@ -57,7 +57,33 @@ visualization:
   enabled: true
   format: "png"
   dpi: 300
-  style: "seaborn"
+  style: "seaborn-v0_8-paper"
+  output_dir: "./vision_plots"
+  figures:
+    # Layerwise RQ / redundancy / synergy distributions
+    - id: "vision_layer_distributions"
+      enabled: true
+    # Redundancy–synergy scatter plot
+    - id: "vision_redundancy_synergy_scatter"
+      enabled: true
+      filename: "vision_redundancy_synergy_scatter.png"
+    # Alignment (RQ) vs synergy scatter
+    - id: "vision_alignment_vs_synergy"
+      enabled: true
+      filename: "vision_alignment_vs_synergy.png"
+    # MNIST pruning accuracy–sparsity curves
+    - id: "vision_mnist_pruning_curves"
+      enabled: true
+      filename: "vision_mnist_pruning_curves.png"
+    # CIFAR pruning accuracy–sparsity curves
+    - id: "vision_cifar_pruning_curves"
+      enabled: true
+      filename: "vision_cifar_pruning_curves.png"
+    # CIFAR pruning ablation at high sparsity
+    - id: "vision_pruning_ablation"
+      enabled: true
+      filename: "vision_pruning_ablation.png"
+      min_sparsity: 0.5
 
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"

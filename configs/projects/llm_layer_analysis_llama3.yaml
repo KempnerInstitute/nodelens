@@ -1,0 +1,74 @@
+experiment:
+  name: "llm_layer_analysis_llama3"
+  type: "llm_supernode"   # Uses LLMAlignmentExperiment pipeline
+  seed: 42
+  device: "cuda"
+
+# HuggingFace LLaMA-3.1 8B model
+model_name: "hf_causal_lm"
+model_config:
+  model_id: "meta-llama/Llama-3.1-8B"
+  model_backend: "hf"
+  device_map: null          # use 'auto' or an explicit map for multi-device; null => single-device
+  torch_dtype: "bfloat16"
+
+# Simple text calibration dataset
+dataset_name: "wikitext"
+batch_size: 1
+num_workers: 0
+
+# Track a single FFN (MLP) layer.
+# For LLaMA-style models, FFN modules are typically named "model.layers.<L>.mlp.down_proj" / "gate_proj".
+# You can change the layer index (e.g., 5, 15, 25) to probe different depths.
+tracked_layers:
+  - "model.layers.15.mlp.down_proj"
+
+# Node-level metrics to compute on that FFN layer
+alignment_methods:
+  - "activation_variance"          # activation magnitude proxy
+  - "rayleigh_quotient"           # alignment to input covariance
+  - "mutual_information_gaussian" # Gaussian MI vs reference signal
+  - "pairwise_redundancy_gaussian" # Gaussian redundancy between neurons
+  - "gaussian_pid_synergy_mmi"    # Gaussian PID-style synergy (requires target_outputs)
+
+# Number of calibration snippets for alignment metrics
+alignment_data_num_samples: 8
+
+# Optional composite weights (used if you later define composite scores)
+alignment_composite_weights:
+  activation_variance: 0.3
+  rayleigh_quotient: 0.3
+  mutual_information_gaussian: 0.3
+  pairwise_redundancy_gaussian: -0.2
+
+# Supernode-style configuration (identify large-activation channels)
+supernode:
+  enabled: true
+  score_metric: "activation_outlier_index"  # defined in activation_magnitude.py
+  core_fraction: 0.01                       # top 1% as candidate supernodes
+  min_core_neurons: 32
+  protect_core: true
+
+# No pruning in this analysis config (we only measure and visualize)
+pruning:
+  enabled: false
+
+# Perplexity / SCAR metrics not required for this analysis
+do_perplexity_computation: false
+evaluation_dataset: "wikitext"
+evaluation_num_samples: 0
+
+do_scar_metrics: false
+scar_num_samples: 0
+scar_max_length: 512
+
+log_dir: "./logs"
+checkpoint_dir: "./checkpoints"
+
+visualization:
+  enabled: true
+  hist_bins: 100
+  scatter_point_size: 10.0
+  scatter_alpha: 0.5
+
+

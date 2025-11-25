@@ -1,0 +1,51 @@
+# Vision Experiment Figures Analysis Configuration
+# Replaces: scripts/generate_vision_figures.py
+#
+# Usage:
+#   python scripts/run_analysis.py --config configs/analysis/vision_figures.yaml
+
+results_dir: "./results"
+output_dir: "./vision_plots"
+style: "seaborn-v0_8-paper"
+figsize: [10, 6]
+dpi: 300
+format: "png"
+
+analyses:
+  - histograms
+  - scatter_plots
+  - heatmaps
+  - layer_distributions
+  - pruning_curves
+
+histograms:
+  bins: 100
+  top_k: 5
+  metrics:
+    - rayleigh_quotient
+    - activation_l2_norm
+    - pairwise_redundancy_gaussian
+
+scatter_plots:
+  alpha: 0.5
+  point_size: 10
+  pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["rayleigh_quotient", "pairwise_redundancy_gaussian"]
+    - ["pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]
+
+heatmaps:
+  metrics:
+    - rayleigh_quotient
+    - activation_l2_norm
+    - pairwise_redundancy_gaussian
+
+layer_distributions:
+  plot_type: "violin"
+  metrics:
+    - rayleigh_quotient
+    - pairwise_redundancy_gaussian
+
+pruning_curves:
+  show_baseline: true
+

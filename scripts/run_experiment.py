@@ -2,15 +2,12 @@
 """
 Unified Alignment Experiment Runner
 
-A single entry point for all alignment experiments that can handle:
-- Any dataset (MNIST, CIFAR, ImageNet, etc.)
-- Any model (MLP, CNN, ResNet, etc.)
-- Any metric (Rayleigh Quotient, MI, CKA, etc.)
-- Any pruning strategy (magnitude, gradient, fisher, etc.)
-- Any experiment type (standard, progressive, layer-wise, etc.)
+Run alignment experiments with configuration files.
 
 Usage:
-    python scripts/run_experiment.py --config configs/unified_config.yaml
+    python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+    python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml --device cuda:0
+    python scripts/run_experiment.py --analysis-only --experiment-dir results/my_experiment_20240101
 """
 
 import argparse
@@ -29,13 +26,49 @@ repo_root = os.path.dirname(current_dir)
 sys.path.insert(0, repo_root)
 sys.path.insert(0, os.path.join(repo_root, "src"))
 
-# Import from the alignment package
 from alignment.experiments.general_alignment import GeneralAlignmentExperiment
 from alignment.pruning.experiments.cascading_layer import CascadingLayerPruningExperiment
 from alignment.pruning.experiments.layer_wise import LayerIsolatedPruningExperiment
 from alignment.experiments.llm_experiments import LLMAlignmentExperiment
 
 logger = logging.getLogger(__name__)
+
+
+def run_post_analysis(config, results_file: Path, output_dir: Path):
+    """Run post-experiment analysis using AnalysisRunner."""
+    post_analysis_config = getattr(config, "post_analysis", {})
+    if not post_analysis_config:
+        return
+    
+    logger.info("Running post-experiment analysis...")
+    
+    try:
+        from alignment.analysis import AnalysisRunner, AnalysisConfig
+        
+        # Build analysis config from post_analysis block
+        analysis_config = AnalysisConfig(
+            results_file=str(results_file),
+            output_dir=str(output_dir / "analysis"),
+            style=post_analysis_config.get("style", "seaborn-v0_8-paper"),
+            format=post_analysis_config.get("format", config.plot_format),
+            dpi=post_analysis_config.get("dpi", config.plot_dpi),
+            analyses=post_analysis_config.get("analyses", ["all"]),
+            histograms=post_analysis_config.get("histograms", {}),
+            scatter_plots=post_analysis_config.get("scatter_plots", {}),
+            heatmaps=post_analysis_config.get("heatmaps", {}),
+            pruning_curves=post_analysis_config.get("pruning_curves", {}),
+            layer_distributions=post_analysis_config.get("layer_distributions", {}),
+            scar_analysis=post_analysis_config.get("scar_analysis", {}),
+        )
+        
+        runner = AnalysisRunner(analysis_config)
+        outputs = runner.run()
+        
+        total_files = sum(len(v) for v in outputs.values())
+        logger.info(f"Post-analysis complete: generated {total_files} files in {output_dir / 'analysis'}")
+        
+    except Exception as e:
+        logger.error(f"Post-analysis failed: {e}")
 
 
 def main():
@@ -45,59 +78,80 @@ def main():
     parser.add_argument("--device", type=str, help="Override device")
     parser.add_argument("--seed", type=int, help="Override seed")
     parser.add_argument("--output-dir", type=str, help="Override output directory")
+    parser.add_argument(
+        "--analysis-only",
+        action="store_true",
+        help="Load existing experiment and regenerate analysis/plots",
+    )
+    parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        help="Path to existing experiment directory (with --analysis-only)",
+    )
 
     args, unknown = parser.parse_known_args()
 
-    # Parse additional overrides
+    # Parse overrides
     overrides = {}
     if args.device:
         overrides["device"] = args.device
     if args.seed:
         overrides["seed"] = args.seed
 
-    # Load config using the proper config loader
+    # Load config
     from alignment.configs.config_loader import load_config as proper_load_config
-
     config = proper_load_config(args.config)
 
-    # Apply overrides to the loaded config
-    if overrides:
-        for key, value in overrides.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
+    # Apply overrides
+    for key, value in overrides.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
 
-    # Create timestamped output directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_name = getattr(config, "name", "experiment")
+    is_analysis_only = bool(args.analysis_only)
 
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
+    if is_analysis_only:
+        if not args.experiment_dir:
+            raise ValueError("--analysis-only requires --experiment-dir")
+        output_dir = Path(args.experiment_dir)
+        if not output_dir.exists():
+            raise FileNotFoundError(f"Experiment directory not found: {output_dir}")
+
+        config.experiment_dir = str(output_dir)
+        config.checkpoint_dir = str(output_dir / "checkpoints")
+        config.log_dir = str(output_dir / "logs")
+        plots_dir = output_dir / "plots"
+        config.plots_dir = str(plots_dir)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        config_save_path = output_dir / "experiment_config.yaml"
+        timestamp = None
     else:
-        # Create a unique directory with experiment name and timestamp
-        output_dir = Path(f"results/{experiment_name}_{timestamp}")
+        # Create timestamped output directory
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        experiment_name = getattr(config, "name", "experiment")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+        else:
+            output_dir = Path(f"results/{experiment_name}_{timestamp}")
 
-    # Save the configuration used
-    config_save_path = output_dir / "experiment_config.yaml"
-    config.save(config_save_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Update config with timestamped directories
-    config.checkpoint_dir = str(output_dir / "checkpoints")
-    config.log_dir = str(output_dir / "logs")
-    config.experiment_dir = str(output_dir)  # Add experiment_dir for compatibility
+        config_save_path = output_dir / "experiment_config.yaml"
+        config.save(config_save_path)
 
-    # Create plots directory in results folder (not in logs)
-    plots_dir = output_dir / "plots"
-    config.plots_dir = str(plots_dir)  # Add plots_dir for visualization
+        config.checkpoint_dir = str(output_dir / "checkpoints")
+        config.log_dir = str(output_dir / "logs")
+        config.experiment_dir = str(output_dir)
 
-    # Ensure directories exist
-    Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
-    Path(config.log_dir).mkdir(parents=True, exist_ok=True)
-    plots_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Created plots directory: {plots_dir}")
+        plots_dir = output_dir / "plots"
+        config.plots_dir = str(plots_dir)
 
-    # Setup logging to both file and console
+        Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        Path(config.log_dir).mkdir(parents=True, exist_ok=True)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+    # Setup logging
     log_file = output_dir / "experiment.log"
     logging.basicConfig(
         level=logging.INFO,
@@ -107,19 +161,16 @@ def main():
 
     # Print experiment info
     print(f"\n{'='*60}")
-    print("Running Alignment Experiment")
+    print("Alignment Experiment" + (" (Analysis Only)" if is_analysis_only else ""))
     print(f"{'='*60}")
     print(f"Configuration: {args.config}")
-    print(f"Output directory: {output_dir}")
+    print(f"Experiment directory: {output_dir}")
     print(f"Device: {config.device}")
-    print(f"Plot generation: {getattr(config, 'generate_plots', True)}")
-    print(f"Plots directory: {plots_dir}")
     print(f"{'='*60}\n")
 
     # Determine experiment type
     experiment_type = getattr(config, "experiment_type", "alignment_analysis")
     logger.info(f"Running {experiment_type} experiment")
-    logger.info(config)
 
     if experiment_type in {"llm_alignment", "llm_supernode", "llm"}:
         experiment = LLMAlignmentExperiment(config)
@@ -132,13 +183,42 @@ def main():
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
 
-    # Run experiment
+    # Analysis-only mode
+    if is_analysis_only:
+        if isinstance(experiment, GeneralAlignmentExperiment):
+            result_files = sorted(output_dir.glob("results_*.json"))
+            if not result_files:
+                raise FileNotFoundError(f"No results_*.json found in {output_dir}")
+            results_path = result_files[-1]
+            with results_path.open("r") as f:
+                results = json.load(f)
+
+            experiment.train_results = results.get("train_results", {})
+            experiment.test_results = results.get("test_results", {})
+            experiment.dropout_results = results.get("dropout_results", {})
+            experiment.pruning_results = results.get("pruning_results", {})
+            experiment.eigenfeature_results = results.get("eigenfeature_results", {})
+
+            if getattr(config, "generate_plots", True):
+                experiment._generate_visualizations()
+                logger.info("Regenerated visualizations from existing results")
+            
+            # Run post-analysis if configured
+            run_post_analysis(config, results_path, output_dir)
+        else:
+            logger.warning(f"Analysis-only mode not supported for {experiment_type}")
+
+        print(f"\n{'='*60}")
+        print("Analysis Complete!")
+        print(f"{'='*60}\n")
+        return
+
+    # Full experiment run
     results = experiment.run()
 
-    # Save results with timestamp
+    # Save results
     results_file = output_dir / f"results_{timestamp}.json"
 
-    # Convert numpy arrays to lists for JSON serialization
     def convert_to_serializable(obj):
         if hasattr(obj, "tolist"):
             return obj.tolist()
@@ -149,75 +229,30 @@ def main():
         return obj
 
     serializable_results = convert_to_serializable(results)
-
     with open(results_file, "w") as f:
         json.dump(serializable_results, f, indent=2)
 
-    # Create experiment summary
-    summary_file = output_dir / "experiment_summary.txt"
-    with open(summary_file, "w") as f:
-        f.write(f"Experiment: {experiment_name}\n")
-        f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Configuration: {args.config}\n")
-        f.write(f"Experiment Type: {experiment_type} (inferred from config blocks)\n")
-        f.write(f"Plot Generation: {getattr(config, 'generate_plots', True)}\n")
-        f.write("=" * 50 + "\n\n")
+    # Run post-analysis if configured
+    run_post_analysis(config, results_file, output_dir)
 
-        # Add results summary
-        if "test_results" in results:
-            f.write("Final Model Performance:\n")
-            f.write(f"  - Accuracy: {results['test_results'].get('final_accuracy', 'N/A'):.2f}%\n")
-            f.write(f"  - Loss: {results['test_results'].get('final_loss', 'N/A'):.4f}\n\n")
-
-        if "pruning_results" in results and results["pruning_results"]:
-            f.write("Pruning Experiments:\n")
-            strategies = results["pruning_results"].get("strategies", {})
-            f.write(f"  - Strategies tested: {list(strategies.keys())}\n")
-            f.write(f"  - Plots saved in: {config.log_dir}/plots/\n")
-
-        # List plots created
-        plots_created = list(plots_dir.glob("*"))
-        if plots_created:
-            f.write(f"\nPlots Generated ({len(plots_created)}):\n")
-            for plot_file in sorted(plots_created):
-                if plot_file.is_file():
-                    f.write(f"  - {plot_file.name}\n")
-        else:
-            f.write("\nNo plots were generated.\n")
-
-        f.write("\nGenerated Files:\n")
-        for file_path in sorted(output_dir.rglob("*")):
-            if file_path.is_file():
-                relative_path = file_path.relative_to(output_dir)
-                f.write(f"  - {relative_path}\n")
-
-    # Print completion message
+    # Print completion
     print(f"\n{'='*60}")
     print("Experiment Complete!")
     print(f"{'='*60}")
 
     if "test_results" in results:
-        print(f"Final model accuracy: {results['test_results'].get('final_accuracy', 'N/A'):.2f}%")
-        print(f"Final model loss: {results['test_results'].get('final_loss', 'N/A'):.4f}")
+        print(f"Final accuracy: {results['test_results'].get('final_accuracy', 'N/A'):.2f}%")
 
-    print(f"\nAll results saved in: {output_dir}")
+    print(f"\nResults saved in: {output_dir}")
     print(f"  - Configuration: {config_save_path}")
     print(f"  - Results: {results_file}")
-    print(f"  - Summary: {summary_file}")
-    print(f"  - Logs: {log_file}")
-
-    # Check and report on plots
-    plots_created = list(plots_dir.glob("*"))
-    if plots_created:
-        print(f"  - Plots ({len(plots_created)}): {plots_dir}/")
-        for plot_file in sorted(plots_created):
-            if plot_file.is_file():
-                print(f"    * {plot_file.name}")
-    else:
-        print("  - No plots generated (check generate_plots setting and experiment configuration)")
-        print(f"    * Pruning enabled: {getattr(config, 'do_pruning_experiments', False)}")
-        print(f"    * Plot generation: {getattr(config, 'generate_plots', False)}")
-        print(f"    * Pruning results in output: {'pruning_results' in results}")
+    print(f"  - Plots: {plots_dir}/")
+    
+    # Check for analysis output
+    analysis_dir = output_dir / "analysis"
+    if analysis_dir.exists():
+        analysis_files = list(analysis_dir.rglob("*"))
+        print(f"  - Analysis ({len([f for f in analysis_files if f.is_file()])} files): {analysis_dir}/")
 
     print(f"{'='*60}\n")
 

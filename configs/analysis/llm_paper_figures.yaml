@@ -1,0 +1,36 @@
+# LLM Paper Figures Analysis Configuration
+# Replaces: scripts/generate_paper_figures.py
+#
+# Usage:
+#   python scripts/run_analysis.py --config configs/analysis/llm_paper_figures.yaml
+
+results_dir: "./results"
+output_dir: "./llm_plots"
+style: "seaborn-v0_8-paper"
+figsize: [10, 5]
+dpi: 300
+format: "png"
+
+analyses:
+  - scar_analysis
+  - pruning_curves
+  - advanced_pruning
+
+scar_analysis:
+  plot_type: "violin"
+  metrics:
+    - scar_loss_proxy
+    - scar_activation_power
+    - scar_taylor
+    - scar_curvature
+
+pruning_curves:
+  show_baseline: true
+
+advanced_pruning:
+  metric_mapping:
+    activation_outlier_index: "Outlier Index (OI)"
+    scar_taylor: "Taylor Saliency (T)"
+    scar_curvature: "Curvature (R)"
+    rayleigh_quotient: "Rayleigh Quotient"
+

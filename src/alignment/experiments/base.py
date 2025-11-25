@@ -112,11 +112,17 @@ class ExperimentConfig:
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
+    dependency_aware_pruning: bool = False  # Propagate masks across dependent layers
 
     # Plotting and visualization
     generate_plots: bool = True
     plot_format: str = "png"
     plot_dpi: int = 300
+    visualization_options: Dict[str, Any] = field(default_factory=dict)
+    
+    # Post-experiment analysis (runs after experiment completes)
+    # When set, AnalysisRunner generates additional visualizations from results
+    post_analysis: Dict[str, Any] = field(default_factory=dict)
 
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
@@ -148,6 +154,7 @@ class ExperimentConfig:
     # Misc
     tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
     model_kwargs: Dict[str, Any] = field(default_factory=dict)
+    analysis_options: Dict[str, Any] = field(default_factory=dict)
     
 
     def to_dict(self) -> Dict[str, Any]:

@@ -10,6 +10,7 @@ from alignment.experiments.base import ExperimentConfig, BaseExperiment
 from alignment.metrics import get_metric
 from alignment.models.transformers import TransformerWrapperEnhanced as TransformerWrapper
 from alignment.pruning import AlignmentPruning, PruningConfig
+from alignment.services import MaskOperations
 from alignment.training.base import BaseTrainer  # kept for compatibility if used elsewhere
 from alignment.core.streaming import StreamingCovariance
 
@@ -1023,9 +1024,182 @@ class LLMAlignmentExperiment(BaseExperiment):
                 import traceback
                 logger.error(traceback.format_exc())
 
+        attention_masks, num_attention_layers = self._prune_attention_layers(
+            pruner=pruner,
+            metric=metric,
+            mode=mode,
+            sparsity=sparsity,
+        )
+        masks.update(attention_masks)
+
         self.pruning_masks = masks
         logger.info(f"Pruned {len(processed_mlps)} MLP layers with {sparsity:.1%} target sparsity")
+        if num_attention_layers > 0:
+            logger.info(f"Pruned {num_attention_layers} attention blocks with shared Q/K/V/O masks")
         return masks
+
+    def _prune_attention_layers(
+        self,
+        pruner: AlignmentPruning,
+        metric: str,
+        mode: str,
+        sparsity: float,
+    ) -> Tuple[Dict[str, torch.Tensor], int]:
+        """
+        Apply shared pruning masks to attention Q/K/V/O projections so that entire heads
+        are dropped consistently.
+        """
+        import re
+
+        attention_masks: Dict[str, torch.Tensor] = {}
+        processed_layers = set()
+        successful_layers = 0
+
+        named_modules = dict(self.wrapped_model._model.named_modules())
+        pattern = re.compile(r"layers\.(\d+)\.self_attn")
+
+        for layer_name, layer_scores in self.importance_scores.items():
+            if metric not in layer_scores:
+                continue
+
+            match = pattern.search(layer_name)
+            if not match:
+                continue
+
+            layer_idx = match.group(1)
+            if layer_idx in processed_layers:
+                continue
+            processed_layers.add(layer_idx)
+
+            base_name = f"model.layers.{layer_idx}.self_attn"
+            attn_module = named_modules.get(base_name)
+            if attn_module is None:
+                logger.warning(f"Attention module '{base_name}' not found; skipping attention pruning for layer {layer_idx}")
+                continue
+
+            scores, ref_layer = self._select_attention_scores(base_name, metric)
+            if scores is None or ref_layer is None:
+                logger.warning(f"No attention scores found for {base_name} using metric '{metric}'")
+                continue
+
+            neuron_mask, heads_kept, total_heads = self._create_attention_neuron_mask(
+                scores=scores,
+                attn_module=attn_module,
+                mode=mode,
+                sparsity=sparsity,
+                layer_key=ref_layer,
+            )
+            if neuron_mask is None:
+                continue
+
+            # Apply mask to Q/K/V outputs (rows) and O input (columns)
+            devices = []
+            for proj_name in ("q_proj", "k_proj", "v_proj"):
+                proj_module = getattr(attn_module, proj_name, None)
+                if proj_module is None:
+                    continue
+                devices.append(proj_module.weight.device)
+                pruner.apply_pruning(proj_module, neuron_mask.to(proj_module.weight.device), dim="output")
+                attention_masks[f"{base_name}.{proj_name}"] = neuron_mask.detach().clone()
+
+            o_proj = getattr(attn_module, "o_proj", None) or getattr(attn_module, "out_proj", None)
+            if o_proj is not None:
+                devices.append(o_proj.weight.device)
+                pruner.apply_pruning(o_proj, neuron_mask.to(o_proj.weight.device), dim="input")
+                attention_masks[f"{base_name}.o_proj"] = neuron_mask.detach().clone()
+
+            if devices:
+                successful_layers += 1
+                pruned_fraction = float((neuron_mask == 0).sum().item()) / float(neuron_mask.numel())
+                if heads_kept is not None and total_heads is not None:
+                    logger.info(
+                        f"  Layer {layer_idx} attention: kept {heads_kept}/{total_heads} heads "
+                        f"({1 - pruned_fraction:.2%} of Q/K/V outputs retained)"
+                    )
+                else:
+                    logger.info(
+                        f"  Layer {layer_idx} attention: pruned {pruned_fraction:.2%} of Q/K/V outputs"
+                    )
+
+        return attention_masks, successful_layers
+
+    def _select_attention_scores(self, base_name: str, metric: str) -> Tuple[Optional[torch.Tensor], Optional[str]]:
+        """Find the first projection within an attention block that has the requested metric."""
+        for proj in ("q_proj", "k_proj", "v_proj", "o_proj", "out_proj"):
+            key = f"{base_name}.{proj}"
+            layer_scores = self.importance_scores.get(key)
+            if not layer_scores:
+                continue
+            metric_scores = layer_scores.get(metric)
+            if metric_scores is None:
+                continue
+            return metric_scores.clone(), key
+        return None, None
+
+    def _create_attention_neuron_mask(
+        self,
+        scores: torch.Tensor,
+        attn_module: nn.Module,
+        mode: str,
+        sparsity: float,
+        layer_key: str,
+    ) -> Tuple[Optional[torch.Tensor], Optional[int], Optional[int]]:
+        """
+        Convert per-neuron attention scores into a shared mask aligned with heads.
+        Returns (mask, heads_kept, total_heads).
+        """
+        scores = scores.flatten()
+        device = scores.device
+
+        supernode_cfg = getattr(self.config, "supernode_config", {}) or {}
+        core_mask = self.importance_scores.get(layer_key, {}).get("supernode_mask")
+        if supernode_cfg.get("enabled") and supernode_cfg.get("protect_core", True) and core_mask is not None:
+            margin = torch.abs(scores).max().detach().item() + 1.0
+            if mode == "low":
+                scores[core_mask] = scores.max() + margin
+            elif mode == "high":
+                scores[core_mask] = scores.min() - margin
+
+        num_heads = None
+        for attr in ("num_heads", "n_heads", "num_attention_heads"):
+            if hasattr(attn_module, attr):
+                num_heads = int(getattr(attn_module, attr))
+                break
+
+        if num_heads is None or num_heads <= 0:
+            logger.warning("Attention module missing head count; falling back to per-neuron mask")
+            raw_mask = MaskOperations.create_structured_mask(scores, amount=sparsity, mode=mode)
+            return raw_mask.float().to(device), None, None
+
+        head_dim = getattr(attn_module, "head_dim", None)
+        if head_dim is None and hasattr(attn_module, "hidden_size"):
+            head_dim = getattr(attn_module, "hidden_size") // num_heads
+        if head_dim is None and hasattr(attn_module, "embed_dim"):
+            head_dim = getattr(attn_module, "embed_dim") // num_heads
+        if head_dim is None and scores.numel() % num_heads == 0:
+            head_dim = scores.numel() // num_heads
+
+        if head_dim is None or head_dim <= 0 or scores.numel() != num_heads * head_dim:
+            logger.warning(
+                f"Attention score length {scores.numel()} is incompatible with num_heads={num_heads}; "
+                f"falling back to per-neuron mask."
+            )
+            raw_mask = MaskOperations.create_structured_mask(scores, amount=sparsity, mode=mode)
+            return raw_mask.float().to(device), None, None
+
+        head_scores = scores.view(num_heads, head_dim).mean(dim=1)
+        head_keep = MaskOperations.create_structured_mask(head_scores, amount=sparsity, mode=mode)
+
+        # Ensure that any head containing a protected core neuron is always kept.
+        if core_mask is not None and core_mask.numel() == scores.numel():
+            core_heads = core_mask.view(num_heads, head_dim).any(dim=1)
+            if core_heads.any():
+                head_keep = head_keep | core_heads.to(head_keep.device)
+
+        heads_kept = int(head_keep.sum().item())
+
+        expanded = head_keep.unsqueeze(1).expand(-1, head_dim).reshape(-1).float()
+        return expanded.to(device), heads_kept, num_heads
     
     def apply_minimal_repair(self, dataset_name: str = "wikitext", epochs: int = 1, lr: float = 1e-4) -> None:
         """
@@ -1180,10 +1354,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     except Exception as viz_err:
                         logger.error(f"Failed to generate SCAR visualizations: {viz_err}")
 
+        # Example: per-layer histogram with top-5 annotations
         # self.plot_layer_importance_histogram(
         #     layer_name="model.layers.1.mlp.up_proj",
+        #     metric="activation_l2_norm",
         #     importance_scores=scores,
-        #     plots_dir=self.config.plots_dir
+        #     plots_dir=self.config.plots_dir,
         # )
 
         for layer_name, layer_scores in scores.items():
@@ -1230,6 +1406,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             sparsity_levels = self.config.pruning_amounts
             metric = self.config.pruning_alignment_metric
             mode = self.config.pruning_selection_mode
+            if isinstance(mode, list):
+                mode = mode[0]
 
             for sparsity in sparsity_levels:
                 masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
@@ -1253,34 +1431,100 @@ class LLMAlignmentExperiment(BaseExperiment):
         return results
     
 
-    def plot_layer_importance_histogram(self, layer_name, importance_scores, plots_dir):
+    def plot_layer_importance_histogram(
+        self,
+        layer_name: str,
+        metric: str,
+        importance_scores: Dict[str, Dict[str, torch.Tensor]],
+        plots_dir: Union[str, Path],
+    ):
         """
-        Creates a histogram of importance scores for a specific layer.
+        Create a histogram of importance scores for a specific layer/metric and
+        annotate the top-5 most important neurons.
 
-        Parameters:
-            layer_name (str): Name of the layer.
-            importance_scores (array-like): List or numpy array of importance values.
-            plots_dir (str or Path): Directory where the plot will be saved.
+        Args:
+            layer_name: Layer name as used in importance_scores.
+            metric: Metric name within importance_scores[layer_name].
+            importance_scores: Nested mapping {layer_name: {metric: scores_tensor}}.
+            plots_dir: Directory to save the figure.
         """
 
-        # Convert to numpy (if needed)
-        scores = np.array(importance_scores)
+        if layer_name not in importance_scores or metric not in importance_scores[layer_name]:
+            logger.warning(f"plot_layer_importance_histogram: missing scores for {layer_name}/{metric}")
+            return
 
-        # Make sure directory exists
-        plots_dir = Path(plots_dir)
-        plots_dir.mkdir(parents=True, exist_ok=True)
+        raw_tensor = importance_scores[layer_name][metric]
+        if not torch.is_tensor(raw_tensor) or raw_tensor.numel() == 0:
+            logger.warning(f"plot_layer_importance_histogram: empty or non-tensor scores for {layer_name}/{metric}")
+            return
 
-        # Create histogram
-        plt.figure(figsize=(8, 5))
-        plt.hist(scores, bins=50, edgecolor="black")
-        plt.xlabel("Importance Score")
-        plt.ylabel("Frequency")
-        plt.title(f"Histogram of Importance Scores — {layer_name}")
-        plt.tight_layout()
+        viz = UnifiedVisualizer()
+        save_path = viz.plot_importance_histogram(
+            scores=raw_tensor,
+            layer_name=layer_name,
+            metric_name=metric,
+            plots_dir=plots_dir,
+            top_k=5,
+        )
+        logger.info(f"[Saved] Histogram with top-5 annotations for {layer_name}/{metric}: {save_path}")
 
-        # Save plot
-        save_path = plots_dir / f"{layer_name}_importance_histogram.png"
-        plt.savefig(save_path)
-        plt.close()
+    def plot_neuron_output_weights_histogram(
+        self,
+        layer_name: str,
+        neuron_index: int,
+        plots_dir: Union[str, Path],
+    ) -> Dict[str, Any]:
+        """
+        Create a histogram of the outgoing weights of a specific neuron and
+        highlight the top-5 largest-magnitude outgoing weights.
 
-        print(f"[Saved] Histogram for {layer_name}: {save_path}")
+        Args:
+            layer_name: Name of the layer (for labeling and lookup).
+            neuron_index: Index of the neuron within the layer.
+            plots_dir: Directory to save the figure.
+        """
+
+        # Look up the layer module and its weight tensor
+        layer_module = dict(self.wrapped_model._model.named_modules()).get(layer_name)
+        if layer_module is None:
+            logger.warning(f"plot_neuron_output_weights_histogram: layer '{layer_name}' not found")
+            return {}
+
+        weight_tensor = self._get_layer_weights(layer_module)
+        if weight_tensor is None:
+            logger.warning(f"plot_neuron_output_weights_histogram: no weight tensor for layer '{layer_name}'")
+            return {}
+
+        W = weight_tensor.detach().cpu().to(torch.float32)
+
+        if neuron_index < 0 or neuron_index >= W.shape[1]:
+            logger.warning(
+                f"plot_neuron_output_weights_histogram: neuron_index {neuron_index} "
+                f"out of range for layer '{layer_name}' with width {W.shape[1]}"
+            )
+            return {}
+
+        outgoing = W[:, neuron_index]
+        magnitudes = outgoing.abs()
+        k = min(5, magnitudes.numel())
+        top_idxs, _ = torch.topk(magnitudes, k=k)
+        top_vals = outgoing[top_idxs]
+
+        viz = UnifiedVisualizer()
+        save_path = viz.plot_neuron_outgoing_weights(
+            weights=W,
+            layer_name=layer_name,
+            neuron_index=neuron_index,
+            plots_dir=plots_dir,
+            top_k=5,
+        )
+
+        logger.info(f"[Saved] Outgoing weights histogram for {layer_name} neuron {neuron_index}: {save_path}")
+
+        return {
+            "layer": layer_name,
+            "neuron_index": neuron_index,
+            "top5_output_indices": top_idxs.tolist(),
+            "top5_values": [outgoing[i].item() for i in top_idxs],
+            "plot_path": str(save_path),
+        }

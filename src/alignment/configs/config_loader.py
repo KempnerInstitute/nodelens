@@ -153,6 +153,22 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["num_workers"] = nested_config.get("num_workers", 4)
         flat_config["dataset_config"] = nested_config.get("dataset_config", {})
 
+    # Map metric configuration block (optional nested structure)
+    metric_block = nested_config.get("metrics")
+    if isinstance(metric_block, dict):
+        enabled_metrics = metric_block.get("enabled")
+        if enabled_metrics is not None:
+            flat_config["metrics"] = enabled_metrics
+
+        metric_configs = flat_config.get("metric_configs", {}).copy()
+        for metric_name, metric_cfg in metric_block.items():
+            if metric_name == "enabled" or metric_cfg is None:
+                continue
+            if isinstance(metric_cfg, dict):
+                metric_configs[metric_name] = metric_cfg
+        if metric_configs:
+            flat_config["metric_configs"] = metric_configs
+
     # Map model configuration
     if "model" in nested_config:
         model = nested_config["model"]
@@ -255,6 +271,38 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
 
     # Map pruning configuration (check both top-level and nested 'pruning' block)
     pruning_block = nested_config.get("pruning", {})
+    if not isinstance(pruning_block, dict):
+        pruning_block = {}
+
+    # Backward-compatibility: allow single-string keys used in older configs/template
+    if "strategy" in pruning_block and "algorithms" not in pruning_block:
+        strategy_value = pruning_block["strategy"]
+        if isinstance(strategy_value, str):
+            pruning_block["algorithms"] = [strategy_value]
+        else:
+            pruning_block["algorithms"] = list(strategy_value)
+    if "target_sparsity" in pruning_block and "sparsity_levels" not in pruning_block:
+        target_value = pruning_block["target_sparsity"]
+        if isinstance(target_value, (int, float)):
+            pruning_block["sparsity_levels"] = [float(target_value)]
+        else:
+            pruning_block["sparsity_levels"] = [float(v) for v in target_value]
+    if "scoring" in pruning_block and "alignment_metric" not in pruning_block:
+        pruning_block["alignment_metric"] = pruning_block["scoring"]
+    if "direction" in pruning_block and "selection_modes" not in pruning_block:
+        direction_value = pruning_block["direction"]
+        pruning_block["selection_modes"] = [direction_value] if isinstance(direction_value, str) else list(direction_value)
+    if "structured" in pruning_block:
+        flat_config["alignment_structured_pruning"] = pruning_block["structured"]
+
+    fine_tune_block = pruning_block.get("fine_tune")
+    if isinstance(fine_tune_block, dict):
+        if "enabled" in fine_tune_block:
+            flat_config["fine_tune_after_pruning"] = fine_tune_block.get("enabled", True)
+        if "epochs" in fine_tune_block:
+            flat_config["fine_tune_epochs"] = fine_tune_block["epochs"]
+        if "learning_rate" in fine_tune_block:
+            flat_config["fine_tune_learning_rate"] = fine_tune_block["learning_rate"]
 
     # Map top-level analysis flags
     flat_config["do_pruning_experiments"] = pruning_block.get("enabled", nested_config.get("do_pruning_experiments", False))
@@ -264,11 +312,15 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map pruning parameters (prioritize nested pruning block, fallback to top-level)
     flat_config["pruning_strategies"] = pruning_block.get("algorithms", nested_config.get("pruning_strategies", ["magnitude", "random"]))
     flat_config["pruning_amounts"] = pruning_block.get("sparsity_levels", nested_config.get("pruning_amounts", [0.1, 0.3, 0.5, 0.7, 0.9]))
-    flat_config["pruning_selection_mode"] = pruning_block.get("selection_modes", [nested_config.get("pruning_selection_mode", "low")])[0]
+    selection_modes = pruning_block.get("selection_modes", nested_config.get("pruning_selection_mode", "low"))
+    flat_config["pruning_selection_mode"] = selection_modes
     flat_config["fine_tune_after_pruning"] = pruning_block.get("fine_tune_after_pruning", nested_config.get("fine_tune_after_pruning", True))
     flat_config["fine_tune_epochs"] = pruning_block.get("fine_tune_epochs", nested_config.get("fine_tune_epochs", 5))
     flat_config["pruning_alignment_metric"] = pruning_block.get(
         "alignment_metric", nested_config.get("pruning_alignment_metric", "rayleigh_quotient")
+    )
+    flat_config["dependency_aware_pruning"] = pruning_block.get(
+        "dependency_aware", nested_config.get("dependency_aware_pruning", False)
     )
 
     # Evaluation
@@ -276,10 +328,41 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["evaluation_dataset"] = nested_config.get("evaluation_dataset", "wikitext")
     flat_config["evaluation_num_samples"] = nested_config.get("evaluation_num_samples", 100)
 
+    # SCAR metrics (LLM-specific)
+    flat_config["do_scar_metrics"] = nested_config.get("do_scar_metrics", False)
+    flat_config["scar_num_samples"] = nested_config.get("scar_num_samples", 0)
+    flat_config["scar_max_length"] = nested_config.get("scar_max_length", 512)
+
     # Map visualization settings
     flat_config["generate_plots"] = nested_config.get("generate_plots", True)
     flat_config["plot_format"] = nested_config.get("plot_format", "png")
     flat_config["plot_dpi"] = nested_config.get("plot_dpi", 300)
+
+    # Support optional nested visualization block for clearer configs
+    viz_block = nested_config.get("visualization", {})
+    if isinstance(viz_block, dict):
+        # Mirror common options onto existing ExperimentConfig fields
+        if "enabled" in viz_block:
+            flat_config["generate_plots"] = viz_block.get("enabled", flat_config["generate_plots"])
+        if "format" in viz_block:
+            flat_config["plot_format"] = viz_block.get("format", flat_config["plot_format"])
+        if "dpi" in viz_block:
+            flat_config["plot_dpi"] = viz_block.get("dpi", flat_config["plot_dpi"])
+
+        # Keep the full block around for experiment-specific logic
+        flat_config["visualization_options"] = viz_block
+
+    # Optional nested analysis block for higher-level analysis configuration
+    analysis_block = nested_config.get("analysis", {})
+    if isinstance(analysis_block, dict):
+        flat_config["analysis_options"] = analysis_block
+        if "generate_plots" in analysis_block:
+            flat_config["generate_plots"] = analysis_block.get("generate_plots", flat_config.get("generate_plots", True))
+    
+    # Post-experiment analysis configuration (for AnalysisRunner)
+    post_analysis_block = nested_config.get("post_analysis", {})
+    if isinstance(post_analysis_block, dict) and post_analysis_block:
+        flat_config["post_analysis"] = post_analysis_block
 
     # Map checkpointing
     if "checkpointing" in nested_config:

@@ -5,7 +5,6 @@ experiment:
   name: "my_experiment"  # Experiment identifier
   seed: 42  # Random seed for reproducibility
   device: "cuda"  # Device: 'cpu', 'cuda', 'cuda:0', etc.
-  output_dir: "./results"  # Output directory for results
 
 model:
   name: "resnet18"  # Options: 'resnet18', 'resnet50', 'vgg16', 'mlp', 'gpt2', 'meta-llama/Meta-Llama-3-8B', etc.
@@ -23,24 +22,24 @@ dataset:
   augmentation: true  # Data augmentation (vision only)
 
 metrics:
-  enabled: ['rayleigh_quotient']  # List of metrics to compute
-  # Available: 'rayleigh_quotient', 'pairwise_redundancy_gaussian', 'synergy_gaussian_mmi',
-  #           'gaussian_mi_analytic', 'gradient_alignment', 'cosine_similarity'
+  enabled:
+    - "rayleigh_quotient"
+    - "pairwise_redundancy_gaussian"
   
   rayleigh_quotient:
-    relative: true  # Normalize by trace
-    regularization: 1.0e-6  # Numerical stability
-    min_samples: 2  # Minimum batch size
+    relative: true
+    regularization: 1.0e-6
+    min_samples: 2
   
   pairwise_redundancy_gaussian:
-    mode: 'output_based'  # Options: 'output_based' (fast), 'covariance_based'
-    num_pairs: 10  # Number of partners to sample
-    sampling_strategy: 'random'  # Options: 'random', 'nearest', 'all'
-    aggregation: 'mean'  # Options: 'mean', 'median', 'max', 'sum'
+    mode: "output_based"     # 'output_based' or 'covariance_based'
+    num_pairs: 10
+    sampling_strategy: "random"
+    aggregation: "mean"
   
   synergy_gaussian_mmi:
-    num_pairs: 10  # Number of partners
-    sampling_strategy: 'random'
+    num_pairs: 10
+    sampling_strategy: "random"
 
 training:
   enabled: false  # Enable training
@@ -53,52 +52,50 @@ training:
   metric_sample_size: 512  # Batch subset size for efficiency
 
 pruning:
-  enabled: false  # Enable pruning experiments
-  strategy: 'composite'  # Options: 'magnitude', 'random', 'alignment', 'composite', 'movement', 'adaptive', 'ultimate'
-  target_sparsity: 0.5  # Fraction to prune (0-1)
-  sparsity_levels: [0.3, 0.5, 0.7]  # Multiple levels to test
-  distribution: 'uniform'  # Options: 'uniform', 'global_threshold', 'adaptive_sensitivity', 'importance_weighted', 'cascading', 'size_proportional', 'hybrid'
-  scoring: 'rayleigh_quotient'  # Options: 'magnitude', 'rayleigh_quotient', 'composite', 'movement'
-  direction: 'low'  # Options: 'low' (prune unimportant), 'high' (ablation), 'random' (baseline)
-  structured: true  # Structured (neurons/channels) vs unstructured (weights)
-  dependency_aware: true  # Handle layer dependencies automatically
+  enabled: false
+  algorithms: ["alignment"]        # Options: 'magnitude', 'random', 'alignment', 'hybrid', ...
+  sparsity_levels: [0.3, 0.5, 0.7]
+  selection_modes: ["low"]         # 'low', 'high', or 'random'
+  alignment_metric: "rayleigh_quotient"
+  scopes: "layer"                  # 'layer', 'global', or 'cascading'
+  structured: true
+  dependency_aware: false          # Propagate masks across dependent layers (ResNet blocks, etc.)
   
   fine_tune:
-    enabled: true  # Fine-tune after pruning
-    epochs: 20  # Fine-tuning epochs
-    learning_rate: 0.0001  # Fine-tuning learning rate
+    enabled: true
+    epochs: 20
+    learning_rate: 0.0001
   
-  composite_weights:  # Weights for composite scoring (if scoring='composite')
-    alpha_mi: 0.0  # Mutual information
-    beta_synergy: 0.3  # Synergy (positive)
-    gamma_redundancy: 0.4  # Redundancy (negative)
-    delta_rq: 0.3  # RQ alignment
+  composite_weights:
+    alpha_mi: 0.0
+    beta_synergy: 0.3
+    gamma_redundancy: 0.4
+    delta_rq: 0.3
 
 analysis:
-  class_conditioned: false  # Compute class-conditioned metrics (requires labels)
-  save_scores: true  # Save per-neuron scores
-  generate_plots: true  # Generate visualizations
+  class_conditioned: false
+  save_scores: true
 
 visualization:
-  enabled: true  # Generate plots
-  format: 'png'  # Options: 'png', 'pdf', 'svg'
-  dpi: 300  # Resolution
-  style: 'default'  # Matplotlib style
+  enabled: true
+  format: "png"
+  dpi: 300
+  training_curves: true
+  alignment_curves: true
+  dropout_plots: false
+  eigen_plots: true
+  pruning_plots: true
 
-layer_config:
-  cnn_mode: 'unfold'  # Options: 'unfold', 'patchwise', 'channel_variance', 'batch_patch_combined'
-  
-  transformer:  # Transformer-specific settings
-    track_qkv: false  # Track Q/K/V projections separately
-    track_per_head: false  # Extract per-head representations
-    aggregation: 'sequence_mean'  # Options: 'sequence_mean', 'token_level'
-    num_heads: null  # Number of heads (null=auto-detect)
-    head_dim: null  # Dimension per head (null=auto-detect)
-
-advanced:
-  use_hook_manager: true  # Memory-safe activation capture
-  covariance_method: 'ledoit_wolf'  # Options: 'none', 'diagonal', 'ledoit_wolf', 'oas'
-  computation_backend: 'eager'  # Options: 'eager', 'jit'
-  parallel_optimization: false  # Parallel multi-strategy comparison
-  num_workers: 4  # Workers for parallel processing
-
+# Post-experiment analysis (optional)
+# Runs AnalysisRunner after experiment completes to generate additional visualizations
+post_analysis:
+  analyses:
+    - histograms
+    - scatter_plots
+    - pruning_curves
+  histograms:
+    bins: 100
+    top_k: 5
+  scatter_plots:
+    pairs:
+      - ["activation_l2_norm", "rayleigh_quotient"]

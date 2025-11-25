@@ -227,6 +227,230 @@ class UnifiedVisualizer:
 
         return fig
 
+    def plot_importance_histogram(
+        self,
+        scores: Union[torch.Tensor, np.ndarray, List[float]],
+        layer_name: str,
+        metric_name: str,
+        plots_dir: Union[str, Path],
+        top_k: int = 5,
+    ) -> Path:
+        """
+        Plot a histogram of per-neuron importance scores highlighting the top-k neurons.
+        """
+        if isinstance(scores, torch.Tensor):
+            tensor = scores.detach().cpu().to(torch.float32)
+            values = tensor.numpy()
+        else:
+            values = np.asarray(scores, dtype=np.float32)
+            tensor = torch.tensor(values)
+
+        if tensor.numel() == 0:
+            raise ValueError(f"No importance scores available for {layer_name}/{metric_name}")
+
+        plots_dir = Path(plots_dir)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        fig, ax = plt.subplots(figsize=(12, 7))
+        ax.hist(values, bins=100, edgecolor="black", alpha=0.7)
+        ax.set_xlabel("Importance Score")
+        ax.set_ylabel("Frequency")
+        ax.set_title(f"Histogram of Importance Scores — {layer_name}\nMetric: {metric_name}")
+
+        y_max = ax.get_ylim()[1]
+        k = min(top_k, tensor.numel())
+        if k > 0:
+            topk_values, topk_indices = torch.topk(tensor, k=k)
+            for i, (idx, val) in enumerate(zip(topk_indices.tolist(), topk_values.tolist())):
+                ax.axvline(val, linestyle="--", linewidth=2, label=f"Neuron {idx}: {val:.4f}")
+                ax.text(
+                    val,
+                    y_max * (0.95 - i * 0.05),
+                    f"Neuron {idx} ({val:.4f})",
+                    fontsize=10,
+                    color="red",
+                )
+            ax.legend(fontsize=9)
+
+        fig.tight_layout()
+        safe = layer_name.replace(".", "_").replace("/", "_")
+        save_path = plots_dir / f"{safe}_{metric_name}_importance_histogram.png"
+        fig.savefig(save_path, dpi=300)
+        plt.close(fig)
+        return save_path
+
+    def plot_neuron_outgoing_weights(
+        self,
+        weights: Union[torch.Tensor, np.ndarray],
+        layer_name: str,
+        neuron_index: int,
+        plots_dir: Union[str, Path],
+        top_k: int = 5,
+    ) -> Path:
+        """
+        Plot a histogram of outgoing weights for a neuron, highlighting top-k connections.
+        """
+        if isinstance(weights, torch.Tensor):
+            W = weights.detach().cpu().to(torch.float32)
+        else:
+            W = torch.tensor(weights, dtype=torch.float32)
+
+        if neuron_index < 0 or neuron_index >= W.shape[1]:
+            raise ValueError(f"Neuron index {neuron_index} out of range for layer '{layer_name}'")
+
+        outgoing = W[:, neuron_index].numpy()
+        magnitudes = np.abs(outgoing)
+        k = min(top_k, outgoing.shape[0])
+        top_idxs = np.argpartition(-magnitudes, range(k))[:k]
+
+        plots_dir = Path(plots_dir)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        fig, ax = plt.subplots(figsize=(12, 7))
+        ax.hist(outgoing, bins=80, edgecolor="black", alpha=0.7)
+        ax.set_xlabel("Outgoing Weight Value")
+        ax.set_ylabel("Frequency")
+        ax.set_title(f"Outgoing Weights Histogram — {layer_name}\nNeuron {neuron_index}")
+
+        y_max = ax.get_ylim()[1]
+        for i, idx in enumerate(top_idxs):
+            val = outgoing[idx]
+            ax.axvline(val, linestyle="--", linewidth=2)
+            ax.text(
+                val,
+                y_max * (0.95 - i * 0.05),
+                f"to output {idx}: {val:.4f}",
+                fontsize=10,
+                color="red",
+            )
+
+        fig.tight_layout()
+        safe = layer_name.replace(".", "_").replace("/", "_")
+        save_path = plots_dir / f"{safe}_neuron_{neuron_index}_outgoing_weights.png"
+        fig.savefig(save_path, dpi=300)
+        plt.close(fig)
+        return save_path
+
+    # ========== Single-Distribution & Scatter Plots ==========
+
+    def plot_1d_histogram(
+        self,
+        values: Union[torch.Tensor, np.ndarray, List[float]],
+        title: str = "Histogram",
+        xlabel: str = "value",
+        bins: int = 100,
+        logx: bool = False,
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot a 1D histogram for a single metric (e.g., activation variance, RQ, MI).
+
+        Args:
+            values: 1D tensor/array/list of scalar values.
+            title:  Plot title.
+            xlabel: X-axis label.
+            bins:   Number of histogram bins.
+            logx:   If True, plot log10 of positive values.
+            save_path: Optional path to save the figure.
+        """
+        if isinstance(values, torch.Tensor):
+            arr = values.detach().cpu().to(torch.float32).numpy()
+        elif isinstance(values, np.ndarray):
+            arr = values.astype(np.float32, copy=False)
+        else:
+            arr = np.asarray(values, dtype=np.float32)
+
+        # Remove non-finite values
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            logger.warning("plot_1d_histogram: no finite values to plot.")
+            fig, _ = plt.subplots(figsize=self.figsize)
+            return fig
+
+        if logx:
+            arr = arr[arr > 0]
+            if arr.size == 0:
+                logger.warning("plot_1d_histogram: no positive values for log-scale histogram.")
+                fig, _ = plt.subplots(figsize=self.figsize)
+                return fig
+            arr = np.log10(arr)
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+        ax.hist(arr, bins=bins, alpha=0.7, edgecolor="black")
+        ax.set_title(title)
+        ax.set_xlabel("log10(value)" if logx else xlabel)
+        ax.set_ylabel("Count")
+        ax.grid(True, alpha=0.2)
+        plt.tight_layout()
+
+        if save_path is not None:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Saved histogram to {save_path}")
+
+        return fig
+
+    def plot_scatter_2d(
+        self,
+        x: Union[torch.Tensor, np.ndarray, List[float]],
+        y: Union[torch.Tensor, np.ndarray, List[float]],
+        xlabel: str,
+        ylabel: str,
+        title: str,
+        save_path: Optional[Union[str, Path]] = None,
+        alpha: float = 0.5,
+        s: float = 10.0,
+    ) -> Figure:
+        """
+        Simple 2D scatter plot helper, useful for relationships like activation vs RQ.
+
+        Args:
+            x: X-axis values.
+            y: Y-axis values (must be same length as x).
+            xlabel: Label for x-axis.
+            ylabel: Label for y-axis.
+            title: Plot title.
+            save_path: Optional path to save the figure.
+            alpha: Point transparency.
+            s: Point size.
+        """
+        def _to_array(z):
+            if isinstance(z, torch.Tensor):
+                return z.detach().cpu().to(torch.float32).numpy()
+            if isinstance(z, np.ndarray):
+                return z.astype(np.float32, copy=False)
+            return np.asarray(z, dtype=np.float32)
+
+        x_arr = _to_array(x)
+        y_arr = _to_array(y)
+
+        # Mask to finite pairs
+        mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+        x_arr = x_arr[mask]
+        y_arr = y_arr[mask]
+
+        if x_arr.size == 0 or y_arr.size == 0:
+            logger.warning("plot_scatter_2d: no finite (x, y) pairs to plot.")
+            fig, _ = plt.subplots(figsize=self.figsize)
+            return fig
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+        ax.scatter(x_arr, y_arr, s=s, alpha=alpha, edgecolors="none")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path is not None:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Saved scatter plot to {save_path}")
+
+        return fig
+
     # ========== Heatmaps ==========
 
     def plot_heatmap(
@@ -477,6 +701,212 @@ class UnifiedVisualizer:
 
         return fig
 
+    def plot_pruning_before_after(
+        self,
+        sparsities: List[float],
+        before_accuracies: Dict[str, List[float]],
+        after_accuracies: Dict[str, List[float]],
+        before_std: Optional[Dict[str, List[float]]] = None,
+        after_std: Optional[Dict[str, List[float]]] = None,
+        algorithm: str = "Pruning",
+        save_dir: Optional[Union[str, Path]] = None,
+        dpi: int = 300,
+    ) -> List[Figure]:
+        """
+        Create before/after fine-tuning comparison plots for pruning experiments.
+
+        Args:
+            sparsities: List of sparsity levels (0.0 to 1.0).
+            before_accuracies: Dict mapping selection mode to accuracy list before fine-tuning.
+            after_accuracies: Dict mapping selection mode to accuracy list after fine-tuning.
+            before_std: Optional dict of standard deviations for before accuracies.
+            after_std: Optional dict of standard deviations for after accuracies.
+            algorithm: Name of the pruning algorithm.
+            save_dir: Directory to save figures.
+            dpi: DPI for saved figures.
+
+        Returns:
+            List of generated figures.
+        """
+        figures = []
+        x_values = [s * 100 for s in sparsities]
+
+        if save_dir:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Multiple selection modes: create separate before/after plots
+        if len(before_accuracies) > 1:
+            # Before fine-tuning plot
+            fig_before, ax_before = plt.subplots(figsize=self.figsize)
+            for mode, accuracies in before_accuracies.items():
+                if before_std and mode in before_std:
+                    ax_before.errorbar(
+                        x_values, accuracies, yerr=before_std[mode],
+                        fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8,
+                        capsize=5, capthick=2
+                    )
+                else:
+                    ax_before.plot(x_values, accuracies, "o-", label=f"{mode} mode",
+                                   linewidth=2.5, markersize=8)
+
+            ax_before.set_xlabel("Pruning %", fontsize=12)
+            ax_before.set_ylabel("Accuracy (%)", fontsize=12)
+            ax_before.set_title(f"{algorithm} Pruning - Before Fine-tuning",
+                               fontsize=14, fontweight="bold")
+            ax_before.grid(True, alpha=0.3)
+            ax_before.legend(loc="best")
+            ax_before.set_xlim(0, 100)
+            ax_before.set_ylim(0, 105)
+            fig_before.tight_layout()
+
+            if save_dir:
+                fig_before.savefig(save_dir / f"pruning_{algorithm}_accuracy_before.png",
+                                   dpi=dpi, bbox_inches="tight")
+            figures.append(fig_before)
+
+            # After fine-tuning plot
+            fig_after, ax_after = plt.subplots(figsize=self.figsize)
+            for mode, accuracies in after_accuracies.items():
+                if after_std and mode in after_std:
+                    ax_after.errorbar(
+                        x_values, accuracies, yerr=after_std[mode],
+                        fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8,
+                        capsize=5, capthick=2
+                    )
+                else:
+                    ax_after.plot(x_values, accuracies, "o-", label=f"{mode} mode",
+                                  linewidth=2.5, markersize=8)
+
+            ax_after.set_xlabel("Pruning %", fontsize=12)
+            ax_after.set_ylabel("Accuracy (%)", fontsize=12)
+            ax_after.set_title(f"{algorithm} Pruning - After Fine-tuning",
+                              fontsize=14, fontweight="bold")
+            ax_after.grid(True, alpha=0.3)
+            ax_after.legend(loc="best")
+            ax_after.set_xlim(0, 100)
+            ax_after.set_ylim(0, 105)
+            fig_after.tight_layout()
+
+            if save_dir:
+                fig_after.savefig(save_dir / f"pruning_{algorithm}_accuracy_after.png",
+                                  dpi=dpi, bbox_inches="tight")
+            figures.append(fig_after)
+
+        else:
+            # Single selection mode: combined before/after plot
+            selection_mode = list(before_accuracies.keys())[0]
+            fig, ax = plt.subplots(figsize=self.figsize)
+
+            # Before fine-tuning
+            if before_std and selection_mode in before_std:
+                ax.errorbar(
+                    x_values, before_accuracies[selection_mode],
+                    yerr=before_std[selection_mode],
+                    fmt="o-", label="Before Fine-tuning", color="#FF6B6B",
+                    linewidth=2.5, markersize=8, capsize=5, capthick=2
+                )
+            else:
+                ax.plot(x_values, before_accuracies[selection_mode], "o-",
+                        label="Before Fine-tuning", color="#FF6B6B",
+                        linewidth=2.5, markersize=8)
+
+            # After fine-tuning
+            if after_std and selection_mode in after_std:
+                ax.errorbar(
+                    x_values, after_accuracies[selection_mode],
+                    yerr=after_std[selection_mode],
+                    fmt="o-", label="After Fine-tuning", color="#4ECDC4",
+                    linewidth=2.5, markersize=8, capsize=5, capthick=2
+                )
+            else:
+                ax.plot(x_values, after_accuracies[selection_mode], "o-",
+                        label="After Fine-tuning", color="#4ECDC4",
+                        linewidth=2.5, markersize=8)
+
+            ax.set_xlabel("Pruning %", fontsize=12)
+            ax.set_ylabel("Accuracy (%)", fontsize=12)
+            ax.set_title(f"{algorithm} Pruning ({selection_mode} mode)",
+                        fontsize=14, fontweight="bold")
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="best", frameon=True, fancybox=True, shadow=True)
+            ax.set_xlim(0, 100)
+            ax.set_ylim(0, 105)
+            fig.tight_layout()
+
+            if save_dir:
+                fig.savefig(save_dir / f"pruning_{algorithm}_accuracy.png",
+                            dpi=dpi, bbox_inches="tight")
+            figures.append(fig)
+
+        return figures
+
+    def plot_pruning_improvement(
+        self,
+        sparsities: List[float],
+        before_accuracies: List[float],
+        after_accuracies: List[float],
+        algorithm: str = "Pruning",
+        selection_mode: str = "",
+        save_path: Optional[Union[str, Path]] = None,
+        dpi: int = 300,
+    ) -> Figure:
+        """
+        Create a bar chart showing accuracy improvement from fine-tuning.
+
+        Args:
+            sparsities: List of sparsity levels.
+            before_accuracies: Accuracies before fine-tuning.
+            after_accuracies: Accuracies after fine-tuning.
+            algorithm: Pruning algorithm name.
+            selection_mode: Selection mode (low, high, random).
+            save_path: Path to save the figure.
+            dpi: DPI for saved figure.
+
+        Returns:
+            Matplotlib figure.
+        """
+        improvements = [after - before for before, after in zip(before_accuracies, after_accuracies)]
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+        bars = ax.bar(
+            range(len(improvements)),
+            improvements,
+            tick_label=[f"{s:.0%}" for s in sparsities],
+            color=["#4ECDC4" if imp >= 0 else "#FF6B6B" for imp in improvements],
+            alpha=0.8,
+        )
+
+        # Add value labels on bars
+        for bar, imp in zip(bars, improvements):
+            height = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{imp:+.1f}%",
+                ha="center",
+                va="bottom" if height >= 0 else "top",
+                fontsize=10,
+                fontweight="bold",
+            )
+
+        ax.set_xlabel("Sparsity Level", fontsize=12)
+        ax.set_ylabel("Accuracy Improvement (%)", fontsize=12)
+        mode_str = f" ({selection_mode} mode)" if selection_mode else ""
+        ax.set_title(f"{algorithm} Pruning{mode_str}: Fine-tuning Improvement",
+                    fontsize=14, fontweight="bold")
+        ax.grid(True, alpha=0.3, axis="y")
+        ax.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
+
+        fig.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+
+        return fig
+
     # ========== Comparison Plots ==========
 
     def plot_radar_chart(
@@ -647,6 +1077,129 @@ Generated visualization report for alignment analysis.
 
         with open(output_dir / "README.md", "w") as f:
             f.write(readme_content)
+
+
+    def plot_distribution(
+        self,
+        data: Union[Dict[str, List[float]], np.ndarray, torch.Tensor],
+        title: str = "Metric Distribution",
+        xlabel: str = "Value",
+        ylabel: str = "Density",
+        bins: int = 50,
+        show_kde: bool = True,
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot distribution of metric values with optional KDE overlay.
+
+        Args:
+            data: Either a dict mapping series names to value lists, or a single array/tensor.
+            title: Plot title.
+            xlabel: X-axis label.
+            ylabel: Y-axis label.
+            bins: Number of histogram bins.
+            show_kde: Whether to overlay a KDE curve.
+            save_path: Optional path to save the figure.
+
+        Returns:
+            Matplotlib figure.
+        """
+        fig, ax = plt.subplots(figsize=self.figsize)
+
+        # Normalize input to dict format
+        if isinstance(data, (np.ndarray, torch.Tensor, list)):
+            if isinstance(data, torch.Tensor):
+                data = data.detach().cpu().numpy()
+            elif isinstance(data, list):
+                data = np.asarray(data)
+            data = {"values": data.flatten()}
+
+        for i, (name, values) in enumerate(data.items()):
+            if isinstance(values, torch.Tensor):
+                values = values.detach().cpu().numpy()
+            elif isinstance(values, list):
+                values = np.asarray(values)
+            values = values.flatten()
+
+            # Remove non-finite values
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                continue
+
+            color = self.colors[i % len(self.colors)]
+            ax.hist(values, bins=bins, alpha=0.6, label=name, color=color, density=True)
+
+            # Add KDE
+            if show_kde and values.size > 1:
+                try:
+                    from scipy.stats import gaussian_kde
+
+                    kde = gaussian_kde(values)
+                    x_range = np.linspace(values.min(), values.max(), 200)
+                    ax.plot(x_range, kde(x_range), color=color, linewidth=2)
+                except Exception:
+                    pass  # Skip KDE if it fails
+
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        if len(data) > 1:
+            ax.legend(loc="best")
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+        return fig
+
+    def plot_sparsity_performance(
+        self,
+        sparsities: List[float],
+        perplexities: List[float],
+        strategy_name: str = "Alignment",
+        baseline_ppl: Optional[float] = None,
+        title: str = "Sparsity vs Perplexity",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot perplexity vs sparsity curve for pruning evaluation.
+
+        Args:
+            sparsities: List of sparsity levels (0.0 to 1.0).
+            perplexities: Corresponding perplexity values.
+            strategy_name: Name of the pruning strategy.
+            baseline_ppl: Optional baseline perplexity (unpruned model).
+            title: Plot title.
+            save_path: Optional path to save the figure.
+
+        Returns:
+            Matplotlib figure.
+        """
+        fig, ax = plt.subplots(figsize=self.figsize)
+
+        ax.plot(sparsities, perplexities, "o-", linewidth=2.5, markersize=8, label=strategy_name)
+
+        if baseline_ppl is not None:
+            ax.axhline(y=baseline_ppl, color="gray", linestyle="--", linewidth=1.5, label="Baseline")
+
+        ax.set_xlabel("Sparsity", fontsize=12)
+        ax.set_ylabel("Perplexity", fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.legend(loc="best")
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+        return fig
 
 
 # Convenience functions for quick plotting

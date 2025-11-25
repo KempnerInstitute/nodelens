@@ -28,6 +28,7 @@ from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
+from alignment.pruning.dependency_aware import DependencyAwarePruning
 from alignment.pruning.strategies import MagnitudePruning, ParallelBatchPruning, RandomPruning
 from alignment.services import ActivationCaptureService, MaskOperations
 
@@ -600,6 +601,10 @@ class GeneralAlignmentExperiment(BaseExperiment):
             model_to_use = self.model
             wrapped_model_to_use = self.wrapped_model
 
+        analysis_opts = getattr(self.config, "analysis_options", {}) or {}
+        save_scores = analysis_opts.get("save_scores", True)
+        class_conditioned = analysis_opts.get("class_conditioned", False)
+
         alignment_values = {}
 
         # Get a batch of data (inputs and targets)
@@ -726,11 +731,51 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
                 try:
                     scores = metric.compute(**metric_kwargs)
-                    layer_values[layer_name] = scores.cpu().tolist()
+                    scores_cpu = scores.detach().cpu()
+                    if save_scores:
+                        layer_values[layer_name] = scores_cpu.tolist()
+                    else:
+                        layer_values[layer_name] = float(scores_cpu.mean().item())
                 except Exception as e:
                     logger.error(f"Error computing {method} for {layer_name}: {e}")
 
             alignment_values[method] = layer_values
+
+        if class_conditioned:
+            rq_metric = self.metrics.get("rayleigh_quotient")
+            if rq_metric is None:
+                logger.warning("Class-conditioned analysis requested, but 'rayleigh_quotient' metric is not initialized.")
+            elif targets is None:
+                logger.warning("Class-conditioned analysis requested, but no targets were provided.")
+            else:
+                cc_values = {}
+                delta_values = {}
+                for layer_name in wrapped_model_to_use.tracked_layers:
+                    if layer_name not in weights or layer_name not in preprocessed_inputs:
+                        continue
+                    try:
+                        cc_result = rq_metric.compute_class_conditioned(
+                            inputs=preprocessed_inputs[layer_name],
+                            weights=weights[layer_name],
+                            targets=targets,
+                            return_delta_rq=True,
+                        )
+                        cond_scores = cc_result["rq_cond"].detach().cpu()
+                        delta_scores = cc_result["delta_rq"].detach().cpu()
+
+                        if save_scores:
+                            cc_values[layer_name] = cond_scores.tolist()
+                            delta_values[layer_name] = delta_scores.tolist()
+                        else:
+                            cc_values[layer_name] = float(cond_scores.mean().item())
+                            delta_values[layer_name] = float(delta_scores.mean().item())
+                    except Exception as e:
+                        logger.error(f"Error computing class-conditioned RQ for {layer_name}: {e}")
+
+                if cc_values:
+                    alignment_values["rayleigh_quotient_class_conditioned"] = cc_values
+                if delta_values:
+                    alignment_values["rayleigh_quotient_delta"] = delta_values
 
         return alignment_values
 
@@ -1051,6 +1096,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         if not isinstance(selection_modes, list):
             selection_modes = [selection_modes]
 
+        dependency_aware_enabled = bool(getattr(self.config, "dependency_aware_pruning", False)) and self.config.pruning_scope == "layer"
+
         for strategy_name in self.config.pruning_strategies:
             logger.info(f"Testing pruning strategy: {strategy_name}")
 
@@ -1097,6 +1144,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         structured=False,  # We handle structured pruning differently for alignment
                         global_pruning=(self.config.pruning_scope == "global"),
                     )
+
+                    if dependency_aware_enabled and not pruning_config.structured:
+                        pruning_config.structured = True
 
                     # For alignment-based pruning, override structured setting
                     if strategy_name == "alignment" and self.config.alignment_structured_pruning:
@@ -1253,35 +1303,48 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         zero_params = sum((mask == 0).sum().item() for mask in masks.values())
                         overall_sparsity = zero_params / total_params if total_params > 0 else 0
                     else:
-                        # Layer-wise pruning (current behavior)
-                        layer_sparsities = {}
-                        for name, module in self.model.named_modules():
-                            if hasattr(module, "weight") and len(module.weight.shape) >= 2:
-                                # For alignment-based pruning, we need layer inputs
-                                layer_inputs = None
-                                if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
-                                    if name in layer_inputs_dict:
-                                        layer_inputs = layer_inputs_dict[name]
-                                    else:
-                                        # This should not happen if hooks worked correctly
-                                        logger.error(f"No captured inputs for layer {name} - this will cause incorrect pruning!")
-                                        continue  # Skip this layer rather than using wrong inputs
+                        dependency_result = None
+                        if dependency_aware_enabled:
+                            dependency_result = self._run_dependency_aware_pruning(
+                                strategy=strategy,
+                                strategy_name=strategy_name,
+                                selection_mode=selection_mode,
+                                amount=amount,
+                                layer_inputs=layer_inputs_dict,
+                            )
 
-                                # Prune this layer
-                                strategy.prune(module, inputs=layer_inputs)
-                                # Get sparsity
-                                sparsity = strategy.get_sparsity(module)
-                                layer_sparsities[name] = sparsity
+                        if dependency_result is not None:
+                            layer_stats = dependency_result.get("stats", {})
+                            layer_details = layer_stats.get("layers", {})
+                            layer_sparsities = {
+                                layer_name: stats.get("sparsity", 0.0) for layer_name, stats in layer_details.items()
+                            }
+                            overall_sparsity = layer_stats.get("overall_sparsity", 0.0)
+                        else:
+                            # Layer-wise pruning (fallback behavior)
+                            layer_sparsities = {}
+                            for name, module in self.model.named_modules():
+                                if hasattr(module, "weight") and len(module.weight.shape) >= 2:
+                                    layer_inputs = None
+                                    if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
+                                        if name in layer_inputs_dict:
+                                            layer_inputs = layer_inputs_dict[name]
+                                        else:
+                                            logger.error(f"No captured inputs for layer {name} - skipping structured pruning for this layer")
+                                            continue
 
-                        # Calculate overall sparsity
-                        total_params = 0
-                        zero_params = 0
-                        for module in self.model.modules():
-                            if hasattr(module, "weight"):
-                                total_params += module.weight.numel()
-                                zero_params += (module.weight == 0).sum().item()
+                                    strategy.prune(module, inputs=layer_inputs)
+                                    sparsity = strategy.get_sparsity(module)
+                                    layer_sparsities[name] = sparsity
 
-                        overall_sparsity = zero_params / total_params if total_params > 0 else 0
+                            total_params = 0
+                            zero_params = 0
+                            for module in self.model.modules():
+                                if hasattr(module, "weight"):
+                                    total_params += module.weight.numel()
+                                    zero_params += (module.weight == 0).sum().item()
+
+                            overall_sparsity = zero_params / total_params if total_params > 0 else 0
 
                     # Evaluate pruned model BEFORE fine-tuning
                     test_loss_before, test_acc_before = self._evaluate()
@@ -1958,6 +2021,81 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         return zero_params / total_params if total_params > 0 else 0.0
 
+    def _reduce_scores_to_output_neurons(self, module: nn.Module, scores: torch.Tensor) -> Optional[torch.Tensor]:
+        """
+        Collapse importance scores to a 1D tensor aligned with the module's output channels.
+        """
+        if scores is None:
+            return None
+
+        if scores.dim() == 1:
+            reduced = scores
+        else:
+            dims = tuple(range(1, scores.dim()))
+            reduced = scores.abs()
+            if dims:
+                reduced = reduced.mean(dim=dims)
+
+        expected = module.weight.shape[0]
+        if reduced.numel() != expected:
+            logger.warning(
+                f"Dependency-aware pruning: score length {reduced.numel()} does not match output dim {expected} "
+                f"for layer {module.__class__.__name__}; skipping."
+            )
+            return None
+
+        return reduced.reshape(expected)
+
+    def _run_dependency_aware_pruning(
+        self,
+        strategy,
+        strategy_name: str,
+        selection_mode: str,
+        amount: float,
+        layer_inputs: Dict[str, torch.Tensor],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Apply dependency-aware pruning by converting per-layer scores into masks that respect
+        downstream dependencies (e.g., Conv blocks, residual connections).
+        """
+        layer_scores: Dict[str, torch.Tensor] = {}
+
+        for name, module in self.model.named_modules():
+            if not hasattr(module, "weight") or module.weight.dim() < 2:
+                continue
+
+            inputs = None
+            if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
+                inputs = layer_inputs.get(name)
+                if inputs is None:
+                    logger.debug(f"Dependency-aware pruning: missing inputs for {name}, skipping.")
+                    continue
+
+            try:
+                scores = strategy.compute_importance_scores(module, inputs=inputs)
+            except Exception as exc:
+                logger.error(f"Dependency-aware pruning: failed to compute scores for {name}: {exc}")
+                continue
+
+            neuron_scores = self._reduce_scores_to_output_neurons(module, scores)
+            if neuron_scores is None:
+                continue
+
+            layer_scores[name] = neuron_scores
+
+        if not layer_scores:
+            logger.warning("Dependency-aware pruning requested but no valid layer scores were computed.")
+            return None
+
+        dep_pruner = DependencyAwarePruning(self.model)
+        try:
+            result = dep_pruner.prune(layer_scores, amount=amount, mode=selection_mode)
+        except ValueError as exc:
+            logger.error(f"Dependency-aware pruning failed validation: {exc}")
+            return None
+
+        return result
+
     def _tensorized_alignment_pruning_batch(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> Dict[str, torch.Tensor]:
         """
         Handle alignment-based pruning with tensorized evaluation and proper state preservation.
@@ -2331,6 +2469,14 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         visualizer = UnifiedVisualizer()
 
+        # Optional fine-grained visualization control via config.visualization_options
+        viz_opts: Dict[str, Any] = getattr(self.config, "visualization_options", {}) or {}
+        show_training = viz_opts.get("training_curves", True)
+        show_alignment = viz_opts.get("alignment_curves", True)
+        show_dropout = viz_opts.get("dropout_plots", True)
+        show_eigen = viz_opts.get("eigen_plots", True)
+        show_pruning = viz_opts.get("pruning_plots", True)
+
         # Training curves
         train_losses = self.train_results.get("train_losses", [])
         val_losses = self.train_results.get("val_losses", [])
@@ -2338,7 +2484,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         val_accs = self.train_results.get("val_accs", [])
         epochs = list(range(1, len(train_losses) + 1))
 
-        if epochs:
+        if epochs and show_training:
             loss_series = {}
             if train_losses:
                 loss_series["Train Loss"] = train_losses
@@ -2377,31 +2523,32 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         # Alignment evolution
         alignment_history = self.train_results.get("alignment", {})
-        for method, history in alignment_history.items():
-            summarized = []
-            for snapshot in history:
-                aggregated_scores = []
-                for layer_scores in snapshot.values():
-                    aggregated_scores.extend(layer_scores)
-                if aggregated_scores:
-                    summarized.append(float(np.mean(aggregated_scores)))
-            if summarized:
-                steps = list(range(1, len(summarized) + 1))
-                fig = visualizer.plot_metric_evolution(
-                    steps,
-                    {method: summarized},
-                    title=f"{method} Alignment Evolution",
-                    xlabel="Measurement Index",
-                    ylabel="Average Score",
-                    legend_title="Metric",
-                    show_confidence=False,
-                    save_path=output_dir / f"alignment_{method}.png",
-                )
-                plt.close(fig)
+        if show_alignment and alignment_history:
+            for method, history in alignment_history.items():
+                summarized = []
+                for snapshot in history:
+                    aggregated_scores = []
+                    for layer_scores in snapshot.values():
+                        aggregated_scores.extend(layer_scores)
+                    if aggregated_scores:
+                        summarized.append(float(np.mean(aggregated_scores)))
+                if summarized:
+                    steps = list(range(1, len(summarized) + 1))
+                    fig = visualizer.plot_metric_evolution(
+                        steps,
+                        {method: summarized},
+                        title=f"{method} Alignment Evolution",
+                        xlabel="Measurement Index",
+                        ylabel="Average Score",
+                        legend_title="Metric",
+                        show_confidence=False,
+                        save_path=output_dir / f"alignment_{method}.png",
+                    )
+                    plt.close(fig)
 
         # Dropout analysis
         dropout_rates = self.dropout_results.get("dropout_rates", [])
-        if dropout_rates:
+        if dropout_rates and show_dropout:
             accuracy_curves = {}
             loss_curves = {}
 
@@ -2454,7 +2601,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 plt.close(fig)
 
         # Eigenfeature analysis visualizations
-        if self.eigenfeature_results:
+        if self.eigenfeature_results and show_eigen:
             eigen_heatmap_data = {}
             for layer_name, info in self.eigenfeature_results.items():
                 eigenvalues = info.get("top_eigenvalues", [])
@@ -2472,7 +2619,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 plt.close(fig)
 
         # Pruning experiments - now enhanced with before/after comparisons
-        if self.pruning_results and "strategies" in self.pruning_results:
+        if self.pruning_results and "strategies" in self.pruning_results and show_pruning:
             print("HELLO D")
 
             from alignment.analysis.visualization import UnifiedVisualizer

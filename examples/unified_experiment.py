@@ -48,11 +48,9 @@ from alignment.pruning.experiments import CascadingLayerPruningExperiment, Layer
 from alignment.pruning.experiments.cascading_layer import CascadingConfig
 from alignment.pruning.experiments.layer_wise import LayerIsolatedConfig
 from alignment.analysis import HTMLReporter, MarkdownReporter
-from alignment.analysis.visualization import (
-    MetricVisualizer,
-    PruningVisualizer,
-    AlignmentVisualizer
-)
+from alignment.analysis.visualization import UnifiedVisualizer, PruningVisualizer, AlignmentVisualizer
+# MetricVisualizer is deprecated, use UnifiedVisualizer instead
+MetricVisualizer = UnifiedVisualizer
 
 
 def setup_logging(config: Dict[str, Any]) -> logging.Logger:
