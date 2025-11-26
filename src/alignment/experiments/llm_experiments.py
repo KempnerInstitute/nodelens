@@ -433,11 +433,45 @@ class LLMAlignmentExperiment(BaseExperiment):
             num_samples=self.config.alignment_data_num_samples
         )
 
-        # self.plot_layer_importance_histogram(
-        #     layer_name="model.layers.1.mlp.up_proj",
-        #     importance_scores=scores,
-        #     plots_dir=self.config.plots_dir
-        # )
+        print("scores: ", scores)
+
+        self.plot_layer_importance_histogram(
+            layer_name="model.layers.10.mlp.down_proj",
+            metric="activation_l2_norm",
+            importance_scores=scores,
+            plots_dir=self.config.plots_dir
+        )
+
+
+        self.plot_neuron_output_weights_histogram(
+            layer_name="model.layers.10.mlp.down_proj",
+            neuron_index=50,
+            plots_dir=self.config.plots_dir
+        )
+
+        self.plot_neuron_output_weights_histogram(
+            layer_name="model.layers.10.mlp.down_proj",
+            neuron_index=812,
+            plots_dir=self.config.plots_dir
+        )
+
+        self.plot_neuron_output_weights_histogram(
+            layer_name="model.layers.10.mlp.down_proj",
+            neuron_index=10232,
+            plots_dir=self.config.plots_dir
+        )
+
+        self.plot_neuron_output_weights_histogram(
+            layer_name="model.layers.10.mlp.down_proj",
+            neuron_index=12000,
+            plots_dir=self.config.plots_dir
+        )
+
+        self.plot_neuron_output_weights_histogram(
+            layer_name="model.layers.10.mlp.down_proj",
+            neuron_index=14295,
+            plots_dir=self.config.plots_dir
+        )
 
         for layer_name, layer_scores in scores.items():
             results["importance_scores"][layer_name] = {}
@@ -481,34 +515,143 @@ class LLMAlignmentExperiment(BaseExperiment):
         return results
     
 
-    def plot_layer_importance_histogram(layer_name, importance_scores, plots_dir):
+    def plot_layer_importance_histogram(self, layer_name, metric, importance_scores, plots_dir):
         """
         Creates a histogram of importance scores for a specific layer.
-
-        Parameters:
-            layer_name (str): Name of the layer.
-            importance_scores (array-like): List or numpy array of importance values.
-            plots_dir (str or Path): Directory where the plot will be saved.
+        Displays top-5 most important neurons directly on the histogram.
         """
 
-        # Convert to numpy (if needed)
-        scores = np.array(importance_scores)
+        # Extract tensor and convert to numpy float32
+        raw_tensor = importance_scores[layer_name][metric]
+        tensor = raw_tensor.detach().cpu().to(torch.float32)
+        scores = tensor.numpy()
 
-        # Make sure directory exists
+        # ---- Top-5 calculations ----
+        topk_values, topk_indices = torch.topk(tensor, k=5)
+        topk_values = topk_values.numpy()
+        topk_indices = topk_indices.numpy()
+
+        # Prepare directory
         plots_dir = Path(plots_dir)
         plots_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create histogram
-        plt.figure(figsize=(8, 5))
-        plt.hist(scores, bins=50, edgecolor="black")
+        # ------------------ Create Histogram ------------------
+        plt.figure(figsize=(12, 7))
+        plt.hist(scores, bins=100, edgecolor="black", alpha=0.7)
         plt.xlabel("Importance Score")
         plt.ylabel("Frequency")
-        plt.title(f"Histogram of Importance Scores — {layer_name}")
+        plt.title(f"Histogram of Importance Scores — {layer_name}\nMetric: {metric}")
+
+        # ------------------ Annotate Top-5 ------------------
+        for i, (idx, val) in enumerate(zip(topk_indices, topk_values)):
+            # vertical line
+            plt.axvline(val, linestyle="--", linewidth=2, label=f"Neuron {idx}: {val:.4f}")
+
+            # text annotation (slightly above the histogram area)
+            plt.text(
+                val,
+                plt.ylim()[1] * (0.95 - i * 0.05),   # stagger labels downward
+                f"Neuron {idx} ({val:.4f})",
+                rotation=0,
+                fontsize=10,
+                color="red"
+            )
+
+        plt.legend(fontsize=9)
         plt.tight_layout()
 
-        # Save plot
-        save_path = plots_dir / f"{layer_name}_importance_histogram.png"
+        safe = layer_name.replace(".", "_").replace("/", "_")
+        save_path = plots_dir / f"{safe}_{metric}_importance_histogram.png"
+
         plt.savefig(save_path)
         plt.close()
 
-        print(f"[Saved] Histogram for {layer_name}: {save_path}")
+        print(f"[Saved] Histogram with top-5 annotations for {layer_name}: {save_path}")
+
+    def plot_neuron_output_weights_histogram(
+        self,
+        layer_name: str,
+        neuron_index: int,
+        plots_dir: str | Path,
+    ):
+        """
+        Creates a histogram of the outgoing weights of a specific neuron.
+        Also highlights the top-5 largest-magnitude outgoing weights.
+
+        Params:
+            layer_name (str): Name of the layer (for labeling + saving).
+            neuron_index (int): Index of the neuron within the layer.
+            weight_tensor (torch.Tensor): Weight matrix of the layer
+                                        Shape: [out_dim, in_dim]
+            plots_dir (str or Path): Where to save the figure.
+        """
+        
+        layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
+        weight_tensor = self._get_layer_weights(layer_module)
+
+        # Move weights to CPU float32 for numpy use
+        W = weight_tensor.detach().cpu().to(torch.float32)
+
+        # print("Weight shape:", W.shape)
+
+        # outgoing weights for a single neuron
+        # For MLP up_proj style: (in_dim, out_dim)
+        outgoing = W[:, neuron_index]   
+        outgoing_np = outgoing.numpy()
+
+        # ---- Top-5 max-magnitude outgoing weights (importance) ----
+        magnitudes = outgoing.abs()
+        top_vals, top_idxs = torch.topk(magnitudes, k=5)
+        top_vals = top_vals.numpy()
+        top_idxs = top_idxs.numpy()
+
+        # Make directory if needed
+        plots_dir = Path(plots_dir)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        # ------------------ Plot histogram ------------------
+        plt.figure(figsize=(12, 7))
+        plt.hist(outgoing_np, bins=80, edgecolor="black", alpha=0.7)
+        plt.xlabel("Outgoing Weight Value")
+        plt.ylabel("Frequency")
+        plt.title(
+            f"Outgoing Weights Histogram — {layer_name}\nNeuron {neuron_index}"
+        )
+
+        # y-limit for annotation placement
+        ylim = plt.ylim()[1]
+
+        # ------------------ Annotate Top-5 ------------------
+        for i, (idx, val) in enumerate(zip(top_idxs, top_vals)):
+            weight_value = outgoing[idx].item()
+
+            # vertical line at the outgoing connection's actual weight
+            plt.axvline(weight_value, linestyle="--", linewidth=2)
+
+            # add text label
+            plt.text(
+                weight_value,
+                ylim * (0.95 - i * 0.05),
+                f"to input {idx}: {weight_value:.4f}",
+                fontsize=10,
+                color="red"
+            )
+
+        safe = layer_name.replace(".", "_").replace("/", "_")
+        save_path = plots_dir / f"{safe}_neuron_{neuron_index}_outgoing_weights.png"
+
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.close()
+
+        print(f"[Saved] Outgoing weights histogram for {layer_name} neuron {neuron_index}: {save_path}")
+
+        return {
+            "layer": layer_name,
+            "neuron_index": neuron_index,
+            "top5_input_indices": top_idxs.tolist(),
+            "top5_values": [outgoing[i].item() for i in top_idxs],
+            "plot_path": str(save_path)
+        }
+
+
