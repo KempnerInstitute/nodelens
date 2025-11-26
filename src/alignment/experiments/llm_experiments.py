@@ -275,15 +275,15 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
 
-            if "down" in layer_name:
+            if dim == "input":
+                layer_key = f"{layer_name}_input"
+            elif dim == "output":
+                layer_key = f"{layer_name}_output"
+            elif "down" in layer_name:
                 layer_key = f"{layer_name}_input"
             elif "gate" in layer_name or "up" in layer_name:
                 layer_key = f"{layer_name}_output"
-            else:
-                if dim == "input":
-                    layer_key = f"{layer_name}_input"
-                else:
-                    layer_key = f"{layer_name}_output"
+                
 
             if layer_key not in all_activations:
                 logger.warning(f"No activations for {layer_name}")
@@ -442,34 +442,21 @@ class LLMAlignmentExperiment(BaseExperiment):
             plots_dir=self.config.plots_dir
         )
 
-
-        self.plot_neuron_output_weights_histogram(
-            layer_name="model.layers.10.mlp.down_proj",
-            neuron_index=50,
-            plots_dir=self.config.plots_dir
-        )
-
-        self.plot_neuron_output_weights_histogram(
-            layer_name="model.layers.10.mlp.down_proj",
-            neuron_index=812,
-            plots_dir=self.config.plots_dir
-        )
-
-        self.plot_neuron_output_weights_histogram(
-            layer_name="model.layers.10.mlp.down_proj",
-            neuron_index=10232,
-            plots_dir=self.config.plots_dir
-        )
-
-        self.plot_neuron_output_weights_histogram(
-            layer_name="model.layers.10.mlp.down_proj",
-            neuron_index=12000,
-            plots_dir=self.config.plots_dir
-        )
-
         self.plot_neuron_output_weights_histogram(
             layer_name="model.layers.10.mlp.down_proj",
             neuron_index=14295,
+            plots_dir=self.config.plots_dir
+        )
+
+        scores = self.compute_importance_scores(
+            num_samples=self.config.alignment_data_num_samples,
+            dim="output"
+        )
+
+        self.plot_layer_importance_histogram(
+            layer_name="model.layers.10.mlp.down_proj",
+            metric="activation_l2_norm",
+            importance_scores=scores,
             plots_dir=self.config.plots_dir
         )
 
@@ -561,7 +548,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         plt.tight_layout()
 
         safe = layer_name.replace(".", "_").replace("/", "_")
-        save_path = plots_dir / f"{safe}_{metric}_importance_histogram.png"
+        save_path = plots_dir / f"{safe}_{metric}_importance_histogram_{len(scores)}.png"
 
         plt.savefig(save_path)
         plt.close()
@@ -592,7 +579,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # Move weights to CPU float32 for numpy use
         W = weight_tensor.detach().cpu().to(torch.float32)
 
-        # print("Weight shape:", W.shape)
+        print("Weight shape:", W.shape)
 
         # outgoing weights for a single neuron
         # For MLP up_proj style: (in_dim, out_dim)
