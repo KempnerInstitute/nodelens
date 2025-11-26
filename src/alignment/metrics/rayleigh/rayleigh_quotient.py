@@ -32,6 +32,9 @@ class RayleighQuotient(BaseMetric):
     proportion of total variance.
     """
 
+    # Class-level set to track warned dimension pairs (avoid spam)
+    _warned_dim_pairs: set = set()
+
     def __init__(
         self,
         relative: bool = True,
@@ -123,7 +126,12 @@ class RayleighQuotient(BaseMetric):
 
         # Check dimension compatibility
         if input_features != weight_features:
-            logger.warning(f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. " "Truncating to common dimensions.")
+            # Only warn once per unique dimension pair to avoid log spam
+            dim_pair = (input_features, weight_features)
+            if dim_pair not in RayleighQuotient._warned_dim_pairs:
+                RayleighQuotient._warned_dim_pairs.add(dim_pair)
+                logger.warning(f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. "
+                              "Truncating to common dimensions. (This warning shown once per dimension pair)")
             min_dim = min(input_features, weight_features)
             inputs = inputs[:, :min_dim]
             weights = weights[:, :min_dim]

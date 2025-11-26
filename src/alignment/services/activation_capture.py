@@ -215,6 +215,19 @@ class ActivationCaptureService:
                 else:
                     processed[name] = tensor
 
+            elif mode == "unfold":
+                # For Conv: [B, C, H, W] -> [B*H*W, C] (treat each spatial position as a sample)
+                # This is useful for computing per-channel metrics across spatial positions
+                if tensor.ndim == 4:  # Conv2d
+                    B, C, H, W = tensor.shape
+                    # Permute to [B, H, W, C] then reshape to [B*H*W, C]
+                    processed[name] = tensor.permute(0, 2, 3, 1).reshape(-1, C)
+                elif tensor.ndim == 3:  # Conv1d: [B, C, L]
+                    B, C, L = tensor.shape
+                    processed[name] = tensor.permute(0, 2, 1).reshape(-1, C)
+                else:
+                    processed[name] = tensor
+
             else:
                 logger.warning(f"Unknown preprocessing mode: {mode}, using 'flatten'")
                 processed[name] = tensor.reshape(tensor.shape[0], -1) if tensor.ndim > 2 else tensor

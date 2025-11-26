@@ -101,11 +101,14 @@ class ExperimentConfig:
     distribution_bins: int = 50
 
     # Pruning configuration
-    pruning_strategies: List[str] = field(default_factory=lambda: ["magnitude", "random"])
+    # pruning_strategies: List of metrics to use for pruning (derived from metrics.enabled)
+    pruning_strategies: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
     pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7, 0.9])
-    pruning_selection_mode: str = "low"  # "low", "high", "random"
+    # pruning_selection_mode: Can be str or List[str] - "low", "high", "random"
+    pruning_selection_mode: Union[str, List[str]] = field(default_factory=lambda: ["low", "high", "random"])
     fine_tune_after_pruning: bool = True
     fine_tune_epochs: int = 5
+    # pruning_alignment_metric: Backward compatibility - single metric fallback
     pruning_alignment_metric: str = "rayleigh_quotient"
     pruning_hybrid_alpha: float = 0.5
     pruning_scope: str = "layer"  # "global" or "layer"
@@ -113,6 +116,9 @@ class ExperimentConfig:
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
     dependency_aware_pruning: bool = False  # Propagate masks across dependent layers
+    # Single-layer pruning: specify a layer name to prune only that layer
+    # None = prune all layers, string = prune only that layer
+    pruning_target_layer: Optional[str] = None
 
     # Plotting and visualization
     generate_plots: bool = True
@@ -150,6 +156,12 @@ class ExperimentConfig:
     do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i)
     scar_num_samples: int = 0      # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
     scar_max_length: int = 512     # Max sequence length for SCAR calibration passes
+
+    # Performance optimization
+    eval_batches: Optional[int] = None  # Limit evaluation to N batches (None = all)
+    use_tensorized_training: bool = True  # Always enabled
+    use_tensorized_pruning: bool = True   # Always enabled
+    use_ultra_parallel_eval: bool = True  # Always enabled
 
     # Misc
     tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -311,8 +323,13 @@ class BaseExperiment(CoreBaseExperiment):
                 else:
                     raise ValueError(f"Unknown model: {self.config.model_name}")
 
-        # Move to device
-        device = torch.device(self.config.device)
+        # Move to device (handle "auto" device)
+        device_str = self.config.device
+        if device_str == "auto":
+            device_str = "cuda" if torch.cuda.is_available() else "cpu"
+            # Update config so all code uses the resolved device
+            object.__setattr__(self.config, 'device', device_str)
+        device = torch.device(device_str)
         if self.config.model_name.lower() == "hf_causal_lm":
             # For HuggingFace causal LMs we may be using accelerate's device_map.
             # Only move the model if no explicit device_map was provided.

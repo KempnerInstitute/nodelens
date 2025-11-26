@@ -1,22 +1,20 @@
-# ResNet-18 Alignment-Aware Pruning on ImageNet
-# Complete pruning workflow with dependency handling for skip connections
+# AlexNet Pruning Experiment on ImageNet
+# AlexNet requires 224x224 input, so we use ImageNet
 
 experiment:
-  name: "resnet18_pruning"
+  name: "alexnet_pruning_test"
   type: "alignment_analysis"
   seed: 42
-  device: "auto"                  # Auto-detect cuda/cpu
-  output_dir: "./results/resnet18_pruning"
-  num_networks: 3                 # Run 3 networks for error bars
+  device: "auto"                  # Auto-detect GPU/CPU
+  output_dir: "./results/alexnet_pruning"
+  num_networks: 1                 # Single network
 
 model:
-  name: "resnet18"
+  name: "alexnet"
   pretrained: true                # Uses pretrained weights (auto-disables training)
-  tracked_layers: null            # Auto-detect all conv and linear layers
+  tracked_layers: null            # Auto-detect conv/linear layers
 
-# Dataset options:
-#   - cifar10/cifar100: ./data (auto-downloads, but ResNet expects 224x224)
-#   - imagenet: /n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k
+# ImageNet dataset path on Kempner cluster
 dataset:
   name: "imagenet"
   data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
@@ -24,20 +22,17 @@ dataset:
   num_workers: 4
 
 # Metrics to compute - these are also used for pruning
-# Note: pairwise_redundancy_gaussian and synergy_gaussian_mmi have CNN
-#       compatibility issues, so we use simpler metrics for now
+# Note: mutual_information_gaussian requires outputs, excluded for now
 metrics:
   enabled:
-    - "rayleigh_quotient"
-    - "activation_l2_norm"
+    - "rayleigh_quotient"               # Alignment to input covariance
+    - "activation_l2_norm"              # Activation magnitude
   num_samples: 256
-  
-  rayleigh_quotient:
-    relative: true
-    regularization: 1.0e-6
 
 # CNN activation preprocessing
 # "unfold" (recommended): Best for RQ/covariance metrics
+# "patchwise": Good for patch-level analysis
+# "channel_variance": Faster but less accurate
 cnn:
   mode: "unfold"
 
@@ -46,7 +41,7 @@ pruning:
   enabled: true
   
   # Sparsity levels to test (fraction of neurons to remove)
-  sparsity_levels: [0.1, 0.2, 0.3, 0.5, 0.7]
+  sparsity_levels: [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
   
   # Selection modes: WHICH neurons to prune based on their scores
   #   "low"    - prune neurons with LOWEST scores (remove least important)
@@ -57,28 +52,26 @@ pruning:
   # Distribution: HOW to allocate sparsity across layers
   #   "uniform"              - same % per layer (simple, default)
   #   "global_threshold"     - global score threshold
-  #   "adaptive_sensitivity" - prune robust layers more, sensitive layers less
+  #   "adaptive_sensitivity" - prune robust layers more
   #   "cascading"            - sequential layer-by-layer
-  distribution: "adaptive_sensitivity"
+  distribution: "uniform"
   
   # Structured: prune entire neurons/channels (vs individual weights)
-  # Required for alignment metrics (RQ is per-neuron)
   structured: true
   
-  # Dependency-aware: handle skip connections (critical for ResNet)
+  # Dependency-aware: handle layer dependencies
   dependency_aware: true
   
   fine_tune:
     enabled: true
-    epochs: 20
+    epochs: 10
     learning_rate: 0.0001
 
 # Performance (all optimizations enabled by default)
 performance:
-  eval_batches: null
+  eval_batches: null              # null = all batches
 
 analysis:
-  class_conditioned: true         # Compute class-conditioned RQ
   save_scores: true
   generate_plots: true
   plots:
@@ -89,6 +82,3 @@ analysis:
 visualization:
   format: "png"
   dpi: 300
-
-# Expected: ~5-6% accuracy drop at 70% sparsity (vs ~10% for magnitude)
-# Run: python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml

@@ -1392,6 +1392,282 @@ Generated visualization report for alignment analysis.
 
         return fig
 
+    def plot_pruning_comparison(
+        self,
+        results: Dict[str, Dict[str, Any]],
+        metric: str = "accuracy",
+        baseline_value: Optional[float] = None,
+        title: str = "Pruning Strategy Comparison",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Create a publication-quality pruning comparison plot with error bars.
+        
+        Args:
+            results: Dict mapping strategy names to their results.
+                Each strategy should have:
+                - 'sparsities' or 'pruning_amounts': List of sparsity levels
+                - 'accuracies_mean' or 'accuracies': Mean accuracy values
+                - 'accuracies_std' (optional): Standard deviation for error bars
+            metric: Metric to plot ('accuracy' or 'loss')
+            baseline_value: Optional baseline value to show as horizontal line
+            title: Plot title
+            save_path: Path to save the figure
+            
+        Returns:
+            Matplotlib figure
+        """
+        # Color palette
+        colors = {
+            'magnitude_low': '#1f77b4',      # Blue
+            'magnitude_high': '#aec7e8',     # Light blue
+            'rayleigh_quotient_low': '#2ca02c',   # Green
+            'rayleigh_quotient_high': '#98df8a',  # Light green
+            'activation_l2_norm_low': '#ff7f0e', # Orange
+            'activation_l2_norm_high': '#ffbb78', # Light orange
+            'mutual_information_gaussian_low': '#9467bd',  # Purple
+            'mutual_information_gaussian_high': '#c5b0d5', # Light purple
+            'pairwise_redundancy_gaussian_low': '#d62728', # Red
+            'pairwise_redundancy_gaussian_high': '#ff9896', # Light red
+            'random_low': '#7f7f7f',         # Gray
+            'random_high': '#c7c7c7',        # Light gray
+            'random_random': '#bcbd22',      # Olive
+        }
+        
+        markers = {
+            'magnitude': 'o',
+            'rayleigh_quotient': 's',
+            'activation_l2_norm': '^',
+            'mutual_information_gaussian': 'D',
+            'pairwise_redundancy_gaussian': 'v',
+            'random': 'x',
+        }
+        
+        linestyles = {
+            'low': '-',
+            'high': '--',
+            'random': ':',
+        }
+        
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        for strategy_key, strategy_data in results.items():
+            # Parse strategy name and mode
+            parts = strategy_key.rsplit('_', 1)
+            if len(parts) == 2 and parts[1] in ['low', 'high', 'random']:
+                strategy_name = parts[0]
+                mode = parts[1]
+            else:
+                strategy_name = strategy_key
+                mode = 'low'
+            
+            # Get data
+            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            
+            if metric == 'accuracy':
+                means = strategy_data.get('accuracies_mean', strategy_data.get('accuracies_after_finetune', 
+                        strategy_data.get('accuracies_before_finetune', [])))
+                stds = strategy_data.get('accuracies_std', None)
+            else:
+                means = strategy_data.get('losses_mean', strategy_data.get('losses_after_finetune',
+                        strategy_data.get('losses_before_finetune', [])))
+                stds = strategy_data.get('losses_std', None)
+            
+            if not sparsities or not means:
+                continue
+            
+            # Convert to percentages for x-axis
+            x_values = [s * 100 for s in sparsities]
+            
+            # Get styling
+            color = colors.get(strategy_key, colors.get(f"{strategy_name}_{mode}", '#333333'))
+            marker = markers.get(strategy_name, 'o')
+            linestyle = linestyles.get(mode, '-')
+            
+            # Create label
+            label = f"{strategy_name.replace('_', ' ').title()} ({mode})"
+            
+            # Plot with or without error bars
+            if stds is not None and len(stds) == len(means):
+                ax.errorbar(
+                    x_values, means, yerr=stds,
+                    fmt=f'{marker}{linestyle}',
+                    label=label,
+                    color=color,
+                    linewidth=2.5,
+                    markersize=8,
+                    capsize=4,
+                    capthick=2,
+                    elinewidth=1.5,
+                    alpha=0.9
+                )
+            else:
+                ax.plot(
+                    x_values, means,
+                    f'{marker}{linestyle}',
+                    label=label,
+                    color=color,
+                    linewidth=2.5,
+                    markersize=8,
+                    alpha=0.9
+                )
+        
+        # Add baseline
+        if baseline_value is not None:
+            ax.axhline(y=baseline_value, color='black', linestyle='-.', 
+                      linewidth=2, label='Baseline (unpruned)', alpha=0.7)
+        
+        # Styling
+        ax.set_xlabel('Sparsity (%)', fontsize=14, fontweight='bold')
+        ylabel = 'Accuracy (%)' if metric == 'accuracy' else 'Loss'
+        ax.set_ylabel(ylabel, fontsize=14, fontweight='bold')
+        ax.set_title(title, fontsize=16, fontweight='bold', pad=15)
+        
+        # Grid
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.set_axisbelow(True)
+        
+        # Legend
+        ax.legend(loc='best', fontsize=10, framealpha=0.9, 
+                 ncol=2 if len(results) > 6 else 1)
+        
+        # Axis limits
+        ax.set_xlim(0, 100)
+        if metric == 'accuracy':
+            ax.set_ylim(0, max(105, ax.get_ylim()[1]))
+        
+        # Tick styling
+        ax.tick_params(axis='both', which='major', labelsize=12)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches='tight', 
+                       facecolor='white', edgecolor='none')
+        
+        return fig
+
+    def plot_pruning_summary_grid(
+        self,
+        results: Dict[str, Dict[str, Any]],
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Create a 2x2 grid of pruning analysis plots.
+        
+        Args:
+            results: Dict mapping strategy names to their results
+            save_path: Path to save the figure
+            
+        Returns:
+            Matplotlib figure with 4 subplots
+        """
+        fig = plt.figure(figsize=(16, 12))
+        gs = GridSpec(2, 2, figure=fig, hspace=0.3, wspace=0.25)
+        
+        # Collect all data
+        all_sparsities = set()
+        strategies = list(results.keys())
+        
+        for strategy_data in results.values():
+            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            all_sparsities.update(sparsities)
+        
+        all_sparsities = sorted(all_sparsities)
+        
+        # Plot 1: Accuracy before fine-tuning
+        ax1 = fig.add_subplot(gs[0, 0])
+        for strategy_key, strategy_data in results.items():
+            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            accs = strategy_data.get('accuracies_before_finetune', [])
+            if sparsities and accs:
+                ax1.plot([s*100 for s in sparsities], accs, 'o-', 
+                        label=strategy_key.replace('_', ' ').title(), 
+                        linewidth=2, markersize=6)
+        ax1.set_xlabel('Sparsity (%)', fontsize=11)
+        ax1.set_ylabel('Accuracy (%)', fontsize=11)
+        ax1.set_title('Before Fine-tuning', fontsize=13, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(fontsize=8, loc='best')
+        
+        # Plot 2: Accuracy after fine-tuning
+        ax2 = fig.add_subplot(gs[0, 1])
+        for strategy_key, strategy_data in results.items():
+            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            accs = strategy_data.get('accuracies_after_finetune', [])
+            if sparsities and accs:
+                ax2.plot([s*100 for s in sparsities], accs, 'o-',
+                        label=strategy_key.replace('_', ' ').title(),
+                        linewidth=2, markersize=6)
+        ax2.set_xlabel('Sparsity (%)', fontsize=11)
+        ax2.set_ylabel('Accuracy (%)', fontsize=11)
+        ax2.set_title('After Fine-tuning', fontsize=13, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(fontsize=8, loc='best')
+        
+        # Plot 3: Improvement from fine-tuning
+        ax3 = fig.add_subplot(gs[1, 0])
+        for strategy_key, strategy_data in results.items():
+            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            before = strategy_data.get('accuracies_before_finetune', [])
+            after = strategy_data.get('accuracies_after_finetune', [])
+            if sparsities and before and after and len(before) == len(after):
+                improvement = [a - b for a, b in zip(after, before)]
+                ax3.bar([s*100 + strategies.index(strategy_key)*2 for s in sparsities], 
+                       improvement, width=2, 
+                       label=strategy_key.replace('_', ' ').title(), alpha=0.8)
+        ax3.set_xlabel('Sparsity (%)', fontsize=11)
+        ax3.set_ylabel('Accuracy Improvement (%)', fontsize=11)
+        ax3.set_title('Fine-tuning Improvement', fontsize=13, fontweight='bold')
+        ax3.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        ax3.grid(True, alpha=0.3, axis='y')
+        ax3.legend(fontsize=8, loc='best')
+        
+        # Plot 4: Strategy comparison at specific sparsity
+        ax4 = fig.add_subplot(gs[1, 1])
+        if all_sparsities:
+            # Pick middle sparsity
+            target_sparsity = all_sparsities[len(all_sparsities)//2]
+            strategy_names = []
+            before_vals = []
+            after_vals = []
+            
+            for strategy_key, strategy_data in results.items():
+                sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+                if target_sparsity in sparsities:
+                    idx = sparsities.index(target_sparsity)
+                    before = strategy_data.get('accuracies_before_finetune', [])
+                    after = strategy_data.get('accuracies_after_finetune', [])
+                    if idx < len(before) and idx < len(after):
+                        strategy_names.append(strategy_key.replace('_', '\n').title())
+                        before_vals.append(before[idx])
+                        after_vals.append(after[idx])
+            
+            if strategy_names:
+                x = np.arange(len(strategy_names))
+                width = 0.35
+                ax4.bar(x - width/2, before_vals, width, label='Before', alpha=0.8)
+                ax4.bar(x + width/2, after_vals, width, label='After', alpha=0.8)
+                ax4.set_xticks(x)
+                ax4.set_xticklabels(strategy_names, fontsize=8)
+                ax4.set_ylabel('Accuracy (%)', fontsize=11)
+                ax4.set_title(f'Strategy Comparison at {target_sparsity*100:.0f}% Sparsity', 
+                             fontsize=13, fontweight='bold')
+                ax4.legend(fontsize=10)
+                ax4.grid(True, alpha=0.3, axis='y')
+        
+        plt.suptitle('Pruning Analysis Summary', fontsize=16, fontweight='bold', y=1.02)
+        
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches='tight',
+                       facecolor='white', edgecolor='none')
+        
+        return fig
+
     # ========== Supernode Analysis Plots ==========
 
     def plot_supernode_activation_distribution(
@@ -1822,3 +2098,322 @@ def plot_quick_summary(scores: Dict[str, Any], title: str = "Summary", save_path
         plt.show()
 
     return fig
+
+
+def generate_experiment_visualizations(
+    results: Dict[str, Any],
+    output_dir: Union[str, Path],
+    config: Optional[Any] = None,
+    dpi: int = 300,
+) -> List[Path]:
+    """
+    Generate all standard visualizations for an experiment.
+    
+    This function can be called from both vision and LLM experiments to produce
+    consistent visualizations. It reads the results dictionary and generates
+    appropriate plots based on what data is available.
+    
+    Args:
+        results: Experiment results dictionary containing:
+            - train_results: Training history (losses, accuracies, alignment)
+            - test_results: Final evaluation and alignment scores
+            - dropout_results: Progressive dropout analysis
+            - pruning_results: Pruning experiment results
+            - eigenfeature_results: Eigenfeature analysis
+        output_dir: Directory to save plots
+        config: Optional experiment config for additional settings
+        dpi: DPI for saved figures
+        
+    Returns:
+        List of paths to generated plots
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    visualizer = UnifiedVisualizer()
+    visualizer.dpi = dpi
+    generated_plots = []
+    
+    # Training curves
+    train_results = results.get("train_results", {})
+    if train_results:
+        train_losses = train_results.get("train_losses", [])
+        val_losses = train_results.get("val_losses", [])
+        train_accs = train_results.get("train_accs", [])
+        val_accs = train_results.get("val_accs", [])
+        epochs = list(range(1, len(train_losses) + 1))
+        
+        if epochs and train_losses:
+            # Loss plot
+            loss_series = {"Train Loss": train_losses}
+            if val_losses and len(val_losses) == len(epochs):
+                loss_series["Val Loss"] = val_losses
+            
+            fig = visualizer.plot_metric_evolution(
+                epochs, loss_series,
+                title="Training Loss",
+                xlabel="Epoch",
+                ylabel="Loss",
+                save_path=output_dir / "training_loss.png",
+            )
+            plt.close(fig)
+            generated_plots.append(output_dir / "training_loss.png")
+            
+            # Accuracy plot
+            if train_accs:
+                acc_series = {"Train Acc": train_accs}
+                if val_accs and len(val_accs) == len(epochs):
+                    acc_series["Val Acc"] = val_accs
+                
+                fig = visualizer.plot_metric_evolution(
+                    epochs, acc_series,
+                    title="Training Accuracy",
+                    xlabel="Epoch",
+                    ylabel="Accuracy (%)",
+                    save_path=output_dir / "training_accuracy.png",
+                )
+                plt.close(fig)
+                generated_plots.append(output_dir / "training_accuracy.png")
+    
+    # Alignment evolution
+    alignment_history = train_results.get("alignment", {})
+    if alignment_history:
+        for method, history in alignment_history.items():
+            if not history:
+                continue
+            
+            # Summarize alignment across layers
+            summarized = []
+            for snapshot in history:
+                if isinstance(snapshot, dict):
+                    aggregated = []
+                    for layer_scores in snapshot.values():
+                        if isinstance(layer_scores, (list, np.ndarray)):
+                            aggregated.extend(layer_scores)
+                    if aggregated:
+                        summarized.append(float(np.mean(aggregated)))
+                elif isinstance(snapshot, (int, float)):
+                    summarized.append(float(snapshot))
+            
+            if summarized:
+                steps = list(range(1, len(summarized) + 1))
+                fig = visualizer.plot_metric_evolution(
+                    steps, {method: summarized},
+                    title=f"{method.replace('_', ' ').title()} Evolution",
+                    xlabel="Measurement",
+                    ylabel="Average Score",
+                    save_path=output_dir / f"alignment_{method}.png",
+                )
+                plt.close(fig)
+                generated_plots.append(output_dir / f"alignment_{method}.png")
+    
+    # Dropout analysis
+    dropout_results = results.get("dropout_results", {})
+    if dropout_results:
+        dropout_rates = dropout_results.get("dropout_rates", [])
+        if dropout_rates:
+            # Extract accuracy curves
+            accuracy_curves = {}
+            if "accuracies" in dropout_results:
+                accuracy_curves = dropout_results["accuracies"]
+            else:
+                for strategy in ["low", "high", "random"]:
+                    key = f"accuracies_{strategy}"
+                    if key in dropout_results:
+                        accuracy_curves[strategy] = dropout_results[key]
+            
+            if accuracy_curves:
+                dropout_pct = [rate * 100 for rate in dropout_rates]
+                fig = visualizer.plot_metric_evolution(
+                    dropout_pct, accuracy_curves,
+                    title="Dropout Analysis",
+                    xlabel="Dropout (%)",
+                    ylabel="Accuracy (%)",
+                    save_path=output_dir / "dropout_accuracy.png",
+                )
+                plt.close(fig)
+                generated_plots.append(output_dir / "dropout_accuracy.png")
+    
+    # Pruning results
+    pruning_results = results.get("pruning_results", {})
+    if pruning_results and "strategies" in pruning_results:
+        # Group by algorithm for comparison plots
+        algorithm_results = {}
+        
+        for strategy_key, strategy_data in pruning_results["strategies"].items():
+            if not strategy_data.get("pruning_amounts") and not strategy_data.get("sparsities"):
+                continue
+            
+            # Parse strategy name and mode
+            if "_" in strategy_key:
+                parts = strategy_key.rsplit("_", 1)
+                if parts[1] in ["low", "high", "random"]:
+                    algorithm = parts[0]
+                    mode = parts[1]
+                else:
+                    algorithm = strategy_key
+                    mode = "low"
+            else:
+                algorithm = strategy_key
+                mode = "low"
+            
+            if algorithm not in algorithm_results:
+                algorithm_results[algorithm] = {
+                    "sparsities": strategy_data.get("sparsities", strategy_data.get("pruning_amounts", [])),
+                    "before": {},
+                    "after": {},
+                    "before_std": {},
+                    "after_std": {},
+                }
+            
+            algorithm_results[algorithm]["before"][mode] = strategy_data.get("accuracies_before_finetune", [])
+            algorithm_results[algorithm]["after"][mode] = strategy_data.get("accuracies_after_finetune", [])
+            
+            if "accuracies_before_finetune_std" in strategy_data:
+                algorithm_results[algorithm]["before_std"][mode] = strategy_data["accuracies_before_finetune_std"]
+            if "accuracies_after_finetune_std" in strategy_data:
+                algorithm_results[algorithm]["after_std"][mode] = strategy_data["accuracies_after_finetune_std"]
+        
+        # Generate plots for each algorithm
+        for algorithm, data in algorithm_results.items():
+            if not data["sparsities"]:
+                continue
+            
+            # Before/after comparison
+            figs = visualizer.plot_pruning_before_after(
+                sparsities=data["sparsities"],
+                before_accuracies=data["before"],
+                after_accuracies=data["after"],
+                before_std=data.get("before_std") or None,
+                after_std=data.get("after_std") or None,
+                algorithm=algorithm.replace("_", " ").title(),
+                save_dir=output_dir,
+                dpi=dpi,
+            )
+            for fig in figs:
+                plt.close(fig)
+            
+            # Track generated files
+            for mode in data["before"]:
+                generated_plots.append(output_dir / f"pruning_{algorithm}_accuracy_before.png")
+                generated_plots.append(output_dir / f"pruning_{algorithm}_accuracy_after.png")
+        
+        # Comparison plot across all strategies
+        if algorithm_results:
+            try:
+                comparison_data = {}
+                for strategy_key, strategy_data in pruning_results["strategies"].items():
+                    comparison_data[strategy_key] = {
+                        "sparsities": strategy_data.get("sparsities", strategy_data.get("pruning_amounts", [])),
+                        "accuracies_after_finetune": strategy_data.get("accuracies_after_finetune", []),
+                        "accuracies_std": strategy_data.get("accuracies_after_finetune_std"),
+                    }
+                
+                fig = visualizer.plot_pruning_comparison(
+                    results=comparison_data,
+                    metric="accuracy",
+                    title="Pruning Strategy Comparison",
+                    save_path=output_dir / "pruning_comparison.png",
+                )
+                plt.close(fig)
+                generated_plots.append(output_dir / "pruning_comparison.png")
+            except Exception as e:
+                logger.warning(f"Could not generate comparison plot: {e}")
+    
+    # Eigenfeature analysis
+    eigenfeature_results = results.get("eigenfeature_results", {})
+    if eigenfeature_results:
+        eigen_data = {}
+        for layer_name, info in eigenfeature_results.items():
+            eigenvalues = info.get("top_eigenvalues", [])
+            if eigenvalues:
+                eigen_data[layer_name] = {f"eig{i+1}": val for i, val in enumerate(eigenvalues)}
+        
+        if eigen_data:
+            fig = visualizer.plot_heatmap(
+                data=eigen_data,
+                title="Top Eigenvalues per Layer",
+                xlabel="Eigenvalue Index",
+                ylabel="Layer",
+                save_path=output_dir / "eigenvalues_heatmap.png",
+            )
+            plt.close(fig)
+            generated_plots.append(output_dir / "eigenvalues_heatmap.png")
+    
+    # ========== Histograms and Scatter Plots from Alignment Scores ==========
+    # Check for alignment scores in test_results
+    test_results = results.get("test_results", {})
+    alignment_scores = test_results.get("alignment", {})
+    
+    if alignment_scores:
+        # Generate histograms for each metric
+        for metric_name, layer_scores in alignment_scores.items():
+            if isinstance(layer_scores, dict):
+                # Aggregate scores across layers for histogram
+                all_scores = []
+                for layer_name, scores in layer_scores.items():
+                    if isinstance(scores, (list, np.ndarray)):
+                        all_scores.extend(scores)
+                    elif isinstance(scores, torch.Tensor):
+                        all_scores.extend(scores.cpu().numpy().tolist())
+                
+                if all_scores:
+                    fig = visualizer.plot_1d_histogram(
+                        values=all_scores,
+                        title=f"{metric_name.replace('_', ' ').title()} Distribution",
+                        xlabel="Score",
+                        ylabel="Count",
+                        bins=50,
+                        save_path=output_dir / f"histogram_{metric_name}.png",
+                    )
+                    plt.close(fig)
+                    generated_plots.append(output_dir / f"histogram_{metric_name}.png")
+                    
+                    # Also generate per-layer histograms
+                    for layer_name, scores in layer_scores.items():
+                        if isinstance(scores, (list, np.ndarray)) and len(scores) > 10:
+                            safe_layer = layer_name.replace(".", "_").replace("/", "_")
+                            fig = visualizer.plot_1d_histogram(
+                                values=scores,
+                                title=f"{metric_name.replace('_', ' ').title()} - {layer_name}",
+                                xlabel="Score",
+                                ylabel="Count",
+                                bins=30,
+                                save_path=output_dir / f"histogram_{metric_name}_{safe_layer}.png",
+                            )
+                            plt.close(fig)
+                            generated_plots.append(output_dir / f"histogram_{metric_name}_{safe_layer}.png")
+        
+        # Generate scatter plots for metric pairs
+        metric_names = list(alignment_scores.keys())
+        if len(metric_names) >= 2:
+            # Generate scatter plots for pairs of metrics
+            for i in range(len(metric_names)):
+                for j in range(i + 1, len(metric_names)):
+                    metric1, metric2 = metric_names[i], metric_names[j]
+                    scores1 = alignment_scores[metric1]
+                    scores2 = alignment_scores[metric2]
+                    
+                    if isinstance(scores1, dict) and isinstance(scores2, dict):
+                        # Aggregate per layer
+                        for layer_name in scores1:
+                            if layer_name in scores2:
+                                s1 = scores1[layer_name]
+                                s2 = scores2[layer_name]
+                                
+                                if isinstance(s1, (list, np.ndarray)) and isinstance(s2, (list, np.ndarray)):
+                                    if len(s1) == len(s2) and len(s1) > 10:
+                                        safe_layer = layer_name.replace(".", "_").replace("/", "_")
+                                        fig = visualizer.plot_scatter_2d(
+                                            x=s1,
+                                            y=s2,
+                                            xlabel=metric1.replace("_", " ").title(),
+                                            ylabel=metric2.replace("_", " ").title(),
+                                            title=f"{metric1} vs {metric2} - {layer_name}",
+                                            save_path=output_dir / f"scatter_{metric1}_vs_{metric2}_{safe_layer}.png",
+                                        )
+                                        plt.close(fig)
+                                        generated_plots.append(output_dir / f"scatter_{metric1}_vs_{metric2}_{safe_layer}.png")
+    
+    logger.info(f"Generated {len(generated_plots)} visualization(s) in {output_dir}")
+    return generated_plots

@@ -1,48 +1,141 @@
-# Vision Pruning Test
-# Comprehensive metrics (RQ, MI, Redundancy) with high/low/random pruning strategies
+# Vision Pruning Test (AlexNet on ImageNet)
+# Comprehensive metrics with pruning strategies
+#
+# Based on alignment_notes/main.tex and vision_synergy_icml.tex:
+# - RQ measures alignment with input covariance
+# - Gaussian MI is directly related to RQ for linear-Gaussian models
+# - Redundancy I(Y_i; Y_j) = -0.5 * log(1 - ρ²) measures overlap between neurons
+# - Synergy S_MMI measures information that emerges only from joint outputs
 
 experiment:
   name: "vision_pruning_test"
   type: "alignment_analysis"
   seed: 42
-  device: "cuda"
+  device: "auto"                  # auto-detect cuda/cpu
   output_dir: "./results/vision_pruning_test"
+  num_networks: 3                 # Run 3 networks for error bars
 
 model:
-  name: "resnet18"
-  pretrained: true
+  name: "alexnet"
+  pretrained: true                # Uses pretrained weights (auto-disables training)
   tracked_layers: null            # Auto-detect conv layers
 
+# Dataset options:
+#   - cifar10/cifar100: ./data (auto-downloads)
+#   - imagenet: /n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k
 dataset:
-  name: "cifar10"
-  data_path: "./data"
+  name: "imagenet"
+  data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
   batch_size: 64
   num_workers: 4
-
+  
+# =============================================================================
+# METRICS TO COMPUTE (from paper's analytical framework)
+# =============================================================================
+#
+# ALIGNMENT (RQ-based):
+#   - rayleigh_quotient: RQ(w) = w^T Σ_X w / w^T w
+#   - conditional_rayleigh_quotient: Class-conditioned RQ
+#   - delta_rq: Δ_RQ = RQ_unconditional - RQ_conditional
+#
+# MUTUAL INFORMATION (Gaussian):
+#   - gaussian_mi_analytic: I(X; y) ≈ 0.5 * log(1 + RQ/σ²)
+#     This is the MI directly related to RQ from the paper
+#   - mi_about_class: I(Z; Y) - MI between activations and class labels
+#
+# REDUNDANCY (Pairwise Gaussian):
+#   - pairwise_redundancy_gaussian: I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
+#     Target-free redundancy between neurons
+#
+# SYNERGY (PID with MMI redundancy):
+#   - gaussian_pid_synergy_mmi: S_MMI(Z; Y_i, Y_j) = I(Z; [Y_i,Y_j]) - I(Z; Y_i) - I(Z; Y_j) + R_MMI
+#     Target-conditional synergy
+#
+# COMPOSITE SCORE for pruning:
+#   Score(i) = α * log RQ(w_i) + β * I(Z; Y_i) + γ * S(i) - δ * R(i)
+#
 metrics:
   enabled:
-    - "rayleigh_quotient"
-    - "activation_l2_norm"
-    - "pairwise_redundancy_gaussian"
-    - "mutual_information_gaussian"
+    # Alignment metrics (RQ-based)
+    - "rayleigh_quotient"               # RQ: alignment to input covariance
+    - "conditional_rayleigh_quotient"   # Class-conditioned RQ
+    
+    # Mutual Information (Gaussian, RQ-related)
+    - "gaussian_mi_analytic"            # MI directly related to RQ
+    - "mi_about_class"                  # MI between activations and class
+    
+    # Redundancy (Pairwise Gaussian)
+    - "pairwise_redundancy_gaussian"    # I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
+    
+    # Synergy (PID with MMI redundancy)
+    - "gaussian_pid_synergy_mmi"        # S_MMI(Z; Y_i, Y_j)
+    
+    # Activation statistics (for comparison)
+    - "activation_l2_norm"              # ||Y||_2 activation magnitude
+    
   num_samples: 256
 
-# Pruning experiments
-# Strategies: magnitude, alignment, random
-# Selection modes: low (prune lowest), high (prune highest)
+# CNN activation preprocessing
+# "unfold" (recommended): Unfolds spatial dims for proper RQ computation
+# "patchwise": Keeps patches separate for patch-level analysis
+# "batch_patch_combined": Combines batch and patch dimensions
+cnn:
+  mode: "unfold"
+
+# =============================================================================
+# PRUNING EXPERIMENTS
+# =============================================================================
 pruning:
   enabled: true
-  algorithms:
-    - "magnitude"
-    - "alignment"
-    - "random"
-  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5]
-  selection_modes: ["low", "high"]
-  alignment_metric: "rayleigh_quotient"
+  
+  # TARGET LAYER: Prune only a specific layer (for interpretability)
+  # Set to null to prune all layers
+  # Examples: "features.0", "features.3", "classifier.1"
+  target_layer: "features.3"  # Second conv layer in AlexNet
+  
+  # Sparsity levels to test (fraction of neurons to remove)
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  
+  # Selection modes: WHICH neurons to prune based on their scores
+  # For composite score (high = important):
+  #   "high"   - prune neurons with HIGHEST scores (ablation study)
+  #   "low"    - prune neurons with LOWEST scores (keep important ones)
+  #   "random" - prune randomly (baseline comparison)
+  selection_modes: ["high", "low", "random"]
+  
+  # Distribution: HOW to allocate sparsity across layers
+  #   "uniform"              - same % per layer (simple, default)
+  #   "global_threshold"     - global score threshold
+  #   "adaptive_sensitivity" - prune robust layers more
+  distribution: "uniform"
+  
+  # Structured: prune entire neurons/channels (vs individual weights)
   structured: true
+  
+  # Dependency-aware: handle skip connections (ResNet)
   dependency_aware: true
+  
+  fine_tune:
+    enabled: false
+    epochs: 5
+    learning_rate: 0.0001
+
+# Performance (all optimizations enabled by default)
+performance:
+  eval_batches: 100               # Limit evaluation to 100 batches (6400 images) for speed
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true              # Distribution of each metric
+    scatter_plots: true           # Redundancy vs Synergy, RQ vs MI, etc.
+    pruning_curves: true          # Accuracy vs sparsity
+  scatter_pairs:
+    - ["rayleigh_quotient", "gaussian_mi_analytic"]  # RQ vs MI (should correlate)
+    - ["pairwise_redundancy_gaussian", "gaussian_pid_synergy_mmi"]  # Redundancy vs Synergy
+    - ["rayleigh_quotient", "gaussian_pid_synergy_mmi"]  # RQ vs Synergy
 
 visualization:
   format: "png"
   dpi: 300
-

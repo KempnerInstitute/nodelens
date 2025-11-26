@@ -29,7 +29,7 @@ from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
 from alignment.pruning.dependency_aware import DependencyAwarePruning
-from alignment.pruning.strategies import MagnitudePruning, ParallelBatchPruning, RandomPruning
+from alignment.pruning.strategies import MagnitudePruning, RandomPruning
 from alignment.services import ActivationCaptureService, MaskOperations
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,8 @@ class GeneralAlignmentConfig(ExperimentConfig):
 
     # Evaluation optimization
     eval_batches: Optional[int] = None  # Limit evaluation to N batches for speed
+    use_ultra_parallel_eval: bool = True  # Use ultra-parallel evaluation for pruning
+    use_tensorized_pruning: bool = True  # Use tensorized operations for pruning
 
     # CNN mode
     cnn_mode: str = "unfold"  # "unfold", "patchwise", "batch_patch_combined"
@@ -524,11 +526,16 @@ class GeneralAlignmentExperiment(BaseExperiment):
         total_loss = 0.0
         correct = 0
         total = 0
+        num_batches = 0
 
         criterion = nn.CrossEntropyLoss()
+        eval_batches = self.config.eval_batches  # Limit evaluation batches (None = all)
 
         with torch.no_grad():
-            for inputs, targets in self.data_loader:
+            for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+                if eval_batches is not None and batch_idx >= eval_batches:
+                    break
+                    
                 inputs, targets = inputs.to(self.config.device), targets.to(self.config.device)
                 outputs = self.model(inputs)
 
@@ -538,9 +545,10 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
+                num_batches += 1
 
-        avg_loss = total_loss / len(self.data_loader)
-        accuracy = 100.0 * correct / total
+        avg_loss = total_loss / max(num_batches, 1)
+        accuracy = 100.0 * correct / max(total, 1)
 
         return avg_loss, accuracy
 
@@ -550,13 +558,17 @@ class GeneralAlignmentExperiment(BaseExperiment):
         all_accuracies = []
 
         criterion = nn.CrossEntropyLoss()
+        eval_batches = self.config.eval_batches  # Limit evaluation batches (None = all)
 
         # Set all networks to eval mode
         for net in self.networks:
             net.eval()
 
         with torch.no_grad():
-            for inputs, targets in self.data_loader:
+            for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+                if eval_batches is not None and batch_idx >= eval_batches:
+                    break
+                    
                 inputs, targets = inputs.to(self.config.device), targets.to(self.config.device)
 
                 batch_losses = []
@@ -728,6 +740,12 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         )
                         continue
                     metric_kwargs["targets"] = targets
+                
+                # Conditional metrics that need class labels
+                if method in ["conditional_rayleigh_quotient", "mi_about_class", 
+                              "conditional_mi", "conditional_activation_norm", "delta_rq"]:
+                    if targets is not None:
+                        metric_kwargs["targets"] = targets
 
                 try:
                     scores = metric.compute(**metric_kwargs)
@@ -1148,12 +1166,19 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     if dependency_aware_enabled and not pruning_config.structured:
                         pruning_config.structured = True
 
-                    # For alignment-based pruning, override structured setting
-                    if strategy_name == "alignment" and self.config.alignment_structured_pruning:
+                    # For metric-based pruning, override structured setting
+                    if self.config.alignment_structured_pruning:
                         pruning_config.structured = True
 
                     # Import additional strategies if needed
                     strategy = None
+                    
+                    # Known metric names that can be used for pruning
+                    metric_based_strategies = [
+                        "rayleigh_quotient", "activation_l2_norm", "activation_l1_norm",
+                        "pairwise_redundancy_gaussian", "mutual_information_gaussian",
+                        "synergy_gaussian_mmi", "taylor_importance"
+                    ]
 
                     if strategy_name == "magnitude":
                         if pruning_config.global_pruning:
@@ -1163,21 +1188,33 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         else:
                             strategy = MagnitudePruning(config=pruning_config)
                     elif strategy_name == "alignment":
+                        # Legacy "alignment" keyword - use pruning_alignment_metric
                         from alignment.pruning.strategies import AlignmentPruning, CascadingAlignmentPruning, GlobalAlignmentPruning
 
-                        # Get the alignment metric from config (default to rayleigh_quotient)
                         alignment_metric = getattr(self.config, "pruning_alignment_metric", "rayleigh_quotient")
 
                         if self.config.pruning_scope == "global":
                             strategy = GlobalAlignmentPruning(metric=alignment_metric, config=pruning_config)
                         elif self.config.pruning_scope == "cascading":
-                            # Cascading always uses structured pruning
                             pruning_config.structured = True
                             strategy = CascadingAlignmentPruning(
                                 metric=alignment_metric, direction=getattr(self.config, "cascading_direction", "forward"), config=pruning_config
                             )
-                        else:  # layer scope (default)
+                        else:
                             strategy = AlignmentPruning(metric=alignment_metric, config=pruning_config)
+                    elif strategy_name in metric_based_strategies:
+                        # NEW: Use metric name directly as pruning criterion
+                        from alignment.pruning.strategies import AlignmentPruning, CascadingAlignmentPruning, GlobalAlignmentPruning
+
+                        if self.config.pruning_scope == "global":
+                            strategy = GlobalAlignmentPruning(metric=strategy_name, config=pruning_config)
+                        elif self.config.pruning_scope == "cascading":
+                            pruning_config.structured = True
+                            strategy = CascadingAlignmentPruning(
+                                metric=strategy_name, direction=getattr(self.config, "cascading_direction", "forward"), config=pruning_config
+                            )
+                        else:
+                            strategy = AlignmentPruning(metric=strategy_name, config=pruning_config)
                     elif strategy_name == "cascading_alignment":
                         # Legacy cascading_alignment handling
                         logger.warning("'cascading_alignment' algorithm is deprecated. Use algorithms=['alignment'] with scope='cascading'")
@@ -1191,7 +1228,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
                         alignment_metric = getattr(self.config, "pruning_alignment_metric", "rayleigh_quotient")
                         alpha = getattr(self.config, "pruning_hybrid_alpha", 0.5)
-                        # Note: Hybrid doesn't have a global variant yet
                         strategy = HybridPruning(alignment_metric=alignment_metric, alpha=alpha, config=pruning_config)
                     elif strategy_name == "gradient":
                         logger.warning("Gradient pruning is not suitable for post-training pruning on converged models")
@@ -1211,9 +1247,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         logger.warning(f"Unsupported pruning strategy: {strategy_name}")
                         continue
 
-                    # Get sample inputs for alignment-based pruning
+                    # Get sample inputs for metric-based pruning (alignment, RQ, MI, etc.)
                     layer_inputs_dict = {}
-                    if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
+                    # All metric-based pruning strategies need layer inputs
+                    needs_layer_inputs = True
+                    if needs_layer_inputs:
                         # Get a batch of data for alignment computation
                         data_iter = iter(self.data_loader)
                         sample_batch, _ = next(data_iter)
@@ -1249,8 +1287,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     # Apply pruning
                     if pruning_config.global_pruning and hasattr(strategy, "prune_model"):
                         # Global pruning across all layers
-                        if strategy_name == "alignment":
-                            # Global alignment pruning needs layer inputs
+                        if needs_layer_inputs:
+                            # Global metric-based pruning needs layer inputs
                             masks = strategy.prune_model(self.model, layer_inputs_dict, amount=amount)
                         else:
                             # Global magnitude pruning
@@ -1261,7 +1299,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         zero_params = sum((mask == 0).sum().item() for mask in masks.values())
                         overall_sparsity = zero_params / total_params if total_params > 0 else 0
 
-                    elif self.config.pruning_scope == "cascading" and strategy_name == "alignment":
+                    elif self.config.pruning_scope == "cascading" and needs_layer_inputs:
                         # Cascading alignment needs special handling
 
                         # TODO: Extend cascading to other algorithms (magnitude, gradient, etc)
@@ -1323,32 +1361,44 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         else:
                             # Layer-wise pruning (fallback behavior)
                             layer_sparsities = {}
+                            pruning_failed = False
                             for name, module in self.model.named_modules():
                                 if hasattr(module, "weight") and len(module.weight.shape) >= 2:
-                                    layer_inputs = None
-                                    if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
-                                        if name in layer_inputs_dict:
-                                            layer_inputs = layer_inputs_dict[name]
-                                        else:
-                                            logger.error(f"No captured inputs for layer {name} - skipping structured pruning for this layer")
-                                            continue
+                                    # All metric-based strategies require inputs
+                                    layer_inputs = layer_inputs_dict.get(name)
+                                    if layer_inputs is None:
+                                        logger.debug(f"No captured inputs for layer {name} - skipping pruning for this layer")
+                                        continue
 
-                                    strategy.prune(module, inputs=layer_inputs)
-                                    sparsity = strategy.get_sparsity(module)
-                                    layer_sparsities[name] = sparsity
+                                    try:
+                                        strategy.prune(module, inputs=layer_inputs)
+                                        sparsity = strategy.get_sparsity(module)
+                                        layer_sparsities[name] = sparsity
+                                    except Exception as e:
+                                        # Log error and skip this strategy entirely
+                                        logger.error(f"Pruning failed for strategy {strategy_name}: {e}")
+                                        pruning_failed = True
+                                        break
 
-                            total_params = 0
-                            zero_params = 0
-                            for module in self.model.modules():
-                                if hasattr(module, "weight"):
-                                    total_params += module.weight.numel()
-                                    zero_params += (module.weight == 0).sum().item()
+                            if pruning_failed:
+                                logger.warning(f"Skipping strategy {strategy_name} due to errors")
+                                continue
 
-                            overall_sparsity = zero_params / total_params if total_params > 0 else 0
+                        total_params = 0
+                        zero_params = 0
+                        for module in self.model.modules():
+                            if hasattr(module, "weight"):
+                                total_params += module.weight.numel()
+                                zero_params += (module.weight == 0).sum().item()
 
-                    # Evaluate pruned model BEFORE fine-tuning
+                        overall_sparsity = zero_params / total_params if total_params > 0 else 0
+
+                    # Evaluate pruned model
                     test_loss_before, test_acc_before = self._evaluate()
-                    logger.info(f"      Before fine-tuning: Loss={test_loss_before:.4f}, Accuracy={test_acc_before:.2f}%")
+                    if self.config.fine_tune_after_pruning:
+                        logger.info(f"      Before fine-tuning: Loss={test_loss_before:.4f}, Accuracy={test_acc_before:.2f}%")
+                    else:
+                        logger.info(f"      After pruning: Loss={test_loss_before:.4f}, Accuracy={test_acc_before:.2f}%")
 
                     # Capture weight distribution before fine-tuning
                     weight_dist_before = self._get_weight_distribution()
@@ -1422,167 +1472,276 @@ class GeneralAlignmentExperiment(BaseExperiment):
         return results
 
     def _pruning_experiments_multi(self) -> Dict[str, Any]:
-        """Perform parallel batch pruning experiments on multiple networks."""
-        # Import moved to top
-
-        # Use the parallel batch pruning strategy
-        pruner = ParallelBatchPruning(self.config)
-
+        """
+        Perform pruning experiments on multiple networks with parallel evaluation.
+        
+        This is the default multi-network pruning implementation that:
+        1. Creates masks for all networks and sparsity levels
+        2. Evaluates all configurations in parallel
+        3. Aggregates results with mean and std across networks
+        
+        OPTIMIZED: Pre-computes importance scores ONCE per metric, then creates
+        all masks for all selection modes and sparsity levels in parallel.
+        """
         # Get selection modes to test
         selection_modes = self.config.pruning_selection_mode
         if not isinstance(selection_modes, list):
             selection_modes = [selection_modes]
 
-        return pruner.run_pruning_experiments(
-            networks=self.networks,
-            data_loader=self.data_loader,
-            strategies=self.config.pruning_strategies,
-            selection_modes=selection_modes,
-            pruning_amounts=self.config.pruning_amounts,
-            device=self.config.device,
-        )
+        results = {"strategies": {}}
 
-    def _tensorized_pruning_batch(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> Dict[str, torch.Tensor]:
-        logger.info(f"    Ultra-fast mode: Processing {num_networks} networks × {num_amounts} pruning amounts in parallel")
+        # Save original states efficiently
+        original_states = []
+        for model in self.networks:
+            state = {name: module.weight.data.clone() for name, module in model.named_modules() if hasattr(module, "weight")}
+            original_states.append(state)
 
+        # Get sample inputs for alignment computation (ONCE)
+        data_iter = iter(self.data_loader)
+        sample_batch, sample_targets = next(data_iter)
+        sample_inputs = sample_batch.to(self.config.device)
+        sample_targets = sample_targets.to(self.config.device)
+
+        # Pre-compute layer inputs for all networks ONCE
+        logger.info("Pre-computing layer inputs for all networks...")
+        all_layer_inputs = []
+        for model in self.networks:
+            layer_inputs_dict = self._capture_layer_inputs(model, sample_inputs)
+            all_layer_inputs.append(layer_inputs_dict)
+
+        # Pre-compute importance scores for each metric ONCE per network
+        logger.info("Pre-computing importance scores for all metrics...")
+        all_importance_scores = {}  # {strategy_name: [{layer_name: scores}]}
+        
+        # Check if we're doing single-layer pruning
+        target_layer = getattr(self.config, 'pruning_target_layer', None)
+        if target_layer:
+            logger.info(f"Single-layer pruning: only computing scores for '{target_layer}'")
+        
+        for strategy_name in self.config.pruning_strategies:
+            all_importance_scores[strategy_name] = []
+            
+            for net_idx, model in enumerate(self.networks):
+                layer_scores = {}
+                for name, module in model.named_modules():
+                    if hasattr(module, "weight") and len(module.weight.shape) >= 2:
+                        # Skip layers that are not the target (if target is specified)
+                        if target_layer is not None and name != target_layer:
+                            continue
+                            
+                        layer_inputs = all_layer_inputs[net_idx].get(name)
+                        if layer_inputs is not None:
+                            try:
+                                scores = self._compute_metric_importance(
+                                    module, layer_inputs, strategy_name, sample_targets
+                                )
+                                layer_scores[name] = scores
+                            except Exception as e:
+                                logger.warning(f"Error computing {strategy_name} for {name}: {e}")
+                                # Fallback to magnitude
+                                layer_scores[name] = module.weight.abs().mean(dim=tuple(range(1, module.weight.dim())))
+                
+                all_importance_scores[strategy_name].append(layer_scores)
+
+        # Now process each strategy with all selection modes and sparsity levels
+        # This is optimized because we don't recompute scores
+        for strategy_name in self.config.pruning_strategies:
+            logger.info(f"Testing pruning strategy: {strategy_name}")
+
+            for selection_mode in selection_modes:
+                logger.info(f"  Selection mode: {selection_mode}")
+
+                # Use pre-computed scores for fast mask creation
+                batch_results = self._evaluate_pruning_with_precomputed_scores(
+                    all_importance_scores[strategy_name],
+                    selection_mode,
+                    self.config.pruning_amounts,
+                    original_states,
+                )
+
+                # Store aggregated results
+                strategy_key = f"{strategy_name}_{selection_mode}"
+                strategy_results = {
+                    "pruning_amounts": self.config.pruning_amounts,
+                    "sparsities": batch_results["sparsities"].mean(dim=0).tolist(),
+                    "accuracies_before_finetune": batch_results["accuracies_before"].mean(dim=0).tolist(),
+                    "accuracies_after_finetune": batch_results["accuracies_after"].mean(dim=0).tolist(),
+                    "losses_before_finetune": batch_results["losses_before"].mean(dim=0).tolist(),
+                    "losses_after_finetune": batch_results["losses_after"].mean(dim=0).tolist(),
+                    "improvements": (batch_results["accuracies_after"] - batch_results["accuracies_before"]).mean(dim=0).tolist(),
+                }
+
+                # Add standard deviations if multiple networks
+                if len(self.networks) > 1:
+                    strategy_results["accuracies_before_finetune_std"] = batch_results["accuracies_before"].std(dim=0).tolist()
+                    strategy_results["accuracies_after_finetune_std"] = batch_results["accuracies_after"].std(dim=0).tolist()
+
+                results["strategies"][strategy_key] = strategy_results
+
+        # Restore original weights
+        for net_idx, model in enumerate(self.networks):
+            for name, module in model.named_modules():
+                if name in original_states[net_idx]:
+                    module.weight.data = original_states[net_idx][name]
+
+        return results
+    
+    def _compute_metric_importance(
+        self, 
+        module: nn.Module, 
+        layer_inputs: torch.Tensor, 
+        metric_name: str,
+        targets: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute per-neuron importance scores using a specified metric.
+        
+        Args:
+            module: The layer module
+            layer_inputs: Input activations to the layer
+            metric_name: Name of the metric to use
+            targets: Optional class labels for conditional metrics
+            
+        Returns:
+            Per-neuron importance scores
+        """
+        from alignment.metrics import get_metric
+        
+        W = module.weight.detach()
+        
+        # Flatten spatial dimensions for conv layers
+        if layer_inputs.dim() > 2:
+            X = layer_inputs.view(layer_inputs.size(0), -1)
+        else:
+            X = layer_inputs
+        
+        # Flatten weights for conv layers
+        if W.dim() > 2:
+            W_flat = W.view(W.size(0), -1)
+        else:
+            W_flat = W
+        
+        try:
+            metric = get_metric(metric_name)
+            
+            # Different metrics have different requirements
+            if hasattr(metric, 'requires_weights') and metric.requires_weights:
+                if hasattr(metric, 'requires_outputs') and metric.requires_outputs:
+                    # Compute outputs
+                    outputs = X @ W_flat.T if X.shape[1] == W_flat.shape[1] else None
+                    if outputs is not None:
+                        scores = metric.compute(inputs=X, weights=W_flat, outputs=outputs, targets=targets)
+                    else:
+                        scores = metric.compute(inputs=X, weights=W_flat, targets=targets)
+                else:
+                    scores = metric.compute(inputs=X, weights=W_flat, targets=targets)
+            elif hasattr(metric, 'requires_outputs') and metric.requires_outputs:
+                # Compute outputs for output-based metrics
+                outputs = X @ W_flat.T if X.shape[1] == W_flat.shape[1] else None
+                if outputs is not None:
+                    scores = metric.compute(outputs=outputs, targets=targets)
+                else:
+                    raise ValueError(f"Cannot compute outputs for metric {metric_name}")
+            else:
+                scores = metric.compute(inputs=X, weights=W_flat, targets=targets)
+            
+            return scores.abs()
+            
+        except Exception as e:
+            logger.warning(f"Metric {metric_name} computation failed: {e}. Using magnitude fallback.")
+            # Fallback to magnitude
+            return W.abs().mean(dim=tuple(range(1, W.dim())))
+    
+    def _evaluate_pruning_with_precomputed_scores(
+        self,
+        all_importance_scores: List[Dict[str, torch.Tensor]],
+        selection_mode: str,
+        pruning_amounts: List[float],
+        original_states: List[Dict[str, torch.Tensor]],
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Evaluate pruning using pre-computed importance scores.
+        
+        This is much faster than recomputing scores for each configuration.
+        
+        If config.pruning_target_layer is set, only that layer will be pruned.
+        """
+        num_networks = len(self.networks)
+        num_amounts = len(pruning_amounts)
+        
+        # Check if we're doing single-layer pruning
+        target_layer = getattr(self.config, 'pruning_target_layer', None)
+        if target_layer:
+            logger.info(f"    Single-layer pruning mode: targeting layer '{target_layer}'")
+        
         # Initialize result tensors
         accuracies_before = torch.zeros(num_networks, num_amounts)
         losses_before = torch.zeros(num_networks, num_amounts)
         accuracies_after = torch.zeros(num_networks, num_amounts)
         losses_after = torch.zeros(num_networks, num_amounts)
         sparsities = torch.zeros(num_networks, num_amounts)
-
-        # Create masks for all networks and all pruning amounts at once
-        if strategy_name in ["magnitude", "random"]:
-            all_masks = self._create_tensorized_masks_optimized(strategy_name, selection_mode, pruning_amounts)
-        else:
-            all_masks = self._create_tensorized_masks(strategy_name, selection_mode, pruning_amounts)
-
-        # Create a batch of pruned network copies
-        pruned_networks = []
+        
+        # Create all masks upfront using pre-computed scores
+        all_masks = []  # [network][amount][layer_name -> mask]
         for net_idx in range(num_networks):
-            network_copies = []
-            for amount_idx in range(num_amounts):
-                # Create a deep copy of the network
-                import copy
-
-                net_copy = copy.deepcopy(self.networks[net_idx])
-
-                # Apply masks to the copy
-                self._apply_tensorized_mask(net_copy, all_masks[net_idx][amount_idx])
-
-                network_copies.append(net_copy)
-            pruned_networks.append(network_copies)
-
-        # Evaluate all network-pruning combinations in a single batch
-        logger.info("    Evaluating all pruning configurations simultaneously...")
-
-        # Batch evaluation before fine-tuning
-        with torch.no_grad():
-            criterion = nn.CrossEntropyLoss()
-
-            for inputs, targets in self.data_loader:
-                inputs = inputs.to(self.config.device)
-                targets = targets.to(self.config.device)
-
-                # Process all networks and pruning amounts
-                for net_idx in range(num_networks):
-                    for amount_idx in range(num_amounts):
-                        net = pruned_networks[net_idx][amount_idx]
-                        net.eval()
-
-                        outputs = net(inputs)
-                        loss = criterion(outputs, targets)
-                        losses_before[net_idx, amount_idx] += loss.item()
-
-                        _, predicted = outputs.max(1)
-                        accuracies_before[net_idx, amount_idx] += predicted.eq(targets).sum().item()
-
-        # Normalize results
-        losses_before /= len(self.data_loader)
-        accuracies_before = accuracies_before * 100.0 / len(self.data_loader.dataset)
-
-        # Calculate sparsities
-        for net_idx in range(num_networks):
-            for amount_idx in range(num_amounts):
-                sparsities[net_idx, amount_idx] = self._calculate_model_sparsity(pruned_networks[net_idx][amount_idx])
-
-        logger.info(f"    Overall before fine-tuning - Avg Acc: {accuracies_before.mean():.2f}%, Avg Sparsity: {sparsities.mean():.2%}")
-
-        # Fine-tuning phase if requested
-        if self.config.fine_tune_after_pruning:
-            logger.info(f"    Fine-tuning all {num_networks * num_amounts} configurations in parallel...")
-
-            # Create optimizers for all network copies
-            all_optimizers = []
-            for net_idx in range(num_networks):
-                for amount_idx in range(num_amounts):
-                    net = pruned_networks[net_idx][amount_idx]
-                    optimizer = torch.optim.Adam(
-                        net.parameters(), lr=getattr(self.config, "fine_tune_learning_rate", self.config.learning_rate * 0.1)
+            network_masks = []
+            for amount in pruning_amounts:
+                layer_masks = {}
+                for layer_name, scores in all_importance_scores[net_idx].items():
+                    # Skip layers that are not the target (if target is specified)
+                    if target_layer is not None and layer_name != target_layer:
+                        continue
+                    
+                    mask = self._create_mask_from_scores(
+                        self._get_module_by_name(self.networks[net_idx], layer_name),
+                        scores,
+                        amount,
+                        selection_mode,
                     )
-                    all_optimizers.append(optimizer)
-
-            # Fine-tune all networks simultaneously
-            for epoch in range(self.config.fine_tune_epochs):
-                for inputs, targets in self.data_loader:
-                    inputs = inputs.to(self.config.device)
-                    targets = targets.to(self.config.device)
-
-                    # Train all network copies
-                    opt_idx = 0
-                    for net_idx in range(num_networks):
-                        for amount_idx in range(num_amounts):
-                            net = pruned_networks[net_idx][amount_idx]
-                            optimizer = all_optimizers[opt_idx]
-                            opt_idx += 1
-
-                            net.train()
-                            optimizer.zero_grad()
-
-                            outputs = net(inputs)
-                            loss = criterion(outputs, targets)
-                            loss.backward()
-                            optimizer.step()
-
-                            # Re-apply masks after update
-                            self._reapply_masks_after_update(net)
-
-            # Evaluate after fine-tuning
-            logger.info("    Evaluating all fine-tuned configurations...")
-            with torch.no_grad():
-                for inputs, targets in self.data_loader:
-                    inputs = inputs.to(self.config.device)
-                    targets = targets.to(self.config.device)
-
-                    for net_idx in range(num_networks):
-                        for amount_idx in range(num_amounts):
-                            net = pruned_networks[net_idx][amount_idx]
-                            net.eval()
-
-                            outputs = net(inputs)
-                            loss = criterion(outputs, targets)
-                            losses_after[net_idx, amount_idx] += loss.item()
-
-                            _, predicted = outputs.max(1)
-                            accuracies_after[net_idx, amount_idx] += predicted.eq(targets).sum().item()
-
-            # Normalize results
-            losses_after /= len(self.data_loader)
-            accuracies_after = accuracies_after * 100.0 / len(self.data_loader.dataset)
-
-            logger.info(
-                f"    Overall after fine-tuning - Avg Acc: {accuracies_after.mean():.2f}%, Avg Improvement: {(accuracies_after - accuracies_before).mean():+.2f}%"
-            )
+                    layer_masks[layer_name] = mask
+                network_masks.append(layer_masks)
+            all_masks.append(network_masks)
+        
+        # Evaluate all pruning amounts
+        logger.info(f"    Evaluating {num_amounts} pruning amounts...")
+        
+        for amount_idx, amount in enumerate(pruning_amounts):
+            # Apply masks to all networks for this pruning amount
+            for net_idx, model in enumerate(self.networks):
+                self._restore_weights_from_dict(model, original_states[net_idx])
+                self._apply_tensorized_mask(model, all_masks[net_idx][amount_idx])
+                sparsities[net_idx, amount_idx] = self._calculate_model_sparsity(model)
+            
+            # Evaluate all networks simultaneously
+            batch_losses_before, batch_accs_before = self._evaluate_networks_batch()
+            accuracies_before[:, amount_idx] = batch_accs_before
+            losses_before[:, amount_idx] = batch_losses_before
+            
+            if amount_idx % 5 == 0 or amount_idx == num_amounts - 1:
+                logger.info(
+                    f"      {amount*100:.0f}% pruning - Avg Acc: {batch_accs_before.mean():.2f}%"
+                )
+        
+        # Fine-tuning if requested
+        if self.config.fine_tune_after_pruning:
+            logger.info(f"    Fine-tuning all pruning configurations")
+            for amount_idx, amount in enumerate(pruning_amounts):
+                for net_idx, model in enumerate(self.networks):
+                    self._restore_weights_from_dict(model, original_states[net_idx])
+                    self._apply_tensorized_mask(model, all_masks[net_idx][amount_idx])
+                
+                self._finetune_networks_batch()
+                batch_losses_after, batch_accs_after = self._evaluate_networks_batch()
+                accuracies_after[:, amount_idx] = batch_accs_after
+                losses_after[:, amount_idx] = batch_losses_after
         else:
-            # No fine-tuning
             accuracies_after = accuracies_before.clone()
             losses_after = losses_before.clone()
 
-        # Clean up - delete temporary network copies to free memory
-        del pruned_networks
-        if self.config.device == "cuda":
-            torch.cuda.empty_cache()
+        # Restore original weights
+        for net_idx, model in enumerate(self.networks):
+            self._restore_weights_from_dict(model, original_states[net_idx])
+            self._cleanup_pruning_artifacts(model)
 
         return {
             "accuracies_before": accuracies_before,
@@ -1591,6 +1750,54 @@ class GeneralAlignmentExperiment(BaseExperiment):
             "losses_after": losses_after,
             "sparsities": sparsities,
         }
+    
+    def _get_module_by_name(self, model: nn.Module, name: str) -> nn.Module:
+        """Get a module by its name."""
+        for n, m in model.named_modules():
+            if n == name:
+                return m
+        return None
+    
+    def _create_mask_from_scores(
+        self,
+        module: nn.Module,
+        scores: torch.Tensor,
+        amount: float,
+        selection_mode: str,
+    ) -> torch.Tensor:
+        """Create a pruning mask from pre-computed scores."""
+        if module is None:
+            return None
+            
+        weights = module.weight
+        num_neurons = scores.numel()
+        num_to_prune = int(amount * num_neurons)
+        
+        if num_to_prune == 0:
+            return torch.ones_like(weights)
+        
+        # Create keep mask
+        keep_mask = torch.ones(num_neurons, dtype=torch.bool, device=weights.device)
+        
+        if selection_mode == "random":
+            indices_to_prune = torch.randperm(num_neurons, device=weights.device)[:num_to_prune]
+            keep_mask[indices_to_prune] = False
+        elif selection_mode == "low":
+            # Prune neurons with LOW scores (keep high)
+            _, sorted_indices = torch.sort(scores)
+            keep_mask[sorted_indices[:num_to_prune]] = False
+        elif selection_mode == "high":
+            # Prune neurons with HIGH scores (keep low)
+            _, sorted_indices = torch.sort(scores, descending=True)
+            keep_mask[sorted_indices[:num_to_prune]] = False
+        
+        # Expand mask to weight shape
+        if len(weights.shape) == 2:
+            mask = keep_mask.unsqueeze(1).expand_as(weights).float()
+        else:
+            mask = keep_mask.view(-1, 1, 1, 1).expand_as(weights).float()
+        
+        return mask
 
     def _tensorized_pruning_batch(self, strategy_name: str, selection_mode: str, pruning_amounts: List[float]) -> Dict[str, torch.Tensor]:
         """
@@ -1619,9 +1826,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
             original_states.append({name: module.weight.data.clone() for name, module in model.named_modules() if hasattr(module, "weight")})
 
         # Create masks for all networks and all pruning amounts at once
-        if strategy_name in ["magnitude", "random"]:
-            all_masks = self._create_tensorized_masks_optimized(strategy_name, selection_mode, pruning_amounts)
-        else:
             all_masks = self._create_tensorized_masks(strategy_name, selection_mode, pruning_amounts)
 
         # Process all pruning amounts simultaneously
@@ -2064,12 +2268,12 @@ class GeneralAlignmentExperiment(BaseExperiment):
             if not hasattr(module, "weight") or module.weight.dim() < 2:
                 continue
 
-            inputs = None
-            if strategy_name in ["alignment", "hybrid", "cascading_alignment"]:
-                inputs = layer_inputs.get(name)
-                if inputs is None:
-                    logger.debug(f"Dependency-aware pruning: missing inputs for {name}, skipping.")
-                    continue
+            # All metric-based strategies (RQ, MI, activation, etc.) require inputs
+            # Only magnitude-based pruning doesn't need inputs
+            inputs = layer_inputs.get(name)
+            if inputs is None:
+                logger.debug(f"Dependency-aware pruning: missing inputs for {name}, skipping.")
+                continue
 
             try:
                 scores = strategy.compute_importance_scores(module, inputs=inputs)
@@ -2461,12 +2665,39 @@ class GeneralAlignmentExperiment(BaseExperiment):
         return weight_stats
 
     def _generate_visualizations(self):
-        """Generate comprehensive visualizations."""
+        """Generate comprehensive visualizations using the unified visualization module."""
         output_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        from alignment.analysis.visualization import UnifiedVisualizer
+        from alignment.analysis.visualization import UnifiedVisualizer, generate_experiment_visualizations
 
+        # Use the centralized visualization function for standard plots
+        all_results = {
+            "train_results": self.train_results,
+            "test_results": self.test_results,
+            "dropout_results": self.dropout_results,
+            "pruning_results": self.pruning_results,
+            "eigenfeature_results": self.eigenfeature_results,
+        }
+        
+        try:
+            generate_experiment_visualizations(
+                results=all_results,
+                output_dir=output_dir,
+                config=self.config,
+                dpi=self.config.plot_dpi,
+            )
+        except Exception as e:
+            logger.warning(f"Centralized visualization failed, using fallback: {e}")
+            # Fallback to inline visualization if centralized fails
+            self._generate_visualizations_fallback(output_dir)
+        
+        logger.info(f"Saved visualizations to {output_dir}")
+    
+    def _generate_visualizations_fallback(self, output_dir: Path):
+        """Fallback visualization method if centralized visualization fails."""
+        from alignment.analysis.visualization import UnifiedVisualizer
+        
         visualizer = UnifiedVisualizer()
 
         # Optional fine-grained visualization control via config.visualization_options
@@ -2694,6 +2925,39 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         )
                         plt.close(fig)
 
+            # Generate comparison plots
+            try:
+                # Prepare data for comparison plot
+                comparison_data = {}
+                for strategy_key, strategy_results in self.pruning_results.get("strategies", {}).items():
+                    comparison_data[strategy_key] = {
+                        "sparsities": strategy_results.get("sparsities", strategy_results.get("pruning_amounts", [])),
+                        "accuracies_before_finetune": strategy_results.get("accuracies_before_finetune", []),
+                        "accuracies_after_finetune": strategy_results.get("accuracies_after_finetune", []),
+                        "accuracies_std": strategy_results.get("accuracies_after_finetune_std"),
+                    }
+                
+                if comparison_data:
+                    # Comparison plot
+                    fig = visualizer.plot_pruning_comparison(
+                        results=comparison_data,
+                        metric="accuracy",
+                        title=f"Pruning Strategy Comparison - {self.config.model_name}",
+                        save_path=output_dir / "pruning_comparison_professional.png",
+                    )
+                    plt.close(fig)
+                    
+                    # Summary grid plot
+                    fig = visualizer.plot_pruning_summary_grid(
+                        results=comparison_data,
+                        save_path=output_dir / "pruning_summary_grid.png",
+                    )
+                    plt.close(fig)
+                    
+                    logger.info("Generated professional pruning comparison plots")
+            except Exception as e:
+                logger.warning(f"Could not generate comparison plots: {e}")
+
         logger.info(f"Saved visualizations to {output_dir}")
 
     def _cleanup_pruning_artifacts(self, model: nn.Module):
@@ -2711,33 +2975,32 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 delattr(module, "_gradient_hook_handle")
 
     def _create_pruning_strategy(self, strategy_name: str, pruning_config: PruningConfig):
-        """Create a pruning strategy instance."""
-        from alignment.pruning.strategies import MagnitudePruning
+        """Create a pruning strategy instance.
+        
+        Args:
+            strategy_name: Name of the strategy. Can be:
+                - A registered strategy ("magnitude", "random", "alignment")
+                - A metric name ("rayleigh_quotient", "activation_l2_norm", etc.)
+            pruning_config: Configuration for the pruning strategy
+            
+        Returns:
+            Initialized pruning strategy or None if creation fails
+        """
+        from alignment.pruning import get_pruning_strategy
+        from alignment.pruning.strategies import GlobalMagnitudePruning, GlobalAlignmentPruning
 
         try:
-            if strategy_name == "magnitude":
-                if pruning_config.global_pruning:
-                    from alignment.pruning.strategies import GlobalMagnitudePruning
-
+            # Handle global pruning variants
+            if pruning_config.global_pruning:
+                if strategy_name == "magnitude":
                     return GlobalMagnitudePruning(config=pruning_config)
-                else:
-                    return MagnitudePruning(config=pruning_config)
             elif strategy_name == "alignment":
-                from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning
-
                 alignment_metric = getattr(self.config, "pruning_alignment_metric", "rayleigh_quotient")
-
-                if self.config.pruning_scope == "global":
-                    return GlobalAlignmentPruning(metric=alignment_metric, config=pruning_config)
-                else:
-                    return AlignmentPruning(metric=alignment_metric, config=pruning_config)
-            elif strategy_name == "random":
-                from alignment.pruning.strategies import RandomPruning
-
-                return RandomPruning(config=pruning_config)
-            else:
-                logger.warning(f"Unsupported pruning strategy: {strategy_name}")
-                return None
+                return GlobalAlignmentPruning(metric=alignment_metric, config=pruning_config)
+            
+            # Use the registry function which handles both registered strategies and metrics
+            return get_pruning_strategy(strategy_name, config=pruning_config)
+            
         except Exception as e:
             logger.error(f"Error creating strategy {strategy_name}: {e}")
             return None
@@ -3024,10 +3287,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         sparsities = torch.zeros(num_networks, num_amounts)
 
         # Create masks for all networks and all pruning amounts at once
-        if strategy_name in ["magnitude", "random"]:
-            all_masks = self._create_tensorized_masks_optimized(strategy_name, selection_mode, pruning_amounts)
-        else:
-            all_masks = self._create_tensorized_masks(strategy_name, selection_mode, pruning_amounts)
+        all_masks = self._create_tensorized_masks(strategy_name, selection_mode, pruning_amounts)
 
         # Create a batch of pruned network copies
         pruned_networks = []
@@ -3197,10 +3457,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         # Pre-create all masks at once for better memory locality
         logger.info("    Creating all masks...")
-        if strategy_name in ["magnitude", "random"]:
-            all_masks = self._create_tensorized_masks_optimized(strategy_name, selection_mode, pruning_amounts)
-        else:
-            all_masks = self._create_tensorized_masks(strategy_name, selection_mode, pruning_amounts)
+        all_masks = self._create_tensorized_masks(strategy_name, selection_mode, pruning_amounts)
 
         # Batch evaluation - process multiple networks at once when possible
         logger.info("    Evaluating pruned networks...")
@@ -3300,15 +3557,20 @@ class GeneralAlignmentExperiment(BaseExperiment):
         total_loss = torch.zeros(num_networks, device=self.config.device)
         total_correct = torch.zeros(num_networks, device=self.config.device)
         total_samples = 0
+        num_batches = 0
 
         # Set eval mode for all
         for net in self.networks:
             net.eval()
 
         criterion = nn.CrossEntropyLoss(reduction="none")
+        eval_batches = self.config.eval_batches  # Limit evaluation batches (None = all)
 
         with torch.no_grad():
-            for inputs, targets in self.data_loader:
+            for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+                if eval_batches is not None and batch_idx >= eval_batches:
+                    break
+                    
                 inputs = inputs.to(self.config.device)
                 targets = targets.to(self.config.device)
                 batch_size = targets.size(0)
@@ -3323,14 +3585,15 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     total_correct[i] += preds.eq(targets).sum()
 
                 total_samples += batch_size
+                num_batches += 1
 
         # Reset to train mode
         for net in self.networks:
             net.train()
 
         # Convert to CPU for return
-        avg_losses = (total_loss / len(self.data_loader)).cpu()
-        avg_accs = (total_correct * 100.0 / total_samples).cpu()
+        avg_losses = (total_loss / max(num_batches, 1)).cpu()
+        avg_accs = (total_correct * 100.0 / max(total_samples, 1)).cpu()
 
         return avg_losses, avg_accs
 
@@ -3376,13 +3639,18 @@ class GeneralAlignmentExperiment(BaseExperiment):
         # Pre-allocate GPU tensors for all results
         total_correct = torch.zeros(num_configs, device=self.config.device)
         total_samples = 0
+        
+        eval_batches = self.config.eval_batches  # Limit evaluation batches (None = all)
 
         # Set all networks to eval mode
         for net, _ in network_configs:
             net.eval()
 
         with torch.no_grad():
-            for inputs, targets in self.data_loader:
+            for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+                if eval_batches is not None and batch_idx >= eval_batches:
+                    break
+                    
                 inputs = inputs.to(self.config.device)
                 targets = targets.to(self.config.device)
                 batch_size = targets.size(0)
@@ -3419,7 +3687,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 total_samples += batch_size
 
         # Convert to accuracy percentages
-        accuracies = (total_correct * 100.0 / total_samples).cpu()
+        accuracies = (total_correct * 100.0 / max(total_samples, 1)).cpu()
 
         # Reset networks to train mode
         for net, _ in network_configs:
@@ -3573,13 +3841,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
             state = {name: module.weight.data.clone() for name, module in model.named_modules() if hasattr(module, "weight")}
             original_states.append(state)
 
-        # Create all masks
+        # Create all masks using alignment-based scoring
         logger.info("    Creating masks for all configurations...")
-        if strategy_name in ["magnitude", "random"]:
-            all_masks = self._create_tensorized_masks_optimized(strategy_name, selection_mode, pruning_amounts)
-        else:
-            # For alignment-based pruning
-            all_masks = self._create_alignment_masks_batch(selection_mode, pruning_amounts)
+        all_masks = self._create_alignment_masks_batch(selection_mode, pruning_amounts)
 
         # Calculate sparsities
         sparsities = torch.zeros(num_networks, num_amounts)

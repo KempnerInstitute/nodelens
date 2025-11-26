@@ -2282,67 +2282,112 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         if self.config.do_pruning_experiments:
             sparsity_levels = self.config.pruning_amounts
-            metric = self.config.pruning_alignment_metric
-            mode = self.config.pruning_selection_mode
-            if isinstance(mode, list):
-                mode = mode[0]
-
-            # Collect pruning results for visualization
-            pruning_data = {
-                "sparsity_levels": [],
-                "perplexities": [],
-                "baseline_perplexity": results.get("evaluation", {}).get("baseline_perplexity", None),
-            }
-
-            for sparsity in sparsity_levels:
-                logger.info(f"Applying pruning: sparsity={sparsity}, metric={metric}, mode={mode}")
-                masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
-
-                pruning_data["sparsity_levels"].append(sparsity)
-
-                # Evaluate pruned model
-                if self.config.do_perplexity_computation:
-                    pruned_ppl = self.evaluate_perplexity(
-                        dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples
-                    )
-                    pruning_data["perplexities"].append(pruned_ppl)
-
-                    results["pruning_results"][f"sparsity_{sparsity}"] = {
-                        "perplexity": pruned_ppl,
-                        "sparsity": sparsity,
-                        "num_pruned_layers": len(masks),
+            
+            # Get pruning strategies from config - these are now the metrics from metrics.enabled
+            pruning_strategies = getattr(self.config, "pruning_strategies", None)
+            if not pruning_strategies:
+                # Fallback to single metric for backward compatibility
+                pruning_strategies = [self.config.pruning_alignment_metric]
+            
+            # Get selection modes
+            selection_modes = self.config.pruning_selection_mode
+            if isinstance(selection_modes, str):
+                selection_modes = [selection_modes]
+            
+            baseline_ppl = results.get("evaluation", {}).get("baseline_perplexity", None)
+            
+            # Iterate over all strategy/mode combinations
+            for metric in pruning_strategies:
+                # Check if we have importance scores for this metric
+                has_metric_scores = any(
+                    metric in layer_scores 
+                    for layer_scores in self.importance_scores.values()
+                )
+                if not has_metric_scores:
+                    logger.warning(f"No importance scores computed for metric '{metric}', skipping pruning")
+                    continue
+                
+                for mode in selection_modes:
+                    logger.info(f"Pruning with strategy: {metric}, selection mode: {mode}")
+                    
+                    # Collect pruning results for this strategy/mode combination
+                    pruning_data = {
+                        "sparsity_levels": [],
+                        "perplexities": [],
+                        "baseline_perplexity": baseline_ppl,
                     }
-                else:
-                    pruning_data["perplexities"].append(None)
+                    
+                    # Save original model state to restore after each sparsity level
+                    original_state = {
+                        name: param.data.clone() 
+                        for name, param in self.wrapped_model._model.named_parameters()
+                    }
 
-            # Generate pruning visualization
-            if getattr(self.config, "generate_plots", True) and pruning_data["perplexities"]:
-                try:
-                    import matplotlib.pyplot as plt
-                    plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
-                    plots_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    viz = UnifiedVisualizer()
-                    
-                    # Filter out None values for plotting
-                    valid_data = [(s, p) for s, p in zip(pruning_data["sparsity_levels"], pruning_data["perplexities"]) if p is not None]
-                    if valid_data:
-                        sparsities, perplexities = zip(*valid_data)
+                    for sparsity in sparsity_levels:
+                        # Restore original weights before applying new pruning level
+                        for name, param in self.wrapped_model._model.named_parameters():
+                            if name in original_state:
+                                param.data.copy_(original_state[name])
                         
-                        # Plot perplexity vs sparsity curve
-                        save_path = plots_dir / f"pruning_curve_{metric}_{mode}.png"
-                        fig = viz.plot_sparsity_performance(
-                            sparsities=list(sparsities),
-                            perplexities=list(perplexities),
-                            strategy_name=f"{metric} ({mode})",
-                            baseline_ppl=pruning_data["baseline_perplexity"],
-                            title=f"Pruning Performance: Perplexity vs Sparsity",
-                            save_path=save_path,
-                        )
-                        plt.close(fig)
-                        logger.info(f"Saved pruning curve to {save_path}")
-                except Exception as e:
-                    logger.error(f"Failed to generate pruning visualization: {e}")
+                        logger.info(f"  Applying pruning: sparsity={sparsity}, metric={metric}, mode={mode}")
+                        masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
+
+                        pruning_data["sparsity_levels"].append(sparsity)
+
+                        # Evaluate pruned model
+                        if self.config.do_perplexity_computation:
+                            pruned_ppl = self.evaluate_perplexity(
+                                dataset=self.config.evaluation_dataset, 
+                                num_samples=self.config.evaluation_num_samples
+                            )
+                            pruning_data["perplexities"].append(pruned_ppl)
+
+                            results["pruning_results"][f"{metric}_{mode}_sparsity_{sparsity}"] = {
+                                "perplexity": pruned_ppl,
+                                "sparsity": sparsity,
+                                "num_pruned_layers": len(masks),
+                                "metric": metric,
+                                "mode": mode,
+                            }
+                        else:
+                            pruning_data["perplexities"].append(None)
+                    
+                    # Restore original weights after all sparsity levels for this strategy/mode
+                    for name, param in self.wrapped_model._model.named_parameters():
+                        if name in original_state:
+                            param.data.copy_(original_state[name])
+
+                    # Generate pruning visualization for this strategy/mode
+                    if getattr(self.config, "generate_plots", True) and pruning_data["perplexities"]:
+                        try:
+                            import matplotlib.pyplot as plt
+                            plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+                            plots_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            viz = UnifiedVisualizer()
+                            
+                            # Filter out None values for plotting
+                            valid_data = [
+                                (s, p) for s, p in zip(pruning_data["sparsity_levels"], pruning_data["perplexities"]) 
+                                if p is not None
+                            ]
+                            if valid_data:
+                                sparsities, perplexities = zip(*valid_data)
+                                
+                                # Plot perplexity vs sparsity curve
+                                save_path = plots_dir / f"pruning_curve_{metric}_{mode}.png"
+                                fig = viz.plot_sparsity_performance(
+                                    sparsities=list(sparsities),
+                                    perplexities=list(perplexities),
+                                    strategy_name=f"{metric} ({mode})",
+                                    baseline_ppl=pruning_data["baseline_perplexity"],
+                                    title=f"Pruning Performance: {metric} ({mode})",
+                                    save_path=save_path,
+                                )
+                                plt.close(fig)
+                                logger.info(f"Saved pruning curve to {save_path}")
+                        except Exception as e:
+                            logger.error(f"Failed to generate pruning visualization: {e}")
 
         return results
     

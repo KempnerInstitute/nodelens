@@ -26,6 +26,9 @@ class MutualInformationGaussian(BaseMetric):
     where ρ is the correlation coefficient.
     """
 
+    # Class-level flag to track if batch mismatch warning has been shown
+    _warned_batch_mismatch: bool = False
+
     def __init__(self, use_pc_reference: bool = True, min_samples: int = 2, **config: Any):
         """
         Initialize the Gaussian MI metric.
@@ -109,7 +112,9 @@ class MutualInformationGaussian(BaseMetric):
 
         # Ensure ref_data has correct batch size
         if ref_data.shape[0] != batch_size:
-            logger.warning("MI_gaussian: Reference batch size mismatch")
+            if not MutualInformationGaussian._warned_batch_mismatch:
+                MutualInformationGaussian._warned_batch_mismatch = True
+                logger.warning("MI_gaussian: Reference batch size mismatch (this warning shown once)")
             return torch.zeros(num_neurons, device=outputs.device, dtype=outputs.dtype)
 
         # Vectorized MI computation across neurons and reference dims

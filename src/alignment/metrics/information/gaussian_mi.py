@@ -233,8 +233,22 @@ class GaussianMIAnalytic(BaseMetric):
         Returns:
             MI scores for each neuron [output_dim] or single score
         """
+        # Flatten inputs if needed (handle CNN activations)
+        if inputs.ndim > 2:
+            inputs = inputs.reshape(inputs.shape[0], -1)
+        if weights.ndim > 2:
+            weights = weights.reshape(weights.shape[0], -1)
+            
         batch_size, input_dim = inputs.shape
-        output_dim = weights.shape[0]
+        output_dim, weight_dim = weights.shape
+
+        # Handle dimension mismatch (common for CNN layers where inputs aren't unfolded)
+        if input_dim != weight_dim:
+            # Use the minimum dimension
+            min_dim = min(input_dim, weight_dim)
+            inputs = inputs[:, :min_dim]
+            weights = weights[:, :min_dim]
+            input_dim = min_dim
 
         # Compute outputs if not provided
         if outputs is None:

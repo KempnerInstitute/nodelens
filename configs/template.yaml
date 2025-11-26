@@ -14,6 +14,7 @@ experiment:
   seed: 42                        # Random seed
   device: "cuda"                  # "cpu", "cuda", "cuda:0"
   output_dir: "./results"         # Output directory
+  num_networks: 1                 # Number of networks to train (>1 for error bars/statistics)
 
 # -----------------------------------------------------------------------------
 # MODEL
@@ -109,28 +110,35 @@ supernode:
 # -----------------------------------------------------------------------------
 # PRUNING
 # -----------------------------------------------------------------------------
+# Pruning uses metrics defined in metrics.enabled as scoring criteria.
+# For each metric, neurons/channels are ranked and pruned based on selection_modes.
 pruning:
   enabled: false
   
-  # Strategy: "magnitude", "alignment", "hybrid", "random", "gradient"
-  strategy: "alignment"
-  
-  # Sparsity
-  target_sparsity: 0.5
+  # Sparsity levels to test (fraction of neurons to remove)
   sparsity_levels: [0.1, 0.3, 0.5, 0.7]
   
-  # How to distribute sparsity across layers
-  # "uniform", "global_threshold", "adaptive_sensitivity", "cascading"
+  # Selection modes determine WHICH neurons to prune based on their scores:
+  #   "low"    - prune neurons with LOWEST scores (remove least important)
+  #   "high"   - prune neurons with HIGHEST scores (ablation study)
+  #   "random" - prune randomly (baseline comparison)
+  selection_modes: ["low", "high", "random"]
+  
+  # Distribution strategy: HOW to allocate sparsity across layers
+  #   "uniform"              - same % per layer (simple, default)
+  #   "global_threshold"     - global score threshold across all layers
+  #   "adaptive_sensitivity" - prune robust layers more, sensitive layers less
+  #   "cascading"            - sequential layer-by-layer pruning
   distribution: "uniform"
   
-  # Scoring metric for importance (uses metrics.composite_weights if "composite")
-  scoring: "rayleigh_quotient"
+  # Structured pruning: remove entire neurons/channels (vs individual weights)
+  # - true  = prune whole neurons (hardware efficient, required for alignment metrics)
+  # - false = prune individual weights (sparse matrices, less practical)
+  structured: true
   
-  # Direction: "low" = prune low-importance, "high" = prune high-importance
-  direction: "low"
-  
-  structured: true                # Prune entire neurons/channels
-  dependency_aware: false         # Handle ResNet/transformer dependencies
+  # Dependency-aware: handle skip connections (ResNet) and attention (transformers)
+  # Ensures shape compatibility when pruning connected layers
+  dependency_aware: false
   
   fine_tune:
     enabled: true
@@ -154,8 +162,23 @@ llm:
 # -----------------------------------------------------------------------------
 # CNN-SPECIFIC
 # -----------------------------------------------------------------------------
+# How to preprocess convolutional layer activations for metric computation.
+# This affects how spatial dimensions (H, W) are handled when computing RQ, MI, etc.
 cnn:
-  mode: "unfold"                  # "unfold", "patchwise", "channel_variance"
+  # Preprocessing mode for CNN activations:
+  #   "unfold" (recommended): Unfolds spatial dims using kernel params, creates
+  #                           [batch*patches, C*K*K] tensor. Best for RQ/covariance.
+  #   "patchwise": Keeps patches separate [batch, features, patches]. Good for
+  #                patch-level analysis.
+  #   "channel_variance": Uses channel-wise variance summary. Faster but less accurate.
+  mode: "unfold"
+
+# -----------------------------------------------------------------------------
+# PERFORMANCE
+# -----------------------------------------------------------------------------
+# All optimizations are enabled by default. Only override if needed.
+performance:
+  eval_batches: null              # Limit eval batches for speed (null = all, int = N batches)
 
 # -----------------------------------------------------------------------------
 # ANALYSIS & VISUALIZATION

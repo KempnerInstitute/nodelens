@@ -96,7 +96,10 @@ def get_pruning_strategy(name: str, **kwargs) -> BasePruningStrategy:
     Get a pruning strategy by name.
 
     Args:
-        name: Name of the pruning strategy
+        name: Name of the pruning strategy. Can be:
+            - A registered strategy name (e.g., "magnitude", "alignment")
+            - A metric name (e.g., "rayleigh_quotient", "activation_l2_norm")
+              which will use AlignmentPruning with that metric
         **kwargs: Additional arguments for the strategy
 
     Returns:
@@ -105,12 +108,26 @@ def get_pruning_strategy(name: str, **kwargs) -> BasePruningStrategy:
     Raises:
         ValueError: If strategy name is not found
     """
-    if name not in PRUNING_STRATEGIES:
-        available = list(PRUNING_STRATEGIES.keys())
+    # Known alignment metrics that should use AlignmentPruning
+    ALIGNMENT_METRICS = {
+        "rayleigh_quotient",
+        "activation_l2_norm",
+        "mutual_information_gaussian",
+        "pairwise_redundancy_gaussian",
+        "synergy_gaussian_mmi",
+        "activation_variance",
+        "activation_mean",
+    }
+    
+    if name in PRUNING_STRATEGIES:
+        strategy_class = PRUNING_STRATEGIES[name]
+        return strategy_class(**kwargs)
+    elif name in ALIGNMENT_METRICS:
+        # Use AlignmentPruning with the specified metric
+        return AlignmentPruning(metric=name, **kwargs)
+    else:
+        available = list(PRUNING_STRATEGIES.keys()) + list(ALIGNMENT_METRICS)
         raise ValueError(f"Unknown pruning strategy: {name}. " f"Available strategies: {available}")
-
-    strategy_class = PRUNING_STRATEGIES[name]
-    return strategy_class(**kwargs)
 
 
 def list_pruning_strategies() -> list:

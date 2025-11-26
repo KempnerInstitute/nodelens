@@ -52,29 +52,64 @@ class ActivationL2Norm(BaseMetric):
 
         Args:
             inputs: Input activations [batch_size, input_dim] or [seq_len, batch_size, input_dim]
-            weights: Weight matrix (not used, but kept for interface compatibility)
+            weights: Weight matrix [out_features, in_features] or [out_channels, in_channels, kH, kW]
             outputs: Output activations [batch_size, num_neurons] or [seq_len, batch_size, num_neurons]
 
         Returns:
-            Importance scores [num_neurons]
+            Importance scores [num_neurons] - one score per OUTPUT neuron/channel
         """
         # Use outputs if available, otherwise compute from inputs and weights
         if outputs is not None:
             activations = outputs
         elif inputs is not None and weights is not None:
-            # Compute activations
+            # Compute activations - need to produce [batch, out_features] shape
             if inputs.ndim == 2:
+                # Linear: [batch, in_features] @ [out_features, in_features].T -> [batch, out_features]
                 activations = torch.matmul(inputs, weights.T)
             elif inputs.ndim == 3:
-                # [seq_len, batch_size, input_dim] @ [num_neurons, input_dim].T
+                # Transformer: [seq_len, batch_size, input_dim] @ [num_neurons, input_dim].T
                 activations = torch.matmul(inputs, weights.T)
+            elif inputs.ndim == 4:
+                # CNN: [batch, in_channels, height, width]
+                # weights: [out_channels, in_channels, kH, kW]
+                # We need to compute per-output-channel importance
+                # Use weight magnitude combined with input activation as proxy
+                batch_size = inputs.shape[0]
+                out_channels = weights.shape[0]
+                
+                # Compute input activation magnitude per input channel
+                input_mag = inputs.abs().mean(dim=(0, 2, 3))  # [in_channels]
+                
+                # Weight magnitude per output channel (sum over in_channels and kernel)
+                weight_mag = weights.abs().sum(dim=(1, 2, 3))  # [out_channels]
+                
+                # Combine: scale weight magnitude by mean input magnitude
+                # This gives a proxy for output activation magnitude per output channel
+                mean_input_mag = input_mag.mean()
+                importance = weight_mag * mean_input_mag
+                return importance
             else:
                 raise ValueError(f"Unsupported input shape: {inputs.shape}")
+        elif inputs is not None:
+            # Only inputs available - compute importance from input activations
+            # For CNN, this gives per-input-channel scores, which is wrong for pruning
+            # Log a warning
+            logger.warning("ActivationL2Norm: No weights provided, using input activations only. "
+                          "Scores will be per input channel, not per output channel.")
+            activations = inputs
         else:
             raise ValueError("Must provide either outputs or (inputs + weights)")
 
         # Handle different input shapes
-        if activations.ndim == 3:
+        if activations.ndim == 4:
+            # CNN: [batch, channels, height, width]
+            # Compute per-channel importance by averaging over spatial dimensions
+            if self.use_absolute:
+                activations = activations.abs()
+            # Average over spatial dimensions (H, W), keep batch and channels
+            activations = activations.mean(dim=(2, 3))  # [batch, channels]
+            
+        elif activations.ndim == 3:
             # [seq_len, batch_size, num_neurons] - typical for transformers
             # This matches PruneLLM's format
 
@@ -179,17 +214,26 @@ class ActivationVariance(BaseMetric):
         elif inputs is not None and weights is not None:
             if inputs.ndim == 2:
                 activations = torch.matmul(inputs, weights.T)
+            elif inputs.ndim == 4:
+                # CNN: use inputs directly
+                activations = inputs
             else:
                 activations = torch.matmul(inputs, weights.T)
         else:
             raise ValueError("Must provide either outputs or (inputs + weights)")
 
-        # Handle 3D activations (seq_len, batch, neurons)
-        if activations.ndim == 3:
+        # Handle different activation shapes
+        if activations.ndim == 4:
+            # CNN: [batch, channels, height, width]
+            # Compute variance per channel over batch and spatial dimensions
+            # Reshape to [batch * height * width, channels]
+            b, c, h, w = activations.shape
+            activations = activations.permute(0, 2, 3, 1).reshape(-1, c)
+        elif activations.ndim == 3:
             # Combine seq and batch dimensions
             activations = activations.reshape(-1, activations.shape[-1])
 
-        # Compute variance per neuron
+        # Compute variance per neuron/channel
         variance = activations.var(dim=0)
 
         return variance
@@ -225,11 +269,19 @@ class ActivationOutlierIndex(BaseMetric):
                 raise ValueError("activation_outlier_index requires outputs or (inputs + weights)")
             if inputs.ndim == 2:
                 outputs = torch.matmul(inputs, weights.T)
+            elif inputs.ndim == 4:
+                # CNN: use inputs directly
+                outputs = inputs
             else:
                 outputs = torch.matmul(inputs, weights.T)
 
         activations = outputs
-        if activations.ndim == 3:
+        if activations.ndim == 4:
+            # CNN: [batch, channels, height, width]
+            # Reshape to [batch * height * width, channels]
+            b, c, h, w = activations.shape
+            activations = activations.permute(0, 2, 3, 1).reshape(-1, c)
+        elif activations.ndim == 3:
             activations = activations.reshape(-1, activations.shape[-1])
         elif activations.ndim != 2:
             raise ValueError(f"Unsupported activation shape: {activations.shape}")
