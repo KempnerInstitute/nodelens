@@ -503,6 +503,7 @@ class LLMAlignmentExperiment(BaseExperiment):
     
 
     def plot_layer_importance_histogram(self, layer_name, metric, importance_scores, plots_dir):
+    def plot_layer_importance_histogram(self, layer_name, metric, importance_scores, plots_dir):
         """
         Creates a histogram of importance scores for a specific layer.
         Displays top-5 most important neurons directly on the histogram.
@@ -517,7 +518,20 @@ class LLMAlignmentExperiment(BaseExperiment):
         topk_values, topk_indices = torch.topk(tensor, k=5)
         topk_values = topk_values.numpy()
         topk_indices = topk_indices.numpy()
+        Displays top-5 most important neurons directly on the histogram.
+        """
 
+        # Extract tensor and convert to numpy float32
+        raw_tensor = importance_scores[layer_name][metric]
+        tensor = raw_tensor.detach().cpu().to(torch.float32)
+        scores = tensor.numpy()
+
+        # ---- Top-5 calculations ----
+        topk_values, topk_indices = torch.topk(tensor, k=5)
+        topk_values = topk_values.numpy()
+        topk_indices = topk_indices.numpy()
+
+        # Prepare directory
         # Prepare directory
         plots_dir = Path(plots_dir)
         plots_dir.mkdir(parents=True, exist_ok=True)
@@ -525,8 +539,29 @@ class LLMAlignmentExperiment(BaseExperiment):
         # ------------------ Create Histogram ------------------
         plt.figure(figsize=(12, 7))
         plt.hist(scores, bins=100, edgecolor="black", alpha=0.7)
+        # ------------------ Create Histogram ------------------
+        plt.figure(figsize=(12, 7))
+        plt.hist(scores, bins=100, edgecolor="black", alpha=0.7)
         plt.xlabel("Importance Score")
         plt.ylabel("Frequency")
+        plt.title(f"Histogram of Importance Scores — {layer_name}\nMetric: {metric}")
+
+        # ------------------ Annotate Top-5 ------------------
+        for i, (idx, val) in enumerate(zip(topk_indices, topk_values)):
+            # vertical line
+            plt.axvline(val, linestyle="--", linewidth=2, label=f"Neuron {idx}: {val:.4f}")
+
+            # text annotation (slightly above the histogram area)
+            plt.text(
+                val,
+                plt.ylim()[1] * (0.95 - i * 0.05),   # stagger labels downward
+                f"Neuron {idx} ({val:.4f})",
+                rotation=0,
+                fontsize=10,
+                color="red"
+            )
+
+        plt.legend(fontsize=9)
         plt.title(f"Histogram of Importance Scores — {layer_name}\nMetric: {metric}")
 
         # ------------------ Annotate Top-5 ------------------
