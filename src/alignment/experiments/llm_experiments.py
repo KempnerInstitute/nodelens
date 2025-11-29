@@ -494,8 +494,12 @@ class LLMAlignmentExperiment(BaseExperiment):
             weight = self._get_layer_weights(layer_module)
             if weight is None:
                 continue
-
+            
             default_activation = layer_inputs if dim == "input" else layer_outputs
+            if "down" in layer_name:
+                default_activation = layer_inputs
+            elif "gate" in layer_name or "up" in layer_name:
+                default_activation = layer_outputs
             if default_activation is None:
                 default_activation = layer_outputs if dim == "input" else layer_inputs
 
@@ -540,6 +544,9 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                     if "inputs" not in metric_args and "outputs" not in metric_args and default_activation is not None:
                         metric_args["outputs"] = default_activation
+
+                    if default_activation is not None:
+                        metric_args["default_activations"] = default_activation
 
                     scores = metric.compute(**metric_args)
                     layer_scores[metric_name] = scores
@@ -1808,6 +1815,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     scores[core_mask] = scores.min() - margin
 
             # Create mask based on importance scores
+            print("scores shape:", scores.shape)  # Debugging line
             mask = pruner.create_pruning_mask(scores)
             
             # Get the MLP module - use underlying model to handle HFCausalLM wrapper
@@ -1815,7 +1823,10 @@ class LLMAlignmentExperiment(BaseExperiment):
             module_dict = dict(underlying_model.named_modules())
             
             # Try different module path patterns for compatibility
-            mlp_path = f"model.layers.{layer_idx}.mlp"
+            mlp_path = f"model.model.layers.{layer_idx}.mlp"
+
+            # print("module_dict keys:", list(module_dict.keys()))  # Debugging line
+
             if mlp_path not in module_dict:
                 # Try without 'model.' prefix (for direct HF models)
                 mlp_path = f"layers.{layer_idx}.mlp"

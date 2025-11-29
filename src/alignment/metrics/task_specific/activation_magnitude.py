@@ -45,7 +45,7 @@ class ActivationL2Norm(BaseMetric):
         self.use_absolute = use_absolute
 
     def compute(
-        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
+        self, default_activations: Optional[torch.Tensor] = None, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute activation-based importance scores.
@@ -58,8 +58,10 @@ class ActivationL2Norm(BaseMetric):
         Returns:
             Importance scores [num_neurons]
         """
-        # Use outputs if available, otherwise compute from inputs and weights
-        if outputs is not None:
+        # Use default_activations if available, otherwise use outputs if available, otherwise compute from inputs and weights
+        if default_activations is not None:
+            activations = default_activations
+        elif outputs is not None:
             activations = outputs
         elif inputs is not None and weights is not None:
             # Compute activations
