@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 
 from alignment.core.registry import register_experiment
 from alignment.dataops.processing import preprocess_layer_activations
@@ -51,6 +52,8 @@ class GeneralAlignmentConfig(ExperimentConfig):
     training_epochs: int = 100
     learning_rate: float = 0.1
     optimizer: str = "sgd"
+    momentum: float = 0.9  # For SGD optimizer
+    weight_decay: float = 0.0001  # L2 regularization
     scheduler: str = "cosine"
     scheduler_config: Dict[str, Any] = field(default_factory=lambda: {"T_max": 100, "eta_min": 0})
 
@@ -203,8 +206,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
         val_accs = []
         alignment_history = {method: [] for method in self.config.alignment_methods}
 
-        # Training loop
-        for epoch in range(self.config.training_epochs):
+        # Training loop with progress bar
+        pbar = tqdm(range(self.config.training_epochs), desc="Training", unit="epoch")
+        for epoch in pbar:
             # Train one epoch
             train_loss, train_acc = self._train_epoch(optimizer, criterion)
             train_losses.append(train_loss)
@@ -225,11 +229,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 for method, values in alignment_values.items():
                     alignment_history[method].append(values)
 
-            # Log progress
-            logger.info(
-                f"Epoch {epoch+1}/{self.config.training_epochs}: "
-                f"Train Loss={train_loss:.4f}, Train Acc={train_acc:.2f}%, "
-                f"Val Loss={val_loss:.4f}, Val Acc={val_acc:.2f}%"
+            # Update progress bar
+            pbar.set_postfix(
+                loss=f"{train_loss:.3f}",
+                acc=f"{train_acc:.1f}%",
+                val_acc=f"{val_acc:.1f}%"
             )
 
             # Save checkpoint
@@ -252,9 +256,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
         optimizers = []
         for net in self.networks:
             if self.config.optimizer.lower() == "sgd":
-                opt = torch.optim.SGD(net.parameters(), lr=self.config.learning_rate, momentum=0.9, weight_decay=0.0001)
+                opt = torch.optim.SGD(net.parameters(), lr=self.config.learning_rate, momentum=self.config.momentum, weight_decay=self.config.weight_decay)
             else:
-                opt = torch.optim.Adam(net.parameters(), lr=self.config.learning_rate, weight_decay=0.0001)
+                opt = torch.optim.Adam(net.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
             optimizers.append(opt)
 
         # Setup schedulers
@@ -471,9 +475,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
     def _setup_optimizer(self) -> torch.optim.Optimizer:
         """Setup optimizer based on config."""
         if self.config.optimizer.lower() == "sgd":
-            return torch.optim.SGD(self.model.parameters(), lr=self.config.learning_rate, momentum=0.9, weight_decay=0.0001)
+            return torch.optim.SGD(self.model.parameters(), lr=self.config.learning_rate, momentum=self.config.momentum, weight_decay=self.config.weight_decay)
         elif self.config.optimizer.lower() == "adam":
-            return torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay=0.0001)
+            return torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
         else:
             raise ValueError(f"Unknown optimizer: {self.config.optimizer}")
 
@@ -511,6 +515,65 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         return avg_loss, accuracy
 
+    def _preprocess_pruning_inputs(self, layer_inputs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        Preprocess layer inputs for pruning, handling CNN unfold for proper RQ computation.
+        
+        For Conv2d layers, unfolds the input tensor to match weight dimensions:
+        [B, C, H, W] -> [B*num_patches, C*kH*kW]
+        
+        Args:
+            layer_inputs_dict: Dictionary mapping layer names to input tensors
+            
+        Returns:
+            Preprocessed inputs dictionary
+        """
+        processed = {}
+        for name, tensor in layer_inputs_dict.items():
+            if tensor.ndim == 4:  # Conv2d input: [B, C, H, W]
+                # Get the layer module to access kernel parameters
+                try:
+                    module = dict(self.model.named_modules()).get(name)
+                    if module is not None and isinstance(module, torch.nn.Conv2d):
+                        # Proper unfold using layer's kernel parameters
+                        unfolded = torch.nn.functional.unfold(
+                            tensor,
+                            kernel_size=module.kernel_size,
+                            dilation=module.dilation,
+                            padding=module.padding,
+                            stride=module.stride,
+                        )
+                        # [B, C*kH*kW, num_patches] -> [B*num_patches, C*kH*kW]
+                        unfolded = unfolded.transpose(1, 2).contiguous()
+                        processed[name] = unfolded.view(-1, unfolded.size(2))
+                    else:
+                        # Fallback: flatten
+                        processed[name] = tensor.reshape(tensor.shape[0], -1)
+                except Exception as e:
+                    logger.debug(f"Unfold failed for {name}: {e}, using flatten")
+                    processed[name] = tensor.reshape(tensor.shape[0], -1)
+            elif tensor.ndim == 3:  # Conv1d input: [B, C, L]
+                # Get the layer module
+                try:
+                    module = dict(self.model.named_modules()).get(name)
+                    if module is not None and isinstance(module, torch.nn.Conv1d):
+                        # Unfold for Conv1d
+                        unfolded = tensor.unfold(2, module.kernel_size[0], module.stride[0])
+                        # [B, C, num_patches, kW] -> [B*num_patches, C*kW]
+                        B, C, num_patches, kW = unfolded.shape
+                        processed[name] = unfolded.permute(0, 2, 1, 3).reshape(-1, C * kW)
+                    else:
+                        processed[name] = tensor.reshape(tensor.shape[0], -1)
+                except Exception:
+                    processed[name] = tensor.reshape(tensor.shape[0], -1)
+            else:
+                # Linear layers: already 2D or flatten
+                if tensor.ndim > 2:
+                    processed[name] = tensor.reshape(tensor.shape[0], -1)
+                else:
+                    processed[name] = tensor
+        return processed
+
     def _evaluate(self) -> Tuple[float, float]:
         """Evaluate model on validation/test set."""
         if self.is_multi_network:
@@ -530,9 +593,19 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         criterion = nn.CrossEntropyLoss()
         eval_batches = self.config.eval_batches  # Limit evaluation batches (None = all)
+        
+        # Determine total batches for progress bar
+        total_batches = eval_batches if eval_batches is not None else len(self.data_loader)
 
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+            pbar = tqdm(
+                enumerate(self.data_loader),
+                total=total_batches,
+                desc="Evaluating",
+                leave=False,
+                disable=not logger.isEnabledFor(logging.INFO),
+            )
+            for batch_idx, (inputs, targets) in pbar:
                 if eval_batches is not None and batch_idx >= eval_batches:
                     break
                     
@@ -546,9 +619,14 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
                 num_batches += 1
+                
+                # Update progress bar with current stats
+                pbar.set_postfix(loss=total_loss / num_batches, acc=f"{100.0 * correct / total:.1f}%")
 
         avg_loss = total_loss / max(num_batches, 1)
         accuracy = 100.0 * correct / max(total, 1)
+        
+        logger.info(f"Eval: loss={avg_loss:.4f}, acc={accuracy:.2f}%")
 
         return avg_loss, accuracy
 
@@ -559,13 +637,20 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         criterion = nn.CrossEntropyLoss()
         eval_batches = self.config.eval_batches  # Limit evaluation batches (None = all)
+        total_batches = eval_batches if eval_batches is not None else len(self.data_loader)
 
         # Set all networks to eval mode
         for net in self.networks:
             net.eval()
 
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(self.data_loader):
+            pbar = tqdm(
+                enumerate(self.data_loader),
+                total=total_batches,
+                desc=f"Evaluating {len(self.networks)} networks",
+                leave=False,
+            )
+            for batch_idx, (inputs, targets) in pbar:
                 if eval_batches is not None and batch_idx >= eval_batches:
                     break
                     
@@ -588,6 +673,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 # Store batch averages
                 all_losses.append(np.mean(batch_losses))
                 all_accuracies.append(np.mean(batch_accuracies))
+                
+                pbar.set_postfix(loss=np.mean(all_losses), acc=f"{np.mean(all_accuracies):.1f}%")
 
         # Set networks back to train mode
         for net in self.networks:
@@ -692,7 +779,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 target_outputs = preprocessed_outputs[target_layer]
 
         # Compute each metric
-        for method in self.config.alignment_methods:
+        for method in tqdm(self.config.alignment_methods, desc="Computing metrics", leave=False):
             if method not in self.metrics:
                 logger.warning(f"Metric {method} not initialized, skipping")
                 continue
@@ -796,6 +883,90 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     alignment_values["rayleigh_quotient_delta"] = delta_values
 
         return alignment_values
+
+    def _compute_redundancy_matrices(self) -> Dict[str, Any]:
+        """
+        Compute pairwise redundancy matrices for visualization.
+        
+        Returns:
+            Dictionary mapping layer names to redundancy matrices [N, N]
+        """
+        # Check if redundancy metric is available
+        if "pairwise_redundancy_gaussian" not in self.metrics and "average_redundancy" not in self.metrics:
+            logger.debug("No redundancy metrics configured, skipping redundancy matrix computation")
+            return {}
+        
+        try:
+            from alignment.metrics.information.pairwise_gaussian import PairwiseRedundancyGaussian
+        except ImportError:
+            logger.warning("PairwiseRedundancyGaussian not available, skipping redundancy matrices")
+            return {}
+        
+        if self.is_multi_network:
+            wrapped_model_to_use = self.wrapped_networks[0]
+        else:
+            wrapped_model_to_use = self.wrapped_model
+        
+        if wrapped_model_to_use is None:
+            return {}
+        
+        redundancy_matrices = {}
+        
+        try:
+            # Get a batch of data
+            inputs, _ = next(iter(self.data_loader))
+            inputs = inputs.to(self.config.device)
+            
+            # Capture activations
+            capture_service = ActivationCaptureService(wrapped_model_to_use, default_mode=self.config.cnn_mode)
+            activation_data = capture_service.capture(
+                inputs,
+                layers=wrapped_model_to_use.tracked_layers,
+                include_weights=True,
+                preprocess=True,
+            )
+            
+            # Create redundancy metric for matrix computation
+            redundancy_metric = PairwiseRedundancyGaussian(
+                sampling_strategy="all",  # Compute full matrix
+                mode="output_based",  # Faster computation using outputs
+            )
+            
+            # Compute redundancy matrices for each layer
+            for layer_name in wrapped_model_to_use.tracked_layers:
+                layer_inputs = activation_data.inputs.get(layer_name)
+                layer_weights = activation_data.weights.get(layer_name)
+                layer_outputs = activation_data.outputs.get(layer_name)
+                
+                if layer_inputs is None or layer_weights is None:
+                    continue
+                
+                try:
+                    # Use compute_pairwise_matrix for full redundancy matrix
+                    # Flatten weights for linear algebra
+                    if layer_weights.ndim > 2:
+                        layer_weights = layer_weights.reshape(layer_weights.shape[0], -1)
+                    if layer_inputs.ndim > 2:
+                        layer_inputs = layer_inputs.reshape(layer_inputs.shape[0], -1)
+                    
+                    # Limit matrix size for performance (max 256 neurons)
+                    num_neurons = layer_weights.shape[0]
+                    if num_neurons > 256:
+                        logger.debug(f"Skipping redundancy matrix for {layer_name} ({num_neurons} neurons > 256)")
+                        continue
+                    
+                    matrix = redundancy_metric.compute_pairwise_matrix(layer_inputs, layer_weights)
+                    redundancy_matrices[layer_name] = matrix.cpu().numpy()
+                    logger.debug(f"Computed redundancy matrix for {layer_name}: shape {matrix.shape}")
+                    
+                except Exception as e:
+                    logger.warning(f"Could not compute redundancy matrix for {layer_name}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.warning(f"Redundancy matrix computation failed: {e}")
+        
+        return redundancy_matrices
 
     def _run_eigenfeature_analysis(self) -> Dict[str, Any]:
         """
@@ -1107,7 +1278,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         results = {"strategies": {}, "final_model_performance": {}}
 
         # Save original model state
-        original_state = self.model.state_dict()
+        # Deep copy the state dict to avoid reference issues when pruning modifies weights in place
+        original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
         # Get selection modes to test (convert single value to list for consistency)
         selection_modes = self.config.pruning_selection_mode
@@ -1124,7 +1296,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 # Create a key that includes selection mode if testing multiple
                 if len(selection_modes) > 1:
                     result_key = f"{strategy_name}_{selection_mode}"
-                    logger.info(f"  Selection mode: {selection_mode}")
                 else:
                     result_key = strategy_name
 
@@ -1139,8 +1310,13 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     "weight_distributions_after": [],
                 }
 
-                for amount in self.config.pruning_amounts:
-                    logger.info(f"    Pruning amount: {amount * 100:.0f}%")
+                pbar_amounts = tqdm(
+                    self.config.pruning_amounts,
+                    desc=f"  {strategy_name}/{selection_mode}",
+                    leave=False,
+                )
+                for amount in pbar_amounts:
+                    pbar_amounts.set_postfix(sparsity=f"{amount*100:.0f}%")
 
                     # Remove any existing pruning masks before resetting
                     for name, module in self.model.named_modules():
@@ -1175,9 +1351,19 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     
                     # Known metric names that can be used for pruning
                     metric_based_strategies = [
-                        "rayleigh_quotient", "activation_l2_norm", "activation_l1_norm",
-                        "pairwise_redundancy_gaussian", "mutual_information_gaussian",
-                        "synergy_gaussian_mmi", "taylor_importance"
+                        # Alignment metrics
+                        "rayleigh_quotient", "conditional_rayleigh_quotient", "delta_rq",
+                        # Activation statistics
+                        "activation_l2_norm", "activation_l1_norm", "activation_variance",
+                        # Redundancy metrics  
+                        "pairwise_redundancy_gaussian", "average_redundancy",
+                        # Information-theoretic metrics
+                        "mutual_information_gaussian", "gaussian_mi_analytic", "mi_about_class",
+                        "synergy_gaussian_mmi",
+                        # Composite scores
+                        "composite_importance", "alignment_minus_redundancy", "class_informative_score",
+                        # Gradient-based
+                        "taylor_importance", "taylor_saliency",
                     ]
 
                     if strategy_name == "magnitude":
@@ -1251,30 +1437,38 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     layer_inputs_dict = {}
                     # All metric-based pruning strategies need layer inputs
                     needs_layer_inputs = True
+                    # Store targets for conditional metrics and outputs for activation metrics
+                    sample_targets = None
+                    layer_outputs_dict = {}
+                    
                     if needs_layer_inputs:
                         # Get a batch of data for alignment computation
                         data_iter = iter(self.data_loader)
-                        sample_batch, _ = next(data_iter)
+                        sample_batch, sample_targets = next(data_iter)
                         sample_inputs = sample_batch.to(self.config.device)
+                        sample_targets = sample_targets.to(self.config.device)
 
                         # For alignment-based pruning, we ALWAYS need inputs for all layers
                         # (not just for global pruning)
-                        # Use hooks to capture inputs for all layers
+                        # Use hooks to capture inputs AND outputs for all layers
+                        # (outputs needed for activation-based metrics like activation_l2_norm)
                         hooks = []
+                        layer_outputs_dict = {}
 
-                        def capture_input(name):
+                        def capture_input_output(name):
                             def hook(module, input, output):
                                 layer_inputs_dict[name] = input[0].detach()
+                                layer_outputs_dict[name] = output.detach()
 
                             return hook
 
                         # Register hooks
                         for name, module in self.model.named_modules():
                             if hasattr(module, "weight") and len(module.weight.shape) >= 2:
-                                hook = module.register_forward_hook(capture_input(name))
+                                hook = module.register_forward_hook(capture_input_output(name))
                                 hooks.append(hook)
 
-                        # Forward pass to capture inputs
+                        # Forward pass to capture inputs and outputs
                         with torch.no_grad():
                             _ = self.model(sample_inputs)
 
@@ -1282,7 +1476,10 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         for hook in hooks:
                             hook.remove()
 
-                        logger.info(f"      Captured inputs for {len(layer_inputs_dict)} layers")
+                        logger.debug(f"Captured inputs for {len(layer_inputs_dict)} layers")
+                        
+                        # Preprocess CNN inputs using unfold for proper RQ computation
+                        layer_inputs_dict = self._preprocess_pruning_inputs(layer_inputs_dict)
 
                     # Apply pruning
                     if pruning_config.global_pruning and hasattr(strategy, "prune_model"):
@@ -1331,7 +1528,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             for hook in hooks:
                                 hook.remove()
 
-                            return current_inputs
+                            # Preprocess CNN inputs
+                            return self._preprocess_pruning_inputs(current_inputs)
 
                         # Apply cascading pruning
                         masks = strategy.prune_model(self.model, get_layer_inputs_fn, amount=amount)
@@ -1349,6 +1547,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                 selection_mode=selection_mode,
                                 amount=amount,
                                 layer_inputs=layer_inputs_dict,
+                                layer_outputs=layer_outputs_dict,
+                                targets=sample_targets,
                             )
 
                         if dependency_result is not None:
@@ -1371,7 +1571,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                         continue
 
                                     try:
-                                        strategy.prune(module, inputs=layer_inputs)
+                                        # Get outputs for this layer (needed for activation-based metrics)
+                                        layer_outputs = layer_outputs_dict.get(name)
+                                        strategy.prune(module, inputs=layer_inputs, outputs=layer_outputs, targets=sample_targets)
                                         sparsity = strategy.get_sparsity(module)
                                         layer_sparsities[name] = sparsity
                                     except Exception as e:
@@ -1395,10 +1597,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
                     # Evaluate pruned model
                     test_loss_before, test_acc_before = self._evaluate()
-                    if self.config.fine_tune_after_pruning:
-                        logger.info(f"      Before fine-tuning: Loss={test_loss_before:.4f}, Accuracy={test_acc_before:.2f}%")
-                    else:
-                        logger.info(f"      After pruning: Loss={test_loss_before:.4f}, Accuracy={test_acc_before:.2f}%")
 
                     # Capture weight distribution before fine-tuning
                     weight_dist_before = self._get_weight_distribution()
@@ -1415,8 +1613,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     test_acc_after = test_acc_before
 
                     if self.config.fine_tune_after_pruning:
-                        logger.info(f"      Fine-tuning for {self.config.fine_tune_epochs} epochs")
-
                         # Setup optimizer for fine-tuning
                         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate * 0.1)  # Lower learning rate
 
@@ -1429,12 +1625,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             finetune_losses.append(train_loss)
                             finetune_accs.append(train_acc)
 
-                            if (epoch + 1) % 5 == 0:
-                                logger.info(f"        Fine-tune epoch {epoch+1}: Loss={train_loss:.4f}, Acc={train_acc:.2f}%")
-
                         # Re-evaluate after fine-tuning
                         test_loss_after, test_acc_after = self._evaluate()
-                        logger.info(f"      After fine-tuning: Loss={test_loss_after:.4f}, Accuracy={test_acc_after:.2f}%")
 
                         # Capture weight distribution after fine-tuning
                         weight_dist_after = self._get_weight_distribution()
@@ -1445,14 +1637,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     strategy_results["accuracies_after_finetune"].append(test_acc_after)
                     strategy_results["losses_after_finetune"].append(test_loss_after)
                     strategy_results["weight_distributions_after"].append(weight_dist_after)
-
-                    # Log improvement
-                    acc_improvement = test_acc_after - test_acc_before
-                    logger.info(
-                        f"      Results: Sparsity={overall_sparsity:.2%}, "
-                        f"Acc before={test_acc_before:.2f}%, Acc after={test_acc_after:.2f}%, "
-                        f"Improvement={acc_improvement:+.2f}%"
-                    )
 
                 results["strategies"][result_key] = strategy_results
 
@@ -1549,8 +1733,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
             logger.info(f"Testing pruning strategy: {strategy_name}")
 
             for selection_mode in selection_modes:
-                logger.info(f"  Selection mode: {selection_mode}")
-
                 # Use pre-computed scores for fast mask creation
                 batch_results = self._evaluate_pruning_with_precomputed_scores(
                     all_importance_scores[strategy_name],
@@ -1856,8 +2038,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
             acc_min = batch_accs_before.min().item()
             acc_max = batch_accs_before.max().item()
 
-            logger.info(
-                f"        Before fine-tuning - Avg Acc: {batch_accs_before.mean():.2f}% (std: {acc_std:.2f}, range: [{acc_min:.2f}, {acc_max:.2f}]), Avg Sparsity: {sparsities[:, amount_idx].mean():.2%}"
+            logger.debug(
+                f"Before fine-tuning - Avg Acc: {batch_accs_before.mean():.2f}% (std: {acc_std:.2f}, range: [{acc_min:.2f}, {acc_max:.2f}]), Avg Sparsity: {sparsities[:, amount_idx].mean():.2%}"
             )
 
         # Now process fine-tuning if requested
@@ -1882,7 +2064,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
                 # Log improvement
                 improvement = batch_accs_after.mean() - accuracies_before[:, amount_idx].mean()
-                logger.info(f"        After fine-tuning - Avg Acc: {batch_accs_after.mean():.2f}%, Improvement: {improvement:+.2f}%")
+                logger.debug(f"After fine-tuning - Avg Acc: {batch_accs_after.mean():.2f}%, Improvement: {improvement:+.2f}%")
         else:
             # No fine-tuning, just copy before results
             accuracies_after = accuracies_before.clone()
@@ -2257,12 +2439,15 @@ class GeneralAlignmentExperiment(BaseExperiment):
         selection_mode: str,
         amount: float,
         layer_inputs: Dict[str, torch.Tensor],
+        layer_outputs: Optional[Dict[str, torch.Tensor]] = None,
+        targets: Optional[torch.Tensor] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Apply dependency-aware pruning by converting per-layer scores into masks that respect
         downstream dependencies (e.g., Conv blocks, residual connections).
         """
         layer_scores: Dict[str, torch.Tensor] = {}
+        layer_outputs = layer_outputs or {}
 
         for name, module in self.model.named_modules():
             if not hasattr(module, "weight") or module.weight.dim() < 2:
@@ -2275,8 +2460,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 logger.debug(f"Dependency-aware pruning: missing inputs for {name}, skipping.")
                 continue
 
+            # Get outputs for activation-based metrics
+            outputs = layer_outputs.get(name)
+
             try:
-                scores = strategy.compute_importance_scores(module, inputs=inputs)
+                scores = strategy.compute_importance_scores(module, inputs=inputs, outputs=outputs, targets=targets)
             except Exception as exc:
                 logger.error(f"Dependency-aware pruning: failed to compute scores for {name}: {exc}")
                 continue
@@ -2361,8 +2549,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
             accuracies_before[:, amount_idx] = batch_accs_before
             losses_before[:, amount_idx] = batch_losses_before
 
-            logger.info(
-                f"        Before fine-tuning - Avg Acc: {batch_accs_before.mean():.2f}%, Avg Sparsity: {sparsities[:, amount_idx].mean():.2%}"
+            logger.debug(
+                f"Before fine-tuning - Avg Acc: {batch_accs_before.mean():.2f}%, Avg Sparsity: {sparsities[:, amount_idx].mean():.2%}"
             )
 
         # Now process fine-tuning if requested
@@ -2392,7 +2580,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
                 # Log improvement
                 improvement = batch_accs_after.mean() - accuracies_before[:, amount_idx].mean()
-                logger.info(f"        After fine-tuning - Avg Acc: {batch_accs_after.mean():.2f}%, Improvement: {improvement:+.2f}%")
+                logger.debug(f"After fine-tuning - Avg Acc: {batch_accs_after.mean():.2f}%, Improvement: {improvement:+.2f}%")
         else:
             # No fine-tuning, just copy before results
             accuracies_after = accuracies_before.clone()
@@ -2519,7 +2707,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         for hook in hooks:
             hook.remove()
 
-        return layer_inputs_dict
+        # Preprocess CNN inputs for proper RQ computation
+        return self._preprocess_pruning_inputs(layer_inputs_dict)
 
     def _apply_alignment_pruning(self, model: nn.Module, layer_inputs_dict: Dict[str, torch.Tensor], amount: float, selection_mode: str):
         """Apply alignment-based pruning to a model with structured pruning."""
@@ -2596,16 +2785,42 @@ class GeneralAlignmentExperiment(BaseExperiment):
         self.train_results = self._train_model()
 
         # Final evaluation
+        logger.info("=" * 60)
+        logger.info("PHASE: Final Evaluation")
+        logger.info("=" * 60)
         test_loss, test_acc = self._evaluate()
-        self.test_results = {"final_loss": test_loss, "final_accuracy": test_acc, "alignment": self._measure_alignment()}
+        
+        logger.info("=" * 60)
+        logger.info("PHASE: Measuring Alignment")
+        logger.info("=" * 60)
+        alignment_results = self._measure_alignment()
+        
+        # Compute pairwise redundancy matrices for visualization
+        redundancy_matrices = self._compute_redundancy_matrices()
+        
+        self.test_results = {
+            "final_loss": test_loss, 
+            "final_accuracy": test_acc, 
+            "alignment": alignment_results,
+            "redundancy_matrices": redundancy_matrices,
+        }
 
         # Dropout analysis
+        logger.info("=" * 60)
+        logger.info("PHASE: Dropout Analysis")
+        logger.info("=" * 60)
         self.dropout_results = self._dropout_analysis()
 
         # Pruning experiments
+        logger.info("=" * 60)
+        logger.info("PHASE: Pruning Experiments")
+        logger.info("=" * 60)
         self.pruning_results = self._pruning_experiments()
 
         # Eigenfeature analysis (optional)
+        logger.info("=" * 60)
+        logger.info("PHASE: Eigenfeature Analysis")
+        logger.info("=" * 60)
         self.eigenfeature_results = self._run_eigenfeature_analysis()
 
         # Combine all results
@@ -2647,17 +2862,25 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     non_zero_weights = weight.flatten()
 
                 if len(non_zero_weights) > 0:
+                    # Sample if tensor is too large for quantile (limit ~16M elements)
+                    max_quantile_size = 10_000_000
+                    if len(non_zero_weights) > max_quantile_size:
+                        indices = torch.randperm(len(non_zero_weights))[:max_quantile_size]
+                        sampled_weights = non_zero_weights[indices]
+                    else:
+                        sampled_weights = non_zero_weights
+                    
                     weight_stats[name] = {
                         "mean": float(non_zero_weights.mean()),
                         "std": float(non_zero_weights.std()),
                         "min": float(non_zero_weights.min()),
                         "max": float(non_zero_weights.max()),
                         "percentiles": {
-                            "1": float(torch.quantile(non_zero_weights, 0.01)),
-                            "25": float(torch.quantile(non_zero_weights, 0.25)),
-                            "50": float(torch.quantile(non_zero_weights, 0.50)),
-                            "75": float(torch.quantile(non_zero_weights, 0.75)),
-                            "99": float(torch.quantile(non_zero_weights, 0.99)),
+                            "1": float(torch.quantile(sampled_weights, 0.01)),
+                            "25": float(torch.quantile(sampled_weights, 0.25)),
+                            "50": float(torch.quantile(sampled_weights, 0.50)),
+                            "75": float(torch.quantile(sampled_weights, 0.75)),
+                            "99": float(torch.quantile(sampled_weights, 0.99)),
                         },
                         "sparsity": float((weight == 0).sum()) / weight.numel() if weight.numel() > 0 else 0,
                     }
@@ -3784,8 +4007,6 @@ class GeneralAlignmentExperiment(BaseExperiment):
             logger.info(f"Testing pruning strategy: {strategy_name}")
 
             for selection_mode in selection_modes:
-                logger.info(f"  Selection mode: {selection_mode}")
-
                 # Use the ultra-parallel evaluation
                 if strategy_name == "alignment" and hasattr(self.config, "use_ultra_parallel_eval") and self.config.use_ultra_parallel_eval:
                     batch_results = self._tensorized_pruning_ultra_parallel(strategy_name, selection_mode, self.config.pruning_amounts)

@@ -306,9 +306,15 @@ def preprocess_layer_activations(
     layer_specific_modes = layer_specific_modes or {}
 
     for layer_name, activation in activations.items():
-        # Handle input activations (name ends with _input)
+        # Handle input/output activations (name ends with _input or _output)
         is_input = layer_name.endswith("_input")
-        actual_layer_name = layer_name.replace("_input", "") if is_input else layer_name
+        is_output = layer_name.endswith("_output")
+        if is_input:
+            actual_layer_name = layer_name[:-6]  # Remove "_input" suffix
+        elif is_output:
+            actual_layer_name = layer_name[:-7]  # Remove "_output" suffix
+        else:
+            actual_layer_name = layer_name
 
         # Get the layer module
         if actual_layer_name not in layer_modules:

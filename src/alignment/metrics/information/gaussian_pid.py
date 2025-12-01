@@ -103,6 +103,24 @@ class GaussianPIDSynergyMMI(BaseMetric):
             target_outputs = target_outputs.squeeze(1)
 
         B, N = outputs.shape
+        
+        # Handle batch size mismatch (CNN unfolding creates expanded batch)
+        target_batch_size = target_outputs.shape[0]
+        if B != target_batch_size:
+            if B % target_batch_size == 0:
+                # CNN unfolding case: aggregate outputs by taking mean over patches
+                num_patches = B // target_batch_size
+                # Reshape to [batch_size, num_patches, num_neurons] and take mean
+                outputs = outputs.view(target_batch_size, num_patches, N).mean(dim=1)
+                B = target_batch_size
+                logger.debug(f"gaussian_pid_synergy_mmi: Aggregated {num_patches} patches per sample")
+            else:
+                logger.warning(
+                    f"gaussian_pid_synergy_mmi: Batch size mismatch (outputs={B}, "
+                    f"targets={target_batch_size}). Returning zeros."
+                )
+                return torch.zeros(N, device=outputs.device, dtype=outputs.dtype)
+        
         if B < self.min_samples:
             logger.warning("gaussian_pid_synergy_mmi: too few samples; returning zeros")
             return torch.zeros(N, device=outputs.device, dtype=outputs.dtype)

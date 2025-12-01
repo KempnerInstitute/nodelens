@@ -151,26 +151,43 @@ class RayleighQuotient(BaseMetric):
             tgt = targets if targets is not None else self._cc_targets
             if tgt.ndim > 1:
                 tgt = tgt.squeeze()
-            classes = torch.unique(tgt)
-            cov = torch.zeros(input_features, input_features, device=inputs.device, dtype=inputs.dtype)
-            total_weight = 0.0
-            for c in classes:
-                mask = tgt == c
-                if mask.sum() < self.min_samples:
-                    continue
-                Xc = inputs[mask]
-                Xc_centered = Xc - Xc.mean(dim=0, keepdim=True)
-                cov_c = (Xc_centered.T @ Xc_centered) / max(1, (Xc.shape[0] - 1))
-                weight_c = float(mask.sum())
-                cov += cov_c * weight_c
-                total_weight += weight_c
-            if total_weight > 0:
-                cov = cov / total_weight
-            else:
-                inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
-                cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
-        else:
-            # Compute covariance matrix
+            
+            # Handle unfolded CNN inputs where each sample becomes multiple patches
+            # If inputs has more rows than targets, expand targets to match
+            original_batch_size = tgt.shape[0]
+            if original_batch_size != batch_size:
+                if batch_size % original_batch_size == 0:
+                    # Expand targets: each label applies to all patches from that sample
+                    num_patches = batch_size // original_batch_size
+                    tgt = tgt.repeat_interleave(num_patches)
+                    logger.debug(f"RQ: Expanded targets from {original_batch_size} to {batch_size} "
+                                f"({num_patches} patches per sample)")
+                else:
+                    logger.warning(f"RQ: Cannot expand targets {original_batch_size} to match "
+                                  f"batch_size {batch_size}, falling back to unconditional")
+                    use_class_cond = False
+            
+            if use_class_cond:
+                classes = torch.unique(tgt)
+                cov = torch.zeros(input_features, input_features, device=inputs.device, dtype=inputs.dtype)
+                total_weight = 0.0
+                for c in classes:
+                    mask = tgt == c
+                    if mask.sum() < self.min_samples:
+                        continue
+                    Xc = inputs[mask]
+                    Xc_centered = Xc - Xc.mean(dim=0, keepdim=True)
+                    cov_c = (Xc_centered.T @ Xc_centered) / max(1, (Xc.shape[0] - 1))
+                    weight_c = float(mask.sum())
+                    cov += cov_c * weight_c
+                    total_weight += weight_c
+                if total_weight > 0:
+                    cov = cov / total_weight
+                else:
+                    use_class_cond = False  # Fall back to unconditional
+        
+        if not use_class_cond:
+            # Compute unconditional covariance matrix
             inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
             cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
 

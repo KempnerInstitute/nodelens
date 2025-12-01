@@ -104,7 +104,32 @@ class SynergyGaussianMMI(BaseMetric):
 
         # Compute outputs if not provided
         if outputs is None:
-            outputs = inputs @ weights.T  # [batch_size, num_neurons]
+            # Handle dimension mismatch for CNN layers
+            if inputs.shape[1] != weights.shape[1]:
+                common_dim = min(inputs.shape[1], weights.shape[1])
+                inputs_truncated = inputs[:, :common_dim]
+                weights_truncated = weights[:, :common_dim]
+                outputs = inputs_truncated @ weights_truncated.T
+            else:
+                outputs = inputs @ weights.T  # [batch_size, num_neurons]
+
+        # Handle batch size mismatch (CNN unfolding creates expanded batch)
+        # If outputs batch size is a multiple of targets batch size, we need to
+        # either aggregate outputs or expand targets
+        if outputs.shape[0] != targets.shape[0]:
+            if outputs.shape[0] % targets.shape[0] == 0:
+                # CNN unfolding case: aggregate outputs by taking mean over patches
+                num_patches = outputs.shape[0] // targets.shape[0]
+                batch_size = targets.shape[0]
+                num_neurons = outputs.shape[1]
+                # Reshape to [batch_size, num_patches, num_neurons] and take mean
+                outputs = outputs.view(batch_size, num_patches, num_neurons).mean(dim=1)
+            else:
+                logger.warning(
+                    f"SynergyGaussianMMI: Batch size mismatch (outputs={outputs.shape[0]}, "
+                    f"targets={targets.shape[0]}). Returning zeros."
+                )
+                return torch.zeros(weights.shape[0], device=weights.device, dtype=weights.dtype)
 
         num_neurons = weights.shape[0]
 

@@ -55,6 +55,7 @@ class ExperimentConfig:
     learning_rate: float = 0.001
     optimizer: str = "adam"
     scheduler: Optional[str] = None
+    scheduler_config: Dict[str, Any] = field(default_factory=dict)
     weight_decay: float = 0.0
     momentum: float = 0.9
 

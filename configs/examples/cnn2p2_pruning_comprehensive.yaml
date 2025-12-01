@@ -1,0 +1,170 @@
+# CNN2P2 Comprehensive Pruning Experiment with All Metrics
+# Tests conditional metrics, redundancy, composite scores, and their combinations
+# Run this before AlexNet to validate pruning behavior
+
+experiment:
+  name: "cnn2p2_comprehensive_pruning"
+  type: "alignment_analysis"
+  seed: 42
+  device: "auto"
+  output_dir: "./results/cnn2p2_comprehensive_pruning"
+  num_networks: 1
+
+model:
+  name: "cnn2p2"
+  pretrained: false
+  tracked_layers: null
+  
+  # CNN2P2 parameters for MNIST
+  cnn2p2_params:
+    in_channels: 1
+    output_dim: 10
+    conv_channels: [32, 64]
+    kernel_sizes: [5, 5]
+    strides: [1, 1]
+    paddings: [2, 2]
+    pool_kernel_size: 2
+    pool_stride: 2
+    hidden_fc_dim: 128
+    dropout_rate: 0.5
+    example_input_hw: [28, 28]
+
+dataset:
+  name: "mnist"
+  data_path: null
+  batch_size: 128
+  num_workers: 4
+
+training:
+  enabled: true
+  epochs: 20
+  learning_rate: 0.01
+  optimizer: "sgd"
+  momentum: 0.9
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  scheduler_config:
+    T_max: 20
+    eta_min: 0.0001
+
+# ============================================
+# COMPREHENSIVE METRICS CONFIGURATION
+# ============================================
+metrics:
+  enabled:
+    # 1. ALIGNMENT METRICS (Rayleigh Quotient based)
+    - "rayleigh_quotient"              # Standard RQ - alignment to input covariance
+    - "conditional_rayleigh_quotient"  # Class-conditioned RQ
+    - "delta_rq"                       # ΔRQ = RQ - cond_RQ (measures class dependency)
+    
+    # 2. MUTUAL INFORMATION METRICS
+    - "gaussian_mi_analytic"           # MI between inputs and outputs (RQ-related)
+    - "mi_about_class"                 # I(Z; Y) - MI with class labels
+    
+    # 3. REDUNDANCY METRICS (for identifying redundant neurons)
+    - "average_redundancy"             # Per-neuron average redundancy
+    - "pairwise_redundancy_gaussian"   # Pairwise redundancy for matrix viz
+    
+    # 4. ACTIVATION STATISTICS
+    - "activation_l2_norm"             # Activation magnitude
+    - "activation_variance"            # Activation variance
+  
+  num_samples: 256
+  
+  # Pairwise redundancy configuration
+  pairwise_redundancy_gaussian:
+    num_pairs: 20
+    sampling_strategy: "all"           # Get full matrix
+    mode: "output_based"               # Fast computation
+
+cnn:
+  mode: "unfold"
+
+# ============================================
+# PRUNING EXPERIMENTS - TEST ALL METRICS AND COMPOSITES
+# ============================================
+# Each metric is tested as a pruning criterion
+# Higher score = more important (keep) when selection_mode="low"
+#
+# INTERPRETATION GUIDE:
+# - rayleigh_quotient: High = aligned with data → keep (prune low)
+# - conditional_rayleigh_quotient: High = aligned with class-specific data → keep (prune low)
+# - mi_about_class: High = informative about class → keep (prune low)
+# - average_redundancy: High = MORE redundant → prune (use selection_mode="high" to prune high scorers)
+# - activation_l2_norm: High = active neuron → keep (prune low)
+# - composite_importance: Combines RQ + class_MI - redundancy → prune low
+# - alignment_minus_redundancy: RQ - R → prune low
+
+pruning:
+  enabled: true
+  
+  # Test these strategies individually
+  strategies:
+    # Basic metrics
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+    - "magnitude"
+    - "random"
+    
+    # Conditional/class-aware metrics
+    - "conditional_rayleigh_quotient"
+    - "mi_about_class"
+    
+    # Redundancy (NOTE: for redundancy, "high" selection removes redundant neurons)
+    - "average_redundancy"
+    
+    # Composite scores (combine multiple metrics)
+    - "composite_importance"           # RQ + class_MI - redundancy
+    - "alignment_minus_redundancy"     # RQ - αR
+    - "class_informative_score"        # MI_class + cond_RQ + delta_RQ
+  
+  # Sparsity levels to test
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  
+  # Selection modes to test for each strategy
+  # "low" = prune neurons with LOW scores (keep high scorers)
+  # "high" = prune neurons with HIGH scores (for redundancy: high = more redundant = prune)
+  # "random" = random pruning baseline
+  selection_modes: ["low", "high", "random"]
+  
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 5
+    learning_rate: 0.001
+
+# ============================================
+# COMPOSITE METRIC CONFIGURATION
+# ============================================
+# These weights are used by the "composite_importance" metric
+composite_weights:
+  rayleigh_quotient: 1.0       # Alignment (positive = keep aligned)
+  mi_about_class: 0.5          # Class information (positive = keep informative)
+  average_redundancy: -0.3     # Redundancy (negative = penalize redundant)
+
+# ============================================
+# ANALYSIS AND VISUALIZATION
+# ============================================
+analysis:
+  save_scores: true
+  generate_plots: true
+  
+  # Pairwise redundancy matrix visualization
+  pairwise_analysis:
+    enabled: true
+    save_matrices: true
+    plot_heatmaps: true
+  
+  plots:
+    histograms: true                   # Score distributions per layer
+    scatter_plots: true                # Correlations between metrics
+    pruning_curves: true               # Accuracy vs sparsity curves
+    redundancy_heatmaps: true          # Pairwise redundancy matrices
+    metric_correlations: true          # Scatter plots between metrics
+
+visualization:
+  format: "png"
+  dpi: 300

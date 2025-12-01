@@ -13,11 +13,11 @@ experiment:
   seed: 42
   device: "auto"                  # auto-detect cuda/cpu
   output_dir: "./results/vision_pruning_test"
-  num_networks: 3                 # Run 3 networks for error bars
+  num_networks: 1                 # Single network for faster testing
 
 model:
-  name: "alexnet"
-  pretrained: true                # Uses pretrained weights (auto-disables training)
+  name: "alexnet"                 # Pretrained AlexNet from torchvision
+  pretrained: true                # Use pretrained weights (skips training)
   tracked_layers: null            # Auto-detect conv layers
 
 # Dataset options:
@@ -26,7 +26,7 @@ model:
 dataset:
   name: "imagenet"
   data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
-  batch_size: 64
+  batch_size: 16          # Reduced for memory efficiency with unfold mode
   num_workers: 4
   
 # =============================================================================
@@ -67,8 +67,8 @@ metrics:
     # Redundancy (Pairwise Gaussian)
     - "pairwise_redundancy_gaussian"    # I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
     
-    # Synergy (PID with MMI redundancy)
-    - "gaussian_pid_synergy_mmi"        # S_MMI(Z; Y_i, Y_j)
+    # Synergy (PID with MMI redundancy) - DISABLED: too slow for large models
+    # - "gaussian_pid_synergy_mmi"        # S_MMI(Z; Y_i, Y_j)
     
     # Activation statistics (for comparison)
     - "activation_l2_norm"              # ||Y||_2 activation magnitude
@@ -76,11 +76,12 @@ metrics:
   num_samples: 256
 
 # CNN activation preprocessing
-# "unfold" (recommended): Unfolds spatial dims for proper RQ computation
+# "unfold" (recommended): Unfolds spatial dims for proper RQ computation - MEMORY INTENSIVE
+# "flatten": Flattens spatial dims (fast, lower memory)
 # "patchwise": Keeps patches separate for patch-level analysis
 # "batch_patch_combined": Combines batch and patch dimensions
 cnn:
-  mode: "unfold"
+  mode: "flatten"         # Use flatten for lower memory; unfold is more accurate but OOMs
 
 # =============================================================================
 # PRUNING EXPERIMENTS
@@ -91,7 +92,7 @@ pruning:
   # TARGET LAYER: Prune only a specific layer (for interpretability)
   # Set to null to prune all layers
   # Examples: "features.0", "features.3", "classifier.1"
-  target_layer: "features.3"  # Second conv layer in AlexNet
+  target_layer: null  # Prune all layers
   
   # Sparsity levels to test (fraction of neurons to remove)
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -122,7 +123,7 @@ pruning:
 
 # Performance (all optimizations enabled by default)
 performance:
-  eval_batches: 100               # Limit evaluation to 100 batches (6400 images) for speed
+  eval_batches: 20                # Limit evaluation to 20 batches for fast testing
 
 analysis:
   save_scores: true

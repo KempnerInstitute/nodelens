@@ -59,6 +59,9 @@ from .information import pairwise_gaussian  # Ensure registration side-effects
 # Import conditional metrics (class-conditioned versions)
 from . import conditional_metrics  # Register conditional RQ, MI about class, etc.
 
+# Import composite metrics (combinations for pruning)
+from . import composite  # Register composite_importance, alignment_minus_redundancy, etc.
+
 
 def get_metric(name: str, **kwargs):
     """

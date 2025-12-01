@@ -1,0 +1,100 @@
+# CNN2P2 Pruning Experiment on MNIST
+# The simplest test case - fast to train, easy to debug pruning behavior
+# Use this for quick debugging before CIFAR-10 or AlexNet
+
+experiment:
+  name: "cnn2p2_pruning_mnist"
+  type: "alignment_analysis"
+  seed: 42
+  device: "auto"
+  output_dir: "./results/cnn2p2_pruning_mnist"
+  num_networks: 1
+
+model:
+  name: "cnn2p2"
+  pretrained: false
+  tracked_layers: null
+  
+  # CNN2P2 specific parameters (for MNIST)
+  cnn2p2_params:
+    in_channels: 1                # Grayscale images
+    output_dim: 10                # MNIST digits
+    conv_channels: [32, 64]
+    kernel_sizes: [5, 5]
+    strides: [1, 1]
+    paddings: [2, 2]
+    pool_kernel_size: 2
+    pool_stride: 2
+    hidden_fc_dim: 128
+    dropout_rate: 0.5
+    example_input_hw: [28, 28]    # MNIST image size
+
+# MNIST dataset (very fast)
+dataset:
+  name: "mnist"
+  data_path: null                 # Uses torchvision default download
+  batch_size: 128
+  num_workers: 4
+
+# Training configuration - MNIST converges fast
+training:
+  enabled: true
+  epochs: 20                      # MNIST needs fewer epochs
+  learning_rate: 0.01
+  optimizer: "sgd"
+  momentum: 0.9
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  scheduler_config:
+    T_max: 20
+    eta_min: 0.0001
+
+# Metrics - comprehensive set including conditional metrics
+metrics:
+  enabled:
+    # Alignment metrics
+    - "rayleigh_quotient"
+    - "conditional_rayleigh_quotient"   # Class-conditioned RQ
+    # Activation-based
+    - "activation_l2_norm"
+    # Redundancy metrics
+    - "average_redundancy"              # Per-neuron redundancy (for pruning)
+    - "pairwise_redundancy_gaussian"    # Pairwise redundancy (for heatmaps)
+    # Information-theoretic metrics
+    - "mutual_information_gaussian"     # Unconditional MI
+    - "mi_about_class"                  # MI about class labels (conditional)
+  num_samples: 256
+
+cnn:
+  mode: "unfold"
+  
+# Pruning experiments - key sparsity levels for comprehensive comparison
+pruning:
+  enabled: true
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]  # 9 levels
+  selection_modes: ["low", "high"]   # Test both directions
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.001
+
+performance:
+  eval_batches: null
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true    # Plot pairwise redundancy matrices
+
+visualization:
+  format: "png"
+  dpi: 300
+

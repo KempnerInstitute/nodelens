@@ -119,6 +119,29 @@ class ConditionalRayleighQuotient(BaseMetric):
         if targets.ndim > 1:
             targets = targets.squeeze()
         
+        # Handle batch size mismatch for CNN layers with unfolding
+        # When inputs are unfolded: [batch * num_patches, features]
+        # targets remain: [batch]
+        # We need to repeat targets so each patch inherits its parent sample's class
+        target_batch_size = targets.shape[0]
+        if batch_size != target_batch_size:
+            if batch_size % target_batch_size == 0:
+                # Unfolded case: repeat each target for all its patches
+                num_patches = batch_size // target_batch_size
+                # Repeat each target num_patches times: [0,0,0,1,1,1,2,2,2,...] 
+                targets = targets.repeat_interleave(num_patches)
+                logger.debug(
+                    f"Conditional RQ: Expanded targets from {target_batch_size} to {batch_size} "
+                    f"({num_patches} patches per sample)"
+                )
+            else:
+                # Unexpected mismatch - fall back to unconditional
+                logger.warning(
+                    f"Conditional RQ: Unexpected batch size mismatch (inputs: {batch_size}, "
+                    f"targets: {target_batch_size}). Computing unconditional RQ."
+                )
+                return self._compute_unconditional(inputs, weights)
+        
         # Get unique classes
         classes = torch.unique(targets)
         
@@ -290,6 +313,28 @@ class MIAboutClass(BaseMetric):
         # Ensure targets are 1D
         if targets.ndim > 1:
             targets = targets.squeeze()
+        
+        # Handle batch size mismatch for CNN layers with unfolding
+        # When outputs are unfolded: [batch * num_patches, num_neurons]
+        # targets remain: [batch]
+        # We need to repeat targets so each patch inherits its parent sample's class
+        target_batch_size = targets.shape[0]
+        if batch_size != target_batch_size:
+            if batch_size % target_batch_size == 0:
+                # Unfolded case: repeat each target for all its patches
+                num_patches = batch_size // target_batch_size
+                targets = targets.repeat_interleave(num_patches)
+                logger.debug(
+                    f"MI about class: Expanded targets from {target_batch_size} to {batch_size} "
+                    f"({num_patches} patches per sample)"
+                )
+            else:
+                # Unexpected mismatch
+                logger.warning(
+                    f"MI about class: Unexpected batch size mismatch (outputs: {batch_size}, "
+                    f"targets: {target_batch_size}). Returning zeros."
+                )
+                return torch.zeros(num_neurons, device=device)
         
         if self.method == "gaussian":
             return self._compute_gaussian(outputs, targets)

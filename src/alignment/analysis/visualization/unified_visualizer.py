@@ -714,6 +714,163 @@ class UnifiedVisualizer:
 
         return fig
 
+    def plot_pairwise_redundancy_matrix(
+        self,
+        redundancy_matrix: Union[torch.Tensor, np.ndarray],
+        layer_name: str,
+        title: Optional[str] = None,
+        cmap: str = "YlOrRd",
+        annotate: bool = False,
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot a pairwise redundancy matrix for neurons in a layer.
+
+        Args:
+            redundancy_matrix: Square matrix [num_neurons, num_neurons] of redundancy values
+            layer_name: Name of the layer
+            title: Optional custom title
+            cmap: Colormap (YlOrRd works well for redundancy - higher = more redundant = warmer)
+            annotate: Whether to annotate cells (only for small matrices)
+            save_path: Optional path to save the figure
+
+        Returns:
+            Matplotlib figure
+        """
+        if isinstance(redundancy_matrix, torch.Tensor):
+            matrix = redundancy_matrix.detach().cpu().numpy()
+        else:
+            matrix = np.asarray(redundancy_matrix)
+
+        num_neurons = matrix.shape[0]
+        
+        # Determine figure size based on matrix size
+        fig_size = max(8, min(20, num_neurons * 0.3))
+        fig, ax = plt.subplots(figsize=(fig_size, fig_size))
+
+        # Only annotate for small matrices
+        should_annotate = annotate and num_neurons <= 20
+
+        if HAS_SEABORN:
+            sns.heatmap(
+                matrix,
+                ax=ax,
+                cmap=cmap,
+                annot=should_annotate,
+                fmt=".2f" if should_annotate else None,
+                cbar_kws={"label": "Redundancy (bits)"},
+                square=True,
+                linewidths=0.5 if num_neurons <= 50 else 0,
+            )
+        else:
+            im = ax.imshow(matrix, cmap=cmap, aspect="equal")
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label("Redundancy (bits)", rotation=270, labelpad=15)
+
+            if should_annotate:
+                for i in range(num_neurons):
+                    for j in range(num_neurons):
+                        ax.text(j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", fontsize=6)
+
+        if title:
+            ax.set_title(title, fontsize=14, fontweight="bold")
+        else:
+            ax.set_title(f"Pairwise Redundancy Matrix - {layer_name}\n({num_neurons} neurons)", fontsize=14, fontweight="bold")
+
+        ax.set_xlabel("Neuron Index")
+        ax.set_ylabel("Neuron Index")
+
+        # Add statistics annotation
+        upper_tri = matrix[np.triu_indices(num_neurons, k=1)]
+        if len(upper_tri) > 0:
+            stats_text = f"Mean: {np.mean(upper_tri):.3f}\nMax: {np.max(upper_tri):.3f}\nMin: {np.min(upper_tri):.3f}"
+            ax.text(
+                1.02, 0.98, stats_text,
+                transform=ax.transAxes,
+                fontsize=10,
+                verticalalignment="top",
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+            )
+
+        plt.tight_layout()
+
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+        return fig
+
+    def plot_metric_correlation_scatter(
+        self,
+        scores_x: Union[torch.Tensor, np.ndarray, List[float]],
+        scores_y: Union[torch.Tensor, np.ndarray, List[float]],
+        metric_name_x: str,
+        metric_name_y: str,
+        layer_name: str,
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot scatter plot comparing two metric scores for correlation analysis.
+
+        Args:
+            scores_x: Scores for x-axis metric
+            scores_y: Scores for y-axis metric  
+            metric_name_x: Name of x-axis metric
+            metric_name_y: Name of y-axis metric
+            layer_name: Name of the layer
+            save_path: Optional path to save the figure
+
+        Returns:
+            Matplotlib figure
+        """
+        if isinstance(scores_x, torch.Tensor):
+            x = scores_x.detach().cpu().numpy().flatten()
+        else:
+            x = np.asarray(scores_x).flatten()
+
+        if isinstance(scores_y, torch.Tensor):
+            y = scores_y.detach().cpu().numpy().flatten()
+        else:
+            y = np.asarray(scores_y).flatten()
+
+        # Ensure same length
+        min_len = min(len(x), len(y))
+        x, y = x[:min_len], y[:min_len]
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        # Scatter plot
+        ax.scatter(x, y, alpha=0.6, s=30, edgecolors="black", linewidths=0.5)
+
+        # Add correlation coefficient
+        if len(x) > 1:
+            correlation = np.corrcoef(x, y)[0, 1]
+            ax.text(
+                0.05, 0.95,
+                f"Pearson r = {correlation:.3f}",
+                transform=ax.transAxes,
+                fontsize=12,
+                verticalalignment="top",
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+            )
+
+            # Add trend line
+            if not np.isnan(correlation):
+                z = np.polyfit(x, y, 1)
+                p = np.poly1d(z)
+                x_line = np.linspace(x.min(), x.max(), 100)
+                ax.plot(x_line, p(x_line), "r--", alpha=0.8, label="Linear fit")
+
+        ax.set_xlabel(metric_name_x, fontsize=12)
+        ax.set_ylabel(metric_name_y, fontsize=12)
+        ax.set_title(f"Metric Correlation: {metric_name_x} vs {metric_name_y}\nLayer: {layer_name}", fontsize=14, fontweight="bold")
+
+        plt.tight_layout()
+
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+        return fig
+
     # ========== SCAR / Supernode Visualizations ==========
 
     def plot_scar_layer_scores(
@@ -1461,8 +1618,9 @@ Generated visualization report for alignment analysis.
                 strategy_name = strategy_key
                 mode = 'low'
             
-            # Get data
-            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            # Get data - prefer pruning_amounts (target) over sparsities (actual) for x-axis
+            # This ensures plots respect the configured sparsity_levels
+            sparsities = strategy_data.get('pruning_amounts', strategy_data.get('sparsities', []))
             
             if metric == 'accuracy':
                 means = strategy_data.get('accuracies_mean', strategy_data.get('accuracies_after_finetune', 
@@ -1572,7 +1730,7 @@ Generated visualization report for alignment analysis.
         strategies = list(results.keys())
         
         for strategy_data in results.values():
-            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            sparsities = strategy_data.get('pruning_amounts', strategy_data.get('sparsities', []))
             all_sparsities.update(sparsities)
         
         all_sparsities = sorted(all_sparsities)
@@ -1580,7 +1738,7 @@ Generated visualization report for alignment analysis.
         # Plot 1: Accuracy before fine-tuning
         ax1 = fig.add_subplot(gs[0, 0])
         for strategy_key, strategy_data in results.items():
-            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            sparsities = strategy_data.get('pruning_amounts', strategy_data.get('sparsities', []))
             accs = strategy_data.get('accuracies_before_finetune', [])
             if sparsities and accs:
                 ax1.plot([s*100 for s in sparsities], accs, 'o-', 
@@ -1595,7 +1753,7 @@ Generated visualization report for alignment analysis.
         # Plot 2: Accuracy after fine-tuning
         ax2 = fig.add_subplot(gs[0, 1])
         for strategy_key, strategy_data in results.items():
-            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            sparsities = strategy_data.get('pruning_amounts', strategy_data.get('sparsities', []))
             accs = strategy_data.get('accuracies_after_finetune', [])
             if sparsities and accs:
                 ax2.plot([s*100 for s in sparsities], accs, 'o-',
@@ -1610,7 +1768,7 @@ Generated visualization report for alignment analysis.
         # Plot 3: Improvement from fine-tuning
         ax3 = fig.add_subplot(gs[1, 0])
         for strategy_key, strategy_data in results.items():
-            sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+            sparsities = strategy_data.get('pruning_amounts', strategy_data.get('sparsities', []))
             before = strategy_data.get('accuracies_before_finetune', [])
             after = strategy_data.get('accuracies_after_finetune', [])
             if sparsities and before and after and len(before) == len(after):
@@ -1635,7 +1793,7 @@ Generated visualization report for alignment analysis.
             after_vals = []
             
             for strategy_key, strategy_data in results.items():
-                sparsities = strategy_data.get('sparsities', strategy_data.get('pruning_amounts', []))
+                sparsities = strategy_data.get('pruning_amounts', strategy_data.get('sparsities', []))
                 if target_sparsity in sparsities:
                     idx = sparsities.index(target_sparsity)
                     before = strategy_data.get('accuracies_before_finetune', [])
@@ -2259,7 +2417,7 @@ def generate_experiment_visualizations(
             
             if algorithm not in algorithm_results:
                 algorithm_results[algorithm] = {
-                    "sparsities": strategy_data.get("sparsities", strategy_data.get("pruning_amounts", [])),
+                    "sparsities": strategy_data.get("pruning_amounts", strategy_data.get("sparsities", [])),
                     "before": {},
                     "after": {},
                     "before_std": {},
@@ -2304,7 +2462,7 @@ def generate_experiment_visualizations(
                 comparison_data = {}
                 for strategy_key, strategy_data in pruning_results["strategies"].items():
                     comparison_data[strategy_key] = {
-                        "sparsities": strategy_data.get("sparsities", strategy_data.get("pruning_amounts", [])),
+                        "sparsities": strategy_data.get("pruning_amounts", strategy_data.get("sparsities", [])),
                         "accuracies_after_finetune": strategy_data.get("accuracies_after_finetune", []),
                         "accuracies_std": strategy_data.get("accuracies_after_finetune_std"),
                     }
@@ -2414,6 +2572,25 @@ def generate_experiment_visualizations(
                                         )
                                         plt.close(fig)
                                         generated_plots.append(output_dir / f"scatter_{metric1}_vs_{metric2}_{safe_layer}.png")
+    
+    # ========== Redundancy Heatmaps ==========
+    # Check for pairwise redundancy matrices in test_results
+    redundancy_matrices = test_results.get("redundancy_matrices", {})
+    if redundancy_matrices:
+        for layer_name, matrix in redundancy_matrices.items():
+            if matrix is not None and (isinstance(matrix, (np.ndarray, torch.Tensor))):
+                safe_layer = layer_name.replace(".", "_").replace("/", "_")
+                try:
+                    fig = visualizer.plot_pairwise_redundancy_matrix(
+                        redundancy_matrix=matrix,
+                        layer_name=layer_name,
+                        save_path=output_dir / f"redundancy_heatmap_{safe_layer}.png",
+                    )
+                    plt.close(fig)
+                    generated_plots.append(output_dir / f"redundancy_heatmap_{safe_layer}.png")
+                    logger.info(f"Generated redundancy heatmap for {layer_name}")
+                except Exception as e:
+                    logger.warning(f"Could not generate redundancy heatmap for {layer_name}: {e}")
     
     logger.info(f"Generated {len(generated_plots)} visualization(s) in {output_dir}")
     return generated_plots

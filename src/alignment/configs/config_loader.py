@@ -211,6 +211,12 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["model_config"]["output_dim"] = model["output_dim"]
         if "dropout_rate" in model:
             flat_config["model_config"]["dropout_rate"] = model["dropout_rate"]
+        if "in_channels" in model:
+            flat_config["model_config"]["in_channels"] = model["in_channels"]
+        if "hidden_channels" in model:
+            flat_config["model_config"]["hidden_channels"] = model["hidden_channels"]
+        if "example_input_hw" in model:
+            flat_config["model_config"]["example_input_hw"] = tuple(model["example_input_hw"])
         if "alignment_layers" in model:
             flat_config["tracked_layers"] = (
                 list(model["alignment_layers"].keys()) if isinstance(model["alignment_layers"], dict) else model["alignment_layers"]
@@ -266,6 +272,12 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["train_before_dropout"] = training.get("train_before_dropout", True)
         if "scheduler" in training:
             flat_config["scheduler"] = training.get("scheduler", "none")
+        if "scheduler_config" in training:
+            flat_config["scheduler_config"] = training["scheduler_config"]
+        if "momentum" in training:
+            flat_config["momentum"] = training["momentum"]
+        if "weight_decay" in training:
+            flat_config["weight_decay"] = training["weight_decay"]
         # Multi-network support for statistical error bars
         flat_config["num_networks"] = training.get("num_networks", 1)
     else:
