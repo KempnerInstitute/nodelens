@@ -226,29 +226,39 @@ class GaussianMIAnalytic(BaseMetric):
         Compute Gaussian MI with non-Gaussian corrections.
 
         Args:
-            inputs: Input activations [batch_size, input_dim]
+            inputs: Input activations [batch_size, input_dim] or [batch*patches, features] for CNN
             weights: Weight matrix [output_dim, input_dim]
             outputs: Output activations (computed if not provided)
 
         Returns:
             MI scores for each neuron [output_dim] or single score
         """
-        # Flatten inputs if needed (handle CNN activations)
-        if inputs.ndim > 2:
+        # Handle CNN inputs [B, C, H, W] -> flatten properly
+        if inputs.ndim == 4:
+            B, C, H, W = inputs.shape
+            # Permute to [B, H, W, C] then reshape to [B*H*W, C] - treat spatial as samples
+            inputs = inputs.permute(0, 2, 3, 1).reshape(B * H * W, C)
+        elif inputs.ndim > 2:
             inputs = inputs.reshape(inputs.shape[0], -1)
+            
         if weights.ndim > 2:
             weights = weights.reshape(weights.shape[0], -1)
             
-        batch_size, input_dim = inputs.shape
+        n_samples, input_dim = inputs.shape
         output_dim, weight_dim = weights.shape
 
         # Handle dimension mismatch (common for CNN layers where inputs aren't unfolded)
         if input_dim != weight_dim:
-            # Use the minimum dimension
-            min_dim = min(input_dim, weight_dim)
-            inputs = inputs[:, :min_dim]
-            weights = weights[:, :min_dim]
-            input_dim = min_dim
+            # For unfolded CNN inputs, dimensions should match
+            # If they don't match, we need to handle gracefully
+            if input_dim > weight_dim:
+                # Inputs may have extra dimensions, truncate
+                inputs = inputs[:, :weight_dim]
+                input_dim = weight_dim
+            else:
+                # Weight has extra dims, can't compute properly
+                # Return uniform scores
+                return torch.ones(output_dim, device=inputs.device)
 
         # Compute outputs if not provided
         if outputs is None:
@@ -264,7 +274,7 @@ class GaussianMIAnalytic(BaseMetric):
 
             # Compute input statistics once
             inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
-            cov_x = (inputs_centered.T @ inputs_centered) / (batch_size - 1)
+            cov_x = (inputs_centered.mT @ inputs_centered) / (n_samples - 1)
             cumulants_x = self._compute_cumulants(inputs, self.expansion_order + 2)
 
             for i in range(output_dim):
@@ -272,9 +282,9 @@ class GaussianMIAnalytic(BaseMetric):
                 y = outputs[:, i].unsqueeze(1)
                 y_centered = y - y.mean(dim=0, keepdim=True)
 
-                # Compute covariances
-                cov_y = (y_centered.T @ y_centered) / (batch_size - 1)
-                cov_xy = (inputs_centered.T @ y_centered) / (batch_size - 1)
+                # Compute covariances (use .mT for matrix transpose)
+                cov_y = (y_centered.mT @ y_centered) / (n_samples - 1)
+                cov_xy = (inputs_centered.mT @ y_centered) / (n_samples - 1)
 
                 # Gaussian MI baseline
                 mi_gaussian = self._gaussian_mi(cov_x, cov_y, cov_xy)
@@ -307,9 +317,9 @@ class GaussianMIAnalytic(BaseMetric):
             outputs_centered = outputs - outputs.mean(dim=0, keepdim=True)
 
             # Compute covariances
-            cov_x = (inputs_centered.T @ inputs_centered) / (batch_size - 1)
-            cov_y = (outputs_centered.T @ outputs_centered) / (batch_size - 1)
-            cov_xy = (inputs_centered.T @ outputs_centered) / (batch_size - 1)
+            cov_x = (inputs_centered.mT @ inputs_centered) / (n_samples - 1)
+            cov_y = (outputs_centered.mT @ outputs_centered) / (n_samples - 1)
+            cov_xy = (inputs_centered.mT @ outputs_centered) / (n_samples - 1)
 
             # Gaussian MI
             mi_gaussian = self._gaussian_mi(cov_x, cov_y, cov_xy)

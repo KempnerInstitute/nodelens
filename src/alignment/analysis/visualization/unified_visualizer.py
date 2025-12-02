@@ -1059,6 +1059,7 @@ class UnifiedVisualizer:
         algorithm: str = "Pruning",
         save_dir: Optional[Union[str, Path]] = None,
         dpi: int = 300,
+        total_params: Optional[int] = None,
     ) -> List[Figure]:
         """
         Create before/after fine-tuning comparison plots for pruning experiments.
@@ -1072,12 +1073,37 @@ class UnifiedVisualizer:
             algorithm: Name of the pruning algorithm.
             save_dir: Directory to save figures.
             dpi: DPI for saved figures.
+            total_params: Total number of parameters in the model (for secondary x-axis).
 
         Returns:
             List of generated figures.
         """
         figures = []
         x_values = [s * 100 for s in sparsities]
+        
+        def format_params(n: int) -> str:
+            """Format parameter count with K/M suffix."""
+            if n >= 1_000_000:
+                return f"{n/1_000_000:.1f}M"
+            elif n >= 1_000:
+                return f"{n/1_000:.0f}K"
+            else:
+                return str(n)
+        
+        def add_param_axis(ax, fig, x_vals, total_params):
+            """Add secondary x-axis showing remaining parameters."""
+            if total_params is None:
+                return
+            # Make room at top for secondary axis
+            fig.subplots_adjust(top=0.85)
+            ax2 = ax.twiny()
+            ax2.set_xlim(ax.get_xlim())
+            # Use fewer ticks to avoid clutter
+            tick_positions = [0, 20, 40, 60, 80, 100]
+            param_labels = [format_params(int(total_params * (1 - t/100))) for t in tick_positions]
+            ax2.set_xticks(tick_positions)
+            ax2.set_xticklabels(param_labels, fontsize=9)
+            ax2.set_xlabel("Remaining Parameters", fontsize=10)
 
         if save_dir:
             save_dir = Path(save_dir)
@@ -1106,7 +1132,7 @@ class UnifiedVisualizer:
             ax_before.legend(loc="best")
             ax_before.set_xlim(0, 100)
             ax_before.set_ylim(0, 105)
-            fig_before.tight_layout()
+            add_param_axis(ax_before, fig_before, x_values, total_params)
 
             if save_dir:
                 fig_before.savefig(save_dir / f"pruning_{algorithm}_accuracy_before.png",
@@ -1134,7 +1160,7 @@ class UnifiedVisualizer:
             ax_after.legend(loc="best")
             ax_after.set_xlim(0, 100)
             ax_after.set_ylim(0, 105)
-            fig_after.tight_layout()
+            add_param_axis(ax_after, fig_after, x_values, total_params)
 
             if save_dir:
                 fig_after.savefig(save_dir / f"pruning_{algorithm}_accuracy_after.png",
@@ -1180,7 +1206,7 @@ class UnifiedVisualizer:
             ax.legend(loc="best", frameon=True, fancybox=True, shadow=True)
             ax.set_xlim(0, 100)
             ax.set_ylim(0, 105)
-            fig.tight_layout()
+            add_param_axis(ax, fig, x_values, total_params)
 
             if save_dir:
                 fig.savefig(save_dir / f"pruning_{algorithm}_accuracy.png",
@@ -1556,6 +1582,7 @@ Generated visualization report for alignment analysis.
         baseline_value: Optional[float] = None,
         title: str = "Pruning Strategy Comparison",
         save_path: Optional[Union[str, Path]] = None,
+        total_params: Optional[int] = None,
     ) -> Figure:
         """
         Create a publication-quality pruning comparison plot with error bars.
@@ -1570,10 +1597,19 @@ Generated visualization report for alignment analysis.
             baseline_value: Optional baseline value to show as horizontal line
             title: Plot title
             save_path: Path to save the figure
+            total_params: Total number of parameters for secondary x-axis
             
         Returns:
             Matplotlib figure
         """
+        def format_params(n: int) -> str:
+            """Format parameter count with K/M suffix."""
+            if n >= 1_000_000:
+                return f"{n/1_000_000:.1f}M"
+            elif n >= 1_000:
+                return f"{n/1_000:.0f}K"
+            else:
+                return str(n)
         # Color palette
         colors = {
             'magnitude_low': '#1f77b4',      # Blue
@@ -1697,7 +1733,19 @@ Generated visualization report for alignment analysis.
         # Tick styling
         ax.tick_params(axis='both', which='major', labelsize=12)
         
-        plt.tight_layout()
+        # Add secondary x-axis with parameter count
+        if total_params is not None:
+            fig.subplots_adjust(top=0.85)  # Make room for secondary axis
+            ax2 = ax.twiny()
+            ax2.set_xlim(ax.get_xlim())
+            # Calculate remaining params at key sparsity levels
+            param_ticks = [0, 20, 40, 60, 80, 100]
+            param_labels = [format_params(int(total_params * (1 - t/100))) for t in param_ticks]
+            ax2.set_xticks(param_ticks)
+            ax2.set_xticklabels(param_labels, fontsize=10)
+            ax2.set_xlabel("Remaining Parameters", fontsize=12, fontweight='bold')
+        else:
+            plt.tight_layout()
         
         if save_path:
             save_path = Path(save_path)

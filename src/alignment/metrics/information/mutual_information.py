@@ -29,18 +29,20 @@ class MutualInformationGaussian(BaseMetric):
     # Class-level flag to track if batch mismatch warning has been shown
     _warned_batch_mismatch: bool = False
 
-    def __init__(self, use_pc_reference: bool = True, min_samples: int = 2, **config: Any):
+    def __init__(self, use_pc_reference: bool = True, min_samples: int = 2, max_samples: int = 5000, **config: Any):
         """
         Initialize the Gaussian MI metric.
 
         Args:
             use_pc_reference: If True and no target provided, use PC1 of inputs as reference
             min_samples: Minimum samples required for computation
+            max_samples: Maximum samples to use (random subsampling for larger tensors)
             **config: Additional configuration
         """
         super().__init__(**config)
         self.use_pc_reference = use_pc_reference
         self.min_samples = min_samples
+        self.max_samples = max_samples
 
     @property
     def requires_inputs(self) -> bool:
@@ -87,6 +89,13 @@ class MutualInformationGaussian(BaseMetric):
             outputs = outputs.reshape(-1, outputs.shape[-1])
 
         batch_size, num_neurons = outputs.shape
+        
+        # Subsample if too many samples (common for unfolded CNN layers)
+        subsample_indices = None
+        if batch_size > self.max_samples:
+            subsample_indices = torch.randperm(batch_size, device=outputs.device)[:self.max_samples]
+            outputs = outputs[subsample_indices]
+            batch_size = self.max_samples
 
         if batch_size < self.min_samples:
             logger.warning(f"MI_gaussian: Only {batch_size} samples, returning zeros")
@@ -96,13 +105,20 @@ class MutualInformationGaussian(BaseMetric):
         if target_outputs is None:
             if self.use_pc_reference and inputs is not None:
                 # Use first PC of inputs as reference
-                if inputs.ndim != 2:
+                if inputs.ndim == 4:
+                    B, C, H, W = inputs.shape
+                    inputs = inputs.permute(0, 2, 3, 1).reshape(B * H * W, C)
+                elif inputs.ndim != 2:
                     inputs = inputs.reshape(inputs.shape[0], -1)
+                
+                # Apply same subsampling as outputs
+                if subsample_indices is not None and inputs.shape[0] > self.max_samples:
+                    inputs = inputs[subsample_indices]
 
                 try:
                     # Compute covariance and get first PC
                     inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
-                    cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
+                    cov = torch.matmul(inputs_centered.mT, inputs_centered) / (batch_size - 1)
                     _, eigvecs = torch.linalg.eigh(cov)
                     ref_data = torch.matmul(inputs, eigvecs[:, -1:])  # PC1
                 except Exception as e:

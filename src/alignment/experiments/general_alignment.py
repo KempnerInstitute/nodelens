@@ -3116,6 +3116,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
             # Create visualizer
             visualizer = UnifiedVisualizer()
+            
+            # Compute total model parameters for secondary x-axis
+            total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
             # Generate plots for each algorithm using UnifiedVisualizer
             for algorithm, results in algorithm_results.items():
@@ -3129,6 +3132,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     algorithm=algorithm.capitalize(),
                     save_dir=output_dir,
                     dpi=self.config.plot_dpi,
+                    total_params=total_params,
                 )
                 for fig in figs:
                     plt.close(fig)
@@ -3167,6 +3171,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         metric="accuracy",
                         title=f"Pruning Strategy Comparison - {self.config.model_name}",
                         save_path=output_dir / "pruning_comparison_professional.png",
+                        total_params=total_params,
                     )
                     plt.close(fig)
                     

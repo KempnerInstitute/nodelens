@@ -1,0 +1,80 @@
+# LLaMA-3 RQ and L2 Score Pruning Experiment
+# Compute Rayleigh Quotient and L2 norm metrics, then prune based on scores
+
+experiment:
+  name: "llama3_rq_l2_pruning"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_rq_l2_pruning"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Track MLP layers for pruning
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+# Core metrics: RQ and L2
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+  num_samples: 64
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+# LLM-specific settings
+llm:
+  scar_metrics: true
+  scar_num_samples: 32
+  scar_max_length: 512
+  evaluate_perplexity: true
+  evaluation_num_samples: 50
+
+# Pruning experiments
+pruning:
+  enabled: true
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5]
+  selection_modes: ["low", "high", "random"]
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: false
+    epochs: 1
+    learning_rate: 1.0e-5
+
+# Performance
+performance:
+  eval_batches: null
+
+# Analysis and plots
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+
+visualization:
+  format: "png"
+  dpi: 300
+

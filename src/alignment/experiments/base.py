@@ -600,9 +600,15 @@ class BaseExperiment(CoreBaseExperiment):
         logger.info(f"Saved results to {results_path}")
 
     def _make_serializable(self, obj):
-        """Convert PyTorch tensors to lists for JSON serialization."""
+        """Convert PyTorch tensors and numpy arrays to lists for JSON serialization."""
+        import numpy as np
+        
         if isinstance(obj, torch.Tensor):
             return obj.cpu().tolist()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
         elif isinstance(obj, dict):
             return {k: self._make_serializable(v) for k, v in obj.items()}
         elif isinstance(obj, list):
