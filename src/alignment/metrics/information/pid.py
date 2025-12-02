@@ -100,10 +100,12 @@ class BasePIDMetric(BaseMetric):
             PCA transformed features
         """
         # Center the data
-        inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
+        # Convert to float32 for eigendecomposition (linalg.eigh doesn't support bfloat16)
+        inputs_f32 = inputs.float()
+        inputs_centered = inputs_f32 - inputs_f32.mean(dim=0, keepdim=True)
 
         # Compute covariance
-        cov = torch.mm(inputs_centered.t(), inputs_centered) / (inputs.size(0) - 1)
+        cov = torch.mm(inputs_centered.t(), inputs_centered) / (inputs_f32.size(0) - 1)
 
         # Eigendecomposition
         eigenvalues, eigenvectors = torch.linalg.eigh(cov)

@@ -2795,6 +2795,104 @@ class LLMAlignmentExperiment(BaseExperiment):
                             save_path=plots_dir / "scar_metrics_heatmap.png",
                         )
                         plt.close(fig)
+                        
+                        # Generate importance score histograms for each metric
+                        logger.info("Generating importance score histograms...")
+                        histogram_dir = plots_dir / "histograms"
+                        histogram_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        for metric_name in scar_metric_list + ["activation_l2_norm", "rayleigh_quotient"]:
+                            try:
+                                # Collect all scores for this metric across layers
+                                all_scores = []
+                                for layer_name, layer_metrics in self.importance_scores.items():
+                                    if metric_name in layer_metrics:
+                                        scores_tensor = layer_metrics[metric_name]
+                                        if torch.is_tensor(scores_tensor):
+                                            all_scores.append(scores_tensor.float().cpu().numpy().flatten())
+                                
+                                if all_scores:
+                                    combined_scores = np.concatenate(all_scores)
+                                    fig = viz.plot_histogram(
+                                        data=combined_scores,
+                                        title=f"{metric_name.replace('_', ' ').title()} Distribution (All Layers)",
+                                        xlabel=metric_name.replace('_', ' ').title(),
+                                        ylabel="Count",
+                                        save_path=histogram_dir / f"histogram_{metric_name}.png",
+                                    )
+                                    plt.close(fig)
+                            except Exception as hist_err:
+                                logger.warning(f"Failed to generate histogram for {metric_name}: {hist_err}")
+                        
+                        # Generate supernode comparison plots (supernode vs non-supernode metrics)
+                        logger.info("Generating supernode comparison plots...")
+                        supernode_dir = plots_dir / "supernode_analysis"
+                        supernode_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Get supernode config
+                        supernode_cfg = getattr(self.config, "supernode_config", {}) or {}
+                        if supernode_cfg.get("enabled", False):
+                            comparison_metrics = supernode_cfg.get("compute_metrics", 
+                                ["activation_l2_norm", "rayleigh_quotient", "scar_activation_power", "scar_loss_proxy"])
+                            
+                            # Aggregate supernodes vs non-supernodes across all layers
+                            supernode_vals = {m: [] for m in comparison_metrics}
+                            non_supernode_vals = {m: [] for m in comparison_metrics}
+                            
+                            for layer_name, layer_scores in self.importance_scores.items():
+                                mask = layer_scores.get("supernode_mask")
+                                if mask is None:
+                                    continue
+                                mask = mask.cpu().numpy() if torch.is_tensor(mask) else np.asarray(mask)
+                                
+                                for metric_name in comparison_metrics:
+                                    if metric_name in layer_scores:
+                                        scores = layer_scores[metric_name]
+                                        scores = scores.float().cpu().numpy() if torch.is_tensor(scores) else np.asarray(scores)
+                                        if len(scores) == len(mask):
+                                            supernode_vals[metric_name].extend(scores[mask])
+                                            non_supernode_vals[metric_name].extend(scores[~mask])
+                            
+                            # Plot comparison for each metric
+                            for metric_name in comparison_metrics:
+                                if supernode_vals[metric_name] and non_supernode_vals[metric_name]:
+                                    try:
+                                        sn_arr = np.array(supernode_vals[metric_name])
+                                        non_sn_arr = np.array(non_supernode_vals[metric_name])
+                                        
+                                        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+                                        
+                                        # Histogram comparison
+                                        axes[0].hist(non_sn_arr, bins=50, alpha=0.7, label=f"Non-Supernode (n={len(non_sn_arr)})", color="#5dade2")
+                                        axes[0].hist(sn_arr, bins=50, alpha=0.7, label=f"Supernode (n={len(sn_arr)})", color="#c0392b")
+                                        axes[0].set_xlabel(metric_name.replace("_", " ").title())
+                                        axes[0].set_ylabel("Count")
+                                        axes[0].set_title(f"{metric_name.replace('_', ' ').title()}: Supernode vs Non-Supernode")
+                                        axes[0].legend()
+                                        axes[0].grid(True, alpha=0.3)
+                                        
+                                        # Box plot comparison
+                                        box_data = [non_sn_arr, sn_arr]
+                                        bp = axes[1].boxplot(box_data, labels=["Non-Supernode", "Supernode"], patch_artist=True)
+                                        bp["boxes"][0].set_facecolor("#5dade2")
+                                        bp["boxes"][1].set_facecolor("#c0392b")
+                                        axes[1].set_ylabel(metric_name.replace("_", " ").title())
+                                        axes[1].set_title(f"Distribution Comparison")
+                                        axes[1].grid(True, alpha=0.3)
+                                        
+                                        # Add statistics annotation
+                                        stats_text = f"Supernode: μ={sn_arr.mean():.4f}, σ={sn_arr.std():.4f}\nNon-SN: μ={non_sn_arr.mean():.4f}, σ={non_sn_arr.std():.4f}"
+                                        axes[1].text(0.02, 0.98, stats_text, transform=axes[1].transAxes, 
+                                                     verticalalignment='top', fontsize=9, 
+                                                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                                        
+                                        plt.tight_layout()
+                                        fig.savefig(supernode_dir / f"supernode_comparison_{metric_name}.png", dpi=300, bbox_inches="tight")
+                                        plt.close(fig)
+                                        logger.info(f"Generated supernode comparison plot for {metric_name}")
+                                    except Exception as cmp_err:
+                                        logger.warning(f"Failed to generate supernode comparison for {metric_name}: {cmp_err}")
+                                        
                     except Exception as viz_err:
                         logger.error(f"Failed to generate SCAR visualizations: {viz_err}")
 
@@ -3063,9 +3161,23 @@ class LLMAlignmentExperiment(BaseExperiment):
                     
                     viz = UnifiedVisualizer()
                     
-                    # Calculate total parameters in the model
+                    # Calculate PRUNABLE parameters (only MLP layers being pruned, not total model params)
+                    # This is important for accurate "remaining parameters" display
+                    underlying_model = self._get_underlying_model()
+                    prunable_params = 0
                     total_params = sum(p.numel() for p in self.wrapped_model._model.parameters())
+                    
+                    # Count parameters in prunable MLP layers
+                    for name, module in underlying_model.named_modules():
+                        if any(pattern.replace("*", "") in name for pattern in ["mlp.up_proj", "mlp.gate_proj", "mlp.down_proj"]):
+                            if hasattr(module, "weight"):
+                                prunable_params += module.weight.numel()
+                    
                     logger.info(f"Total model parameters: {total_params:,}")
+                    logger.info(f"Prunable MLP parameters: {prunable_params:,} ({100*prunable_params/total_params:.1f}% of total)")
+                    
+                    # Use prunable params for the x-axis (more accurate representation)
+                    display_params = prunable_params if prunable_params > 0 else total_params
                     
                     # Get list of evaluation metrics to plot
                     eval_metrics = getattr(self.config, "evaluation_metrics", ["perplexity"])
@@ -3088,7 +3200,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             metric=eval_metric,
                             title=f"LLM Pruning: Strategy Comparison ({eval_metric.replace('_', ' ').title()})",
                             save_path=comparison_path,
-                            total_params=total_params,
+                            total_params=display_params,  # Use prunable params, not total
                         )
                         plt.close(fig)
                         
@@ -3113,7 +3225,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                                 metric=eval_metric,
                                 title=f"LLM Pruning: {algo.replace('_', ' ').title()} ({eval_metric.replace('_', ' ').title()})",
                                 save_path=algo_path,
-                                total_params=total_params,
+                                total_params=display_params,  # Use prunable params
                             )
                             plt.close(fig)
                     

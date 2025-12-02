@@ -85,11 +85,13 @@ class ConditionalMutualInformation(BaseMetric):
         # Use first principal component of inputs as conditioning variable
         if inputs.shape[1] > 1:
             # Simple PCA approximation using SVD
-            inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
+            # Convert to float32 for SVD (doesn't support bfloat16)
+            inputs_f32 = inputs.float()
+            inputs_centered = inputs_f32 - inputs_f32.mean(dim=0, keepdim=True)
             _, _, V = torch.linalg.svd(inputs_centered, full_matrices=False)
             X = torch.matmul(inputs_centered, V[0:1, :].T)  # First PC
         else:
-            X = inputs
+            X = inputs.float()
 
         # Determine reference signal Z
         if target_outputs is not None:

@@ -117,10 +117,12 @@ class MutualInformationGaussian(BaseMetric):
 
                 try:
                     # Compute covariance and get first PC
-                    inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
+                    # Convert to float32 for eigenvalue computation (linalg.eigh doesn't support bfloat16)
+                    inputs_f32 = inputs.float()
+                    inputs_centered = inputs_f32 - inputs_f32.mean(dim=0, keepdim=True)
                     cov = torch.matmul(inputs_centered.mT, inputs_centered) / (batch_size - 1)
                     _, eigvecs = torch.linalg.eigh(cov)
-                    ref_data = torch.matmul(inputs, eigvecs[:, -1:])  # PC1
+                    ref_data = torch.matmul(inputs_f32, eigvecs[:, -1:])  # PC1
                 except Exception as e:
                     logger.warning(f"MI_gaussian: PC computation failed: {e}, using first neuron")
                     ref_data = outputs[:, :1]

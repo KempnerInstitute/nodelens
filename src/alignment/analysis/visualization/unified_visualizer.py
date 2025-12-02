@@ -1677,12 +1677,26 @@ Generated visualization report for alignment analysis.
                 return f"{n/1_000:.1f}K"
             return str(n)
         
-        # Define colors and markers for different modes
-        mode_styles = {
-            "low": {"color": "#2ca02c", "marker": "o", "linestyle": "-"},
-            "high": {"color": "#d62728", "marker": "s", "linestyle": "-"},
-            "random": {"color": "#7f7f7f", "marker": "^", "linestyle": "--"},
+        # Define markers for different modes (shape distinguishes mode)
+        mode_markers = {
+            "low": {"marker": "o", "linestyle": "-"},      # Circle, solid
+            "high": {"marker": "s", "linestyle": "-"},     # Square, solid
+            "random": {"marker": "^", "linestyle": "--"},  # Triangle, dashed
         }
+        
+        # Define colors for different algorithms (color distinguishes algorithm)
+        algo_colors = [
+            "#1f77b4",  # Blue
+            "#ff7f0e",  # Orange
+            "#2ca02c",  # Green
+            "#d62728",  # Red
+            "#9467bd",  # Purple
+            "#8c564b",  # Brown
+            "#e377c2",  # Pink
+            "#7f7f7f",  # Gray
+            "#bcbd22",  # Olive
+            "#17becf",  # Cyan
+        ]
         
         # Group by algorithm (metric)
         algorithms = {}
@@ -1714,17 +1728,18 @@ Generated visualization report for alignment analysis.
         # Plot each algorithm with its modes
         for algo_idx, (algorithm, modes) in enumerate(algorithms.items()):
             algo_display = algorithm.replace("_", " ").title()
+            algo_color = algo_colors[algo_idx % len(algo_colors)]
             
             for mode, data in modes.items():
-                style = mode_styles.get(mode, {"color": f"C{algo_idx}", "marker": "o", "linestyle": "-"})
+                mode_style = mode_markers.get(mode, {"marker": "o", "linestyle": "-"})
                 label = f"{algo_display} ({mode})"
                 
                 ax.plot(
                     data["sparsities"],
                     data["values"],
-                    marker=style["marker"],
-                    linestyle=style["linestyle"],
-                    color=style["color"],
+                    marker=mode_style["marker"],
+                    linestyle=mode_style["linestyle"],
+                    color=algo_color,  # Color by algorithm
                     linewidth=2,
                     markersize=8,
                     label=label,

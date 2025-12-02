@@ -233,6 +233,14 @@ class GaussianMIAnalytic(BaseMetric):
         Returns:
             MI scores for each neuron [output_dim] or single score
         """
+        # Convert to float32 and move to CPU for linear algebra operations
+        # (linalg.pinv/solve don't support bfloat16, and large covariance matrices cause OOM on GPU)
+        original_device = inputs.device
+        inputs = inputs.float().cpu()
+        weights = weights.float().cpu()
+        if outputs is not None:
+            outputs = outputs.float().cpu()
+        
         # Handle CNN inputs [B, C, H, W] -> flatten properly
         if inputs.ndim == 4:
             B, C, H, W = inputs.shape
@@ -258,7 +266,7 @@ class GaussianMIAnalytic(BaseMetric):
             else:
                 # Weight has extra dims, can't compute properly
                 # Return uniform scores
-                return torch.ones(output_dim, device=inputs.device)
+                return torch.ones(output_dim, device=original_device)
 
         # Compute outputs if not provided
         if outputs is None:
@@ -309,7 +317,7 @@ class GaussianMIAnalytic(BaseMetric):
                 else:
                     mi_scores[i] = mi_gaussian
 
-            return mi_scores
+            return mi_scores.to(original_device)
 
         else:
             # Compute joint MI between all inputs and all outputs
@@ -346,4 +354,4 @@ class GaussianMIAnalytic(BaseMetric):
                 total_mi = mi_gaussian
 
             # Return same value for all neurons
-            return torch.full((output_dim,), total_mi.item(), device=inputs.device)
+            return torch.full((output_dim,), total_mi.item(), device=original_device)

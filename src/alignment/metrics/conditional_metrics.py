@@ -740,7 +740,9 @@ class ConditionalMIGaussian(BaseMetric):
             if inputs.ndim > 2:
                 inputs = inputs.reshape(inputs.shape[0], -1)
             try:
-                inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
+                # Convert to float32 for SVD (doesn't support bfloat16)
+                inputs_f32 = inputs.float()
+                inputs_centered = inputs_f32 - inputs_f32.mean(dim=0, keepdim=True)
                 _, _, V = torch.linalg.svd(inputs_centered, full_matrices=False)
                 ref = (inputs_centered @ V[0:1, :].T)
             except Exception:
