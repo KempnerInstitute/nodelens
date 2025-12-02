@@ -2353,7 +2353,16 @@ class LLMAlignmentExperiment(BaseExperiment):
             raise ValueError("Must compute importance scores before pruning")
 
         config = PruningConfig(amount=sparsity, structured=True, pruning_mode=mode)
-        pruner = AlignmentPruning(metric=metric, config=config)
+        
+        # For SCAR metrics and other pre-computed scores, use BasePruningStrategy directly
+        # since they're not in the metric registry (computed separately by SCAR analysis)
+        scar_metrics = ["scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature", 
+                        "directed_redundancy", "supernode_protection_score"]
+        if metric in scar_metrics:
+            from alignment.pruning.base import BasePruningStrategy
+            pruner = BasePruningStrategy(config=config)
+        else:
+            pruner = AlignmentPruning(metric=metric, config=config)
 
         masks = {}
         processed_mlps = set()  # Track which MLPs we've already processed
