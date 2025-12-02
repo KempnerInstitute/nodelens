@@ -1806,6 +1806,8 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
+            device = mlp_module.gate_proj.weight.device
+            mask = mask.to(device)
             
             # Get the MLP module - use underlying model to handle HFCausalLM wrapper
             underlying_model = self._get_underlying_model()
