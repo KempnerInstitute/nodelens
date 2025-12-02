@@ -2354,13 +2354,13 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         config = PruningConfig(amount=sparsity, structured=True, pruning_mode=mode)
         
-        # For SCAR metrics and other pre-computed scores, use BasePruningStrategy directly
+        # For SCAR metrics and other pre-computed scores, use PrecomputedScorePruning
         # since they're not in the metric registry (computed separately by SCAR analysis)
         scar_metrics = ["scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature", 
                         "directed_redundancy", "supernode_protection_score"]
         if metric in scar_metrics:
-            from alignment.pruning.base import BasePruningStrategy
-            pruner = BasePruningStrategy(config=config)
+            from alignment.pruning.base import PrecomputedScorePruning
+            pruner = PrecomputedScorePruning(config=config)
         else:
             pruner = AlignmentPruning(metric=metric, config=config)
 

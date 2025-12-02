@@ -309,6 +309,28 @@ class BasePruningStrategy(ABC):
         return mask
 
 
+class PrecomputedScorePruning(BasePruningStrategy):
+    """
+    Pruning strategy for use with pre-computed importance scores.
+    
+    This is a concrete implementation that doesn't compute scores itself,
+    but can apply masks and pruning using externally computed importance scores
+    (e.g., from SCAR metrics or other analysis methods).
+    """
+    
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
+        """
+        Not used for pre-computed scores - raises error if called.
+        
+        For PrecomputedScorePruning, importance scores should be passed directly
+        to create_pruning_mask() rather than computed here.
+        """
+        raise NotImplementedError(
+            "PrecomputedScorePruning expects scores to be passed directly to create_pruning_mask(). "
+            "Do not call compute_importance_scores() on this class."
+        )
+
+
 class IterativePruningStrategy(BasePruningStrategy):
     """
     Base class for iterative pruning strategies.
