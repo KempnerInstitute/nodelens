@@ -34,8 +34,8 @@ mkdir -p logs
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export HF_HOME=/n/holylabs/kempner_dev/Users/hsafaai/.cache/huggingface
-export TRANSFORMERS_CACHE=$HF_HOME
+export HF_HOME=/n/home13/hsafaai/.cache/huggingface
+export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
 
 echo "Running SCAR-based pruning experiment..."
 echo "Pruning metrics: L2 norm, SCAR loss proxy"
