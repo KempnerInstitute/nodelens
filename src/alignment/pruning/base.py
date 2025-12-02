@@ -156,6 +156,9 @@ class BasePruningStrategy(ABC):
             raise ValueError(f"Module {module} does not have a weight parameter")
 
         weight = module.weight.data
+        
+        # Move mask to same device as weight (important for multi-GPU models)
+        mask = mask.to(weight.device)
 
         # Handle dimension
         if mask.dim() == 1:
@@ -240,6 +243,30 @@ class BasePruningStrategy(ABC):
         if hasattr(module, "_gradient_hook_handle"):
             module._gradient_hook_handle.remove()
             delattr(module, "_gradient_hook_handle")
+    
+    def clear_pruning_state(self, module: nn.Module):
+        """
+        Clear all pruning state from a module WITHOUT making pruning permanent.
+        This allows a fresh pruning to be applied later.
+        
+        Args:
+            module: Module to clear pruning state from
+        """
+        # Remove hooks first
+        if hasattr(module, "_pruning_hook"):
+            module._pruning_hook.remove()
+            delattr(module, "_pruning_hook")
+
+        if hasattr(module, "_gradient_hook_handle"):
+            module._gradient_hook_handle.remove()
+            delattr(module, "_gradient_hook_handle")
+        
+        # Remove buffers (original weight and mask)
+        if hasattr(module, "_original_weight"):
+            delattr(module, "_original_weight")
+        
+        if hasattr(module, "weight_mask"):
+            delattr(module, "weight_mask")
 
     def get_sparsity(self, module: nn.Module) -> float:
         """

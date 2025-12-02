@@ -44,15 +44,30 @@ llm:
   scar_max_length: 512
   evaluate_perplexity: true
   evaluation_num_samples: 50
-
+  
+  # Evaluation metrics for pruning plots
+  # Available metrics (lower is better for perplexity/bits_per_byte, higher for accuracy):
+  #   - perplexity: Language modeling perplexity on WikiText
+  #   - bits_per_byte: Bits per byte (derived from perplexity)
+  #   - normalized_perplexity: Normalized to 0-100 scale (100 = best)
+  #   - accuracy_hellaswag: Zero-shot accuracy on HellaSwag benchmark
+  #   - accuracy_arc_easy: Zero-shot accuracy on ARC-Easy benchmark
+  evaluation_metrics:
+    - "perplexity"
+    - "accuracy_hellaswag"  # Zero-shot commonsense reasoning
+    
 # Pruning experiments
 pruning:
   enabled: true
-  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5]
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
   selection_modes: ["low", "high", "random"]
   distribution: "uniform"
   structured: true
   dependency_aware: true
+  
+  # For LLMs: limit to single strategy to reduce memory usage
+  # Set to a specific metric name, or null to run all enabled metrics
+  single_strategy: null  # e.g., "rayleigh_quotient" or "activation_l2_norm"
   
   fine_tune:
     enabled: false

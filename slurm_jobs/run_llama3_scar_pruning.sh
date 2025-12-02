@@ -1,18 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=llama3_rq_l2
-#SBATCH --output=logs/llama3_rq_l2_%j.out
-#SBATCH --error=logs/llama3_rq_l2_%j.err
+#SBATCH --job-name=llama3_scar
+#SBATCH --output=logs/llama3_scar_%j.out
+#SBATCH --error=logs/llama3_scar_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
-#SBATCH --time=2:00:00
+#SBATCH --time=8:00:00
 #SBATCH --mem=320GB
-#SBATCH --partition=kempner_eng
+#SBATCH --partition=kempner_h100
 #SBATCH --account=kempner_dev
 
 echo "=========================================="
-echo "LLaMA-3 RQ + L2 Pruning Experiment"
+echo "LLaMA-3 SCAR-Based Pruning with Supernode Protection"
 echo "=========================================="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $(hostname)"
@@ -34,14 +34,20 @@ mkdir -p logs
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HOME=/n/holylabs/kempner_dev/Users/hsafaai/.cache/huggingface
+export TRANSFORMERS_CACHE=$HF_HOME
 
-echo "Running experiment..."
+echo "Running SCAR-based pruning experiment..."
+echo "Pruning metrics: L2 norm, SCAR loss proxy"
+echo "Selection modes: low, high, random"
+echo "Evaluation: perplexity, bits_per_byte, MMLU"
+echo ""
+
 python scripts/run_experiment.py \
-    --config configs/examples/llama3_rq_l2_pruning.yaml \
+    --config configs/examples/llama3_scar_pruning.yaml \
     --device cuda
 
 echo ""
 echo "=========================================="
 echo "Experiment completed at $(date)"
 echo "=========================================="
-

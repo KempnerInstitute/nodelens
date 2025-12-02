@@ -918,6 +918,7 @@ class UnifiedVisualizer:
         metrics: Optional[List[str]] = None,
         title: str = "SCAR Metrics Heatmap",
         save_path: Optional[Union[str, Path]] = None,
+        normalize_per_metric: bool = True,
     ) -> Figure:
         """
         Create a heatmap of mean SCAR metrics across layers.
@@ -927,6 +928,8 @@ class UnifiedVisualizer:
             metrics:     List of metric names to include (default: all present keys)
             title:       Plot title
             save_path:   Optional path to save the figure
+            normalize_per_metric: If True, normalize each metric column to [0, 1] for visualization
+                                  (important since SCAR metrics have vastly different scales)
         """
         # Determine metrics to include
         all_metric_names = sorted({m for layer_scores in scar_scores.values() for m in layer_scores.keys()})
@@ -963,17 +966,64 @@ class UnifiedVisualizer:
             fig, _ = plt.subplots(figsize=self.figsize)
             return fig
 
-        # Reuse generic heatmap helper (it will convert nested dict to DataFrame)
-        return self.plot_heatmap(
-            data=layer_metric_means,
-            title=title,
-            cmap="coolwarm",
-            annotate=True,
-            fmt=".3f",
-            xlabel="Metric",
-            ylabel="Layer",
-            save_path=save_path,
-        )
+        # Convert to DataFrame
+        df = pd.DataFrame(layer_metric_means).T  # layers as rows, metrics as columns
+        
+        # Store original values for annotations
+        df_original = df.copy()
+        
+        # Normalize per metric column for visualization (SCAR metrics have vastly different scales)
+        if normalize_per_metric and len(df) > 1:
+            for col in df.columns:
+                col_min = df[col].min()
+                col_max = df[col].max()
+                if col_max - col_min > 1e-12:
+                    df[col] = (df[col] - col_min) / (col_max - col_min)
+                else:
+                    df[col] = 0.5  # All values same, set to middle
+        
+        fig, ax = plt.subplots(figsize=(max(12, len(df.columns) * 2), max(8, len(df.index) * 0.4)))
+        
+        if HAS_SEABORN:
+            # Use normalized values for coloring, but show original values as annotations
+            # Don't use center=0 since SCAR values are all positive
+            sns.heatmap(
+                df, ax=ax, cmap="viridis", 
+                annot=df_original.applymap(lambda x: f"{x:.2e}"),  # Scientific notation for small values
+                fmt="",  # Empty fmt since we're passing formatted strings
+                cbar_kws={"label": "Normalized Value" if normalize_per_metric else "Value"}, 
+                linewidths=0.5,
+                vmin=0, vmax=1 if normalize_per_metric else None,
+            )
+        else:
+            im = ax.imshow(df.values, cmap="viridis", aspect="auto", vmin=0, vmax=1 if normalize_per_metric else None)
+            
+            ax.set_xticks(np.arange(len(df.columns)))
+            ax.set_yticks(np.arange(len(df.index)))
+            ax.set_xticklabels(df.columns)
+            ax.set_yticklabels(df.index)
+            
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+            
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label("Normalized Value" if normalize_per_metric else "Value", rotation=270, labelpad=15)
+            
+            # Annotate with original values in scientific notation
+            for i in range(len(df.index)):
+                for j in range(len(df.columns)):
+                    val = df_original.iloc[i, j]
+                    ax.text(j, i, f"{val:.2e}", ha="center", va="center", color="white", fontsize=8)
+        
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.set_xlabel("Metric")
+        ax.set_ylabel("Layer")
+        
+        plt.tight_layout()
+        
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        
+        return fig
 
     # ========== Pruning Analysis ==========
 
@@ -1573,6 +1623,161 @@ Generated visualization report for alignment analysis.
             save_path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
+        return fig
+
+    def plot_llm_pruning_comparison(
+        self,
+        results: Dict[str, Dict[str, Any]],
+        baseline_ppl: Optional[float] = None,
+        baseline_values: Optional[Dict[str, float]] = None,
+        metric: str = "perplexity",
+        title: str = "LLM Pruning Comparison",
+        save_path: Optional[Union[str, Path]] = None,
+        total_params: Optional[int] = None,
+    ) -> Figure:
+        """
+        Plot pruning comparison for LLMs with configurable evaluation metric.
+        All strategies (metric_low, metric_high, metric_random) are plotted together.
+        
+        Args:
+            results: Dict mapping strategy names to their results.
+                Each strategy should have:
+                - 'sparsities': List of sparsity levels
+                - 'perplexities' or other metric: Values at each sparsity
+            baseline_ppl: Optional baseline perplexity (for backward compatibility)
+            baseline_values: Optional dict of baseline values for each metric
+            metric: Which metric to plot ('perplexity', 'accuracy_hellaswag', etc.)
+            title: Plot title
+            save_path: Path to save the figure
+            total_params: Total number of parameters for secondary x-axis
+            
+        Returns:
+            Matplotlib figure
+        """
+        # Metric configuration: name, ylabel, lower_is_better
+        metric_config = {
+            "perplexity": ("Perplexity", True),
+            "bits_per_byte": ("Bits per Byte", True),
+            "normalized_perplexity": ("Normalized Score", False),
+            "accuracy_hellaswag": ("HellaSwag Accuracy (%)", False),
+            "accuracy_arc_easy": ("ARC-Easy Accuracy (%)", False),
+        }
+        
+        ylabel, lower_is_better = metric_config.get(metric, (metric.replace("_", " ").title(), True))
+        
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Helper function to format parameter counts
+        def format_params(n: int) -> str:
+            if n >= 1_000_000_000:
+                return f"{n/1_000_000_000:.1f}B"
+            elif n >= 1_000_000:
+                return f"{n/1_000_000:.1f}M"
+            elif n >= 1_000:
+                return f"{n/1_000:.1f}K"
+            return str(n)
+        
+        # Define colors and markers for different modes
+        mode_styles = {
+            "low": {"color": "#2ca02c", "marker": "o", "linestyle": "-"},
+            "high": {"color": "#d62728", "marker": "s", "linestyle": "-"},
+            "random": {"color": "#7f7f7f", "marker": "^", "linestyle": "--"},
+        }
+        
+        # Group by algorithm (metric)
+        algorithms = {}
+        for strategy_name, data in results.items():
+            sparsities = data.get("sparsities", [])
+            # Try to get the requested metric, fall back to perplexities
+            metric_key = metric if metric in data else "perplexities"
+            values = data.get(metric_key, data.get("perplexities", []))
+            
+            if not sparsities or not values:
+                continue
+            
+            # Parse algorithm and mode from strategy name (e.g., "rayleigh_quotient_low")
+            parts = strategy_name.rsplit("_", 1)
+            if len(parts) == 2 and parts[1] in ["low", "high", "random"]:
+                algorithm = parts[0]
+                mode = parts[1]
+            else:
+                algorithm = strategy_name
+                mode = "low"
+            
+            if algorithm not in algorithms:
+                algorithms[algorithm] = {}
+            algorithms[algorithm][mode] = {
+                "sparsities": sparsities,
+                "values": values,
+            }
+        
+        # Plot each algorithm with its modes
+        for algo_idx, (algorithm, modes) in enumerate(algorithms.items()):
+            algo_display = algorithm.replace("_", " ").title()
+            
+            for mode, data in modes.items():
+                style = mode_styles.get(mode, {"color": f"C{algo_idx}", "marker": "o", "linestyle": "-"})
+                label = f"{algo_display} ({mode})"
+                
+                ax.plot(
+                    data["sparsities"],
+                    data["values"],
+                    marker=style["marker"],
+                    linestyle=style["linestyle"],
+                    color=style["color"],
+                    linewidth=2,
+                    markersize=8,
+                    label=label,
+                    alpha=0.8,
+                )
+        
+        # Plot baseline
+        baseline = baseline_ppl if metric == "perplexity" else (baseline_values or {}).get(metric)
+        if baseline is not None:
+            ax.axhline(y=baseline, color="black", linestyle=":", linewidth=2, label=f"Baseline ({baseline:.2f})")
+        
+        ax.set_xlabel("Sparsity (% Pruned)", fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.legend(loc="upper left" if lower_is_better else "lower left", fontsize=10)
+        ax.grid(True, alpha=0.3)
+        
+        # Use log scale for y-axis if range is large (only for perplexity-like metrics)
+        if lower_is_better and metric in ["perplexity", "bits_per_byte"]:
+            all_vals = [v for data in results.values() for v in data.get(metric, data.get("perplexities", []))]
+            if all_vals and max(all_vals) / (min(all_vals) + 1e-6) > 10:
+                ax.set_yscale("log")
+        
+        # Add secondary x-axis for parameter count
+        if total_params is not None and total_params > 0:
+            # Get the sparsity values from the x-axis
+            xlim = ax.get_xlim()
+            
+            # Create secondary axis at the top
+            ax2 = ax.twiny()
+            ax2.set_xlim(xlim)
+            
+            # Calculate tick positions (use same as primary axis or custom)
+            sparsity_ticks = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+            # Filter to those in xlim range
+            sparsity_ticks = [s for s in sparsity_ticks if xlim[0] <= s <= xlim[1]]
+            
+            ax2.set_xticks(sparsity_ticks)
+            param_labels = [format_params(int(total_params * (1 - s))) for s in sparsity_ticks]
+            ax2.set_xticklabels(param_labels, fontsize=9)
+            ax2.set_xlabel("Remaining Parameters", fontsize=11)
+            
+            # Adjust layout to make room for top axis
+            fig.subplots_adjust(top=0.85)
+        else:
+            plt.tight_layout()
+        
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Saved LLM pruning comparison ({metric}) to {save_path}")
+        
         return fig
 
     def plot_pruning_comparison(
