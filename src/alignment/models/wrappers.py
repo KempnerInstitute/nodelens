@@ -73,6 +73,7 @@ class ModelWrapper(BaseModelWrapper):
         Returns:
             Tuple of (model outputs, activation dictionary)
         """
+        print("TRACKED: ", self._tracked_layers)
         self._activation_cache.clear()
         # Support both tensor and dict inputs (for HF models)
         if isinstance(inputs, dict):

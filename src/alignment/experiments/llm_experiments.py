@@ -28,23 +28,12 @@ class LLMAlignmentExperiment(BaseExperiment):
         """Setup LLM alignment experiment components."""
         logger.info("Setting up LLM alignment experiment...")
 
-        # If using HuggingFace backend, (re)wrap the HF model and load tokenizer.
-        # Prefer reusing an already-initialized registry model (hf_causal_lm) to
-        # avoid double-loading large checkpoints.
+        # If using HuggingFace backend, load tokenizer & HF model then wrap
         if self.config.model_config.get("model_backend") == "hf":
-            if (
-                getattr(self, "model", None) is not None
-                and self.config.model_name.lower() == "hf_causal_lm"
-            ):
-                logger.info("Reusing existing 'hf_causal_lm' model from registry for LLMAlignmentExperiment.")
-                self._wrap_existing_hf_model()
-            else:
-                self._load_hf_tokenizer_and_model()
+            self._load_hf_tokenizer_and_model()
         else:
             # If not HF, rely on BaseExperiment's initialization (already called in __init__).
             logger.info("Using registry or torchvision model; BaseExperiment has initialized it.")
-
-        expanded = None
 
         # Expand tracked layer patterns into actual layer names for the wrapper
         if self.config.tracked_layers is not None:
@@ -61,9 +50,8 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                 logger.info(f"Tracked layers expanded to {len(expanded)} layers")
 
-        if expanded is not None:
-            # print("underlying_model: ", underlying_model)
-            print("expanded: ", expanded)
+        # print("underlying_model: ", underlying_model)
+        print("expanded: ", expanded)
 
         # Ensure we have a text dataset for importance computation in LLM experiments.
         # BaseExperiment may skip dataset initialization for LLM experiment types.
@@ -188,7 +176,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             return getattr(self.wrapped_model, "module")
         return self.wrapped_model  # type: ignore[return-value]
 
-    def _wrap_existing_hf_model(self) -> None:
+    def _wrap_existing_hf_model(self, expanded) -> None:
         """Reuse an HF Causal LM created via the model registry and wrap it."""
         from transformers import AutoTokenizer
 
@@ -205,7 +193,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         hf_model = getattr(self.model, "model", self.model)
 
         # Wrap with TransformerWrapper (expects an nn.Module)
-        wrapper_kwargs = {"tracked_layers": getattr(self.config, "tracked_layers", None)}
+        wrapper_kwargs = {"tracked_layers": expanded}
         try:
             wrapped = TransformerWrapper(hf_model, **wrapper_kwargs)
         except Exception:
@@ -480,6 +468,8 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         for layer_name in self.wrapped_model._tracked_layers:
             logger.info(f"Computing scores for {layer_name}")
+
+            print("named_modules: ", dict(self.wrapped_model._model.named_modules()).keys())
 
             layer_module = dict(self.wrapped_model._model.named_modules())[layer_name]
 
@@ -1815,7 +1805,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                     scores[core_mask] = scores.min() - margin
 
             # Create mask based on importance scores
-            print("scores shape:", scores.shape)  # Debugging line
             mask = pruner.create_pruning_mask(scores)
             
             # Get the MLP module - use underlying model to handle HFCausalLM wrapper
@@ -1823,9 +1812,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             module_dict = dict(underlying_model.named_modules())
             
             # Try different module path patterns for compatibility
-            mlp_path = f"model.model.layers.{layer_idx}.mlp"
-
-            # print("module_dict keys:", list(module_dict.keys()))  # Debugging line
+            mlp_path = f"model.layers.{layer_idx}.mlp"
 
             if mlp_path not in module_dict:
                 # Try without 'model.' prefix (for direct HF models)
@@ -2358,100 +2345,108 @@ class LLMAlignmentExperiment(BaseExperiment):
         return results
     
 
-    def plot_layer_importance_histogram(
-        self,
-        layer_name: str,
-        metric: str,
-        importance_scores: Dict[str, Dict[str, torch.Tensor]],
-        plots_dir: Union[str, Path],
-    ):
-        """
-        Create a histogram of importance scores for a specific layer/metric and
-        annotate the top-5 most important neurons.
+    def full_model_analysis():
+        pass
 
-        Args:
-            layer_name: Layer name as used in importance_scores.
-            metric: Metric name within importance_scores[layer_name].
-            importance_scores: Nested mapping {layer_name: {metric: scores_tensor}}.
-            plots_dir: Directory to save the figure.
-        """
 
-        if layer_name not in importance_scores or metric not in importance_scores[layer_name]:
-            logger.warning(f"plot_layer_importance_histogram: missing scores for {layer_name}/{metric}")
-            return
 
-        raw_tensor = importance_scores[layer_name][metric]
-        if not torch.is_tensor(raw_tensor) or raw_tensor.numel() == 0:
-            logger.warning(f"plot_layer_importance_histogram: empty or non-tensor scores for {layer_name}/{metric}")
-            return
 
-        viz = UnifiedVisualizer()
-        save_path = viz.plot_importance_histogram(
-            scores=raw_tensor,
-            layer_name=layer_name,
-            metric_name=metric,
-            plots_dir=plots_dir,
-            top_k=5,
-        )
-        logger.info(f"[Saved] Histogram with top-5 annotations for {layer_name}/{metric}: {save_path}")
+    
 
-    def plot_neuron_output_weights_histogram(
-        self,
-        layer_name: str,
-        neuron_index: int,
-        plots_dir: Union[str, Path],
-    ) -> Dict[str, Any]:
-        """
-        Create a histogram of the outgoing weights of a specific neuron and
-        highlight the top-5 largest-magnitude outgoing weights.
+    # def plot_layer_importance_histogram(
+    #     self,
+    #     layer_name: str,
+    #     metric: str,
+    #     importance_scores: Dict[str, Dict[str, torch.Tensor]],
+    #     plots_dir: Union[str, Path],
+    # ):
+    #     """
+    #     Create a histogram of importance scores for a specific layer/metric and
+    #     annotate the top-5 most important neurons.
 
-        Args:
-            layer_name: Name of the layer (for labeling and lookup).
-            neuron_index: Index of the neuron within the layer.
-            plots_dir: Directory to save the figure.
-        """
+    #     Args:
+    #         layer_name: Layer name as used in importance_scores.
+    #         metric: Metric name within importance_scores[layer_name].
+    #         importance_scores: Nested mapping {layer_name: {metric: scores_tensor}}.
+    #         plots_dir: Directory to save the figure.
+    #     """
 
-        # Look up the layer module and its weight tensor
-        layer_module = dict(self.wrapped_model._model.named_modules()).get(layer_name)
-        if layer_module is None:
-            logger.warning(f"plot_neuron_output_weights_histogram: layer '{layer_name}' not found")
-            return {}
+    #     if layer_name not in importance_scores or metric not in importance_scores[layer_name]:
+    #         logger.warning(f"plot_layer_importance_histogram: missing scores for {layer_name}/{metric}")
+    #         return
 
-        weight_tensor = self._get_layer_weights(layer_module)
-        if weight_tensor is None:
-            logger.warning(f"plot_neuron_output_weights_histogram: no weight tensor for layer '{layer_name}'")
-            return {}
+    #     raw_tensor = importance_scores[layer_name][metric]
+    #     if not torch.is_tensor(raw_tensor) or raw_tensor.numel() == 0:
+    #         logger.warning(f"plot_layer_importance_histogram: empty or non-tensor scores for {layer_name}/{metric}")
+    #         return
 
-        W = weight_tensor.detach().cpu().to(torch.float32)
+    #     viz = UnifiedVisualizer()
+    #     save_path = viz.plot_importance_histogram(
+    #         scores=raw_tensor,
+    #         layer_name=layer_name,
+    #         metric_name=metric,
+    #         plots_dir=plots_dir,
+    #         top_k=5,
+    #     )
+    #     logger.info(f"[Saved] Histogram with top-5 annotations for {layer_name}/{metric}: {save_path}")
 
-        if neuron_index < 0 or neuron_index >= W.shape[1]:
-            logger.warning(
-                f"plot_neuron_output_weights_histogram: neuron_index {neuron_index} "
-                f"out of range for layer '{layer_name}' with width {W.shape[1]}"
-            )
-            return {}
+    # def plot_neuron_output_weights_histogram(
+    #     self,
+    #     layer_name: str,
+    #     neuron_index: int,
+    #     plots_dir: Union[str, Path],
+    # ) -> Dict[str, Any]:
+    #     """
+    #     Create a histogram of the outgoing weights of a specific neuron and
+    #     highlight the top-5 largest-magnitude outgoing weights.
 
-        outgoing = W[:, neuron_index]
-        magnitudes = outgoing.abs()
-        k = min(5, magnitudes.numel())
-        top_idxs, _ = torch.topk(magnitudes, k=k)
-        top_vals = outgoing[top_idxs]
+    #     Args:
+    #         layer_name: Name of the layer (for labeling and lookup).
+    #         neuron_index: Index of the neuron within the layer.
+    #         plots_dir: Directory to save the figure.
+    #     """
 
-        viz = UnifiedVisualizer()
-        save_path = viz.plot_neuron_outgoing_weights(
-            weights=W,
-            layer_name=layer_name,
-            neuron_index=neuron_index,
-            plots_dir=plots_dir,
-            top_k=5,
-        )
+    #     # Look up the layer module and its weight tensor
+    #     layer_module = dict(self.wrapped_model._model.named_modules()).get(layer_name)
+    #     if layer_module is None:
+    #         logger.warning(f"plot_neuron_output_weights_histogram: layer '{layer_name}' not found")
+    #         return {}
 
-        logger.info(f"[Saved] Outgoing weights histogram for {layer_name} neuron {neuron_index}: {save_path}")
+    #     weight_tensor = self._get_layer_weights(layer_module)
+    #     if weight_tensor is None:
+    #         logger.warning(f"plot_neuron_output_weights_histogram: no weight tensor for layer '{layer_name}'")
+    #         return {}
 
-        return {
-            "layer": layer_name,
-            "neuron_index": neuron_index,
-            "top5_output_indices": top_idxs.tolist(),
-            "top5_values": [outgoing[i].item() for i in top_idxs],
-            "plot_path": str(save_path),
-        }
+    #     W = weight_tensor.detach().cpu().to(torch.float32)
+
+    #     if neuron_index < 0 or neuron_index >= W.shape[1]:
+    #         logger.warning(
+    #             f"plot_neuron_output_weights_histogram: neuron_index {neuron_index} "
+    #             f"out of range for layer '{layer_name}' with width {W.shape[1]}"
+    #         )
+    #         return {}
+
+    #     outgoing = W[:, neuron_index]
+    #     magnitudes = outgoing.abs()
+    #     k = min(5, magnitudes.numel())
+    #     top_idxs, _ = torch.topk(magnitudes, k=k)
+    #     top_vals = outgoing[top_idxs]
+
+    #     viz = UnifiedVisualizer()
+    #     save_path = viz.plot_neuron_outgoing_weights(
+    #         weights=W,
+    #         layer_name=layer_name,
+    #         neuron_index=neuron_index,
+    #         plots_dir=plots_dir,
+    #         top_k=5,
+    #     )
+
+    #     logger.info(f"[Saved] Outgoing weights histogram for {layer_name} neuron {neuron_index}: {save_path}")
+
+    #     return {
+    #         "layer": layer_name,
+    #         "neuron_index": neuron_index,
+    #         "top5_output_indices": top_idxs.tolist(),
+    #         "top5_values": [outgoing[i].item() for i in top_idxs],
+    #         "plot_path": str(save_path),
+    #     }

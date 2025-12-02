@@ -300,6 +300,7 @@ class BaseModelWrapper(BaseModel):
         Returns:
             Tuple of (model_output, activations_dict)
         """
+
         layers = layers or self._tracked_layers
 
         with self.hook_manager.temporary_hooks(
