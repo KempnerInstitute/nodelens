@@ -1657,10 +1657,14 @@ Generated visualization report for alignment analysis.
         # Metric configuration: name, ylabel, lower_is_better
         metric_config = {
             "perplexity": ("Perplexity", True),
+            "loss": ("Cross-Entropy Loss", True),
             "bits_per_byte": ("Bits per Byte", True),
             "normalized_perplexity": ("Normalized Score", False),
             "accuracy_hellaswag": ("HellaSwag Accuracy (%)", False),
             "accuracy_arc_easy": ("ARC-Easy Accuracy (%)", False),
+            "accuracy_piqa": ("PIQA Accuracy (%)", False),
+            "accuracy_boolq": ("BoolQ Accuracy (%)", False),
+            "accuracy_mmlu": ("MMLU Accuracy (%)", False),
         }
         
         ylabel, lower_is_better = metric_config.get(metric, (metric.replace("_", " ").title(), True))
@@ -1758,7 +1762,7 @@ Generated visualization report for alignment analysis.
         ax.grid(True, alpha=0.3)
         
         # Use log scale for y-axis if range is large (only for perplexity-like metrics)
-        if lower_is_better and metric in ["perplexity", "bits_per_byte"]:
+        if lower_is_better and metric in ["perplexity", "bits_per_byte", "loss"]:
             all_vals = [v for data in results.values() for v in data.get(metric, data.get("perplexities", []))]
             if all_vals and max(all_vals) / (min(all_vals) + 1e-6) > 10:
                 ax.set_yscale("log")

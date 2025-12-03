@@ -1,18 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=vision_synergy
-#SBATCH --output=logs/vision_synergy_%j.out
-#SBATCH --error=logs/vision_synergy_%j.err
+#SBATCH --job-name=test_all_layers
+#SBATCH --output=logs/test_all_layers_%j.out
+#SBATCH --error=logs/test_all_layers_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
-#SBATCH --time=4:00:00
-#SBATCH --mem=64GB
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=16
+#SBATCH --time=2:00:00
+#SBATCH --mem=320GB
 #SBATCH --partition=kempner_h100
 #SBATCH --account=kempner_dev
 
 echo "=========================================="
-echo "Vision Synergy Paper: RQ, Redundancy, Synergy"
+echo "Test: All Layers (MLP + Attention)"
 echo "=========================================="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $(hostname)"
@@ -33,17 +33,18 @@ mkdir -p logs
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HOME=/n/home13/hsafaai/.cache/huggingface
+export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
 
-echo "Running Vision Synergy experiments..."
-echo "Model: ResNet-18 on CIFAR-10"
-echo "Metrics: RQ, Redundancy, Synergy, L2 Norm"
+echo "Testing with ALL layers (MLP + Attention)..."
 echo ""
 
 python scripts/run_experiment.py \
-    --config configs/projects/vision_synergy.yaml \
+    --config configs/examples/llama3_test_all_layers.yaml \
     --device cuda
 
 echo ""
 echo "=========================================="
-echo "Experiment completed at $(date)"
+echo "Test completed at $(date)"
 echo "=========================================="

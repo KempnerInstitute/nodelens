@@ -189,8 +189,10 @@ class LLMAlignmentExperiment(BaseExperiment):
         Supported metrics:
         - perplexity: Language modeling perplexity on WikiText (lower is better)
         - bits_per_byte: Bits per byte on WikiText (lower is better)
-        - accuracy_hellaswag: Zero-shot accuracy on HellaSwag (higher is better)
-        - accuracy_arc_easy: Zero-shot accuracy on ARC-Easy (higher is better)
+        - accuracy_hellaswag: Zero-shot accuracy on HellaSwag commonsense (higher is better)
+        - accuracy_arc_easy: Zero-shot accuracy on ARC-Easy science (higher is better)
+        - accuracy_piqa: Zero-shot accuracy on PIQA physical intuition (higher is better)
+        - accuracy_boolq: Zero-shot accuracy on BoolQ boolean questions (higher is better)
         - accuracy_mmlu: Zero-shot accuracy on MMLU across 57 subjects (higher is better)
         
         Args:
@@ -201,7 +203,9 @@ class LLMAlignmentExperiment(BaseExperiment):
             Dict mapping metric name to value
         """
         if metrics is None:
-            metrics = getattr(self.config, "evaluation_metrics", ["perplexity"])
+            # Check both self.config and self.config.llm for evaluation_metrics
+            llm_cfg = getattr(self.config, "llm", {}) or {}
+            metrics = llm_cfg.get("evaluation_metrics") or getattr(self.config, "evaluation_metrics", ["perplexity"])
         
         results = {}
         
@@ -224,6 +228,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                     results["accuracy_hellaswag"] = self._evaluate_hellaswag(num_samples=num_samples)
                 elif metric == "accuracy_arc_easy":
                     results["accuracy_arc_easy"] = self._evaluate_arc_easy(num_samples=num_samples)
+                elif metric == "accuracy_piqa":
+                    results["accuracy_piqa"] = self._evaluate_piqa(num_samples=num_samples)
+                elif metric == "accuracy_boolq":
+                    results["accuracy_boolq"] = self._evaluate_boolq(num_samples=num_samples)
                 elif metric == "accuracy_mmlu":
                     results["accuracy_mmlu"] = self._evaluate_mmlu(num_samples=num_samples)
                 elif metric == "normalized_perplexity":
@@ -529,6 +537,264 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         accuracy = 100 * correct / total if total > 0 else 0.0
         logger.info(f"MMLU accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_hellaswag(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on HellaSwag (commonsense reasoning).
+        Returns accuracy (higher is better).
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate HellaSwag")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on HellaSwag ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("Rowan/hellaswag", split="validation", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load HellaSwag dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    ctx = example["ctx"]
+                    endings = example["endings"]
+                    label = int(example["label"])
+                    
+                    # Score each ending
+                    scores = []
+                    for ending in endings:
+                        text = f"{ctx} {ending}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+                        
+                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
+                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                        scores.append(-loss.item())
+                    
+                    predicted = np.argmax(scores)
+                    if predicted == label:
+                        correct += 1
+                    total += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Error on HellaSwag sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"HellaSwag accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_arc_easy(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on ARC-Easy (science questions).
+        Returns accuracy (higher is better).
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate ARC")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on ARC-Easy ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("allenai/ai2_arc", "ARC-Easy", split="test", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load ARC-Easy dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    question = example["question"]
+                    choices = example["choices"]
+                    answer_key = example["answerKey"]
+                    
+                    choice_texts = choices["text"]
+                    choice_labels = choices["label"]
+                    answer_idx = choice_labels.index(answer_key)
+                    
+                    # Score each choice
+                    scores = []
+                    for choice_text in choice_texts:
+                        text = f"Question: {question}\nAnswer: {choice_text}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+                        
+                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
+                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                        scores.append(-loss.item())
+                    
+                    predicted = np.argmax(scores)
+                    if predicted == answer_idx:
+                        correct += 1
+                    total += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Error on ARC-Easy sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"ARC-Easy accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_piqa(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on PIQA (physical intuition).
+        Returns accuracy (higher is better).
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate PIQA")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on PIQA ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("piqa", split="validation", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load PIQA dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    goal = example["goal"]
+                    sol1 = example["sol1"]
+                    sol2 = example["sol2"]
+                    label = example["label"]  # 0 or 1
+                    
+                    # Score each solution
+                    scores = []
+                    for sol in [sol1, sol2]:
+                        text = f"Goal: {goal}\nSolution: {sol}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+                        
+                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
+                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                        scores.append(-loss.item())
+                    
+                    predicted = np.argmax(scores)
+                    if predicted == label:
+                        correct += 1
+                    total += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Error on PIQA sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"PIQA accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_boolq(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on BoolQ (boolean questions).
+        Returns accuracy (higher is better).
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate BoolQ")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on BoolQ ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("google/boolq", split="validation", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load BoolQ dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    question = example["question"]
+                    passage = example["passage"]
+                    answer = example["answer"]  # True or False
+                    
+                    # Score "Yes" vs "No" completions
+                    scores = []
+                    for response in ["Yes", "No"]:
+                        text = f"Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+                        
+                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
+                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                        scores.append(-loss.item())
+                    
+                    # 0 = Yes (True), 1 = No (False)
+                    predicted = np.argmax(scores) == 0  # True if "Yes" has higher score
+                    if predicted == answer:
+                        correct += 1
+                    total += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Error on BoolQ sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"BoolQ accuracy: {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
     def _get_underlying_model(self) -> nn.Module:
@@ -1284,7 +1550,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         return composite
 
     def _apply_supernode_selection(self, layer_scores: Dict[str, torch.Tensor], composite: Optional[torch.Tensor]) -> None:
-        config = getattr(self.config, "supernode_config", {}) or {}
+        config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
         if not config.get("enabled"):
             return
 
@@ -1388,6 +1654,12 @@ class LLMAlignmentExperiment(BaseExperiment):
             plots_dir = Path(getattr(self.config, "plots_dir", "./plots"))
         plots_dir = Path(plots_dir)
         plots_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create subfolders for organized plots
+        supernode_plots_dir = plots_dir / "supernode"
+        supernode_plots_dir.mkdir(parents=True, exist_ok=True)
+        layer_analysis_dir = plots_dir / "layer_analysis"
+        layer_analysis_dir.mkdir(parents=True, exist_ok=True)
 
         results = {}
 
@@ -1490,7 +1762,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     threshold_percentile=supernode_fraction,
                     layer_name=layer_name,
                     metric_name=supernode_metric,
-                    save_path=plots_dir / f"supernode_score_dist_{layer_suffix}.png",
+                    save_path=supernode_plots_dir / f"supernode_score_dist_{layer_suffix}.png",
                 )
                 import matplotlib.pyplot as plt
                 plt.close(fig)
@@ -1502,7 +1774,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 fig = viz.plot_outgoing_weights_distribution(
                     weights=supernode_weights,
                     layer_name=layer_name,
-                    save_path=plots_dir / f"supernode_outgoing_weights_{layer_suffix}.png",
+                    save_path=supernode_plots_dir / f"supernode_outgoing_weights_{layer_suffix}.png",
                 )
                 import matplotlib.pyplot as plt
                 plt.close(fig)
@@ -1516,7 +1788,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     threshold_value=follower_vals[num_followers-1].item(),
                     threshold_percentile=follower_fraction,
                     layer_name=layer_name,
-                    save_path=plots_dir / f"supernode_influence_{layer_suffix}.png",
+                    save_path=supernode_plots_dir / f"supernode_influence_{layer_suffix}.png",
                 )
                 import matplotlib.pyplot as plt
                 plt.close(fig)
@@ -1776,7 +2048,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 title=f"{title_prefix}\nPairwise Correlations (Mean |r|={mean_redundancy:.3f})",
                 xlabel="Neuron Index (high supernode connection)",
                 ylabel="Neuron Index (high supernode connection)",
-                save_path=plots_dir / f"next_layer_correlation_{layer_suffix}.png",
+                save_path=layer_analysis_dir / f"next_layer_correlation_{layer_suffix}.png",
             )
             plt.close(fig)
         except Exception as e:
@@ -1791,7 +2063,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 title=f"{title_prefix}\nRedundancy Distribution",
                 vline=mean_redundancy,
                 vline_label=f"Mean: {mean_redundancy:.3f}",
-                save_path=plots_dir / f"next_layer_redundancy_hist_{layer_suffix}.png",
+                save_path=layer_analysis_dir / f"next_layer_redundancy_hist_{layer_suffix}.png",
             )
             plt.close(fig)
         except Exception as e:
@@ -1807,7 +2079,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 vline=rq_scores.mean().item(),
                 vline_label=f"Mean: {rq_scores.mean().item():.4f}",
                 color='green',
-                save_path=plots_dir / f"next_layer_rq_hist_{layer_suffix}.png",
+                save_path=layer_analysis_dir / f"next_layer_rq_hist_{layer_suffix}.png",
             )
             plt.close(fig)
         except Exception as e:
@@ -1823,7 +2095,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 vline=mi_scores.mean().item(),
                 vline_label=f"Mean: {mi_scores.mean().item():.4f}",
                 color='purple',
-                save_path=plots_dir / f"next_layer_mi_hist_{layer_suffix}.png",
+                save_path=layer_analysis_dir / f"next_layer_mi_hist_{layer_suffix}.png",
             )
             plt.close(fig)
         except Exception as e:
@@ -1837,7 +2109,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 mi_scores=mi_scores,
                 redundancy_scores=redundancy_for_color,
                 layer_name=f"{title_prefix}",
-                save_path=plots_dir / f"next_layer_rq_vs_mi_{layer_suffix}.png",
+                save_path=layer_analysis_dir / f"next_layer_rq_vs_mi_{layer_suffix}.png",
             )
             plt.close(fig)
         except Exception as e:
@@ -2069,7 +2341,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 xlabel="Supernode Influence (Total Abs Weight)",
                 ylabel="Mean Redundancy (Avg |Correlation| with Group)",
                 title=f"Supernode Influence vs Redundancy per Neuron\n{layer_name}",
-                save_path=plots_dir / f"redundancy_vs_influence_scatter_{layer_name.replace('.', '_')}.png",
+                save_path=layer_analysis_dir / f"redundancy_vs_influence_scatter_{layer_name.replace('.', '_')}.png",
             )
             plt.close(fig)
         except Exception as e:
@@ -2097,6 +2369,269 @@ class LLMAlignmentExperiment(BaseExperiment):
             },
         }
         
+        return results
+
+    def compute_directed_redundancy(
+        self,
+        scar_scores: Dict[str, Dict[str, torch.Tensor]],
+        supernode_fraction: float = 0.01,
+        halo_fraction: float = 0.10,
+        num_samples: int = 8,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Compute DIRECTED REDUNDANCY: redundancy among neurons in the "halo" connected to supernodes.
+        
+        This is the key novel contribution for SCAR pruning:
+        1. Identify supernodes (top neurons by activation power/loss proxy)
+        2. Find "halo" neurons: those with large weight connections TO supernodes
+        3. Compute pairwise redundancy WITHIN the halo
+        4. Neurons in the halo that are highly redundant with each other are safe to prune
+        5. Neurons with low redundancy (unique information) should be protected
+        
+        Args:
+            scar_scores: SCAR metrics per layer from compute_scar_supernode_metrics
+            supernode_fraction: Fraction to identify as supernodes (top by loss proxy)
+            halo_fraction: Fraction of neurons to consider as "halo" around supernodes
+            num_samples: Number of calibration samples to use
+            
+        Returns:
+            Dict with per-layer results including:
+            - halo_indices: Indices of neurons in the halo
+            - halo_redundancy: Per-neuron redundancy score within the halo
+            - protection_score: 1 - normalized_redundancy (high = protect, low = prune)
+            - pruning_candidates: Indices of highly redundant halo neurons
+        """
+        logger.info("=" * 60)
+        logger.info("Computing DIRECTED REDUNDANCY (supernode -> halo)")
+        logger.info("=" * 60)
+        logger.info(f"  Supernode fraction: {supernode_fraction*100:.1f}%")
+        logger.info(f"  Halo fraction: {halo_fraction*100:.1f}%")
+        
+        results = {}
+        
+        # Get model
+        hf_model = self.wrapped_model._model if hasattr(self.wrapped_model, "_model") else self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+            
+        # Get calibration texts
+        calibration_texts = []
+        if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+            calibration_texts = list(self.dataset.texts)[:num_samples]
+        if not calibration_texts:
+            logger.warning("No calibration texts available for directed redundancy")
+            return {}
+            
+        # Process each layer with SCAR scores
+        for layer_name, layer_scores in scar_scores.items():
+            if "down_proj" not in layer_name:
+                continue
+                
+            logger.info(f"\nProcessing {layer_name}...")
+            
+            # Get loss proxy scores to identify supernodes
+            loss_proxy = layer_scores.get("scar_loss_proxy")
+            if loss_proxy is None:
+                continue
+            loss_proxy = loss_proxy.float().cpu()
+            
+            # Get down_proj weights to find connections
+            down_proj_weight = None
+            for name, module in hf_model.named_modules():
+                if name.endswith(layer_name.replace("model.model.", "model.")):
+                    if hasattr(module, "weight"):
+                        down_proj_weight = module.weight.data.float().cpu()
+                        break
+            
+            if down_proj_weight is None:
+                # Try alternative naming
+                layer_pattern = layer_name.replace("model.model.", "")
+                for name, module in hf_model.named_modules():
+                    if layer_pattern in name or name.endswith(layer_pattern):
+                        if hasattr(module, "weight"):
+                            down_proj_weight = module.weight.data.float().cpu()
+                            break
+            
+            if down_proj_weight is None:
+                logger.warning(f"  Could not find weights for {layer_name}")
+                continue
+                
+            intermediate_dim = loss_proxy.numel()  # e.g., 14336
+            hidden_dim = down_proj_weight.shape[0]  # e.g., 4096
+            
+            # Step 1: Identify supernodes (top by loss proxy)
+            num_supernodes = max(1, int(supernode_fraction * intermediate_dim))
+            _, supernode_indices = torch.topk(loss_proxy, num_supernodes)
+            supernode_indices = supernode_indices.numpy()
+            
+            logger.info(f"  Identified {num_supernodes} supernodes")
+            
+            # Step 2: Find "halo" - neurons with large weights TO supernodes
+            # down_proj shape: [hidden_dim, intermediate_dim]
+            # Each row i is the weights from all intermediate neurons to output i
+            # Supernode columns are the weights FROM supernodes
+            
+            # Sum of absolute weights FROM supernodes for each output neuron
+            supernode_weights = down_proj_weight[:, supernode_indices]  # [hidden_dim, num_supernodes]
+            connection_strength = torch.abs(supernode_weights).sum(dim=1)  # [hidden_dim]
+            
+            # Top halo_fraction of neurons by connection to supernodes
+            num_halo = max(1, int(halo_fraction * hidden_dim))
+            _, halo_indices = torch.topk(connection_strength, num_halo)
+            halo_indices = halo_indices.numpy()
+            
+            logger.info(f"  Identified {num_halo} halo neurons (connected to supernodes)")
+            
+            # Step 3: Capture activations for halo neurons
+            halo_activations = []
+            
+            def capture_hook(module, inputs, outputs):
+                if outputs is not None:
+                    out = outputs.detach().float()
+                    if out.ndim == 3:
+                        out = out.reshape(-1, out.shape[-1])
+                    halo_activations.append(out[:, halo_indices].cpu())
+            
+            # Find and hook down_proj
+            hook_handle = None
+            for name, module in hf_model.named_modules():
+                if "mlp.down_proj" in name and any(p in layer_name for p in [name, name.split(".")[-3]]):
+                    hook_handle = module.register_forward_hook(capture_hook)
+                    break
+                    
+            if hook_handle is None:
+                # Try more flexible matching
+                layer_idx = None
+                if "layers." in layer_name:
+                    try:
+                        parts = layer_name.split("layers.")
+                        if len(parts) > 1:
+                            layer_idx = int(parts[1].split(".")[0])
+                    except:
+                        pass
+                
+                if layer_idx is not None:
+                    for name, module in hf_model.named_modules():
+                        if f"layers.{layer_idx}.mlp.down_proj" in name:
+                            hook_handle = module.register_forward_hook(capture_hook)
+                            break
+            
+            if hook_handle is None:
+                logger.warning(f"  Could not hook module for {layer_name}")
+                continue
+            
+            # Run forward passes
+            self.wrapped_model._model.eval()
+            with torch.no_grad():
+                for text in calibration_texts:
+                    inputs = self.tokenizer(
+                        text,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=256,
+                        padding=False,
+                    )
+                    inputs = {k: v.to(self.config.device) for k, v in inputs.items()}
+                    try:
+                        self.wrapped_model._model(**inputs)
+                    except Exception:
+                        pass
+            
+            hook_handle.remove()
+            
+            if not halo_activations:
+                logger.warning(f"  No activations captured for {layer_name}")
+                continue
+            
+            # Step 4: Compute pairwise redundancy WITHIN the halo
+            all_acts = torch.cat(halo_activations, dim=0)  # [total_tokens, num_halo]
+            
+            # Correlation matrix
+            acts_centered = all_acts - all_acts.mean(dim=0, keepdim=True)
+            acts_std = acts_centered.std(dim=0, keepdim=True)
+            acts_std = torch.where(acts_std > 1e-8, acts_std, torch.ones_like(acts_std))
+            acts_norm = acts_centered / acts_std
+            
+            corr_matrix = (acts_norm.T @ acts_norm) / (all_acts.shape[0] - 1)
+            corr_matrix = torch.clamp(corr_matrix, -1, 1)
+            
+            # Redundancy: average |correlation| with other halo neurons (excluding self)
+            abs_corr = torch.abs(corr_matrix)
+            abs_corr.fill_diagonal_(0)  # Exclude self
+            halo_redundancy = abs_corr.mean(dim=1)  # [num_halo]
+            
+            # Gaussian MI approximation: MI = -0.5 * log(1 - rho^2)
+            rho_sq = corr_matrix ** 2
+            rho_sq = torch.clamp(rho_sq, 0, 0.9999)
+            rho_sq.fill_diagonal_(0)
+            mi_matrix = -0.5 * torch.log(1 - rho_sq)
+            halo_redundancy_mi = mi_matrix.mean(dim=1)  # [num_halo]
+            
+            logger.info(f"  Halo redundancy: mean={halo_redundancy.mean():.4f}, std={halo_redundancy.std():.4f}")
+            
+            # Step 5: Compute protection score (low redundancy = unique = protect)
+            # Normalize redundancy to [0, 1]
+            red_min, red_max = halo_redundancy.min(), halo_redundancy.max()
+            if red_max > red_min:
+                normalized_redundancy = (halo_redundancy - red_min) / (red_max - red_min)
+            else:
+                normalized_redundancy = torch.zeros_like(halo_redundancy)
+            
+            protection_score = 1.0 - normalized_redundancy  # High = protect, low = prune
+            
+            # Step 6: Identify pruning candidates (high redundancy within halo)
+            # Bottom 50% of protection score = top 50% redundant
+            prune_threshold = protection_score.median()
+            pruning_candidates = halo_indices[protection_score.numpy() < prune_threshold.item()]
+            
+            logger.info(f"  Pruning candidates (high redundancy): {len(pruning_candidates)} neurons")
+            
+            # Store results
+            results[layer_name] = {
+                "supernode_indices": supernode_indices.tolist(),
+                "num_supernodes": num_supernodes,
+                "halo_indices": halo_indices.tolist(),
+                "num_halo": num_halo,
+                "halo_redundancy": halo_redundancy.numpy().tolist(),
+                "halo_redundancy_mi": halo_redundancy_mi.numpy().tolist(),
+                "protection_score": protection_score.numpy().tolist(),
+                "pruning_candidates": pruning_candidates.tolist(),
+                "num_pruning_candidates": len(pruning_candidates),
+                "stats": {
+                    "redundancy_mean": float(halo_redundancy.mean()),
+                    "redundancy_std": float(halo_redundancy.std()),
+                    "protection_mean": float(protection_score.mean()),
+                    "protection_std": float(protection_score.std()),
+                },
+            }
+            
+            # Store in importance_scores for use in pruning
+            if layer_name in self.importance_scores:
+                layer_scores = self.importance_scores[layer_name]
+                
+                # Create full-size tensors
+                full_halo_mask = torch.zeros(hidden_dim, dtype=torch.bool)
+                full_halo_mask[halo_indices] = True
+                
+                # Build protection score with base from L2 or RQ
+                full_protection = torch.zeros(hidden_dim)
+                if "activation_l2_norm" in layer_scores:
+                    base = layer_scores["activation_l2_norm"].detach().clone()
+                    if base.max() > base.min():
+                        full_protection = (base - base.min()) / (base.max() - base.min())
+                
+                # Halo neurons get boosted protection based on uniqueness
+                max_base = full_protection.max().item() if full_protection.max() > 0 else 1.0
+                full_protection[halo_indices] = full_protection[halo_indices] + max_base * 5 + protection_score
+                
+                full_prune_candidates = torch.zeros(hidden_dim, dtype=torch.bool)
+                full_prune_candidates[pruning_candidates] = True
+                
+                layer_scores["halo_mask"] = full_halo_mask
+                layer_scores["supernode_protection_score"] = full_protection
+                layer_scores["prune_candidate_mask"] = full_prune_candidates
+        
+        logger.info("\nDirected redundancy computation complete!")
         return results
 
     def _get_layer_weights(self, layer_module: nn.Module) -> Optional[torch.Tensor]:
@@ -2304,9 +2839,22 @@ class LLMAlignmentExperiment(BaseExperiment):
             full_directed_redundancy[supernode_indices] = supernode_total_influence
             layer_scores["directed_redundancy"] = full_directed_redundancy
             
-            # Also store as "supernode protection score" - higher = more important
-            protection_scores = torch.zeros(intermediate_dim)
-            protection_scores[supernode_indices] = supernode_total_influence
+            # Create "supernode protection score" - higher = more important, harder to prune
+            # All neurons get a base score based on their activation (L2 norm)
+            # Then supernodes get a large boost
+            base_protection = torch.zeros(intermediate_dim)
+            
+            # Get base importance from L2 norm or RQ if available
+            if "activation_l2_norm" in layer_scores:
+                base_protection = layer_scores["activation_l2_norm"].detach().clone()
+                # Normalize to [0, 1]
+                if base_protection.max() > base_protection.min():
+                    base_protection = (base_protection - base_protection.min()) / (base_protection.max() - base_protection.min())
+            
+            # Supernodes get very high protection (10x boost above max base)
+            max_base = base_protection.max().item() if base_protection.max() > 0 else 1.0
+            protection_scores = base_protection.clone()
+            protection_scores[supernode_indices] = max_base * 10 + supernode_total_influence
             layer_scores["supernode_protection_score"] = protection_scores
             
             self.importance_scores[layer_name] = layer_scores
@@ -2386,7 +2934,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Get importance scores
             scores = self.importance_scores[layer_name][metric].clone()
 
-            supernode_cfg = getattr(self.config, "supernode_config", {}) or {}
+            supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
             core_mask = self.importance_scores[layer_name].get("supernode_mask")
             if supernode_cfg.get("enabled") and supernode_cfg.get("protect_core", True) and core_mask is not None:
                 margin = torch.abs(scores).max().detach().item() + 1.0
@@ -2585,7 +3133,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         scores = scores.flatten()
         device = scores.device
 
-        supernode_cfg = getattr(self.config, "supernode_config", {}) or {}
+        supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
         core_mask = self.importance_scores.get(layer_key, {}).get("supernode_mask")
         if supernode_cfg.get("enabled") and supernode_cfg.get("protect_core", True) and core_mask is not None:
             margin = torch.abs(scores).max().detach().item() + 1.0
@@ -2759,6 +3307,10 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                         plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
                         plots_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Create organized subfolders
+                        scar_plots_dir = plots_dir / "scar"
+                        scar_plots_dir.mkdir(parents=True, exist_ok=True)
 
                         # Convert bfloat16 tensors to float32 for matplotlib compatibility
                         scar_scores_float32 = {}
@@ -2777,7 +3329,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             scar_scores_float32,
                             metric_name="scar_loss_proxy",
                             plot_type="violin",
-                            save_path=plots_dir / "scar_loss_proxy_layers.png",
+                            save_path=scar_plots_dir / "scar_loss_proxy_layers.png",
                         )
                         plt.close(fig)
 
@@ -2792,7 +3344,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             scar_scores_float32,
                             metrics=scar_metric_list,
                             title="SCAR Metrics per Layer",
-                            save_path=plots_dir / "scar_metrics_heatmap.png",
+                            save_path=scar_plots_dir / "scar_metrics_heatmap.png",
                         )
                         plt.close(fig)
                         
@@ -2801,7 +3353,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         histogram_dir = plots_dir / "histograms"
                         histogram_dir.mkdir(parents=True, exist_ok=True)
                         
-                        for metric_name in scar_metric_list + ["activation_l2_norm", "rayleigh_quotient"]:
+                        for metric_name in scar_metric_list + ["activation_l2_norm", "rayleigh_quotient", "gaussian_mi_analytic", "average_redundancy"]:
                             try:
                                 # Collect all scores for this metric across layers
                                 all_scores = []
@@ -2809,15 +3361,15 @@ class LLMAlignmentExperiment(BaseExperiment):
                                     if metric_name in layer_metrics:
                                         scores_tensor = layer_metrics[metric_name]
                                         if torch.is_tensor(scores_tensor):
-                                            all_scores.append(scores_tensor.float().cpu().numpy().flatten())
+                                            all_scores.append(scores_tensor.detach().float().cpu().numpy().flatten())
                                 
                                 if all_scores:
                                     combined_scores = np.concatenate(all_scores)
-                                    fig = viz.plot_histogram(
-                                        data=combined_scores,
-                                        title=f"{metric_name.replace('_', ' ').title()} Distribution (All Layers)",
+                                    fig = viz.plot_1d_histogram(
+                                        values=combined_scores,
                                         xlabel=metric_name.replace('_', ' ').title(),
                                         ylabel="Count",
+                                        title=f"{metric_name.replace('_', ' ').title()} Distribution (All Layers)",
                                         save_path=histogram_dir / f"histogram_{metric_name}.png",
                                     )
                                     plt.close(fig)
@@ -2826,11 +3378,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                         
                         # Generate supernode comparison plots (supernode vs non-supernode metrics)
                         logger.info("Generating supernode comparison plots...")
-                        supernode_dir = plots_dir / "supernode_analysis"
+                        supernode_dir = plots_dir / "supernode" / "comparison"
                         supernode_dir.mkdir(parents=True, exist_ok=True)
                         
                         # Get supernode config
-                        supernode_cfg = getattr(self.config, "supernode_config", {}) or {}
+                        supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
                         if supernode_cfg.get("enabled", False):
                             comparison_metrics = supernode_cfg.get("compute_metrics", 
                                 ["activation_l2_norm", "rayleigh_quotient", "scar_activation_power", "scar_loss_proxy"])
@@ -2898,7 +3450,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                     # Run supernode connection analysis
                     try:
-                        supernode_config = getattr(self.config, "supernode_config", {}) or {}
+                        supernode_config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
                         supernode_fraction = supernode_config.get("core_fraction", 0.01)
                         follower_fraction = supernode_config.get("follower_fraction", 0.10)
                         supernode_metric = supernode_config.get("score_metric", "scar_activation_power")
@@ -2933,7 +3485,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Compute directed redundancy from supernodes to downstream neurons
                     if getattr(self.config, "do_directed_redundancy", True):
                         try:
-                            supernode_config = getattr(self.config, "supernode_config", {}) or {}
+                            supernode_config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
                             directed_redundancy_results = self.compute_directed_redundancy(
                                 scar_scores=scar_scores,
                                 supernode_fraction=supernode_config.get("core_fraction", 0.01),
@@ -3020,12 +3572,17 @@ class LLMAlignmentExperiment(BaseExperiment):
             
             # For LLMs, save original state to CPU to avoid OOM
             # This is done once before all pruning experiments
+            # First clear GPU cache to free any temporary allocations
+            torch.cuda.empty_cache()
             logger.info("Saving original model state to CPU for pruning experiments...")
-            original_state = {
-                name: param.data.clone().cpu() 
-                for name, param in self.wrapped_model._model.named_parameters()
-            }
-            torch.cuda.empty_cache()  # Free GPU memory after cloning to CPU
+            original_state = {}
+            for name, param in self.wrapped_model._model.named_parameters():
+                # Use detach and clone to CPU directly, avoiding GPU allocation
+                original_state[name] = param.data.detach().cpu().clone()
+                # Periodically clear cache during large model copying
+                if len(original_state) % 100 == 0:
+                    torch.cuda.empty_cache()
+            torch.cuda.empty_cache()  # Final cleanup
             logger.info(f"Saved {len(original_state)} parameter tensors to CPU")
             
             # Helper function to clear pruning state (hooks, buffers) from all modules
@@ -3090,16 +3647,24 @@ class LLMAlignmentExperiment(BaseExperiment):
                         pruning_data["sparsities"].append(sparsity)
 
                         # Evaluate pruned model with configured metrics
-                        eval_metrics = getattr(self.config, "evaluation_metrics", ["perplexity"])
+                        llm_cfg = getattr(self.config, "llm", {}) or {}
+                        eval_metrics = llm_cfg.get("evaluation_metrics") or getattr(self.config, "evaluation_metrics", ["perplexity"])
                         if isinstance(eval_metrics, str):
                             eval_metrics = [eval_metrics]
                         
                         if self.config.do_perplexity_computation or "perplexity" in eval_metrics:
+                            # Log which metrics are being evaluated
+                            logger.info(f"Evaluating metrics: {eval_metrics}")
+                            
                             # Evaluate all requested metrics
                             eval_results = self.evaluate_multiple_metrics(
                                 metrics=eval_metrics,
                                 num_samples=self.config.evaluation_num_samples
                             )
+                            
+                            # Add loss (log of perplexity) if perplexity is available
+                            if "perplexity" in eval_results and eval_results["perplexity"] is not None:
+                                eval_results["loss"] = np.log(eval_results["perplexity"])
                             
                             # Store perplexity for backward compatibility
                             pruned_ppl = eval_results.get("perplexity")
@@ -3159,6 +3724,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                     plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
                     plots_dir.mkdir(parents=True, exist_ok=True)
                     
+                    # Create pruning subfolder
+                    pruning_plots_dir = plots_dir / "pruning"
+                    pruning_plots_dir.mkdir(parents=True, exist_ok=True)
+                    
                     viz = UnifiedVisualizer()
                     
                     # Calculate PRUNABLE parameters (only MLP layers being pruned, not total model params)
@@ -3180,7 +3749,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                     display_params = prunable_params if prunable_params > 0 else total_params
                     
                     # Get list of evaluation metrics to plot
-                    eval_metrics = getattr(self.config, "evaluation_metrics", ["perplexity"])
+                    llm_cfg = getattr(self.config, "llm", {}) or {}
+                    eval_metrics = llm_cfg.get("evaluation_metrics") or getattr(self.config, "evaluation_metrics", ["perplexity"])
                     if isinstance(eval_metrics, str):
                         eval_metrics = [eval_metrics]
                     
@@ -3192,7 +3762,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         metric_suffix = f"_{eval_metric}" if eval_metric != "perplexity" else ""
                         
                         # Generate combined comparison plot with all strategies
-                        comparison_path = plots_dir / f"pruning_comparison{metric_suffix}.png"
+                        comparison_path = pruning_plots_dir / f"pruning_comparison{metric_suffix}.png"
                         fig = viz.plot_llm_pruning_comparison(
                             results=all_pruning_data,
                             baseline_ppl=baseline_ppl if eval_metric == "perplexity" else None,
@@ -3217,7 +3787,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             algorithms[algo][strategy_key] = data
                         
                         for algo, algo_data in algorithms.items():
-                            algo_path = plots_dir / f"pruning_{algo}_comparison{metric_suffix}.png"
+                            algo_path = pruning_plots_dir / f"pruning_{algo}_comparison{metric_suffix}.png"
                             fig = viz.plot_llm_pruning_comparison(
                                 results=algo_data,
                                 baseline_ppl=baseline_ppl if eval_metric == "perplexity" else None,

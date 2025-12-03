@@ -53,7 +53,12 @@ llm:
   evaluation_metrics:
     - "perplexity"
     - "bits_per_byte"        # Compression efficiency (lower is better)
-    - "accuracy_mmlu"        # Zero-shot MMLU across 57 subjects
+    # Downstream tasks (slow - enable for final experiments):
+    # - "accuracy_mmlu"        # Zero-shot MMLU across 57 subjects (~20min)
+    # - "accuracy_hellaswag"   # Commonsense reasoning (~10min)
+    # - "accuracy_arc_easy"    # Science questions (~5min)
+    # - "accuracy_piqa"        # Physical intuition (~5min)
+    # - "accuracy_boolq"       # Boolean questions (~5min)
 
 # Supernode configuration - this is the key for supernode-aware pruning!
 # Supernodes are neurons with high activation power that are protected from pruning
@@ -67,7 +72,9 @@ supernode:
   #   - scar_activation_power: neurons with highest activation magnitude
   #   - scar_loss_proxy: neurons most impactful on loss
   #   - scar_taylor: first-order saliency
-  score_metric: "scar_loss_proxy"
+  # Use activation_l2_norm for initial supernode selection (available during importance computation)
+  # SCAR metrics (scar_loss_proxy) are computed afterward and used for visualization/analysis
+  score_metric: "activation_l2_norm"
   # Protect supernodes during pruning
   protect_core: true
   # Analyze connections across layers
@@ -85,7 +92,7 @@ supernode:
 pruning:
   enabled: true
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-  selection_modes: ["low", "high", "random"]  # All three selection modes
+  selection_modes: ["low", "high"]  # Low prunes lowest-scored, high prunes highest-scored
   distribution: "uniform"
   structured: true
   dependency_aware: true
@@ -97,6 +104,10 @@ pruning:
     - "rayleigh_quotient"            # RQ (alignment-based)
     - "gaussian_mi_analytic"         # MI (analytically related to RQ, fast)
     - "average_redundancy"           # Redundancy (remove redundant neurons)
+    - "supernode_protection_score"   # NEW: Directed redundancy - protects unique halo neurons
+    # Baselines for comparison (to be implemented)
+    # - "wanda"                      # Weight × Activation (Sun et al., 2023)
+    # - "sparsegpt"                  # Second-order one-shot (Frantar & Alistarh, 2023)
   
   # For LLMs: limit to single strategy to reduce memory usage (or null for all)
   single_strategy: null
@@ -105,6 +116,9 @@ pruning:
     enabled: false
     epochs: 1
     learning_rate: 1.0e-5
+
+# Enable directed redundancy computation (supernode -> halo analysis)
+do_directed_redundancy: true
 
 # Performance
 performance:

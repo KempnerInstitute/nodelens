@@ -138,8 +138,11 @@ class RayleighQuotient(BaseMetric):
             input_features = min_dim  # Update input_features after truncation
 
         # Move to appropriate device for computation
+        # Force CPU for large input dimensions (covariance matrix would be huge)
+        # down_proj has 14336 inputs -> cov is [14336, 14336] = 820MB
         compute_device = weights.device
-        if self._should_use_cpu(inputs, weights):
+        use_cpu = self._should_use_cpu(inputs, weights) or input_features > 8192
+        if use_cpu:
             logger.debug("RQ: Moving computation to CPU for large tensors")
             compute_device = torch.device("cpu")
             inputs = inputs.cpu()
@@ -221,7 +224,8 @@ class RayleighQuotient(BaseMetric):
 
         # Normalize by trace if relative
         if self.relative:
-            trace_cov = torch.trace(cov)
+            # Convert to float32 for trace (bfloat16 not supported)
+            trace_cov = torch.trace(cov.float())
             if trace_cov > eps:
                 rq_values = rq_values / trace_cov
             else:
@@ -315,7 +319,8 @@ class RayleighQuotient(BaseMetric):
 
             # Normalize by trace if relative
             if self.relative:
-                trace_c = torch.trace(cov_c)
+                # Convert to float32 for trace (bfloat16 not supported)
+                trace_c = torch.trace(cov_c.float())
                 if trace_c > eps:
                     rq_c = rq_c / trace_c
 
@@ -412,7 +417,8 @@ class RayleighQuotient(BaseMetric):
 
             # Normalize by trace if relative
             if self.relative:
-                trace = torch.trace(patch_cov)
+                # Convert to float32 for trace (bfloat16 not supported)
+                trace = torch.trace(patch_cov.float())
                 if trace > eps:
                     patch_rq = patch_rq / trace
 

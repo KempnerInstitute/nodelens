@@ -88,62 +88,61 @@ class AverageRedundancy(BaseMetric):
         # Compute projected outputs
         projected = torch.matmul(inputs, weights.T)  # [batch_size, num_neurons]
 
-        # Move to CPU for large correlation computations if needed
+        # Move to CPU for large computations
         compute_device = projected.device
-        if self._should_use_cpu(projected):
+        if self._should_use_cpu(projected) or num_neurons > 4096:
             projected = projected.cpu()
-
-        # Compute correlation or covariance matrix
-        if self.use_correlation:
-            # Normalize each neuron's output
-            proj_mean = projected.mean(dim=0, keepdim=True)
-            proj_std = projected.std(dim=0, keepdim=True)
-            proj_std = torch.where(proj_std > 1e-12, proj_std, torch.ones_like(proj_std))
-            projected_norm = (projected - proj_mean) / proj_std
-            corr_matrix = torch.matmul(projected_norm.T, projected_norm) / (batch_size - 1)
+        
+        # Convert to float32 for numerical stability
+        projected = projected.float()
+        
+        # Normalize for correlation computation
+        proj_mean = projected.mean(dim=0, keepdim=True)
+        proj_std = projected.std(dim=0, keepdim=True)
+        proj_std = torch.where(proj_std > 1e-12, proj_std, torch.ones_like(proj_std))
+        projected_norm = (projected - proj_mean) / proj_std  # [batch_size, num_neurons]
+        
+        # For large layers, compute redundancy by sampling neighbors per neuron
+        # This gives a score for EVERY neuron without creating full NxN matrix
+        num_neighbors = min(512, num_neurons - 1)  # Sample 512 neighbors per neuron
+        
+        if num_neurons > 2048:
+            # Efficient stochastic approach: sample a fixed set of reference neurons
+            # and compute each neuron's correlation with this reference set
+            num_refs = min(1024, num_neurons)
+            ref_indices = torch.randperm(num_neurons, device=projected.device)[:num_refs]
+            
+            # Compute correlation of ALL neurons with reference neurons
+            # projected_norm: [batch_size, num_neurons]
+            # ref_activations: [batch_size, num_refs]
+            ref_activations = projected_norm[:, ref_indices]
+            
+            # Correlation matrix: [num_neurons, num_refs]
+            corr_with_refs = (projected_norm.T @ ref_activations) / (batch_size - 1)
+            
+            # For self-correlations (neuron i's corr with itself in ref set), set to 0
+            # This happens when neuron i is in the reference set
+            for idx, ref_idx in enumerate(ref_indices):
+                corr_with_refs[ref_idx, idx] = 0.0
+            
+            rho_sq = corr_with_refs ** 2
+            rho_sq = torch.clamp(rho_sq, 0, 0.999999)
+            
+            # MI approximation for each neuron
+            mi_with_refs = -0.5 * torch.log(1.0 - rho_sq)
+            
+            # Average MI with reference set (approximate redundancy)
+            redundancy_scores = mi_with_refs.mean(dim=1)
         else:
-            # Use covariance
-            corr_matrix = torch.cov(projected.T)
+            # Full correlation matrix for smaller layers
+            corr_matrix = torch.matmul(projected_norm.T, projected_norm) / (batch_size - 1)
+            rho_sq = corr_matrix ** 2
+            rho_sq = torch.clamp(rho_sq, 0, 0.999999)
+            mi_matrix = -0.5 * torch.log(1.0 - rho_sq)
+            mi_matrix.fill_diagonal_(0)
+            redundancy_scores = mi_matrix.sum(dim=1) / max(1, num_neurons - 1)
 
-        # Compute average redundancy for each neuron
-        redundancy_scores = torch.zeros(num_neurons, device=weights.device)
-
-        for i in range(num_neurons):
-            # Average MI with other neurons using Gaussian approximation
-            sum_redundancy = 0.0
-            num_pairs = 0
-
-            for j in range(num_neurons):
-                if i == j:
-                    continue
-
-                # Get correlation/covariance value
-                if self.use_correlation:
-                    rho_sq = corr_matrix[i, j] ** 2
-                else:
-                    # Normalize by variances for MI computation
-                    var_i = corr_matrix[i, i]
-                    var_j = corr_matrix[j, j]
-                    if var_i > 1e-12 and var_j > 1e-12:
-                        rho_sq = (corr_matrix[i, j] ** 2) / (var_i * var_j)
-                    else:
-                        rho_sq = 0.0
-
-                # MI approximation
-                rho_sq = torch.clamp(rho_sq, 0, 0.999999)
-                mi_ij = -0.5 * torch.log(1.0 - rho_sq)
-
-                sum_redundancy += mi_ij
-                num_pairs += 1
-
-            if num_pairs > 0:
-                redundancy_scores[i] = sum_redundancy / num_pairs
-
-        # Move back to original device if needed
-        if compute_device != weights.device:
-            redundancy_scores = redundancy_scores.to(weights.device)
-
-        return torch.nan_to_num(redundancy_scores)
+        return torch.nan_to_num(redundancy_scores.to(weights.device))
 
 
 @register_metric("node_redundancy", aliases=["input_redundancy"])
