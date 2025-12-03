@@ -152,6 +152,12 @@ class ExperimentConfig:
     do_perplexity_computation: bool = False
     evaluation_dataset: str = "wikitext"
     evaluation_num_samples: int = 100
+    evaluation_metrics: List[str] = field(default_factory=lambda: ["perplexity"])
+    llm: Dict[str, Any] = field(default_factory=dict)  # Full LLM config block
+    
+    # Directed redundancy and connectivity pruning
+    do_directed_redundancy: bool = True
+    do_connectivity_pruning: bool = True
 
     # SCAR / supernode-specific options for LLMs
     do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i)

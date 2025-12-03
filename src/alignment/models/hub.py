@@ -157,7 +157,7 @@ class HFVisionModel(nn.Module):
         model_id: e.g., 'google/vit-base-patch16-224'
         revision: optional git revision
         trust_remote_code: allow custom code in the repo
-        torch_dtype: 'float32'|'float16'|'bfloat16'
+        torch_dtype: 'float32'|'float16'|'bfloat16' (maps to HF 'dtype' parameter)
         device_map: optional device_map for accelerate (None|'auto')
         model_kwargs: forwarded to from_pretrained
     """
@@ -182,7 +182,7 @@ class HFVisionModel(nn.Module):
             model_id,
             revision=revision,
             trust_remote_code=trust_remote_code,
-            torch_dtype=dtype,
+            dtype=dtype,  # Use 'dtype' instead of deprecated 'torch_dtype'
             device_map=device_map,
             **model_kwargs,
         )
@@ -199,7 +199,7 @@ class HFCausalLM(nn.Module):
         model_id: e.g., 'meta-llama/Meta-Llama-3-8B-Instruct'
         revision: optional git revision
         trust_remote_code: allow custom code
-        torch_dtype: 'float32'|'float16'|'bfloat16'
+        torch_dtype: 'float32'|'float16'|'bfloat16' (maps to HF 'dtype' parameter)
         device_map: optional device_map for accelerate (None|'auto')
         model_kwargs: forwarded to from_pretrained
     """
@@ -224,10 +224,24 @@ class HFCausalLM(nn.Module):
             model_id,
             revision=revision,
             trust_remote_code=trust_remote_code,
-            torch_dtype=dtype,
+            dtype=dtype,  # Use 'dtype' instead of deprecated 'torch_dtype'
             device_map=device_map,
             **model_kwargs,
         )
 
     def forward(self, *args, **kwargs):  # pass-through
         return self.model(*args, **kwargs)
+
+    def generate(self, *args, **kwargs):
+        """Delegate generate() to the underlying HF model for text generation."""
+        return self.model.generate(*args, **kwargs)
+
+    @property
+    def config(self):
+        """Access the underlying model's config."""
+        return self.model.config
+
+    @property
+    def device(self):
+        """Get the device of the underlying model."""
+        return next(self.model.parameters()).device

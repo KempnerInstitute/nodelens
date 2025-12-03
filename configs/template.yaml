@@ -35,7 +35,7 @@ model:
   
   # HuggingFace config (for LLMs only)
   model_id: null                  # e.g., "meta-llama/Llama-3.1-8B"
-  torch_dtype: "bfloat16"         # "float32", "float16", "bfloat16"
+  dtype: "bfloat16"                # "float32", "float16", "bfloat16"
   device_map: "auto"              # "auto", null, or explicit mapping
 
 # -----------------------------------------------------------------------------

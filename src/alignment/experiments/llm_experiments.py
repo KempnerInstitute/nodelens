@@ -11,6 +11,7 @@ from alignment.experiments.base import ExperimentConfig, BaseExperiment
 from alignment.metrics import get_metric
 from alignment.models.transformers import TransformerWrapperEnhanced as TransformerWrapper
 from alignment.pruning import AlignmentPruning, PruningConfig
+from alignment.pruning.strategies.llm_baselines import WandaPruning, SparseGPTPruning
 from alignment.services import MaskOperations
 from alignment.training.base import BaseTrainer  # kept for compatibility if used elsewhere
 from alignment.core.streaming import StreamingCovariance
@@ -191,9 +192,18 @@ class LLMAlignmentExperiment(BaseExperiment):
         - bits_per_byte: Bits per byte on WikiText (lower is better)
         - accuracy_hellaswag: Zero-shot accuracy on HellaSwag commonsense (higher is better)
         - accuracy_arc_easy: Zero-shot accuracy on ARC-Easy science (higher is better)
+        - accuracy_arc_challenge: Zero-shot accuracy on ARC-Challenge science (higher is better)
         - accuracy_piqa: Zero-shot accuracy on PIQA physical intuition (higher is better)
         - accuracy_boolq: Zero-shot accuracy on BoolQ boolean questions (higher is better)
+        - accuracy_winogrande: Zero-shot accuracy on WinoGrande commonsense (higher is better)
+        - accuracy_truthfulqa: Zero-shot accuracy on TruthfulQA truthfulness (higher is better)
         - accuracy_mmlu: Zero-shot accuracy on MMLU across 57 subjects (higher is better)
+        - accuracy_gsm8k: Zero-shot accuracy on GSM8k math problems (higher is better)
+        - accuracy_mbpp: Zero-shot accuracy on MBPP code generation (higher is better)
+        - accuracy_humaneval: Zero-shot accuracy on HumanEval code generation (higher is better)
+        
+        NVIDIA Minitron benchmarks (https://arxiv.org/abs/2408.11796):
+        - MMLU, HellaSwag, ARC-Challenge, Winogrande, PIQA, TruthfulQA, GSM8k, MBPP, HumanEval
         
         Args:
             metrics: List of metrics to evaluate. If None, uses config.
@@ -216,6 +226,13 @@ class LLMAlignmentExperiment(BaseExperiment):
                         dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
                         num_samples=num_samples
                     )
+                elif metric == "loss":
+                    # Cross-entropy loss = ln(perplexity)
+                    ppl = self.evaluate_perplexity(
+                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
+                        num_samples=num_samples
+                    )
+                    results["loss"] = np.log(ppl)
                 elif metric == "bits_per_byte":
                     # Bits per byte = log2(perplexity) / avg_chars_per_token
                     ppl = self.evaluate_perplexity(
@@ -228,12 +245,24 @@ class LLMAlignmentExperiment(BaseExperiment):
                     results["accuracy_hellaswag"] = self._evaluate_hellaswag(num_samples=num_samples)
                 elif metric == "accuracy_arc_easy":
                     results["accuracy_arc_easy"] = self._evaluate_arc_easy(num_samples=num_samples)
+                elif metric == "accuracy_arc_challenge":
+                    results["accuracy_arc_challenge"] = self._evaluate_arc_challenge(num_samples=num_samples)
                 elif metric == "accuracy_piqa":
                     results["accuracy_piqa"] = self._evaluate_piqa(num_samples=num_samples)
                 elif metric == "accuracy_boolq":
                     results["accuracy_boolq"] = self._evaluate_boolq(num_samples=num_samples)
+                elif metric == "accuracy_winogrande":
+                    results["accuracy_winogrande"] = self._evaluate_winogrande(num_samples=num_samples)
+                elif metric == "accuracy_truthfulqa":
+                    results["accuracy_truthfulqa"] = self._evaluate_truthfulqa(num_samples=num_samples)
                 elif metric == "accuracy_mmlu":
                     results["accuracy_mmlu"] = self._evaluate_mmlu(num_samples=num_samples)
+                elif metric == "accuracy_gsm8k":
+                    results["accuracy_gsm8k"] = self._evaluate_gsm8k(num_samples=num_samples)
+                elif metric == "accuracy_mbpp":
+                    results["accuracy_mbpp"] = self._evaluate_mbpp(num_samples=num_samples)
+                elif metric == "accuracy_humaneval":
+                    results["accuracy_humaneval"] = self._evaluate_humaneval(num_samples=num_samples)
                 elif metric == "normalized_perplexity":
                     # Normalized to 0-100 scale (100 = best = PPL of 1)
                     ppl = self.evaluate_perplexity(
@@ -795,6 +824,495 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         accuracy = 100 * correct / total if total > 0 else 0.0
         logger.info(f"BoolQ accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_winogrande(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on WinoGrande (commonsense reasoning with Winograd schemas).
+        Returns accuracy (higher is better).
+        
+        WinoGrande is a large-scale dataset of Winograd Schema Challenge problems.
+        Each example has a sentence with a blank and two options to fill it.
+        
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) for LLM evaluation.
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate WinoGrande")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on WinoGrande ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("winogrande", "winogrande_xl", split="validation", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load WinoGrande dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    sentence = example["sentence"]
+                    option1 = example["option1"]
+                    option2 = example["option2"]
+                    answer = int(example["answer"]) - 1  # Convert 1/2 to 0/1
+                    
+                    # Replace _ with each option and score
+                    scores = []
+                    for option in [option1, option2]:
+                        text = sentence.replace("_", option)
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+                        
+                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
+                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                        scores.append(-loss.item())  # Higher = better
+                    
+                    predicted = np.argmax(scores)
+                    if predicted == answer:
+                        correct += 1
+                    total += 1
+                    
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"WinoGrande: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        
+                except Exception as e:
+                    logger.warning(f"Error on WinoGrande sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"WinoGrande accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_arc_challenge(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on ARC-Challenge (harder science questions).
+        Returns accuracy (higher is better).
+        
+        ARC-Challenge is the harder subset of the AI2 Reasoning Challenge,
+        containing questions that require more complex reasoning.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) for LLM evaluation.
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate ARC-Challenge")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on ARC-Challenge ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="test", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load ARC-Challenge dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    question = example["question"]
+                    choices = example["choices"]
+                    answer_key = example["answerKey"]
+                    
+                    choice_texts = choices["text"]
+                    choice_labels = choices["label"]
+                    answer_idx = choice_labels.index(answer_key)
+                    
+                    # Score each choice
+                    scores = []
+                    for choice_text in choice_texts:
+                        text = f"Question: {question}\nAnswer: {choice_text}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+                        
+                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
+                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                        scores.append(-loss.item())
+                    
+                    predicted = np.argmax(scores)
+                    if predicted == answer_idx:
+                        correct += 1
+                    total += 1
+                    
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"ARC-Challenge: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                    
+                except Exception as e:
+                    logger.warning(f"Error on ARC-Challenge sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"ARC-Challenge accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_truthfulqa(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on TruthfulQA (truthfulness in answers).
+        Returns accuracy (higher is better).
+        
+        TruthfulQA measures whether models generate truthful answers to questions
+        that humans might answer incorrectly due to false beliefs or misconceptions.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) for LLM evaluation.
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate TruthfulQA")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on TruthfulQA ({num_samples} samples)...")
+        
+        try:
+            # TruthfulQA multiple choice format
+            dataset = load_dataset("truthful_qa", "multiple_choice", split="validation", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load TruthfulQA dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    question = example["question"]
+                    mc1_targets = example["mc1_targets"]
+                    
+                    choices = mc1_targets["choices"]
+                    labels = mc1_targets["labels"]  # List of 0s and 1s (1 = correct)
+                    
+                    # Find correct answer index
+                    correct_idx = labels.index(1)
+                    
+                    # Score each choice
+                    scores = []
+                    for choice in choices:
+                        text = f"Question: {question}\nAnswer: {choice}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        outputs = self.model(**inputs)
+                        logits = outputs.logits
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+                        
+                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
+                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                        scores.append(-loss.item())
+                    
+                    predicted = np.argmax(scores)
+                    if predicted == correct_idx:
+                        correct += 1
+                    total += 1
+                    
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"TruthfulQA: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                    
+                except Exception as e:
+                    logger.warning(f"Error on TruthfulQA sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"TruthfulQA accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_gsm8k(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on GSM8k (grade school math word problems).
+        Returns accuracy (higher is better).
+        
+        GSM8k tests mathematical reasoning with grade school level word problems.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2408.11796) for LLM evaluation.
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate GSM8k")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on GSM8k ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("openai/gsm8k", "main", split="test", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load GSM8k dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        def extract_answer(text: str) -> str:
+            """Extract the final numerical answer from GSM8k format."""
+            import re
+            # GSM8k answers are in format "#### NUMBER"
+            match = re.search(r'####\s*([0-9,\-\.]+)', text)
+            if match:
+                return match.group(1).replace(',', '')
+            # Try to find last number in text
+            numbers = re.findall(r'[\-]?[0-9,]+\.?[0-9]*', text)
+            if numbers:
+                return numbers[-1].replace(',', '')
+            return ""
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    question = example["question"]
+                    answer = example["answer"]
+                    gold_answer = extract_answer(answer)
+                    
+                    # Generate answer using the model
+                    prompt = f"Question: {question}\n\nLet's solve this step by step:\n"
+                    inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    
+                    # Generate response
+                    with torch.no_grad():
+                        outputs = self.model.generate(
+                            **inputs,
+                            max_new_tokens=256,
+                            do_sample=False,
+                            pad_token_id=self.tokenizer.eos_token_id,
+                        )
+                    
+                    generated = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                    pred_answer = extract_answer(generated)
+                    
+                    # Compare answers (allow for minor formatting differences)
+                    try:
+                        if pred_answer and gold_answer:
+                            if float(pred_answer) == float(gold_answer):
+                                correct += 1
+                    except ValueError:
+                        if pred_answer == gold_answer:
+                            correct += 1
+                    
+                    total += 1
+                    
+                    if (i + 1) % 20 == 0:
+                        logger.info(f"GSM8k: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        
+                except Exception as e:
+                    logger.warning(f"Error on GSM8k sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"GSM8k accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_mbpp(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on MBPP (Mostly Basic Python Problems).
+        Returns accuracy based on pass@1 (higher is better).
+        
+        MBPP tests code generation with simple Python problems.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2408.11796) for LLM evaluation.
+        
+        Note: This is a simplified evaluation that checks syntax and basic execution.
+        Full evaluation would require running test cases in a sandbox.
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate MBPP")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on MBPP ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("google-research-datasets/mbpp", "sanitized", split="test", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load MBPP dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    prompt_text = example["prompt"]
+                    test_list = example["test_list"]
+                    
+                    # Format prompt for code generation
+                    prompt = f"Write a Python function to solve the following problem:\n\n{prompt_text}\n\n```python\n"
+                    inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    
+                    # Generate code
+                    with torch.no_grad():
+                        outputs = self.model.generate(
+                            **inputs,
+                            max_new_tokens=256,
+                            do_sample=False,
+                            pad_token_id=self.tokenizer.eos_token_id,
+                            eos_token_id=self.tokenizer.encode("```")[0] if "```" in self.tokenizer.get_vocab() else self.tokenizer.eos_token_id,
+                        )
+                    
+                    generated = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                    
+                    # Extract code (up to closing ```)
+                    code = generated.split("```")[0].strip()
+                    
+                    # Try to execute the code with test cases
+                    try:
+                        # Create a namespace for execution
+                        namespace = {}
+                        exec(code, namespace)
+                        
+                        # Run test cases
+                        passed = 0
+                        for test in test_list[:3]:  # Limit to first 3 tests for speed
+                            try:
+                                exec(test, namespace)
+                                passed += 1
+                            except Exception:
+                                pass
+                        
+                        if passed == len(test_list[:3]):
+                            correct += 1
+                            
+                    except Exception:
+                        pass  # Code didn't compile/run
+                    
+                    total += 1
+                    
+                    if (i + 1) % 20 == 0:
+                        logger.info(f"MBPP: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        
+                except Exception as e:
+                    logger.warning(f"Error on MBPP sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"MBPP accuracy: {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_humaneval(self, num_samples: int = 100) -> float:
+        """
+        Zero-shot evaluation on HumanEval (code generation).
+        Returns accuracy based on pass@1 (higher is better).
+        
+        HumanEval tests code generation with Python programming problems.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2408.11796) for LLM evaluation.
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate HumanEval")
+            return 0.0
+        
+        logger.info(f"Evaluating zero-shot accuracy on HumanEval ({num_samples} samples)...")
+        
+        try:
+            dataset = load_dataset("openai/openai_humaneval", split="test", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load HumanEval dataset: {e}")
+            return 0.0
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if i >= num_samples:
+                    break
+                
+                try:
+                    prompt = example["prompt"]
+                    test = example["test"]
+                    entry_point = example["entry_point"]
+                    
+                    # Generate code completion
+                    inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    
+                    with torch.no_grad():
+                        outputs = self.model.generate(
+                            **inputs,
+                            max_new_tokens=256,
+                            do_sample=False,
+                            pad_token_id=self.tokenizer.eos_token_id,
+                        )
+                    
+                    generated = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                    
+                    # Combine prompt and generated code
+                    # Stop at first function definition that's not the target
+                    lines = generated.split('\n')
+                    code_lines = []
+                    for line in lines:
+                        if line.strip().startswith('def ') and entry_point not in line:
+                            break
+                        code_lines.append(line)
+                    
+                    full_code = prompt + '\n'.join(code_lines)
+                    
+                    # Try to execute with test
+                    try:
+                        namespace = {}
+                        exec(full_code, namespace)
+                        exec(test, namespace)
+                        # If we get here, tests passed
+                        correct += 1
+                    except Exception:
+                        pass
+                    
+                    total += 1
+                    
+                    if (i + 1) % 20 == 0:
+                        logger.info(f"HumanEval: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        
+                except Exception as e:
+                    logger.warning(f"Error on HumanEval sample {i}: {e}")
+                    continue
+        
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"HumanEval accuracy: {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
     def _get_underlying_model(self) -> nn.Module:
@@ -1494,6 +2012,166 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         return scar_scores
     
+    def compute_baseline_pruning_scores(
+        self,
+        strategies: Optional[List[str]] = None,
+        num_calibration_samples: int = 128,
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Compute importance scores for baseline pruning methods (Wanda, SparseGPT).
+        
+        These methods require calibration data to compute activation-aware scores.
+        Scores are stored in self.importance_scores for use in pruning experiments.
+        
+        Args:
+            strategies: List of baseline strategies to compute. Default: ["wanda", "sparsegpt"]
+            num_calibration_samples: Number of samples for calibration
+            
+        Returns:
+            Dict mapping layer names to {strategy_name: scores_tensor}
+        """
+        if strategies is None:
+            # Check which baseline strategies are configured
+            pruning_strategies = getattr(self.config, "pruning_strategies", [])
+            strategies = [s for s in pruning_strategies if s in ["wanda", "sparsegpt"]]
+        
+        if not strategies:
+            logger.info("No baseline pruning strategies (wanda/sparsegpt) configured, skipping.")
+            return {}
+        
+        logger.info(f"Computing baseline pruning scores for: {strategies}")
+        
+        # Get calibration dataloader
+        try:
+            from alignment.dataops.datasets.text_datasets import WikiTextDataset
+            from torch.utils.data import DataLoader
+            
+            tokenizer = getattr(self, 'tokenizer', None)
+            if tokenizer is None:
+                logger.error("Tokenizer not available for baseline score calibration")
+                return {}
+            
+            # Create calibration dataset and dataloader
+            calib_dataset = WikiTextDataset(
+                tokenizer=tokenizer,
+                split="train",
+                max_length=getattr(self.config, "scar_max_length", 512),
+            )
+            # Limit samples
+            if len(calib_dataset) > num_calibration_samples:
+                from torch.utils.data import Subset
+                indices = list(range(min(num_calibration_samples, len(calib_dataset))))
+                calib_dataset = Subset(calib_dataset, indices)
+            
+            calib_dataloader = DataLoader(calib_dataset, batch_size=1, shuffle=False)
+            logger.info(f"Created calibration dataloader with {len(calib_dataset)} samples")
+        except Exception as e:
+            logger.error(f"Failed to create calibration dataloader: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {}
+        
+        results = {}
+        model = self.wrapped_model._model
+        device = next(model.parameters()).device
+        
+        # Track which layers to compute scores for (MLP layers from tracked_layers)
+        target_layers = []
+        for layer_name in self.importance_scores.keys():
+            # Check if it's an MLP layer
+            if any(mlp_pattern in layer_name for mlp_pattern in ["up_proj", "gate_proj", "down_proj", "fc", "mlp"]):
+                target_layers.append(layer_name)
+        
+        if not target_layers:
+            logger.warning("No target layers found for baseline pruning scores")
+            return {}
+        
+        logger.info(f"Computing baseline scores for {len(target_layers)} layers")
+        
+        # Compute Wanda scores
+        if "wanda" in strategies:
+            logger.info("Calibrating Wanda pruning strategy...")
+            try:
+                wanda = WandaPruning(num_calibration_samples=num_calibration_samples)
+                wanda.calibrate(model, calib_dataloader, device=str(device))
+                
+                # Compute scores for each tracked layer
+                for layer_name in target_layers:
+                    # Find the module
+                    module = None
+                    for name, mod in model.named_modules():
+                        if name == layer_name or layer_name.endswith(name) or name.endswith(layer_name.split('.')[-1]):
+                            if isinstance(mod, nn.Linear):
+                                module = mod
+                                break
+                    
+                    if module is not None:
+                        try:
+                            # Get structured scores (per output neuron)
+                            scores = wanda.get_structured_scores(module, layer_name=layer_name, dim=0)
+                            
+                            # Store in importance_scores
+                            if layer_name not in self.importance_scores:
+                                self.importance_scores[layer_name] = {}
+                            self.importance_scores[layer_name]["wanda"] = scores
+                            
+                            if layer_name not in results:
+                                results[layer_name] = {}
+                            results[layer_name]["wanda"] = scores
+                            
+                            logger.debug(f"Wanda scores for {layer_name}: shape {scores.shape}, mean {scores.mean():.4f}")
+                        except Exception as e:
+                            logger.warning(f"Failed to compute Wanda scores for {layer_name}: {e}")
+                
+                logger.info(f"Wanda: computed scores for {len([k for k in results if 'wanda' in results.get(k, {})])} layers")
+            except Exception as e:
+                logger.error(f"Wanda calibration failed: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        # Compute SparseGPT scores
+        if "sparsegpt" in strategies:
+            logger.info("Calibrating SparseGPT pruning strategy...")
+            try:
+                sparsegpt = SparseGPTPruning(num_calibration_samples=num_calibration_samples)
+                sparsegpt.calibrate(model, calib_dataloader, device=str(device))
+                
+                # Compute scores for each tracked layer
+                for layer_name in target_layers:
+                    # Find the module
+                    module = None
+                    for name, mod in model.named_modules():
+                        if name == layer_name or layer_name.endswith(name) or name.endswith(layer_name.split('.')[-1]):
+                            if isinstance(mod, nn.Linear):
+                                module = mod
+                                break
+                    
+                    if module is not None:
+                        try:
+                            # Get structured scores (per output neuron)
+                            scores = sparsegpt.get_structured_scores(module, layer_name=layer_name, dim=0)
+                            
+                            # Store in importance_scores
+                            if layer_name not in self.importance_scores:
+                                self.importance_scores[layer_name] = {}
+                            self.importance_scores[layer_name]["sparsegpt"] = scores
+                            
+                            if layer_name not in results:
+                                results[layer_name] = {}
+                            results[layer_name]["sparsegpt"] = scores
+                            
+                            logger.debug(f"SparseGPT scores for {layer_name}: shape {scores.shape}, mean {scores.mean():.4f}")
+                        except Exception as e:
+                            logger.warning(f"Failed to compute SparseGPT scores for {layer_name}: {e}")
+                
+                logger.info(f"SparseGPT: computed scores for {len([k for k in results if 'sparsegpt' in results.get(k, {})])} layers")
+            except Exception as e:
+                logger.error(f"SparseGPT calibration failed: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        return results
+    
     @staticmethod
     def _normalize_scores_tensor(scores: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
         if scores.numel() == 0:
@@ -1676,10 +2354,18 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Filter by target_layers if specified
             if target_layers:
                 # Check if this layer matches any of the target patterns
+                import fnmatch
                 layer_matches = False
                 for target in target_layers:
+                    # Skip wildcard patterns - they mean "all layers"
+                    if "*" in target:
+                        layer_matches = True
+                        break
                     # Support both exact match and partial match (e.g., "model.layers.10" matches "model.layers.10.mlp.down_proj")
-                    if target in layer_name or layer_name in target:
+                    # Also handle prefix variations (model.model.layers vs model.layers)
+                    target_normalized = target.replace("model.model.", "model.")
+                    layer_normalized = layer_name.replace("model.model.", "model.")
+                    if target_normalized in layer_normalized or layer_normalized in target_normalized:
                         layer_matches = True
                         break
                 if not layer_matches:
@@ -1839,6 +2525,543 @@ class LLMAlignmentExperiment(BaseExperiment):
             results[layer_name] = layer_results
 
         return results
+
+    def analyze_supernode_robustness(
+        self,
+        supernode_fraction: float = 0.01,
+        num_bootstrap_samples: int = 10,
+        batch_size: int = 32,
+        max_samples: int = 256,
+        metrics: Optional[List[str]] = None,
+        target_layers: Optional[List[str]] = None,
+        plots_dir: Optional[Union[str, Path]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Analyze the robustness and consistency of supernode identification.
+        
+        This analysis quantifies how stable supernode identification is across:
+        1. **Different metrics** - Do different metrics identify the same neurons as supernodes?
+        2. **Different data batches** - Are supernodes consistent across different input samples?
+        
+        Key outputs:
+        - Jaccard similarity between supernode sets from different metrics
+        - Rank correlation (Spearman) between importance scores from different metrics
+        - Bootstrap stability: fraction of times each neuron is identified as supernode
+        - Consistency heatmaps across metrics and batches
+        
+        Args:
+            supernode_fraction: Fraction of neurons to consider as supernodes (top by score)
+            num_bootstrap_samples: Number of bootstrap samples for stability analysis
+            batch_size: Batch size for forward passes
+            max_samples: Maximum number of samples per bootstrap
+            metrics: List of metrics to compare. If None, uses:
+                     ['scar_activation_power', 'scar_loss_proxy', 'rayleigh_quotient', 
+                      'gaussian_mi_analytic', 'activation_l2_norm']
+            target_layers: Layer patterns to analyze (e.g., ['model.layers.15', 'model.layers.20'])
+            plots_dir: Directory to save visualizations
+            
+        Returns:
+            Dictionary with robustness analysis results including:
+            - metric_jaccard: Jaccard similarity matrix between metrics
+            - metric_spearman: Spearman correlation matrix between metrics
+            - bootstrap_stability: Per-neuron stability scores
+            - consistent_supernodes: Neurons that are supernodes across all metrics
+        """
+        from scipy import stats
+        import matplotlib.pyplot as plt
+        
+        if metrics is None:
+            metrics = [
+                'scar_activation_power', 
+                'scar_loss_proxy', 
+                'scar_taylor',
+                'rayleigh_quotient', 
+                'gaussian_mi_analytic', 
+                'activation_l2_norm'
+            ]
+        
+        logger.info(f"Analyzing supernode robustness:")
+        logger.info(f"  - Supernode fraction: top {supernode_fraction*100:.1f}%")
+        logger.info(f"  - Bootstrap samples: {num_bootstrap_samples}")
+        logger.info(f"  - Metrics to compare: {metrics}")
+        
+        if plots_dir is None:
+            plots_dir = Path(getattr(self.config, "plots_dir", "./plots"))
+        plots_dir = Path(plots_dir)
+        robustness_dir = plots_dir / "supernode_robustness"
+        robustness_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Get model and device
+        device = next(self.model.parameters()).device
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+        
+        # Find down_proj layers to analyze
+        down_proj_layers = []
+        for name, module in hf_model.named_modules():
+            if "mlp.down_proj" in name and hasattr(module, "weight"):
+                # Filter by target_layers if specified
+                if target_layers:
+                    matches = any(t in name for t in target_layers)
+                    if not matches:
+                        continue
+                down_proj_layers.append((name, module))
+        
+        if not down_proj_layers:
+            logger.warning("No down_proj layers found for robustness analysis")
+            return {}
+        
+        logger.info(f"  - Analyzing {len(down_proj_layers)} layers")
+        
+        # Get calibration texts
+        texts = []
+        if hasattr(self, "dataset") and self.dataset is not None:
+            if hasattr(self.dataset, "texts"):
+                texts = self.dataset.texts[:max_samples]
+            elif hasattr(self.dataset, "__getitem__"):
+                texts = [self.dataset[i] for i in range(min(len(self.dataset), max_samples))]
+        
+        if not texts:
+            logger.warning("No calibration texts available, using default")
+            texts = ["The quick brown fox jumps over the lazy dog."] * max_samples
+        
+        results = {}
+        viz = UnifiedVisualizer()
+        
+        for layer_name, layer_module in down_proj_layers:
+            logger.info(f"\n  Analyzing layer: {layer_name}")
+            
+            # Get layer dimensions
+            weight = layer_module.weight.data
+            hidden_dim, intermediate_dim = weight.shape
+            num_supernodes = max(1, int(supernode_fraction * intermediate_dim))
+            
+            logger.info(f"    - Intermediate dim: {intermediate_dim}, Supernodes: {num_supernodes}")
+            
+            layer_results = {
+                "num_neurons": intermediate_dim,
+                "num_supernodes": num_supernodes,
+                "metrics_analyzed": [],
+                "metric_scores": {},
+                "metric_supernode_indices": {},
+            }
+            
+            # =========================================================
+            # Part 1: Compute scores for each metric (full dataset)
+            # =========================================================
+            logger.info("    Computing metric scores on full dataset...")
+            
+            # Run SCAR metrics if available
+            scar_scores = {}
+            if getattr(self.config, "do_scar_metrics", True):
+                try:
+                    # Temporarily compute SCAR for this analysis
+                    scar_results = self.compute_scar_supernode_metrics(
+                        num_samples=min(max_samples, 128),
+                        max_length=getattr(self.config, "max_length", 512),
+                    )
+                    if layer_name in scar_results:
+                        scar_scores = scar_results[layer_name]
+                except Exception as e:
+                    logger.warning(f"    Failed to compute SCAR metrics: {e}")
+            
+            # Collect all metric scores for this layer
+            metric_scores_layer = {}
+            for metric_name in metrics:
+                if metric_name.startswith("scar_"):
+                    # SCAR metrics from compute_scar_supernode_metrics
+                    if metric_name in scar_scores:
+                        metric_scores_layer[metric_name] = scar_scores[metric_name].float().cpu()
+                elif metric_name in self.importance_scores.get(layer_name, {}):
+                    # Pre-computed importance scores
+                    metric_scores_layer[metric_name] = self.importance_scores[layer_name][metric_name].float().cpu()
+                else:
+                    # Try computing on the fly
+                    try:
+                        if metric_name == "activation_l2_norm":
+                            # Compute activation magnitude
+                            scores = self._compute_activation_magnitude(layer_name, texts[:max_samples], batch_size)
+                            if scores is not None:
+                                metric_scores_layer[metric_name] = scores
+                        elif metric_name == "rayleigh_quotient":
+                            scores = self._compute_rq_for_layer(layer_name, texts[:max_samples], batch_size)
+                            if scores is not None:
+                                metric_scores_layer[metric_name] = scores
+                        elif metric_name == "gaussian_mi_analytic":
+                            scores = self._compute_mi_for_layer(layer_name, texts[:max_samples], batch_size)
+                            if scores is not None:
+                                metric_scores_layer[metric_name] = scores
+                    except Exception as e:
+                        logger.warning(f"    Could not compute {metric_name}: {e}")
+            
+            if len(metric_scores_layer) < 2:
+                logger.warning(f"    Only {len(metric_scores_layer)} metrics available, need at least 2 for comparison")
+                continue
+            
+            # Identify supernodes for each metric
+            metric_supernode_indices = {}
+            for metric_name, scores in metric_scores_layer.items():
+                scores_flat = scores.flatten()
+                if scores_flat.numel() != intermediate_dim:
+                    logger.warning(f"    Score dim {scores_flat.numel()} != intermediate_dim {intermediate_dim} for {metric_name}")
+                    continue
+                sorted_vals, sorted_indices = torch.sort(scores_flat, descending=True)
+                supernode_idx = sorted_indices[:num_supernodes].numpy()
+                metric_supernode_indices[metric_name] = set(supernode_idx.tolist())
+                layer_results["metrics_analyzed"].append(metric_name)
+            
+            layer_results["metric_scores"] = {k: v.numpy().tolist() for k, v in metric_scores_layer.items()}
+            layer_results["metric_supernode_indices"] = {k: list(v) for k, v in metric_supernode_indices.items()}
+            
+            # =========================================================
+            # Part 2: Compute Jaccard similarity between metrics
+            # =========================================================
+            analyzed_metrics = layer_results["metrics_analyzed"]
+            n_metrics = len(analyzed_metrics)
+            
+            jaccard_matrix = np.zeros((n_metrics, n_metrics))
+            for i, m1 in enumerate(analyzed_metrics):
+                for j, m2 in enumerate(analyzed_metrics):
+                    set1 = metric_supernode_indices[m1]
+                    set2 = metric_supernode_indices[m2]
+                    intersection = len(set1 & set2)
+                    union = len(set1 | set2)
+                    jaccard_matrix[i, j] = intersection / union if union > 0 else 0
+            
+            layer_results["jaccard_matrix"] = jaccard_matrix.tolist()
+            
+            # =========================================================
+            # Part 3: Compute Spearman correlation between metrics
+            # =========================================================
+            spearman_matrix = np.zeros((n_metrics, n_metrics))
+            for i, m1 in enumerate(analyzed_metrics):
+                for j, m2 in enumerate(analyzed_metrics):
+                    scores1 = np.array(layer_results["metric_scores"][m1])
+                    scores2 = np.array(layer_results["metric_scores"][m2])
+                    if len(scores1) == len(scores2):
+                        corr, _ = stats.spearmanr(scores1, scores2)
+                        spearman_matrix[i, j] = corr if not np.isnan(corr) else 0
+            
+            layer_results["spearman_matrix"] = spearman_matrix.tolist()
+            
+            # =========================================================
+            # Part 4: Bootstrap stability analysis
+            # =========================================================
+            logger.info(f"    Running bootstrap stability analysis ({num_bootstrap_samples} samples)...")
+            
+            # Track how many times each neuron is identified as supernode
+            supernode_counts = np.zeros(intermediate_dim)
+            bootstrap_supernode_sets = []
+            
+            for b in range(num_bootstrap_samples):
+                # Bootstrap sample from texts
+                bootstrap_indices = np.random.choice(len(texts), size=min(batch_size * 4, len(texts)), replace=True)
+                bootstrap_texts = [texts[i] for i in bootstrap_indices]
+                
+                # Compute activation magnitude for this bootstrap sample
+                try:
+                    bootstrap_scores = self._compute_activation_magnitude(layer_name, bootstrap_texts, batch_size)
+                    if bootstrap_scores is not None:
+                        scores_flat = bootstrap_scores.flatten()
+                        if scores_flat.numel() == intermediate_dim:
+                            sorted_vals, sorted_indices = torch.sort(scores_flat, descending=True)
+                            bootstrap_supernode_idx = sorted_indices[:num_supernodes].numpy()
+                            supernode_counts[bootstrap_supernode_idx] += 1
+                            bootstrap_supernode_sets.append(set(bootstrap_supernode_idx.tolist()))
+                except Exception as e:
+                    logger.warning(f"    Bootstrap {b} failed: {e}")
+            
+            # Normalize to get stability scores (0 to 1)
+            stability_scores = supernode_counts / num_bootstrap_samples
+            layer_results["bootstrap_stability"] = stability_scores.tolist()
+            
+            # Identify highly stable supernodes (appear in >80% of bootstrap samples)
+            highly_stable_mask = stability_scores > 0.8
+            highly_stable_count = np.sum(highly_stable_mask)
+            layer_results["highly_stable_supernodes"] = np.where(highly_stable_mask)[0].tolist()
+            layer_results["num_highly_stable"] = int(highly_stable_count)
+            
+            logger.info(f"    - Highly stable supernodes (>80%): {highly_stable_count}")
+            
+            # =========================================================
+            # Part 5: Cross-metric consistency
+            # =========================================================
+            # Find neurons that are supernodes in ALL metrics
+            if len(metric_supernode_indices) >= 2:
+                consistent_supernodes = set.intersection(*metric_supernode_indices.values())
+                layer_results["consistent_across_all_metrics"] = list(consistent_supernodes)
+                layer_results["num_consistent"] = len(consistent_supernodes)
+                logger.info(f"    - Consistent across all metrics: {len(consistent_supernodes)}")
+            
+            # =========================================================
+            # Part 6: Generate visualizations
+            # =========================================================
+            layer_suffix = layer_name.replace('.', '_')
+            
+            # Plot 1: Jaccard similarity heatmap
+            try:
+                fig = viz.plot_metric_similarity_heatmap(
+                    similarity_matrix=jaccard_matrix,
+                    metric_names=analyzed_metrics,
+                    title=f"Supernode Overlap (Jaccard Similarity)\n{layer_name}",
+                    save_path=robustness_dir / f"jaccard_heatmap_{layer_suffix}.png",
+                )
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"    Failed to plot Jaccard heatmap: {e}")
+            
+            # Plot 2: Spearman correlation heatmap
+            try:
+                fig = viz.plot_metric_similarity_heatmap(
+                    similarity_matrix=spearman_matrix,
+                    metric_names=analyzed_metrics,
+                    title=f"Score Correlation (Spearman)\n{layer_name}",
+                    save_path=robustness_dir / f"spearman_heatmap_{layer_suffix}.png",
+                    cmap="coolwarm",
+                    vmin=-1,
+                    vmax=1,
+                )
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"    Failed to plot Spearman heatmap: {e}")
+            
+            # Plot 3: Bootstrap stability distribution
+            try:
+                fig = viz.plot_supernode_stability_distribution(
+                    stability_scores=stability_scores,
+                    num_supernodes=num_supernodes,
+                    layer_name=layer_name,
+                    save_path=robustness_dir / f"bootstrap_stability_{layer_suffix}.png",
+                )
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"    Failed to plot stability distribution: {e}")
+            
+            # Plot 4: Supernode consistency across metrics (Venn-style bar chart)
+            try:
+                fig = viz.plot_supernode_consistency_bars(
+                    metric_supernode_indices=metric_supernode_indices,
+                    total_neurons=intermediate_dim,
+                    layer_name=layer_name,
+                    save_path=robustness_dir / f"consistency_bars_{layer_suffix}.png",
+                )
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"    Failed to plot consistency bars: {e}")
+            
+            # Plot 5: Metric score correlations scatter matrix
+            try:
+                if len(analyzed_metrics) >= 2:
+                    fig = viz.plot_metric_score_scatter_matrix(
+                        metric_scores={m: np.array(layer_results["metric_scores"][m]) for m in analyzed_metrics[:4]},
+                        supernode_indices=metric_supernode_indices.get(analyzed_metrics[0], set()),
+                        layer_name=layer_name,
+                        save_path=robustness_dir / f"score_scatter_matrix_{layer_suffix}.png",
+                    )
+                    plt.close(fig)
+            except Exception as e:
+                logger.error(f"    Failed to plot scatter matrix: {e}")
+            
+            results[layer_name] = layer_results
+        
+        # =========================================================
+        # Summary statistics across all layers
+        # =========================================================
+        if results:
+            summary = {
+                "num_layers_analyzed": len(results),
+                "avg_jaccard_across_metrics": np.mean([
+                    np.mean(np.array(r["jaccard_matrix"])[np.triu_indices(len(r["metrics_analyzed"]), k=1)])
+                    for r in results.values() if "jaccard_matrix" in r
+                ]),
+                "avg_spearman_across_metrics": np.mean([
+                    np.mean(np.array(r["spearman_matrix"])[np.triu_indices(len(r["metrics_analyzed"]), k=1)])
+                    for r in results.values() if "spearman_matrix" in r
+                ]),
+                "avg_highly_stable_fraction": np.mean([
+                    r["num_highly_stable"] / r["num_supernodes"]
+                    for r in results.values() if "num_highly_stable" in r
+                ]),
+            }
+            results["summary"] = summary
+            
+            logger.info(f"\n  Summary across {len(results)-1} layers:")
+            logger.info(f"    - Avg Jaccard similarity: {summary['avg_jaccard_across_metrics']:.3f}")
+            logger.info(f"    - Avg Spearman correlation: {summary['avg_spearman_across_metrics']:.3f}")
+            logger.info(f"    - Avg highly stable fraction: {summary['avg_highly_stable_fraction']:.1%}")
+        
+        return results
+
+    def _compute_activation_magnitude(
+        self,
+        layer_name: str,
+        texts: List[str],
+        batch_size: int = 32,
+    ) -> Optional[torch.Tensor]:
+        """Compute activation L2 norm for a specific layer."""
+        device = next(self.model.parameters()).device
+        
+        # Register hook to capture activations
+        activations = []
+        hook_handle = None
+        
+        def hook_fn(module, input, output):
+            if isinstance(output, tuple):
+                act = output[0]
+            else:
+                act = output
+            # For gate_proj/up_proj output before down_proj
+            activations.append(act.detach().float())
+        
+        # Find the gate_proj layer (input to the down_proj)
+        gate_proj_name = layer_name.replace("down_proj", "gate_proj")
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+        
+        for name, module in hf_model.named_modules():
+            if name == gate_proj_name or name.endswith(gate_proj_name):
+                hook_handle = module.register_forward_hook(hook_fn)
+                break
+        
+        if hook_handle is None:
+            # Try up_proj instead
+            up_proj_name = layer_name.replace("down_proj", "up_proj")
+            for name, module in hf_model.named_modules():
+                if name == up_proj_name or name.endswith(up_proj_name):
+                    hook_handle = module.register_forward_hook(hook_fn)
+                    break
+        
+        if hook_handle is None:
+            return None
+        
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                for i in range(0, len(texts), batch_size):
+                    batch_texts = texts[i:i+batch_size]
+                    inputs = self.tokenizer(
+                        batch_texts,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=512,
+                    ).to(device)
+                    self.model(**inputs)
+            
+            if activations:
+                all_acts = torch.cat([a.view(-1, a.shape[-1]) for a in activations], dim=0)
+                # L2 norm per neuron
+                scores = torch.norm(all_acts, p=2, dim=0)
+                return scores.cpu()
+        finally:
+            hook_handle.remove()
+        
+        return None
+
+    def _compute_rq_for_layer(
+        self,
+        layer_name: str,
+        texts: List[str],
+        batch_size: int = 32,
+    ) -> Optional[torch.Tensor]:
+        """Compute Rayleigh Quotient for a specific layer."""
+        device = next(self.model.parameters()).device
+        
+        # Get weight matrix
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+        
+        weight = None
+        for name, module in hf_model.named_modules():
+            if name == layer_name or name.endswith(layer_name):
+                if hasattr(module, "weight"):
+                    weight = module.weight.data.float()  # [hidden_dim, intermediate_dim]
+                    break
+        
+        if weight is None:
+            return None
+        
+        # Collect activations for covariance
+        activations = []
+        hook_handle = None
+        
+        def hook_fn(module, input, output):
+            if isinstance(input, tuple):
+                inp = input[0]
+            else:
+                inp = input
+            activations.append(inp.detach().float())
+        
+        for name, module in hf_model.named_modules():
+            if name == layer_name or name.endswith(layer_name):
+                hook_handle = module.register_forward_hook(hook_fn)
+                break
+        
+        if hook_handle is None:
+            return None
+        
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                for i in range(0, min(len(texts), batch_size * 4), batch_size):
+                    batch_texts = texts[i:i+batch_size]
+                    inputs = self.tokenizer(
+                        batch_texts,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=256,
+                    ).to(device)
+                    self.model(**inputs)
+            
+            if activations:
+                all_acts = torch.cat([a.view(-1, a.shape[-1]) for a in activations], dim=0)
+                all_acts = all_acts.to(device)
+                
+                # Compute covariance
+                mean = all_acts.mean(dim=0, keepdim=True)
+                centered = all_acts - mean
+                cov = (centered.T @ centered) / (all_acts.shape[0] - 1)
+                
+                # weight: [hidden_dim, intermediate_dim]
+                # Each column is a neuron's outgoing weights
+                # RQ = w^T Σ w / w^T w
+                weight_t = weight.T.to(device)  # [intermediate_dim, hidden_dim]
+                
+                # w^T Σ w for each neuron
+                w_cov = weight_t @ cov  # [intermediate_dim, intermediate_dim]
+                w_cov_w = torch.sum(w_cov * weight_t, dim=1)  # [intermediate_dim]
+                
+                # w^T w for each neuron
+                w_w = torch.sum(weight_t ** 2, dim=1)  # [intermediate_dim]
+                
+                rq = w_cov_w / (w_w + 1e-10)
+                return rq.cpu()
+        finally:
+            hook_handle.remove()
+        
+        return None
+
+    def _compute_mi_for_layer(
+        self,
+        layer_name: str,
+        texts: List[str],
+        batch_size: int = 32,
+    ) -> Optional[torch.Tensor]:
+        """Compute Gaussian MI for a specific layer."""
+        # Similar to RQ but with MI formula
+        rq_scores = self._compute_rq_for_layer(layer_name, texts, batch_size)
+        if rq_scores is not None:
+            # MI = 0.5 * log(1 + SNR), where SNR ~ RQ / noise_var
+            # Use a fixed noise variance estimate
+            noise_var = 0.1
+            snr = rq_scores / (noise_var + 1e-10)
+            mi = 0.5 * torch.log1p(snr.clamp(min=0))
+            return mi
+        return None
 
     def _compute_next_layer_metrics(
         self,
@@ -2037,6 +3260,10 @@ class LLMAlignmentExperiment(BaseExperiment):
         viz = UnifiedVisualizer()
         layer_suffix = current_layer_name.replace('.', '_')
         import matplotlib.pyplot as plt
+        
+        # Create layer_analysis directory
+        layer_analysis_dir = plots_dir / "layer_analysis"
+        layer_analysis_dir.mkdir(parents=True, exist_ok=True)
         
         # Create descriptive title prefix
         title_prefix = f"High-Connection Neurons (Layer {next_layer_idx} input)"
@@ -2292,6 +3519,14 @@ class LLMAlignmentExperiment(BaseExperiment):
         viz = UnifiedVisualizer()
         import matplotlib.pyplot as plt
         
+        # Create redundancy subfolder for organized plots
+        redundancy_dir = plots_dir / "redundancy"
+        redundancy_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create layer_analysis subfolder for scatter and other analysis plots
+        layer_analysis_dir = plots_dir / "layer_analysis"
+        layer_analysis_dir.mkdir(parents=True, exist_ok=True)
+        
         # Plots 1-3: Redundancy comparison (side-by-side, overlay, boxplot)
         try:
             figs = viz.plot_redundancy_comparison(
@@ -2301,7 +3536,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 low_mean=low_mean_redundancy,
                 layer_name=layer_name,
                 follower_fraction=follower_fraction,
-                save_dir=plots_dir,
+                save_dir=redundancy_dir,
             )
             for fig in figs:
                 plt.close(fig)
@@ -2844,9 +4079,19 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Then supernodes get a large boost
             base_protection = torch.zeros(intermediate_dim)
             
-            # Get base importance from L2 norm or RQ if available
-            if "activation_l2_norm" in layer_scores:
-                base_protection = layer_scores["activation_l2_norm"].detach().clone()
+            # Get base importance from L2 norm, RQ, or scar_loss_proxy if available
+            # First check self.importance_scores, then scar_scores
+            base_metric = None
+            for metric_name in ["activation_l2_norm", "rayleigh_quotient", "scar_loss_proxy", "scar_activation_power"]:
+                if metric_name in layer_scores:
+                    base_metric = layer_scores[metric_name]
+                    break
+                elif metric_name in layer_metrics:
+                    base_metric = layer_metrics[metric_name]
+                    break
+            
+            if base_metric is not None:
+                base_protection = base_metric.float().cpu().detach().clone()
                 # Normalize to [0, 1]
                 if base_protection.max() > base_protection.min():
                     base_protection = (base_protection - base_protection.min()) / (base_protection.max() - base_protection.min())
@@ -2882,6 +4127,287 @@ class LLMAlignmentExperiment(BaseExperiment):
         logger.info(f"Computed directed redundancy for {len(results)} layers")
         return results
     
+    def compute_supernode_connectivity_pruning_score(
+        self,
+        scar_scores: Dict[str, Dict[str, torch.Tensor]],
+        supernode_fraction: float = 0.01,
+        high_connectivity_fraction: float = 0.10,
+        redundancy_weight: float = 0.5,
+        num_samples: int = 8,
+        plots_dir: Optional[Union[str, Path]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Compute supernode-connectivity based pruning score.
+        
+        Algorithm:
+        1. For each layer, identify supernodes (top neurons by activation power)
+        2. Compute weight connections from each neuron to supernodes in next layer
+        3. Partition neurons into:
+           - High-connectivity: Strong weights to supernodes → compute redundancy, prune redundant
+           - Low-connectivity: Weak weights to supernodes → low importance, can prune
+        4. Create composite pruning score:
+           - Low connectivity neurons get low score (safe to prune)
+           - High connectivity neurons: score = base_importance - redundancy_penalty
+        
+        This captures the insight that neurons weakly connected to important supernodes
+        are likely less important, while among strongly connected neurons, the redundant
+        ones are safer to prune.
+        
+        Args:
+            scar_scores: SCAR scores dictionary with supernode metrics
+            supernode_fraction: Fraction of neurons considered supernodes
+            high_connectivity_fraction: Fraction of neurons considered "high connectivity"
+            redundancy_weight: Weight for redundancy penalty in high-connectivity group
+            num_samples: Calibration samples for redundancy computation
+            plots_dir: Directory to save analysis plots
+            
+        Returns:
+            Dictionary with pruning scores and analysis per layer
+        """
+        logger.info("Computing supernode-connectivity based pruning score...")
+        logger.info(f"  Supernode fraction: {supernode_fraction*100:.1f}%")
+        logger.info(f"  High-connectivity fraction: {high_connectivity_fraction*100:.1f}%")
+        
+        results: Dict[str, Dict[str, Any]] = {}
+        
+        # Get underlying HF model
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+        
+        # Get calibration texts
+        calibration_texts: List[str] = []
+        if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+            calibration_texts = list(self.dataset.texts)[:num_samples]
+        
+        if not calibration_texts:
+            logger.warning("No calibration texts available")
+            return {}
+        
+        # Setup plots directory
+        if plots_dir:
+            plots_dir = Path(plots_dir)
+            scatter_dir = plots_dir / "scatter"
+            scatter_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Get all layer names with SCAR scores
+        layer_names = [ln for ln in scar_scores.keys() if "mlp.down_proj" in ln]
+        
+        for idx, layer_name in enumerate(layer_names):
+            layer_metrics = scar_scores[layer_name]
+            
+            # Get supernode identification metric
+            # Note: Use explicit None checks to avoid tensor boolean ambiguity
+            supernode_metric = layer_metrics.get("scar_activation_power")
+            if supernode_metric is None:
+                supernode_metric = layer_metrics.get("scar_loss_proxy")
+            if supernode_metric is None:
+                continue
+            
+            supernode_metric = supernode_metric.float().cpu()
+            num_neurons = supernode_metric.numel()  # intermediate_dim
+            
+            # Identify supernodes in THIS layer
+            num_supernodes = max(1, int(supernode_fraction * num_neurons))
+            _, sorted_indices = torch.sort(supernode_metric, descending=True)
+            supernode_indices = sorted_indices[:num_supernodes]
+            supernode_mask = torch.zeros(num_neurons, dtype=torch.bool)
+            supernode_mask[supernode_indices] = True
+            
+            # Get weights from this layer's neurons to NEXT layer
+            # down_proj: [hidden_dim, intermediate_dim] - current layer output
+            # next layer's up_proj/gate_proj: [intermediate_dim', hidden_dim] - receives from hidden
+            
+            # For simplicity, we use the current layer's down_proj weights
+            # to estimate connectivity importance (how much each neuron contributes to output)
+            down_proj_weight = None
+            for name, module in hf_model.named_modules():
+                if name == layer_name or (name.endswith("mlp.down_proj") and name in layer_name):
+                    if hasattr(module, "weight"):
+                        down_proj_weight = module.weight.detach().float().cpu()
+                        break
+            
+            if down_proj_weight is None:
+                continue
+            
+            hidden_dim, intermediate_dim = down_proj_weight.shape
+            
+            # Compute connectivity score: how much each neuron (column) contributes
+            # to outputs that go to supernodes in the NEXT layer
+            # For within-layer analysis: use total weight magnitude per neuron
+            neuron_output_magnitude = down_proj_weight.abs().sum(dim=0)  # [intermediate_dim]
+            
+            # If we have next layer info, use supernode indices from next layer
+            # For now, use supernode influence from THIS layer
+            # Supernodes have high activation, so neurons with large weights TO those outputs matter
+            supernode_influence = down_proj_weight[:, supernode_indices].abs().sum(dim=1)  # [hidden_dim]
+            
+            # For each neuron in intermediate_dim, compute its "supernode connectivity"
+            # = sum of |weights| to hidden dimensions that have high supernode_influence
+            num_high_influence = max(1, int(high_connectivity_fraction * hidden_dim))
+            _, high_influence_hidden = torch.topk(supernode_influence, num_high_influence)
+            
+            # Connectivity score: how much does each intermediate neuron contribute to 
+            # hidden dimensions that strongly connect to supernodes
+            connectivity_score = down_proj_weight[high_influence_hidden, :].abs().sum(dim=0)  # [intermediate_dim]
+            
+            # Partition into high and low connectivity
+            num_high_conn = max(1, int(high_connectivity_fraction * intermediate_dim))
+            _, conn_sorted = torch.sort(connectivity_score, descending=True)
+            high_conn_indices = conn_sorted[:num_high_conn]
+            low_conn_indices = conn_sorted[num_high_conn:]
+            
+            high_conn_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
+            high_conn_mask[high_conn_indices] = True
+            
+            logger.info(f"  {layer_name}:")
+            logger.info(f"    {num_supernodes} supernodes, {len(high_conn_indices)} high-connectivity neurons")
+            
+            # Compute redundancy among high-connectivity neurons
+            # Capture activations for redundancy computation
+            activations: List[torch.Tensor] = []
+            
+            def capture_hook(module, inputs, outputs):
+                if inputs and inputs[0] is not None:
+                    inp = inputs[0].detach().float()
+                    if inp.ndim == 3:
+                        inp = inp.reshape(-1, inp.shape[-1])
+                    activations.append(inp.cpu())
+            
+            hook_handle = None
+            for name, module in hf_model.named_modules():
+                if name == layer_name or (name.endswith("mlp.down_proj") and name in layer_name):
+                    hook_handle = module.register_forward_hook(capture_hook)
+                    break
+            
+            if hook_handle:
+                self.model.eval()
+                with torch.no_grad():
+                    for text in calibration_texts:
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+                        inputs = {k: v.to(self.config.device) for k, v in inputs.items()}
+                        try:
+                            self.model(**inputs)
+                        except Exception:
+                            pass
+                hook_handle.remove()
+            
+            # Compute redundancy for high-connectivity neurons
+            redundancy_scores = torch.zeros(intermediate_dim)
+            
+            if activations:
+                all_acts = torch.cat(activations, dim=0)  # [N, intermediate_dim]
+                high_acts = all_acts[:, high_conn_indices]  # [N, num_high_conn]
+                
+                # Compute pairwise correlation among high-connectivity neurons
+                high_centered = high_acts - high_acts.mean(dim=0, keepdim=True)
+                high_cov = (high_centered.T @ high_centered) / (high_acts.shape[0] - 1)
+                high_std = torch.sqrt(torch.diag(high_cov) + 1e-8)
+                high_corr = high_cov / (high_std.unsqueeze(0) * high_std.unsqueeze(1) + 1e-8)
+                high_corr = torch.clamp(high_corr, -1, 1)
+                high_corr.fill_diagonal_(0)
+                
+                # Per-neuron redundancy = mean |correlation| with others
+                per_neuron_redundancy = high_corr.abs().mean(dim=1)
+                redundancy_scores[high_conn_indices] = per_neuron_redundancy
+                
+                logger.info(f"    High-connectivity redundancy: mean={per_neuron_redundancy.mean():.4f}, max={per_neuron_redundancy.max():.4f}")
+            
+            # Build composite pruning score
+            # Low connectivity → low score (safe to prune)
+            # High connectivity with high redundancy → lower score (redundant, can prune)
+            # High connectivity with low redundancy → high score (important, protect)
+            
+            # Normalize connectivity to [0, 1]
+            conn_normalized = connectivity_score.clone()
+            if conn_normalized.max() > conn_normalized.min():
+                conn_normalized = (conn_normalized - conn_normalized.min()) / (conn_normalized.max() - conn_normalized.min())
+            
+            # Base importance from activation power
+            base_importance = supernode_metric.clone()
+            if base_importance.max() > base_importance.min():
+                base_importance = (base_importance - base_importance.min()) / (base_importance.max() - base_importance.min())
+            
+            # Composite score:
+            # - Start with base importance (activation power)
+            # - Multiply by connectivity (low connectivity = low score)
+            # - Subtract redundancy penalty for high-connectivity neurons
+            pruning_score = base_importance * (0.5 + 0.5 * conn_normalized)  # [0, 1]
+            pruning_score[high_conn_mask] = pruning_score[high_conn_mask] - redundancy_weight * redundancy_scores[high_conn_mask]
+            
+            # Supernodes always get high protection
+            pruning_score[supernode_mask] = pruning_score.max() + 1.0
+            
+            # Store in importance_scores
+            layer_scores = self.importance_scores.get(layer_name, {})
+            layer_scores["supernode_connectivity_score"] = pruning_score
+            layer_scores["connectivity_score"] = connectivity_score
+            layer_scores["redundancy_in_high_conn"] = redundancy_scores
+            layer_scores["high_connectivity_mask"] = high_conn_mask
+            self.importance_scores[layer_name] = layer_scores
+            
+            # Generate scatter plots
+            if plots_dir and activations:
+                import matplotlib.pyplot as plt
+                viz = UnifiedVisualizer()
+                
+                try:
+                    # Scatter 1: Connectivity vs Base Importance
+                    fig, ax = plt.subplots(figsize=(10, 8))
+                    colors = ['#e74c3c' if supernode_mask[i] else '#3498db' if high_conn_mask[i] else '#95a5a6' 
+                              for i in range(intermediate_dim)]
+                    ax.scatter(conn_normalized.numpy(), base_importance.numpy(), c=colors, alpha=0.5, s=10)
+                    ax.set_xlabel("Connectivity Score (normalized)")
+                    ax.set_ylabel("Base Importance (activation power)")
+                    ax.set_title(f"Connectivity vs Importance\n{layer_name}")
+                    ax.legend(handles=[
+                        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#e74c3c', label='Supernode'),
+                        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#3498db', label='High-Connectivity'),
+                        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#95a5a6', label='Low-Connectivity'),
+                    ])
+                    ax.grid(True, alpha=0.3)
+                    fig.savefig(scatter_dir / f"connectivity_vs_importance_{layer_name.replace('.', '_')}.png", dpi=150, bbox_inches="tight")
+                    plt.close(fig)
+                    
+                    # Scatter 2: Redundancy vs Connectivity (for high-connectivity only)
+                    if high_conn_mask.sum() > 0:
+                        fig, ax = plt.subplots(figsize=(10, 8))
+                        hc_conn = conn_normalized[high_conn_mask].numpy()
+                        hc_red = redundancy_scores[high_conn_mask].numpy()
+                        ax.scatter(hc_conn, hc_red, alpha=0.5, s=20, c='#3498db')
+                        ax.set_xlabel("Connectivity Score")
+                        ax.set_ylabel("Redundancy Score")
+                        ax.set_title(f"Redundancy vs Connectivity (High-Conn Neurons)\n{layer_name}")
+                        ax.grid(True, alpha=0.3)
+                        fig.savefig(scatter_dir / f"redundancy_vs_connectivity_{layer_name.replace('.', '_')}.png", dpi=150, bbox_inches="tight")
+                        plt.close(fig)
+                    
+                    # Scatter 3: Final Pruning Score vs Base Importance
+                    fig, ax = plt.subplots(figsize=(10, 8))
+                    ax.scatter(base_importance.numpy(), pruning_score.numpy(), c=colors, alpha=0.5, s=10)
+                    ax.set_xlabel("Base Importance (activation power)")
+                    ax.set_ylabel("Final Pruning Score")
+                    ax.set_title(f"Pruning Score vs Base Importance\n{layer_name}")
+                    ax.plot([0, 1], [0, 1], 'k--', alpha=0.3, label='y=x')
+                    ax.legend()
+                    ax.grid(True, alpha=0.3)
+                    fig.savefig(scatter_dir / f"pruning_score_vs_importance_{layer_name.replace('.', '_')}.png", dpi=150, bbox_inches="tight")
+                    plt.close(fig)
+                    
+                except Exception as e:
+                    logger.warning(f"    Failed to generate scatter plots: {e}")
+            
+            results[layer_name] = {
+                "num_supernodes": num_supernodes,
+                "num_high_connectivity": len(high_conn_indices),
+                "num_low_connectivity": len(low_conn_indices),
+                "mean_redundancy_high_conn": float(redundancy_scores[high_conn_mask].mean().item()) if high_conn_mask.sum() > 0 else 0,
+                "pruning_score_range": [float(pruning_score.min().item()), float(pruning_score.max().item())],
+            }
+        
+        logger.info(f"Computed supernode-connectivity pruning score for {len(results)} layers")
+        return results
+    
     def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
         """
         Apply structured pruning to MLP layers.
@@ -2905,7 +4431,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # For SCAR metrics and other pre-computed scores, use PrecomputedScorePruning
         # since they're not in the metric registry (computed separately by SCAR analysis)
         scar_metrics = ["scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature", 
-                        "directed_redundancy", "supernode_protection_score"]
+                        "directed_redundancy", "supernode_protection_score", "supernode_connectivity_score"]
         if metric in scar_metrics:
             from alignment.pruning.base import PrecomputedScorePruning
             pruner = PrecomputedScorePruning(config=config)
@@ -3383,7 +4909,9 @@ class LLMAlignmentExperiment(BaseExperiment):
                         
                         # Get supernode config
                         supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
-                        if supernode_cfg.get("enabled", False):
+                        supernode_fraction = supernode_cfg.get("core_fraction", 0.01)
+                        
+                        if supernode_cfg.get("enabled", False) or scar_scores:
                             comparison_metrics = supernode_cfg.get("compute_metrics", 
                                 ["activation_l2_norm", "rayleigh_quotient", "scar_activation_power", "scar_loss_proxy"])
                             
@@ -3392,18 +4920,38 @@ class LLMAlignmentExperiment(BaseExperiment):
                             non_supernode_vals = {m: [] for m in comparison_metrics}
                             
                             for layer_name, layer_scores in self.importance_scores.items():
+                                # Try to get supernode_mask, or compute it from scar_scores
                                 mask = layer_scores.get("supernode_mask")
+                                if mask is None and scar_scores and layer_name in scar_scores:
+                                    # Compute mask on-the-fly from scar_activation_power
+                                    scar_layer = scar_scores[layer_name]
+                                    act_power = scar_layer.get("scar_activation_power") or scar_layer.get("scar_loss_proxy")
+                                    if act_power is not None:
+                                        act_power = act_power.float().cpu()
+                                        n = act_power.numel()
+                                        num_supernodes = max(1, int(supernode_fraction * n))
+                                        _, top_idx = torch.topk(act_power, num_supernodes)
+                                        mask = torch.zeros(n, dtype=torch.bool)
+                                        mask[top_idx] = True
+                                        logger.info(f"  Created supernode mask for {layer_name}: {num_supernodes} supernodes")
+                                
                                 if mask is None:
                                     continue
                                 mask = mask.cpu().numpy() if torch.is_tensor(mask) else np.asarray(mask)
                                 
                                 for metric_name in comparison_metrics:
+                                    # Check both importance_scores and scar_scores for the metric
+                                    metric_vals = None
                                     if metric_name in layer_scores:
-                                        scores = layer_scores[metric_name]
-                                        scores = scores.float().cpu().numpy() if torch.is_tensor(scores) else np.asarray(scores)
-                                        if len(scores) == len(mask):
-                                            supernode_vals[metric_name].extend(scores[mask])
-                                            non_supernode_vals[metric_name].extend(scores[~mask])
+                                        metric_vals = layer_scores[metric_name]
+                                    elif scar_scores and layer_name in scar_scores and metric_name in scar_scores[layer_name]:
+                                        metric_vals = scar_scores[layer_name][metric_name]
+                                    
+                                    if metric_vals is not None:
+                                        metric_vals = metric_vals.float().cpu().numpy() if torch.is_tensor(metric_vals) else np.asarray(metric_vals)
+                                        if len(metric_vals) == len(mask):
+                                            supernode_vals[metric_name].extend(metric_vals[mask])
+                                            non_supernode_vals[metric_name].extend(metric_vals[~mask])
                             
                             # Plot comparison for each metric
                             for metric_name in comparison_metrics:
@@ -3496,6 +5044,64 @@ class LLMAlignmentExperiment(BaseExperiment):
                             logger.error(f"Failed directed redundancy computation: {dr_err}")
                             import traceback
                             logger.error(traceback.format_exc())
+                    
+                    # Compute supernode-connectivity based pruning score
+                    if getattr(self.config, "do_connectivity_pruning", True):
+                        try:
+                            supernode_config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+                            connectivity_results = self.compute_supernode_connectivity_pruning_score(
+                                scar_scores=scar_scores,
+                                supernode_fraction=supernode_config.get("core_fraction", 0.01),
+                                high_connectivity_fraction=supernode_config.get("follower_fraction", 0.10),
+                                redundancy_weight=supernode_config.get("redundancy_weight", 0.5),
+                                plots_dir=plots_dir,
+                            )
+                            results["supernode_connectivity"] = connectivity_results
+                            logger.info("Supernode-connectivity pruning score computation complete")
+                        except Exception as conn_err:
+                            logger.error(f"Failed supernode-connectivity computation: {conn_err}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+
+                    # Supernode Robustness Analysis
+                    # Analyzes consistency of supernode identification across metrics and batches
+                    robustness_config = getattr(self.config, "supernode_robustness", {}) or {}
+                    if robustness_config.get("enabled", False):
+                        try:
+                            logger.info("Running supernode robustness analysis...")
+                            robustness_results = self.analyze_supernode_robustness(
+                                supernode_fraction=robustness_config.get("supernode_fraction", 0.01),
+                                num_bootstrap_samples=robustness_config.get("num_bootstrap_samples", 10),
+                                batch_size=robustness_config.get("batch_size", 32),
+                                max_samples=robustness_config.get("max_samples", 256),
+                                metrics=robustness_config.get("metrics", None),
+                                target_layers=robustness_config.get("target_layers", None),
+                                plots_dir=plots_dir,
+                            )
+                            results["supernode_robustness"] = robustness_results
+                            logger.info("Supernode robustness analysis complete")
+                        except Exception as rob_err:
+                            logger.error(f"Failed supernode robustness analysis: {rob_err}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+
+        # Compute baseline pruning scores (Wanda, SparseGPT) if configured
+        # This runs OUTSIDE the SCAR metrics block so it can work independently
+        baseline_scores: Dict[str, Any] = {}
+        pruning_strategies = getattr(self.config, "pruning_strategies", None) or []
+        baseline_strategies = [s for s in pruning_strategies if s in ["wanda", "sparsegpt"]]
+        logger.info(f"Checking baseline strategies: pruning_strategies={pruning_strategies}, baseline_strategies={baseline_strategies}")
+        if baseline_strategies:
+            try:
+                baseline_scores = self.compute_baseline_pruning_scores(
+                    strategies=baseline_strategies,
+                    num_calibration_samples=getattr(self.config, "scar_num_samples", 128),
+                )
+                logger.info(f"Computed baseline pruning scores for {len(baseline_scores)} layers")
+            except Exception as base_err:
+                logger.error(f"Failed baseline pruning score computation: {base_err}")
+                import traceback
+                logger.error(traceback.format_exc())
 
         # Example: per-layer histogram with top-5 annotations
         # self.plot_layer_importance_histogram(

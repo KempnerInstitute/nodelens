@@ -60,7 +60,9 @@ from .strategies import (
     MomentumPruning,
     ParallelModePruning,
     RandomPruning,
+    SparseGPTPruning,
     TensorizedPruning,
+    WandaPruning,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +90,9 @@ PRUNING_STRATEGIES = {
     "parallel_mode": ParallelModePruning,
     "tensorized": TensorizedPruning,
     "async_parallel": AsyncParallelPruning,
+    # LLM Baselines (Sun et al. 2023, Frantar & Alistarh 2023)
+    "wanda": WandaPruning,
+    "sparsegpt": SparseGPTPruning,
 }
 
 
@@ -161,6 +166,9 @@ __all__ = [
     "ParallelModePruning",
     "TensorizedPruning",
     "AsyncParallelPruning",
+    # LLM Baselines
+    "WandaPruning",
+    "SparseGPTPruning",
     # Functions
     "get_pruning_strategy",
     "list_pruning_strategies",

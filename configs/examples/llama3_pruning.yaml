@@ -11,7 +11,7 @@ experiment:
 model:
   name: "hf_causal_lm"
   model_id: "meta-llama/Llama-3.1-8B"
-  torch_dtype: "bfloat16"
+  dtype: "bfloat16"
   device_map: "auto"
   
   # LLaMA MLP: up_proj has 14336 intermediate neurons (pruning target)

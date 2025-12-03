@@ -198,10 +198,14 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
                 flat_config["pretrained"] = external.get("pretrained", False)
         
         # Handle HuggingFace model config (for LLMs)
-        hf_fields = ["model_id", "model_backend", "torch_dtype", "device_map"]
+        hf_fields = ["model_id", "model_backend", "dtype", "torch_dtype", "device_map"]
         for field in hf_fields:
             if field in model:
-                flat_config["model_config"][field] = model[field]
+                # Normalize dtype field name (prefer 'dtype', but accept 'torch_dtype')
+                if field == "dtype":
+                    flat_config["model_config"]["torch_dtype"] = model[field]
+                else:
+                    flat_config["model_config"][field] = model[field]
         # Map hf_device_map -> device_map for backward compatibility
         if "hf_device_map" in model:
             flat_config["model_config"]["device_map"] = model["hf_device_map"]
@@ -449,6 +453,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["do_perplexity_computation"] = nested_config.get("do_perplexity_computation", False)
     flat_config["evaluation_dataset"] = nested_config.get("evaluation_dataset", "wikitext")
     flat_config["evaluation_num_samples"] = nested_config.get("evaluation_num_samples", 100)
+    
+    # Directed redundancy and connectivity pruning flags
+    flat_config["do_directed_redundancy"] = nested_config.get("do_directed_redundancy", True)
+    flat_config["do_connectivity_pruning"] = nested_config.get("do_connectivity_pruning", True)
 
     # SCAR metrics (LLM-specific) - check both old top-level and new llm block
     flat_config["do_scar_metrics"] = nested_config.get("do_scar_metrics", False)
@@ -470,6 +478,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["evaluation_dataset"] = llm_block["evaluation_dataset"]
         if "evaluation_num_samples" in llm_block:
             flat_config["evaluation_num_samples"] = llm_block["evaluation_num_samples"]
+        if "evaluation_metrics" in llm_block:
+            flat_config["evaluation_metrics"] = llm_block["evaluation_metrics"]
+        # Preserve the entire llm block for direct access
+        flat_config["llm"] = llm_block
     
     # Also check evaluation block (backward compatibility)
     eval_block = nested_config.get("evaluation", {})

@@ -2895,12 +2895,21 @@ class GeneralAlignmentExperiment(BaseExperiment):
         from alignment.analysis.visualization import UnifiedVisualizer, generate_experiment_visualizations
 
         # Use the centralized visualization function for standard plots
+        # Calculate total_params from model for secondary x-axis in pruning plots
+        total_params = None
+        if hasattr(self, 'model') and self.model is not None:
+            try:
+                total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            except:
+                pass
+        
         all_results = {
             "train_results": self.train_results,
             "test_results": self.test_results,
             "dropout_results": self.dropout_results,
             "pruning_results": self.pruning_results,
             "eigenfeature_results": self.eigenfeature_results,
+            "model_info": {"total_params": total_params} if total_params is not None else {},
         }
         
         try:
@@ -2918,10 +2927,28 @@ class GeneralAlignmentExperiment(BaseExperiment):
         logger.info(f"Saved visualizations to {output_dir}")
     
     def _generate_visualizations_fallback(self, output_dir: Path):
-        """Fallback visualization method if centralized visualization fails."""
+        """Fallback visualization method if centralized visualization fails.
+        
+        Uses consistent folder structure matching LLM experiments:
+        - training/ - Training curves, alignment evolution
+        - pruning/  - Pruning comparison plots
+        - histograms/ - Score distribution histograms
+        - scatter/  - Metric scatter plots
+        - redundancy/ - Redundancy heatmaps
+        """
         from alignment.analysis.visualization import UnifiedVisualizer
         
         visualizer = UnifiedVisualizer()
+        
+        # Create subfolders for organized output (matching LLM experiment format)
+        training_dir = output_dir / "training"
+        pruning_dir = output_dir / "pruning"
+        histogram_dir = output_dir / "histograms"
+        scatter_dir = output_dir / "scatter"
+        redundancy_dir = output_dir / "redundancy"
+        
+        for d in [training_dir, pruning_dir, histogram_dir, scatter_dir, redundancy_dir]:
+            d.mkdir(parents=True, exist_ok=True)
 
         # Optional fine-grained visualization control via config.visualization_options
         viz_opts: Dict[str, Any] = getattr(self.config, "visualization_options", {}) or {}
@@ -2931,7 +2958,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
         show_eigen = viz_opts.get("eigen_plots", True)
         show_pruning = viz_opts.get("pruning_plots", True)
 
-        # Training curves
+        # Training curves (saved to training/ subfolder)
         train_losses = self.train_results.get("train_losses", [])
         val_losses = self.train_results.get("val_losses", [])
         train_accs = self.train_results.get("train_accs", [])
@@ -2953,7 +2980,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     ylabel="Loss",
                     legend_title="Split",
                     show_confidence=False,
-                    save_path=output_dir / "training_loss.png",
+                    save_path=training_dir / "training_loss.png",
                 )
                 plt.close(fig)
 
@@ -2971,11 +2998,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     ylabel="Accuracy (%)",
                     legend_title="Split",
                     show_confidence=False,
-                    save_path=output_dir / "training_accuracy.png",
+                    save_path=training_dir / "training_accuracy.png",
                 )
                 plt.close(fig)
 
-        # Alignment evolution
+        # Alignment evolution (saved to training/ subfolder)
         alignment_history = self.train_results.get("alignment", {})
         if show_alignment and alignment_history:
             for method, history in alignment_history.items():
@@ -2988,6 +3015,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         summarized.append(float(np.mean(aggregated_scores)))
                 if summarized:
                     steps = list(range(1, len(summarized) + 1))
+                    # Use lowercase underscore naming like LLM
+                    method_safe = method.lower().replace(" ", "_")
                     fig = visualizer.plot_metric_evolution(
                         steps,
                         {method: summarized},
@@ -2996,11 +3025,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         ylabel="Average Score",
                         legend_title="Metric",
                         show_confidence=False,
-                        save_path=output_dir / f"alignment_{method}.png",
+                        save_path=training_dir / f"alignment_{method_safe}.png",
                     )
                     plt.close(fig)
 
-        # Dropout analysis
+        # Dropout analysis (saved to training/ subfolder)
         dropout_rates = self.dropout_results.get("dropout_rates", [])
         if dropout_rates and show_dropout:
             accuracy_curves = {}
@@ -3037,7 +3066,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     ylabel="Accuracy (%)",
                     legend_title="Strategy",
                     show_confidence=False,
-                    save_path=output_dir / "dropout_accuracy.png",
+                    save_path=training_dir / "dropout_accuracy.png",
                 )
                 plt.close(fig)
 
@@ -3050,11 +3079,11 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     ylabel="Loss",
                     legend_title="Strategy",
                     show_confidence=False,
-                    save_path=output_dir / "dropout_loss.png",
+                    save_path=training_dir / "dropout_loss.png",
                 )
                 plt.close(fig)
 
-        # Eigenfeature analysis visualizations
+        # Eigenfeature analysis visualizations (saved to training/ subfolder)
         if self.eigenfeature_results and show_eigen:
             eigen_heatmap_data = {}
             for layer_name, info in self.eigenfeature_results.items():
@@ -3068,16 +3097,12 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     title="Top Eigenvalues per Layer",
                     xlabel="Eigenvalue Index",
                     ylabel="Layer",
-                    save_path=output_dir / "eigenvalues_heatmap.png",
+                    save_path=training_dir / "eigenvalues_heatmap.png",
                 )
                 plt.close(fig)
 
-        # Pruning experiments - now enhanced with before/after comparisons
+        # Pruning experiments (saved to pruning/ subfolder) - now enhanced with before/after comparisons
         if self.pruning_results and "strategies" in self.pruning_results and show_pruning:
-            print("HELLO D")
-
-            from alignment.analysis.visualization import UnifiedVisualizer
-
             # Group results by algorithm (for multi-selection mode comparison)
             algorithm_results = {}
 
@@ -3085,26 +3110,38 @@ class GeneralAlignmentExperiment(BaseExperiment):
                 if not strategy_results.get("pruning_amounts"):
                     continue
 
-                # Extract algorithm name and selection mode from key
+                # Extract algorithm name and selection mode from key (use lowercase like LLM)
                 if "_" in strategy_key and strategy_key.split("_")[-1] in ["low", "high", "random"]:
                     # Format: "algorithm_selectionmode"
                     parts = strategy_key.rsplit("_", 1)
-                    algorithm = parts[0]
+                    algorithm = parts[0].lower().replace(" ", "_")
                     selection_mode = parts[1]
                 else:
                     # Single selection mode
-                    algorithm = strategy_key
+                    algorithm = strategy_key.lower().replace(" ", "_")
                     selection_mode = self.config.pruning_selection_mode
                     if isinstance(selection_mode, list):
                         selection_mode = selection_mode[0]
 
                 # Initialize algorithm group if needed
                 if algorithm not in algorithm_results:
-                    algorithm_results[algorithm] = {"sparsities": strategy_results["sparsities"], "before": {}, "after": {}}
+                    algorithm_results[algorithm] = {
+                        "sparsities": strategy_results["sparsities"],
+                        "before": {},
+                        "after": {},
+                        "before_losses": {},
+                        "after_losses": {},
+                    }
 
                 # Store accuracies by selection mode
                 algorithm_results[algorithm]["before"][selection_mode] = strategy_results["accuracies_before_finetune"]
                 algorithm_results[algorithm]["after"][selection_mode] = strategy_results["accuracies_after_finetune"]
+
+                # Store losses by selection mode if available
+                if "losses_before_finetune" in strategy_results:
+                    algorithm_results[algorithm]["before_losses"][selection_mode] = strategy_results["losses_before_finetune"]
+                if "losses_after_finetune" in strategy_results:
+                    algorithm_results[algorithm]["after_losses"][selection_mode] = strategy_results["losses_after_finetune"]
 
                 # Store standard deviations if available
                 if "accuracies_before_finetune_std" in strategy_results:
@@ -3113,29 +3150,42 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         algorithm_results[algorithm]["after_std"] = {}
                     algorithm_results[algorithm]["before_std"][selection_mode] = strategy_results["accuracies_before_finetune_std"]
                     algorithm_results[algorithm]["after_std"][selection_mode] = strategy_results["accuracies_after_finetune_std"]
-
-            # Create visualizer
-            visualizer = UnifiedVisualizer()
             
             # Compute total model parameters for secondary x-axis
             total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
-            # Generate plots for each algorithm using UnifiedVisualizer
+            # Generate plots for each algorithm using UnifiedVisualizer (use pruning_dir)
             for algorithm, results in algorithm_results.items():
-                # Create before/after comparison plots
+                # Create before/after comparison plots (saved to pruning/ subfolder)
                 figs = visualizer.plot_pruning_before_after(
                     sparsities=results["sparsities"],
                     before_accuracies=results["before"],
                     after_accuracies=results["after"],
                     before_std=results.get("before_std"),
                     after_std=results.get("after_std"),
-                    algorithm=algorithm.capitalize(),
-                    save_dir=output_dir,
+                    algorithm=algorithm.replace("_", " ").title(),
+                    save_dir=pruning_dir,  # Use pruning subfolder
                     dpi=self.config.plot_dpi,
                     total_params=total_params,
                 )
                 for fig in figs:
                     plt.close(fig)
+
+                # Create loss plots if available
+                if results.get("before_losses") and results.get("after_losses"):
+                    loss_figs = visualizer.plot_pruning_loss_before_after(
+                        sparsities=results["sparsities"],
+                        before_losses=results["before_losses"],
+                        after_losses=results["after_losses"],
+                        before_std=results.get("before_losses_std"),
+                        after_std=results.get("after_losses_std"),
+                        algorithm=algorithm.replace("_", " ").title(),
+                        save_dir=pruning_dir,
+                        dpi=self.config.plot_dpi,
+                        total_params=total_params,
+                    )
+                    for fig in loss_figs:
+                        plt.close(fig)
 
                 # Create improvement plots for each selection mode
                 for selection_mode in results["before"]:
@@ -3145,19 +3195,20 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             sparsities=results["sparsities"],
                             before_accuracies=results["before"][selection_mode],
                             after_accuracies=results["after"][selection_mode],
-                            algorithm=algorithm.capitalize(),
+                            algorithm=algorithm.replace("_", " ").title(),
                             selection_mode=selection_mode,
-                            save_path=output_dir / f"pruning_{algorithm}_improvement{suffix}.png",
+                            save_path=pruning_dir / f"pruning_{algorithm}_improvement{suffix}.png",
                             dpi=self.config.plot_dpi,
                         )
                         plt.close(fig)
 
             # Generate comparison plots
             try:
-                # Prepare data for comparison plot
+                # Prepare data for comparison plot (use lowercase underscore keys)
                 comparison_data = {}
                 for strategy_key, strategy_results in self.pruning_results.get("strategies", {}).items():
-                    comparison_data[strategy_key] = {
+                    normalized_key = strategy_key.lower().replace(" ", "_")
+                    comparison_data[normalized_key] = {
                         "sparsities": strategy_results.get("sparsities", strategy_results.get("pruning_amounts", [])),
                         "accuracies_before_finetune": strategy_results.get("accuracies_before_finetune", []),
                         "accuracies_after_finetune": strategy_results.get("accuracies_after_finetune", []),
@@ -3165,24 +3216,24 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     }
                 
                 if comparison_data:
-                    # Comparison plot
+                    # Comparison plot (save to pruning subfolder)
                     fig = visualizer.plot_pruning_comparison(
                         results=comparison_data,
                         metric="accuracy",
                         title=f"Pruning Strategy Comparison - {self.config.model_name}",
-                        save_path=output_dir / "pruning_comparison_professional.png",
+                        save_path=pruning_dir / "pruning_comparison.png",
                         total_params=total_params,
                     )
                     plt.close(fig)
                     
-                    # Summary grid plot
+                    # Summary grid plot (save to pruning subfolder)
                     fig = visualizer.plot_pruning_summary_grid(
                         results=comparison_data,
-                        save_path=output_dir / "pruning_summary_grid.png",
+                        save_path=pruning_dir / "pruning_summary_grid.png",
                     )
                     plt.close(fig)
                     
-                    logger.info("Generated professional pruning comparison plots")
+                    logger.info("Generated professional pruning comparison plots in pruning/ subfolder")
             except Exception as e:
                 logger.warning(f"Could not generate comparison plots: {e}")
 

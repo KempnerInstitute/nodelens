@@ -280,28 +280,33 @@ class GaussianMIAnalytic(BaseMetric):
             # Add regularization
             cov = cov + self.regularization * torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
             
-            # Compute w^T Σ_x w for all neurons efficiently (same as RQ)
+            # Compute w^T Σ_x w for all neurons efficiently
+            # This is the SIGNAL VARIANCE captured by each neuron
             wc = torch.matmul(weights_f, cov)  # [output_dim, input_dim]
-            w_cov_w = torch.sum(wc * weights_f, dim=1)  # [output_dim]
+            w_cov_w = torch.sum(wc * weights_f, dim=1)  # [output_dim] = signal variance
             
-            # Compute w^T w (weight norm squared) for normalization
-            w_w = torch.sum(weights_f ** 2, dim=1)  # [output_dim]
+            # KEY DIFFERENCE FROM RQ:
+            # - RQ = (w^T Σ_x w) / (w^T w)  -- normalizes by weight norm (scale-invariant)
+            # - MI = 0.5 * log(1 + (w^T Σ_x w) / σ_n²)  -- uses raw signal variance!
+            #
+            # From the theory (see alignment_notes/main.tex Section 3):
+            # For noisy linear neuron y = w^T X + n where n ~ N(0, σ_n²):
+            #   I(X; y) = 0.5 * log(1 + (w^T Σ_X w) / σ_n²)
+            #
+            # The w^T w term is NOT in MI! That's what makes MI and RQ different.
+            # Neurons with large weights but low efficiency (low RQ) can still have
+            # high MI because they capture lots of absolute signal variance.
             
-            # Compute relative alignment: RQ = (w^T Σ_x w) / (w^T w)
-            # This measures variance captured per unit weight
-            rq = w_cov_w / (w_w + 1e-10)
+            # Estimate noise variance as a fraction of average signal variance
+            # or use the configured noise_std
+            noise_var = self.noise_std ** 2
             
-            # Normalize by trace of covariance (total input variance)
-            # Convert to float32 for trace computation (bfloat16 not supported)
-            trace_cov = torch.trace(cov.float())
-            relative_rq = rq / (trace_cov + 1e-10)
+            # Compute SNR = signal_variance / noise_variance
+            # signal_variance = w^T Σ_x w (NOT divided by w^T w!)
+            snr = w_cov_w / (noise_var + 1e-10)
             
-            # MI ≈ 0.5 * log(1 + SNR), where SNR is related to alignment
-            # For well-aligned neurons, relative_rq is high
-            # Use: MI = 0.5 * log(1 + relative_rq * scale_factor)
-            # Scale factor chosen so MI values are in reasonable range
-            scale_factor = 1000.0  # So MI ranges from ~0 to ~3-4 nats
-            mi_scores = 0.5 * torch.log1p(relative_rq * scale_factor)
+            # MI = 0.5 * log(1 + SNR) in nats
+            mi_scores = 0.5 * torch.log1p(snr)
             
             # Clamp to reasonable range (no clamping needed if formula is correct)
             mi_scores = torch.clamp(mi_scores, min=0.0)

@@ -1,0 +1,103 @@
+# Quick test for Wanda/SparseGPT integration
+# Minimal config to verify baseline pruning strategies work
+
+experiment:
+  name: "llama3_baseline_test"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_baseline_test"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+  num_samples: 16  # Quick test
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 16  # Quick calibration
+  scar_max_length: 256
+  
+  evaluate_perplexity: true
+  evaluation_num_samples: 20  # Quick eval
+  
+  evaluation_metrics:
+    - "perplexity"
+    - "loss"
+    - "accuracy_winogrande"
+
+supernode:
+  enabled: true
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  score_metric: "activation_l2_norm"
+  protect_core: true
+  cross_layer_analysis: true
+  compare_by_connection: true
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+
+# Pruning: Just 50% to test baseline methods
+pruning:
+  enabled: true
+  sparsity_levels: [0.5]  # Just 50%
+  selection_modes: ["low"]
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  algorithms:
+    # Test baselines
+    - "activation_l2_norm"
+    - "scar_loss_proxy"
+    - "supernode_connectivity_score"
+    - "wanda"
+    - "sparsegpt"
+  
+  single_strategy: null
+  
+  fine_tune:
+    enabled: false
+
+do_directed_redundancy: true
+do_connectivity_pruning: true
+
+performance:
+  eval_batches: null
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: false
+    pruning_curves: true
+    redundancy_heatmaps: false
+
+visualization:
+  format: "png"
+  dpi: 150
+

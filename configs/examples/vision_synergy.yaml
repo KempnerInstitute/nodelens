@@ -1,6 +1,6 @@
 # Vision Synergy Paper: Redundancy, Synergy, and Alignment in Vision Networks
 # ICML 2025 Experiments
-# Run: python scripts/run_experiment.py --config configs/projects/vision_synergy.yaml
+# Run: python scripts/run_experiment.py --config configs/examples/vision_synergy.yaml
 
 experiment:
   name: "vision_synergy_resnet18"
@@ -22,24 +22,26 @@ dataset:
   train_split: 0.9  # Use 90% for train, 10% for calibration
 
 # Core alignment metrics for vision
+# NOTE: Synergy is very slow (O(n×k) with expensive MI). 
+# For fast runs, use only RQ + L2 + variance (like LLM experiment)
 metrics:
   enabled:
     - "rayleigh_quotient"
     - "activation_l2_norm"
-    - "pairwise_redundancy_gaussian"
-    - "gaussian_pid_synergy_mmi"
     - "activation_variance"
-  num_samples: 5000  # Calibration samples for metric estimation
+    - "pairwise_redundancy_gaussian"
+    # - "gaussian_pid_synergy_mmi"  # SLOW: ~hours. Enable only for final runs
+  num_samples: 500  # Reduced from 5000 for faster calibration
 
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
     
   pairwise_redundancy_gaussian:
-    num_partners: 50  # Sample 50 partners per channel for redundancy
+    num_partners: 10  # Reduced from 50 for speed
     
   gaussian_pid_synergy_mmi:
-    num_partners: 50
+    num_partners: 10  # Reduced from 50
 
 # Training settings (for fine-tuning if needed)
 training:

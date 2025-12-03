@@ -1,0 +1,152 @@
+# LLaMA-3 Minitron Comparison Experiment
+# Comprehensive comparison with NVIDIA Minitron benchmarks (https://arxiv.org/abs/2408.11796)
+# 
+# PURPOSE: Compare our pruning methods against NVIDIA Minitron results
+# 
+# NVIDIA Minitron Reference Results for Llama 3.1 8B (from Table 1):
+# ┌──────────────────┬─────────────────┬───────────────────────┐
+# │ Benchmark        │ Llama 3.1 8B    │ Minitron-4B-Width     │
+# │                  │ (baseline)      │ (50% pruned)          │
+# ├──────────────────┼─────────────────┼───────────────────────┤
+# │ Winogrande (5)   │ 77.3%           │ 73.5%                 │
+# │ ARC-Challenge(25)│ 57.9%           │ 55.6%                 │
+# │ MMLU (5)         │ 65.3%           │ 60.5%                 │
+# │ HellaSwag (10)   │ 81.8%           │ 76.1%                 │
+# │ GSM8k (5)        │ 48.6%           │ 41.2%                 │
+# │ TruthfulQA (0)   │ 45.0%           │ 42.9%                 │
+# │ MBPP (0)         │ 42.3%           │ 32.4%                 │
+# │ HumanEval (0)    │ 24.8%           │ -                     │
+# └──────────────────┴─────────────────┴───────────────────────┘
+#
+# Our goal: Compare SCAR-based, supernode-aware, Wanda, and SparseGPT pruning
+# at similar sparsity levels to see how our methods compare.
+
+experiment:
+  name: "llama3_minitron_comparison"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_minitron_comparison"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+    - "gaussian_mi_analytic"
+    - "average_redundancy"
+  num_samples: 64
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+# LLM settings with FULL Minitron benchmark suite
+llm:
+  scar_metrics: true
+  scar_num_samples: 32
+  scar_max_length: 512
+  
+  evaluate_perplexity: true
+  evaluation_num_samples: 100  # 100 samples per benchmark
+  
+  # COMPLETE NVIDIA Minitron benchmark suite (https://arxiv.org/abs/2408.11796)
+  evaluation_metrics:
+    # Language modeling
+    - "perplexity"
+    - "loss"
+    
+    # Core Minitron benchmarks (Table 1)
+    - "accuracy_winogrande"     # Winograd schemas
+    - "accuracy_arc_challenge"  # Hard science (ARC-Challenge)
+    - "accuracy_mmlu"           # Massive Multitask LU
+    - "accuracy_hellaswag"      # Commonsense
+    - "accuracy_gsm8k"          # Grade school math
+    - "accuracy_truthfulqa"     # Truthfulness
+    - "accuracy_mbpp"           # Python code (MBPP)
+    - "accuracy_humaneval"      # Code (HumanEval)
+    
+    # Additional benchmarks for completeness
+    - "accuracy_arc_easy"       # Easier science
+    - "accuracy_piqa"           # Physical intuition
+    - "accuracy_boolq"          # Boolean QA
+
+supernode:
+  enabled: true
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  score_metric: "activation_l2_norm"
+  protect_core: true
+  cross_layer_analysis: true
+  compare_by_connection: true
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+
+# Pruning: Focus on 50% sparsity for direct Minitron comparison
+pruning:
+  enabled: true
+  # Key sparsity levels: 50% matches Minitron-4B from 8B
+  sparsity_levels: [0.25, 0.5, 0.75]  # 25%, 50%, 75% pruned
+  selection_modes: ["low"]  # Prune lowest importance
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  algorithms:
+    # Our novel methods
+    - "activation_l2_norm"           # Magnitude baseline
+    - "scar_loss_proxy"              # SCAR-based
+    - "rayleigh_quotient"            # Alignment-based
+    - "supernode_protection_score"   # Supernode-aware
+    - "supernode_connectivity_score" # Connectivity-based
+    
+    # SOTA baselines for comparison
+    - "wanda"                        # Weight × Activation (Sun et al., 2023)
+    - "sparsegpt"                    # Second-order (Frantar & Alistarh, 2023)
+  
+  single_strategy: null
+  
+  fine_tune:
+    enabled: false
+
+do_directed_redundancy: true
+do_connectivity_pruning: true
+
+performance:
+  eval_batches: null
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["scar_activation_power", "scar_loss_proxy"]
+
+visualization:
+  format: "png"
+  dpi: 300
+

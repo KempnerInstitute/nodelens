@@ -1185,7 +1185,9 @@ class UnifiedVisualizer:
             add_param_axis(ax_before, fig_before, x_values, total_params)
 
             if save_dir:
-                fig_before.savefig(save_dir / f"pruning_{algorithm}_accuracy_before.png",
+                # Use lowercase underscore naming for consistency with LLM format
+                algo_safe = algorithm.lower().replace(" ", "_")
+                fig_before.savefig(save_dir / f"pruning_{algo_safe}_accuracy_before.png",
                                    dpi=dpi, bbox_inches="tight")
             figures.append(fig_before)
 
@@ -1213,7 +1215,9 @@ class UnifiedVisualizer:
             add_param_axis(ax_after, fig_after, x_values, total_params)
 
             if save_dir:
-                fig_after.savefig(save_dir / f"pruning_{algorithm}_accuracy_after.png",
+                # Use lowercase underscore naming for consistency with LLM format
+                algo_safe = algorithm.lower().replace(" ", "_")
+                fig_after.savefig(save_dir / f"pruning_{algo_safe}_accuracy_after.png",
                                   dpi=dpi, bbox_inches="tight")
             figures.append(fig_after)
 
@@ -1259,7 +1263,175 @@ class UnifiedVisualizer:
             add_param_axis(ax, fig, x_values, total_params)
 
             if save_dir:
-                fig.savefig(save_dir / f"pruning_{algorithm}_accuracy.png",
+                # Use lowercase underscore naming for consistency with LLM format
+                algo_safe = algorithm.lower().replace(" ", "_")
+                fig.savefig(save_dir / f"pruning_{algo_safe}_accuracy.png",
+                            dpi=dpi, bbox_inches="tight")
+            figures.append(fig)
+
+        return figures
+
+    def plot_pruning_loss_before_after(
+        self,
+        sparsities: List[float],
+        before_losses: Dict[str, List[float]],
+        after_losses: Dict[str, List[float]],
+        before_std: Optional[Dict[str, List[float]]] = None,
+        after_std: Optional[Dict[str, List[float]]] = None,
+        algorithm: str = "Pruning",
+        save_dir: Optional[Union[str, Path]] = None,
+        dpi: int = 300,
+        total_params: Optional[int] = None,
+    ) -> List[Figure]:
+        """
+        Create before/after fine-tuning comparison plots for pruning experiments (loss metric).
+
+        Args:
+            sparsities: List of sparsity levels (0.0 to 1.0).
+            before_losses: Dict mapping selection mode to loss list before fine-tuning.
+            after_losses: Dict mapping selection mode to loss list after fine-tuning.
+            before_std: Optional dict of standard deviations for before losses.
+            after_std: Optional dict of standard deviations for after losses.
+            algorithm: Name of the pruning algorithm.
+            save_dir: Directory to save figures.
+            dpi: DPI for saved figures.
+            total_params: Total number of parameters in the model (for secondary x-axis).
+
+        Returns:
+            List of generated figures.
+        """
+        figures = []
+        x_values = [s * 100 for s in sparsities]
+        
+        def format_params(n: int) -> str:
+            """Format parameter count with K/M suffix."""
+            if n >= 1_000_000:
+                return f"{n/1_000_000:.1f}M"
+            elif n >= 1_000:
+                return f"{n/1_000:.0f}K"
+            else:
+                return str(n)
+        
+        def add_param_axis(ax, fig, x_vals, total_params):
+            """Add secondary x-axis showing remaining parameters."""
+            if total_params is None:
+                return
+            # Make room at top for secondary axis
+            fig.subplots_adjust(top=0.85)
+            ax2 = ax.twiny()
+            ax2.set_xlim(ax.get_xlim())
+            # Use fewer ticks to avoid clutter
+            tick_positions = [0, 20, 40, 60, 80, 100]
+            param_labels = [format_params(int(total_params * (1 - t/100))) for t in tick_positions]
+            ax2.set_xticks(tick_positions)
+            ax2.set_xticklabels(param_labels, fontsize=9)
+            ax2.set_xlabel("Remaining Parameters", fontsize=10)
+
+        if save_dir:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Multiple selection modes: create separate before/after plots
+        if len(before_losses) > 1:
+            # Before fine-tuning plot
+            fig_before, ax_before = plt.subplots(figsize=self.figsize)
+            for mode, losses in before_losses.items():
+                if before_std and mode in before_std:
+                    ax_before.errorbar(
+                        x_values, losses, yerr=before_std[mode],
+                        fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8,
+                        capsize=5, capthick=2
+                    )
+                else:
+                    ax_before.plot(x_values, losses, "o-", label=f"{mode} mode",
+                                   linewidth=2.5, markersize=8)
+
+            ax_before.set_xlabel("Pruning %", fontsize=12)
+            ax_before.set_ylabel("Loss", fontsize=12)
+            ax_before.set_title(f"{algorithm} Pruning - Before Fine-tuning (Loss)",
+                               fontsize=14, fontweight="bold")
+            ax_before.grid(True, alpha=0.3)
+            ax_before.legend(loc="best")
+            ax_before.set_xlim(0, 100)
+            add_param_axis(ax_before, fig_before, x_values, total_params)
+
+            if save_dir:
+                algo_safe = algorithm.lower().replace(" ", "_")
+                fig_before.savefig(save_dir / f"pruning_{algo_safe}_loss_before.png",
+                                   dpi=dpi, bbox_inches="tight")
+            figures.append(fig_before)
+
+            # After fine-tuning plot
+            fig_after, ax_after = plt.subplots(figsize=self.figsize)
+            for mode, losses in after_losses.items():
+                if after_std and mode in after_std:
+                    ax_after.errorbar(
+                        x_values, losses, yerr=after_std[mode],
+                        fmt="o-", label=f"{mode} mode", linewidth=2.5, markersize=8,
+                        capsize=5, capthick=2
+                    )
+                else:
+                    ax_after.plot(x_values, losses, "o-", label=f"{mode} mode",
+                                  linewidth=2.5, markersize=8)
+
+            ax_after.set_xlabel("Pruning %", fontsize=12)
+            ax_after.set_ylabel("Loss", fontsize=12)
+            ax_after.set_title(f"{algorithm} Pruning - After Fine-tuning (Loss)",
+                              fontsize=14, fontweight="bold")
+            ax_after.grid(True, alpha=0.3)
+            ax_after.legend(loc="best")
+            ax_after.set_xlim(0, 100)
+            add_param_axis(ax_after, fig_after, x_values, total_params)
+
+            if save_dir:
+                algo_safe = algorithm.lower().replace(" ", "_")
+                fig_after.savefig(save_dir / f"pruning_{algo_safe}_loss_after.png",
+                                  dpi=dpi, bbox_inches="tight")
+            figures.append(fig_after)
+
+        else:
+            # Single selection mode: combined before/after plot
+            selection_mode = list(before_losses.keys())[0]
+            fig, ax = plt.subplots(figsize=self.figsize)
+
+            # Before fine-tuning
+            if before_std and selection_mode in before_std:
+                ax.errorbar(
+                    x_values, before_losses[selection_mode],
+                    yerr=before_std[selection_mode],
+                    fmt="o-", label="Before Fine-tuning", color="#FF6B6B",
+                    linewidth=2.5, markersize=8, capsize=5, capthick=2
+                )
+            else:
+                ax.plot(x_values, before_losses[selection_mode], "o-",
+                        label="Before Fine-tuning", color="#FF6B6B",
+                        linewidth=2.5, markersize=8)
+
+            # After fine-tuning
+            if after_std and selection_mode in after_std:
+                ax.errorbar(
+                    x_values, after_losses[selection_mode],
+                    yerr=after_std[selection_mode],
+                    fmt="o-", label="After Fine-tuning", color="#4ECDC4",
+                    linewidth=2.5, markersize=8, capsize=5, capthick=2
+                )
+            else:
+                ax.plot(x_values, after_losses[selection_mode], "o-",
+                        label="After Fine-tuning", color="#4ECDC4",
+                        linewidth=2.5, markersize=8)
+
+            ax.set_xlabel("Pruning %", fontsize=12)
+            ax.set_ylabel("Loss", fontsize=12)
+            ax.set_title(f"{algorithm} Pruning ({selection_mode} mode) - Loss",
+                        fontsize=14, fontweight="bold")
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="best", frameon=True, fancybox=True, shadow=True)
+            ax.set_xlim(0, 100)
+            add_param_axis(ax, fig, x_values, total_params)
+
+            if save_dir:
+                algo_safe = algorithm.lower().replace(" ", "_")
+                fig.savefig(save_dir / f"pruning_{algo_safe}_loss.png",
                             dpi=dpi, bbox_inches="tight")
             figures.append(fig)
 
@@ -1662,9 +1834,15 @@ Generated visualization report for alignment analysis.
             "normalized_perplexity": ("Normalized Score", False),
             "accuracy_hellaswag": ("HellaSwag Accuracy (%)", False),
             "accuracy_arc_easy": ("ARC-Easy Accuracy (%)", False),
+            "accuracy_arc_challenge": ("ARC-Challenge Accuracy (%)", False),  # NVIDIA Minitron
             "accuracy_piqa": ("PIQA Accuracy (%)", False),
             "accuracy_boolq": ("BoolQ Accuracy (%)", False),
+            "accuracy_winogrande": ("WinoGrande Accuracy (%)", False),
+            "accuracy_truthfulqa": ("TruthfulQA Accuracy (%)", False),  # NVIDIA Minitron
             "accuracy_mmlu": ("MMLU Accuracy (%)", False),
+            "accuracy_gsm8k": ("GSM8k Math Accuracy (%)", False),  # NVIDIA Minitron
+            "accuracy_mbpp": ("MBPP Code Accuracy (%)", False),  # NVIDIA Minitron
+            "accuracy_humaneval": ("HumanEval Code Accuracy (%)", False),  # NVIDIA Minitron
         }
         
         ylabel, lower_is_better = metric_config.get(metric, (metric.replace("_", " ").title(), True))
@@ -2500,6 +2678,314 @@ Generated visualization report for alignment analysis.
 
         return fig
 
+    # =========================================================================
+    # Supernode Robustness Analysis Plots
+    # =========================================================================
+
+    def plot_metric_similarity_heatmap(
+        self,
+        similarity_matrix: np.ndarray,
+        metric_names: List[str],
+        title: str = "Metric Similarity",
+        save_path: Optional[Union[str, Path]] = None,
+        cmap: str = "YlOrRd",
+        vmin: Optional[float] = 0,
+        vmax: Optional[float] = 1,
+    ) -> Figure:
+        """
+        Plot a heatmap showing similarity/correlation between different metrics.
+        
+        Args:
+            similarity_matrix: Square matrix of similarity values
+            metric_names: Names of metrics (for axis labels)
+            title: Plot title
+            save_path: Path to save figure
+            cmap: Colormap name
+            vmin: Minimum value for colormap
+            vmax: Maximum value for colormap
+            
+        Returns:
+            Matplotlib figure
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Create heatmap
+        im = ax.imshow(similarity_matrix, cmap=cmap, vmin=vmin, vmax=vmax, aspect='auto')
+        
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label("Similarity" if "Jaccard" in title else "Correlation")
+        
+        # Set ticks and labels
+        ax.set_xticks(np.arange(len(metric_names)))
+        ax.set_yticks(np.arange(len(metric_names)))
+        
+        # Shorten metric names for display
+        short_names = [m.replace('scar_', '').replace('gaussian_', '').replace('_', '\n') 
+                       for m in metric_names]
+        ax.set_xticklabels(short_names, rotation=45, ha='right', fontsize=9)
+        ax.set_yticklabels(short_names, fontsize=9)
+        
+        # Add value annotations
+        for i in range(len(metric_names)):
+            for j in range(len(metric_names)):
+                val = similarity_matrix[i, j]
+                text_color = 'white' if val > 0.5 * (vmax if vmax else 1) else 'black'
+                ax.text(j, i, f'{val:.2f}', ha='center', va='center', 
+                       color=text_color, fontsize=8, fontweight='bold')
+        
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        plt.tight_layout()
+        
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved metric similarity heatmap to {save_path}")
+        
+        return fig
+
+    def plot_supernode_stability_distribution(
+        self,
+        stability_scores: np.ndarray,
+        num_supernodes: int,
+        layer_name: str = "",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot the distribution of supernode stability scores from bootstrap analysis.
+        
+        Args:
+            stability_scores: Array of stability scores (0-1) for each neuron
+            num_supernodes: Number of supernodes being selected
+            layer_name: Layer name for title
+            save_path: Path to save figure
+            
+        Returns:
+            Matplotlib figure
+        """
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Left: Histogram of stability scores
+        ax = axes[0]
+        ax.hist(stability_scores, bins=50, alpha=0.7, color='steelblue', edgecolor='none')
+        ax.axvline(0.8, color='coral', linestyle='--', linewidth=2, 
+                   label='High stability threshold (80%)')
+        ax.axvline(0.5, color='orange', linestyle=':', linewidth=2,
+                   label='Moderate threshold (50%)')
+        
+        highly_stable = np.sum(stability_scores > 0.8)
+        ax.set_xlabel("Stability Score (fraction of bootstrap samples)")
+        ax.set_ylabel("Number of Neurons")
+        ax.set_title(f"Bootstrap Stability Distribution\n{highly_stable} highly stable neurons (>80%)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Right: Sorted stability scores (stability curve)
+        ax = axes[1]
+        sorted_stability = np.sort(stability_scores)[::-1]
+        x = np.arange(len(sorted_stability))
+        
+        ax.fill_between(x, sorted_stability, alpha=0.3, color='steelblue')
+        ax.plot(x, sorted_stability, color='steelblue', linewidth=1.5)
+        ax.axvline(num_supernodes, color='coral', linestyle='--', linewidth=2,
+                   label=f'Supernode threshold (top {num_supernodes})')
+        ax.axhline(0.8, color='orange', linestyle=':', linewidth=1.5,
+                   label='80% stability line')
+        
+        ax.set_xlabel("Neuron Rank (sorted by stability)")
+        ax.set_ylabel("Stability Score")
+        ax.set_title("Stability Curve")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, min(len(sorted_stability), num_supernodes * 10))
+        
+        layer_suffix = f" - {layer_name}" if layer_name else ""
+        fig.suptitle(f"Supernode Stability Analysis{layer_suffix}", fontsize=12, fontweight='bold')
+        plt.tight_layout()
+        
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved stability distribution to {save_path}")
+        
+        return fig
+
+    def plot_supernode_consistency_bars(
+        self,
+        metric_supernode_indices: Dict[str, set],
+        total_neurons: int,
+        layer_name: str = "",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot bar chart showing supernode consistency across metrics.
+        
+        Shows how many neurons appear as supernodes in 1, 2, 3, ... N metrics.
+        
+        Args:
+            metric_supernode_indices: Dict mapping metric names to sets of supernode indices
+            total_neurons: Total number of neurons in the layer
+            layer_name: Layer name for title
+            save_path: Path to save figure
+            
+        Returns:
+            Matplotlib figure
+        """
+        # Count how many metrics identify each neuron as supernode
+        neuron_metric_count = np.zeros(total_neurons)
+        for indices in metric_supernode_indices.values():
+            for idx in indices:
+                if idx < total_neurons:
+                    neuron_metric_count[idx] += 1
+        
+        n_metrics = len(metric_supernode_indices)
+        
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Left: Bar chart of neurons by number of metrics
+        ax = axes[0]
+        counts_per_level = [np.sum(neuron_metric_count == i) for i in range(n_metrics + 1)]
+        x_labels = [f"{i}" for i in range(n_metrics + 1)]
+        colors = plt.cm.RdYlGn(np.linspace(0.2, 0.8, n_metrics + 1))
+        
+        bars = ax.bar(x_labels, counts_per_level, color=colors, edgecolor='black', linewidth=0.5)
+        ax.set_xlabel("Number of Metrics Identifying as Supernode")
+        ax.set_ylabel("Number of Neurons")
+        ax.set_title("Supernode Identification Consistency")
+        
+        # Add value labels on bars
+        for bar, count in zip(bars, counts_per_level):
+            if count > 0:
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                       f'{int(count)}', ha='center', va='bottom', fontsize=9)
+        
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        # Right: Stacked bar for each metric
+        ax = axes[1]
+        metrics = list(metric_supernode_indices.keys())
+        x_pos = np.arange(len(metrics))
+        
+        # Calculate unique vs shared for each metric
+        unique_counts = []
+        shared_counts = []
+        for metric in metrics:
+            indices = metric_supernode_indices[metric]
+            unique = sum(1 for idx in indices if neuron_metric_count[idx] == 1)
+            shared = len(indices) - unique
+            unique_counts.append(unique)
+            shared_counts.append(shared)
+        
+        short_names = [m.replace('scar_', '').replace('gaussian_', '').replace('_analytic', '')
+                       for m in metrics]
+        
+        ax.bar(x_pos, unique_counts, label='Unique to this metric', color='lightcoral', edgecolor='darkred')
+        ax.bar(x_pos, shared_counts, bottom=unique_counts, label='Shared with others', 
+               color='lightgreen', edgecolor='darkgreen')
+        
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(short_names, rotation=45, ha='right', fontsize=9)
+        ax.set_ylabel("Number of Supernodes")
+        ax.set_title("Unique vs Shared Supernodes per Metric")
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        layer_suffix = f" - {layer_name}" if layer_name else ""
+        fig.suptitle(f"Cross-Metric Supernode Consistency{layer_suffix}", fontsize=12, fontweight='bold')
+        plt.tight_layout()
+        
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved consistency bars to {save_path}")
+        
+        return fig
+
+    def plot_metric_score_scatter_matrix(
+        self,
+        metric_scores: Dict[str, np.ndarray],
+        supernode_indices: set,
+        layer_name: str = "",
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Plot scatter matrix comparing scores from different metrics.
+        
+        Args:
+            metric_scores: Dict mapping metric names to score arrays
+            supernode_indices: Set of supernode indices to highlight
+            layer_name: Layer name for title
+            save_path: Path to save figure
+            
+        Returns:
+            Matplotlib figure
+        """
+        metrics = list(metric_scores.keys())
+        n_metrics = len(metrics)
+        
+        if n_metrics < 2:
+            logger.warning("Need at least 2 metrics for scatter matrix")
+            return plt.figure()
+        
+        fig, axes = plt.subplots(n_metrics, n_metrics, figsize=(3 * n_metrics, 3 * n_metrics))
+        
+        # Create supernode mask
+        n_neurons = len(next(iter(metric_scores.values())))
+        supernode_mask = np.zeros(n_neurons, dtype=bool)
+        for idx in supernode_indices:
+            if idx < n_neurons:
+                supernode_mask[idx] = True
+        
+        for i, m1 in enumerate(metrics):
+            for j, m2 in enumerate(metrics):
+                ax = axes[i, j] if n_metrics > 1 else axes
+                
+                scores1 = metric_scores[m1]
+                scores2 = metric_scores[m2]
+                
+                if i == j:
+                    # Diagonal: histogram
+                    ax.hist(scores1[~supernode_mask], bins=30, alpha=0.5, color='steelblue',
+                           label='Regular', density=True)
+                    ax.hist(scores1[supernode_mask], bins=30, alpha=0.7, color='coral',
+                           label='Supernodes', density=True)
+                    ax.set_xlabel(m1.replace('scar_', '').replace('_', ' '))
+                    if j == 0:
+                        ax.legend(fontsize=7)
+                else:
+                    # Off-diagonal: scatter
+                    ax.scatter(scores2[~supernode_mask], scores1[~supernode_mask], 
+                              s=5, alpha=0.3, c='steelblue', label='Regular')
+                    ax.scatter(scores2[supernode_mask], scores1[supernode_mask],
+                              s=20, alpha=0.8, c='coral', edgecolors='darkred', 
+                              linewidths=0.5, label='Supernodes')
+                    
+                    # Add correlation
+                    from scipy import stats
+                    corr, _ = stats.spearmanr(scores1, scores2)
+                    ax.text(0.05, 0.95, f'ρ={corr:.2f}', transform=ax.transAxes,
+                           fontsize=8, va='top', fontweight='bold')
+                    
+                    if i == n_metrics - 1:
+                        ax.set_xlabel(m2.replace('scar_', '').replace('_', ' '), fontsize=9)
+                    if j == 0:
+                        ax.set_ylabel(m1.replace('scar_', '').replace('_', ' '), fontsize=9)
+        
+        layer_suffix = f" - {layer_name}" if layer_name else ""
+        fig.suptitle(f"Metric Score Correlations{layer_suffix}", fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        if save_path:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            logger.info(f"Saved scatter matrix to {save_path}")
+        
+        return fig
+
     def _to_numpy(self, data: Union[torch.Tensor, np.ndarray, List]) -> np.ndarray:
         """Convert data to numpy array."""
         if isinstance(data, torch.Tensor):
@@ -2543,6 +3029,13 @@ def generate_experiment_visualizations(
     consistent visualizations. It reads the results dictionary and generates
     appropriate plots based on what data is available.
     
+    UNIFIED FORMAT: Uses subfolders matching LLM experiment structure:
+        - plots/pruning/       - Pruning comparison plots
+        - plots/histograms/    - Score distribution histograms
+        - plots/scatter/       - Metric scatter plots
+        - plots/redundancy/    - Redundancy heatmaps
+        - plots/training/      - Training curves
+    
     Args:
         results: Experiment results dictionary containing:
             - train_results: Training history (losses, accuracies, alignment)
@@ -2560,11 +3053,21 @@ def generate_experiment_visualizations(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Create subfolders for organized output (matching LLM experiment format)
+    pruning_dir = output_dir / "pruning"
+    histogram_dir = output_dir / "histograms"
+    scatter_dir = output_dir / "scatter"
+    redundancy_dir = output_dir / "redundancy"
+    training_dir = output_dir / "training"
+    
+    for d in [pruning_dir, histogram_dir, scatter_dir, redundancy_dir, training_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+    
     visualizer = UnifiedVisualizer()
     visualizer.dpi = dpi
     generated_plots = []
     
-    # Training curves
+    # Training curves (saved to training/ subfolder)
     train_results = results.get("train_results", {})
     if train_results:
         train_losses = train_results.get("train_losses", [])
@@ -2584,10 +3087,10 @@ def generate_experiment_visualizations(
                 title="Training Loss",
                 xlabel="Epoch",
                 ylabel="Loss",
-                save_path=output_dir / "training_loss.png",
+                save_path=training_dir / "training_loss.png",
             )
             plt.close(fig)
-            generated_plots.append(output_dir / "training_loss.png")
+            generated_plots.append(training_dir / "training_loss.png")
             
             # Accuracy plot
             if train_accs:
@@ -2600,12 +3103,12 @@ def generate_experiment_visualizations(
                     title="Training Accuracy",
                     xlabel="Epoch",
                     ylabel="Accuracy (%)",
-                    save_path=output_dir / "training_accuracy.png",
+                    save_path=training_dir / "training_accuracy.png",
                 )
                 plt.close(fig)
-                generated_plots.append(output_dir / "training_accuracy.png")
+                generated_plots.append(training_dir / "training_accuracy.png")
     
-    # Alignment evolution
+    # Alignment evolution (saved to training/ subfolder)
     alignment_history = train_results.get("alignment", {})
     if alignment_history:
         for method, history in alignment_history.items():
@@ -2632,12 +3135,12 @@ def generate_experiment_visualizations(
                     title=f"{method.replace('_', ' ').title()} Evolution",
                     xlabel="Measurement",
                     ylabel="Average Score",
-                    save_path=output_dir / f"alignment_{method}.png",
+                    save_path=training_dir / f"alignment_{method}.png",
                 )
                 plt.close(fig)
-                generated_plots.append(output_dir / f"alignment_{method}.png")
+                generated_plots.append(training_dir / f"alignment_{method}.png")
     
-    # Dropout analysis
+    # Dropout analysis (saved to training/ subfolder)
     dropout_results = results.get("dropout_results", {})
     if dropout_results:
         dropout_rates = dropout_results.get("dropout_rates", [])
@@ -2659,13 +3162,38 @@ def generate_experiment_visualizations(
                     title="Dropout Analysis",
                     xlabel="Dropout (%)",
                     ylabel="Accuracy (%)",
-                    save_path=output_dir / "dropout_accuracy.png",
+                    save_path=training_dir / "dropout_accuracy.png",
                 )
                 plt.close(fig)
-                generated_plots.append(output_dir / "dropout_accuracy.png")
+                generated_plots.append(training_dir / "dropout_accuracy.png")
     
-    # Pruning results
+    # Pruning results (saved to pruning/ subfolder, matching LLM format)
     pruning_results = results.get("pruning_results", {})
+    
+    # Calculate total_params from model info if available
+    total_params = None
+    if "model_info" in results:
+        total_params = results["model_info"].get("total_params")
+    elif "test_results" in results and "model_info" in results["test_results"]:
+        total_params = results["test_results"]["model_info"].get("total_params")
+    # Try to get from config if available
+    if total_params is None and config is not None:
+        if hasattr(config, "model") and hasattr(config.model, "total_params"):
+            total_params = config.model.total_params
+        # Try to get model from config and calculate params
+        elif hasattr(config, "model") and hasattr(config.model, "parameters"):
+            try:
+                total_params = sum(p.numel() for p in config.model.parameters() if p.requires_grad)
+            except:
+                pass
+    # If still None, try to estimate from pruning results (if we have sparsity info)
+    # This is a fallback - we can't calculate exactly but can use a reasonable estimate
+    if total_params is None and pruning_results and "strategies" in pruning_results:
+        # Try to infer from first strategy's data if available
+        first_strategy = next(iter(pruning_results["strategies"].values()), None)
+        if first_strategy and "total_params" in first_strategy:
+            total_params = first_strategy["total_params"]
+    
     if pruning_results and "strategies" in pruning_results:
         # Group by algorithm for comparison plots
         algorithm_results = {}
@@ -2674,17 +3202,17 @@ def generate_experiment_visualizations(
             if not strategy_data.get("pruning_amounts") and not strategy_data.get("sparsities"):
                 continue
             
-            # Parse strategy name and mode
+            # Parse strategy name and mode (use lowercase underscores like LLM)
             if "_" in strategy_key:
                 parts = strategy_key.rsplit("_", 1)
                 if parts[1] in ["low", "high", "random"]:
-                    algorithm = parts[0]
+                    algorithm = parts[0].lower().replace(" ", "_")
                     mode = parts[1]
                 else:
-                    algorithm = strategy_key
+                    algorithm = strategy_key.lower().replace(" ", "_")
                     mode = "low"
             else:
-                algorithm = strategy_key
+                algorithm = strategy_key.lower().replace(" ", "_")
                 mode = "low"
             
             if algorithm not in algorithm_results:
@@ -2694,6 +3222,10 @@ def generate_experiment_visualizations(
                     "after": {},
                     "before_std": {},
                     "after_std": {},
+                    "before_losses": {},
+                    "after_losses": {},
+                    "before_losses_std": {},
+                    "after_losses_std": {},
                 }
             
             algorithm_results[algorithm]["before"][mode] = strategy_data.get("accuracies_before_finetune", [])
@@ -2703,13 +3235,23 @@ def generate_experiment_visualizations(
                 algorithm_results[algorithm]["before_std"][mode] = strategy_data["accuracies_before_finetune_std"]
             if "accuracies_after_finetune_std" in strategy_data:
                 algorithm_results[algorithm]["after_std"][mode] = strategy_data["accuracies_after_finetune_std"]
+            
+            # Collect loss data
+            if "losses_before_finetune" in strategy_data:
+                algorithm_results[algorithm]["before_losses"][mode] = strategy_data["losses_before_finetune"]
+            if "losses_after_finetune" in strategy_data:
+                algorithm_results[algorithm]["after_losses"][mode] = strategy_data["losses_after_finetune"]
+            if "losses_before_finetune_std" in strategy_data:
+                algorithm_results[algorithm]["before_losses_std"][mode] = strategy_data["losses_before_finetune_std"]
+            if "losses_after_finetune_std" in strategy_data:
+                algorithm_results[algorithm]["after_losses_std"][mode] = strategy_data["losses_after_finetune_std"]
         
-        # Generate plots for each algorithm
+        # Generate plots for each algorithm (use pruning_dir subfolder)
         for algorithm, data in algorithm_results.items():
             if not data["sparsities"]:
                 continue
             
-            # Before/after comparison
+            # Before/after accuracy comparison (save to pruning subfolder)
             figs = visualizer.plot_pruning_before_after(
                 sparsities=data["sparsities"],
                 before_accuracies=data["before"],
@@ -2717,23 +3259,45 @@ def generate_experiment_visualizations(
                 before_std=data.get("before_std") or None,
                 after_std=data.get("after_std") or None,
                 algorithm=algorithm.replace("_", " ").title(),
-                save_dir=output_dir,
+                save_dir=pruning_dir,
                 dpi=dpi,
+                total_params=total_params,
             )
             for fig in figs:
                 plt.close(fig)
             
-            # Track generated files
+            # Before/after loss comparison (save to pruning subfolder)
+            if data.get("before_losses") and data.get("after_losses"):
+                loss_figs = visualizer.plot_pruning_loss_before_after(
+                    sparsities=data["sparsities"],
+                    before_losses=data["before_losses"],
+                    after_losses=data["after_losses"],
+                    before_std=data.get("before_losses_std") or None,
+                    after_std=data.get("after_losses_std") or None,
+                    algorithm=algorithm.replace("_", " ").title(),
+                    save_dir=pruning_dir,
+                    dpi=dpi,
+                    total_params=total_params,
+                )
+                for fig in loss_figs:
+                    plt.close(fig)
+            
+            # Track generated files (using consistent lowercase names)
             for mode in data["before"]:
-                generated_plots.append(output_dir / f"pruning_{algorithm}_accuracy_before.png")
-                generated_plots.append(output_dir / f"pruning_{algorithm}_accuracy_after.png")
+                generated_plots.append(pruning_dir / f"pruning_{algorithm}_accuracy_before.png")
+                generated_plots.append(pruning_dir / f"pruning_{algorithm}_accuracy_after.png")
+                if data.get("before_losses") and mode in data["before_losses"]:
+                    generated_plots.append(pruning_dir / f"pruning_{algorithm}_loss_before.png")
+                    generated_plots.append(pruning_dir / f"pruning_{algorithm}_loss_after.png")
         
-        # Comparison plot across all strategies
+        # Comparison plot across all strategies (save to pruning subfolder)
         if algorithm_results:
             try:
                 comparison_data = {}
                 for strategy_key, strategy_data in pruning_results["strategies"].items():
-                    comparison_data[strategy_key] = {
+                    # Normalize key to lowercase underscores
+                    normalized_key = strategy_key.lower().replace(" ", "_")
+                    comparison_data[normalized_key] = {
                         "sparsities": strategy_data.get("pruning_amounts", strategy_data.get("sparsities", [])),
                         "accuracies_after_finetune": strategy_data.get("accuracies_after_finetune", []),
                         "accuracies_std": strategy_data.get("accuracies_after_finetune_std"),
@@ -2743,14 +3307,15 @@ def generate_experiment_visualizations(
                     results=comparison_data,
                     metric="accuracy",
                     title="Pruning Strategy Comparison",
-                    save_path=output_dir / "pruning_comparison.png",
+                    save_path=pruning_dir / "pruning_comparison.png",
+                    total_params=total_params,
                 )
                 plt.close(fig)
-                generated_plots.append(output_dir / "pruning_comparison.png")
+                generated_plots.append(pruning_dir / "pruning_comparison.png")
             except Exception as e:
                 logger.warning(f"Could not generate comparison plot: {e}")
     
-    # Eigenfeature analysis
+    # Eigenfeature analysis (saved to training/ subfolder)
     eigenfeature_results = results.get("eigenfeature_results", {})
     if eigenfeature_results:
         eigen_data = {}
@@ -2765,18 +3330,18 @@ def generate_experiment_visualizations(
                 title="Top Eigenvalues per Layer",
                 xlabel="Eigenvalue Index",
                 ylabel="Layer",
-                save_path=output_dir / "eigenvalues_heatmap.png",
+                save_path=training_dir / "eigenvalues_heatmap.png",
             )
             plt.close(fig)
-            generated_plots.append(output_dir / "eigenvalues_heatmap.png")
+            generated_plots.append(training_dir / "eigenvalues_heatmap.png")
     
-    # ========== Histograms and Scatter Plots from Alignment Scores ==========
+    # ========== Histograms from Alignment Scores (saved to histograms/ subfolder) ==========
     # Check for alignment scores in test_results
     test_results = results.get("test_results", {})
     alignment_scores = test_results.get("alignment", {})
     
     if alignment_scores:
-        # Generate histograms for each metric
+        # Generate histograms for each metric (use histograms subfolder)
         for metric_name, layer_scores in alignment_scores.items():
             if isinstance(layer_scores, dict):
                 # Aggregate scores across layers for histogram
@@ -2788,33 +3353,35 @@ def generate_experiment_visualizations(
                         all_scores.extend(scores.cpu().numpy().tolist())
                 
                 if all_scores:
+                    # Use lowercase underscore naming like LLM
+                    metric_name_safe = metric_name.lower().replace(" ", "_")
                     fig = visualizer.plot_1d_histogram(
                         values=all_scores,
                         title=f"{metric_name.replace('_', ' ').title()} Distribution",
                         xlabel="Score",
                         ylabel="Count",
                         bins=50,
-                        save_path=output_dir / f"histogram_{metric_name}.png",
+                        save_path=histogram_dir / f"histogram_{metric_name_safe}.png",
                     )
                     plt.close(fig)
-                    generated_plots.append(output_dir / f"histogram_{metric_name}.png")
+                    generated_plots.append(histogram_dir / f"histogram_{metric_name_safe}.png")
                     
                     # Also generate per-layer histograms
                     for layer_name, scores in layer_scores.items():
                         if isinstance(scores, (list, np.ndarray)) and len(scores) > 10:
-                            safe_layer = layer_name.replace(".", "_").replace("/", "_")
+                            safe_layer = layer_name.replace(".", "_").replace("/", "_").lower()
                             fig = visualizer.plot_1d_histogram(
                                 values=scores,
                                 title=f"{metric_name.replace('_', ' ').title()} - {layer_name}",
                                 xlabel="Score",
                                 ylabel="Count",
                                 bins=30,
-                                save_path=output_dir / f"histogram_{metric_name}_{safe_layer}.png",
+                                save_path=histogram_dir / f"histogram_{metric_name_safe}_{safe_layer}.png",
                             )
                             plt.close(fig)
-                            generated_plots.append(output_dir / f"histogram_{metric_name}_{safe_layer}.png")
+                            generated_plots.append(histogram_dir / f"histogram_{metric_name_safe}_{safe_layer}.png")
         
-        # Generate scatter plots for metric pairs
+        # Generate scatter plots for metric pairs (saved to scatter/ subfolder)
         metric_names = list(alignment_scores.keys())
         if len(metric_names) >= 2:
             # Generate scatter plots for pairs of metrics
@@ -2833,33 +3400,37 @@ def generate_experiment_visualizations(
                                 
                                 if isinstance(s1, (list, np.ndarray)) and isinstance(s2, (list, np.ndarray)):
                                     if len(s1) == len(s2) and len(s1) > 10:
-                                        safe_layer = layer_name.replace(".", "_").replace("/", "_")
+                                        # Use lowercase underscore naming like LLM
+                                        safe_layer = layer_name.replace(".", "_").replace("/", "_").lower()
+                                        m1_safe = metric1.lower().replace(" ", "_")
+                                        m2_safe = metric2.lower().replace(" ", "_")
                                         fig = visualizer.plot_scatter_2d(
                                             x=s1,
                                             y=s2,
                                             xlabel=metric1.replace("_", " ").title(),
                                             ylabel=metric2.replace("_", " ").title(),
                                             title=f"{metric1} vs {metric2} - {layer_name}",
-                                            save_path=output_dir / f"scatter_{metric1}_vs_{metric2}_{safe_layer}.png",
+                                            save_path=scatter_dir / f"scatter_{m1_safe}_vs_{m2_safe}_{safe_layer}.png",
                                         )
                                         plt.close(fig)
-                                        generated_plots.append(output_dir / f"scatter_{metric1}_vs_{metric2}_{safe_layer}.png")
+                                        generated_plots.append(scatter_dir / f"scatter_{m1_safe}_vs_{m2_safe}_{safe_layer}.png")
     
-    # ========== Redundancy Heatmaps ==========
+    # ========== Redundancy Heatmaps (saved to redundancy/ subfolder) ==========
     # Check for pairwise redundancy matrices in test_results
     redundancy_matrices = test_results.get("redundancy_matrices", {})
     if redundancy_matrices:
         for layer_name, matrix in redundancy_matrices.items():
             if matrix is not None and (isinstance(matrix, (np.ndarray, torch.Tensor))):
-                safe_layer = layer_name.replace(".", "_").replace("/", "_")
+                # Use lowercase underscore naming like LLM
+                safe_layer = layer_name.replace(".", "_").replace("/", "_").lower()
                 try:
                     fig = visualizer.plot_pairwise_redundancy_matrix(
                         redundancy_matrix=matrix,
                         layer_name=layer_name,
-                        save_path=output_dir / f"redundancy_heatmap_{safe_layer}.png",
+                        save_path=redundancy_dir / f"redundancy_heatmap_{safe_layer}.png",
                     )
                     plt.close(fig)
-                    generated_plots.append(output_dir / f"redundancy_heatmap_{safe_layer}.png")
+                    generated_plots.append(redundancy_dir / f"redundancy_heatmap_{safe_layer}.png")
                     logger.info(f"Generated redundancy heatmap for {layer_name}")
                 except Exception as e:
                     logger.warning(f"Could not generate redundancy heatmap for {layer_name}: {e}")
