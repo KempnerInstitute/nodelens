@@ -223,103 +223,120 @@ class GaussianMIAnalytic(BaseMetric):
 
     def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
-        Compute Gaussian MI with non-Gaussian corrections.
+        Compute Gaussian MI using the same efficient pattern as RayleighQuotient.
+
+        Uses the relationship: MI(X; y_i) = -0.5 * log(1 - R²_i)
+        where R²_i = (w_i^T Σ_x w_i) / var(y_i)
+        
+        This is computed efficiently using the same covariance-based approach as RQ.
 
         Args:
-            inputs: Input activations [batch_size, input_dim]
+            inputs: Input activations [batch_size, input_dim] or [batch*patches, features] for CNN
             weights: Weight matrix [output_dim, input_dim]
             outputs: Output activations (computed if not provided)
 
         Returns:
             MI scores for each neuron [output_dim] or single score
         """
-        batch_size, input_dim = inputs.shape
-        output_dim = weights.shape[0]
+        original_device = inputs.device
+        
+        # Handle CNN inputs [B, C, H, W] -> flatten properly
+        if inputs.ndim == 4:
+            B, C, H, W = inputs.shape
+            inputs = inputs.permute(0, 2, 3, 1).reshape(B * H * W, C)
+        elif inputs.ndim > 2:
+            inputs = inputs.reshape(inputs.shape[0], -1)
+            
+        if weights.ndim > 2:
+            weights = weights.reshape(weights.shape[0], -1)
+            
+        n_samples, input_dim = inputs.shape
+        output_dim, weight_dim = weights.shape
 
-        # Compute outputs if not provided
-        if outputs is None:
-            outputs = inputs @ weights.T
-            # Add small noise to simulate realistic conditions
-            if self.noise_std > 0:
-                noise = torch.randn_like(outputs) * self.noise_std
-                outputs = outputs + noise
+        # Handle dimension mismatch
+        if input_dim != weight_dim:
+            if input_dim > weight_dim:
+                inputs = inputs[:, :weight_dim]
+                input_dim = weight_dim
+            else:
+                return torch.ones(output_dim, device=original_device)
 
         if self.per_neuron:
-            # Compute MI for each output neuron separately
-            mi_scores = torch.zeros(output_dim, device=inputs.device)
-
-            # Compute input statistics once
-            inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
-            cov_x = (inputs_centered.T @ inputs_centered) / (batch_size - 1)
-            cumulants_x = self._compute_cumulants(inputs, self.expansion_order + 2)
-
-            for i in range(output_dim):
-                # Get single output
-                y = outputs[:, i].unsqueeze(1)
-                y_centered = y - y.mean(dim=0, keepdim=True)
-
-                # Compute covariances
-                cov_y = (y_centered.T @ y_centered) / (batch_size - 1)
-                cov_xy = (inputs_centered.T @ y_centered) / (batch_size - 1)
-
-                # Gaussian MI baseline
-                mi_gaussian = self._gaussian_mi(cov_x, cov_y, cov_xy)
-
-                if self.expansion_order > 0 and self.use_entropy_edgeworth:
-                    # Compute MI via entropy difference with Edgeworth entropy corrections (univariate)
-                    # Fit linear regression to get residual r = y - E[y|X]
-                    # Using population-style coefficients from sample covariances: beta = Σ_x^{-1} cov_xy
-                    try:
-                        beta = torch.linalg.solve(cov_x + self.regularization * torch.eye(cov_x.shape[0], device=cov_x.device), cov_xy).squeeze()
-                    except RuntimeError:
-                        beta = torch.linalg.pinv(cov_x) @ cov_xy
-                        beta = beta.squeeze()
-                    y_hat_centered = inputs_centered @ beta
-                    r_centered = y_centered.squeeze() - y_hat_centered
-
-                    # Entropy corrections for y and residual r
-                    h_y = self._univariate_entropy_edgeworth(y_centered.squeeze())
-                    h_r = self._univariate_entropy_edgeworth(r_centered)
-                    mi_edge = torch.clamp(h_y - h_r, min=0.0)
-                    mi_scores[i] = mi_edge
-                else:
-                    mi_scores[i] = mi_gaussian
-
-            return mi_scores
+            # Force CPU for large input dimensions (covariance matrix would be huge)
+            # down_proj has 14336 inputs -> cov is [14336, 14336] = 820MB
+            use_cpu = self._should_use_cpu(inputs, weights) or input_dim > 8192
+            if use_cpu:
+                inputs = inputs.cpu()
+                weights = weights.cpu()
+            
+            # Convert to float32 for numerical stability
+            inputs_f = inputs.float()
+            weights_f = weights.float()
+            
+            # Compute covariance matrix (same as RQ)
+            inputs_centered = inputs_f - inputs_f.mean(dim=0, keepdim=True)
+            cov = torch.matmul(inputs_centered.T, inputs_centered) / (n_samples - 1)
+            
+            # Add regularization
+            cov = cov + self.regularization * torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
+            
+            # Compute w^T Σ_x w for all neurons efficiently
+            # This is the SIGNAL VARIANCE captured by each neuron
+            wc = torch.matmul(weights_f, cov)  # [output_dim, input_dim]
+            w_cov_w = torch.sum(wc * weights_f, dim=1)  # [output_dim] = signal variance
+            
+            # KEY DIFFERENCE FROM RQ:
+            # - RQ = (w^T Σ_x w) / (w^T w)  -- normalizes by weight norm (scale-invariant)
+            # - MI = 0.5 * log(1 + (w^T Σ_x w) / σ_n²)  -- uses raw signal variance!
+            #
+            # From the theory (see alignment_notes/main.tex Section 3):
+            # For noisy linear neuron y = w^T X + n where n ~ N(0, σ_n²):
+            #   I(X; y) = 0.5 * log(1 + (w^T Σ_X w) / σ_n²)
+            #
+            # The w^T w term is NOT in MI! That's what makes MI and RQ different.
+            # Neurons with large weights but low efficiency (low RQ) can still have
+            # high MI because they capture lots of absolute signal variance.
+            
+            # Estimate noise variance as a fraction of average signal variance
+            # or use the configured noise_std
+            noise_var = self.noise_std ** 2
+            
+            # Compute SNR = signal_variance / noise_variance
+            # signal_variance = w^T Σ_x w (NOT divided by w^T w!)
+            snr = w_cov_w / (noise_var + 1e-10)
+            
+            # MI = 0.5 * log(1 + SNR) in nats
+            mi_scores = 0.5 * torch.log1p(snr)
+            
+            # Clamp to reasonable range (no clamping needed if formula is correct)
+            mi_scores = torch.clamp(mi_scores, min=0.0)
+            
+            return mi_scores.to(original_device)
 
         else:
-            # Compute joint MI between all inputs and all outputs
-            inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
-            outputs_centered = outputs - outputs.mean(dim=0, keepdim=True)
+            # Compute joint MI between all inputs and all outputs (rarely used for pruning)
+            # Move to CPU for heavy covariance computation
+            inputs_f = inputs.float().cpu()
+            weights_f = weights.float().cpu()
+            
+            if outputs is None:
+                outputs_f = inputs_f @ weights_f.T
+            else:
+                outputs_f = outputs.float().cpu()
+                
+            inputs_centered = inputs_f - inputs_f.mean(dim=0, keepdim=True)
+            outputs_centered = outputs_f - outputs_f.mean(dim=0, keepdim=True)
 
             # Compute covariances
-            cov_x = (inputs_centered.T @ inputs_centered) / (batch_size - 1)
-            cov_y = (outputs_centered.T @ outputs_centered) / (batch_size - 1)
-            cov_xy = (inputs_centered.T @ outputs_centered) / (batch_size - 1)
+            cov_x = (inputs_centered.mT @ inputs_centered) / (n_samples - 1)
+            cov_y = (outputs_centered.mT @ outputs_centered) / (n_samples - 1)
+            cov_xy = (inputs_centered.mT @ outputs_centered) / (n_samples - 1)
 
             # Gaussian MI
             mi_gaussian = self._gaussian_mi(cov_x, cov_y, cov_xy)
 
-            # Add corrections if requested
-            if self.expansion_order > 0:
-                cumulants_x = self._compute_cumulants(inputs, self.expansion_order + 2)
-                self._compute_cumulants(outputs, self.expansion_order + 2)
-
-                # For joint MI, we need to handle the corrections differently
-                # Here we provide a simplified scalar correction
-                avg_correction = 0.0
-                for i in range(output_dim):
-                    y_single = outputs[:, i].unsqueeze(1)
-                    cumulants_y_single = self._compute_cumulants(y_single, self.expansion_order + 2)
-                    cov_xy_single = cov_xy[:, i].unsqueeze(1)
-
-                    correction = self._edgeworth_correction(cumulants_x, cumulants_y_single, cov_xy_single.squeeze(), self.expansion_order)
-                    avg_correction += correction
-
-                avg_correction = avg_correction / output_dim
-                total_mi = mi_gaussian + avg_correction
-            else:
-                total_mi = mi_gaussian
+            # Skip expensive corrections for joint MI
+            total_mi = mi_gaussian
 
             # Return same value for all neurons
-            return torch.full((output_dim,), total_mi.item(), device=inputs.device)
+            return torch.full((output_dim,), total_mi.item(), device=original_device)

@@ -129,8 +129,14 @@ class PairwiseRedundancyGaussian(BaseMetric):
         Compute redundancy from outputs directly (FAST!).
         Optimized to only compute necessary correlations if indices are provided.
         """
-        if outputs.ndim > 2:
-            outputs = outputs.reshape(outputs.shape[0], -1)
+        # Handle CNN outputs [B, C, H, W] -> [B*H*W, C] to get per-channel scores
+        if outputs.ndim == 4:
+            B, C, H, W = outputs.shape
+            # Permute to [B, H, W, C] then reshape to [B*H*W, C]
+            outputs = outputs.permute(0, 2, 3, 1).reshape(B * H * W, C)
+        elif outputs.ndim > 2:
+            # For other multi-dim outputs, flatten to 2D keeping last dim
+            outputs = outputs.reshape(-1, outputs.shape[-1])
 
         B, N = outputs.shape
 

@@ -23,7 +23,7 @@ For advanced pruning visualizations (multi-seed, ablations):
 """
 
 # Primary interface
-from .unified_visualizer import UnifiedVisualizer, plot_quick_summary
+from .unified_visualizer import UnifiedVisualizer, plot_quick_summary, generate_experiment_visualizations
 
 # Specialized visualizers (for advanced use cases)
 from .pruning_plots import PruningVisualizer
@@ -33,6 +33,7 @@ __all__ = [
     # Primary
     "UnifiedVisualizer",
     "plot_quick_summary",
+    "generate_experiment_visualizations",
     # Specialized
     "PruningVisualizer",
     "AlignmentVisualizer",

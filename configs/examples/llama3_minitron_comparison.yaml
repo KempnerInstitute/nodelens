@@ -1,0 +1,305 @@
+# ============================================================================
+# LLaMA-3 NVIDIA MINITRON-COMPATIBLE COMPREHENSIVE COMPARISON
+# ============================================================================
+# Reference: https://arxiv.org/abs/2408.11796 (NVIDIA Minitron)
+# 
+# PURPOSE: Compare all pruning methods with NVIDIA Minitron-compatible evaluation
+# 
+# This config reproduces NVIDIA's benchmark methodology:
+# - Few-shot evaluation matching official settings
+# - Chain-of-thought prompting for GSM8k
+# - Full benchmark suite from Minitron paper
+#
+# ┌──────────────────┬─────────────────┬───────────────────────┬─────────────┐
+# │ Benchmark        │ Llama 3.1 8B    │ Minitron-4B-Width     │ Few-shot    │
+# │                  │ (baseline)      │ (50% pruned)          │ Setting     │
+# ├──────────────────┼─────────────────┼───────────────────────┼─────────────┤
+# │ Winogrande       │ 77.3%           │ 73.5%                 │ 5-shot      │
+# │ ARC-Challenge    │ 57.9%           │ 55.6%                 │ 25-shot     │
+# │ MMLU             │ 65.3%           │ 60.5%                 │ 5-shot      │
+# │ HellaSwag        │ 81.8%           │ 76.1%                 │ 10-shot     │
+# │ GSM8k            │ 48.6%           │ 41.2%                 │ 5-shot+CoT  │
+# │ TruthfulQA       │ 45.0%           │ 42.9%                 │ 0-shot      │
+# │ MBPP             │ 42.3%           │ 32.4%                 │ 0-shot      │
+# │ HumanEval        │ 24.8%           │ -                     │ 0-shot      │
+# └──────────────────┴─────────────────┴───────────────────────┴─────────────┘
+#
+# PRUNING METHODS COMPARED:
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ CATEGORY           │ METHOD                        │ REFERENCE          │
+# ├────────────────────┼───────────────────────────────┼────────────────────┤
+# │ ALIGNMENT-BASED    │ rayleigh_quotient (RQ)        │ Our method         │
+# │                    │ gaussian_mi_analytic (MI)     │ Related to RQ      │
+# │                    │ average_redundancy            │ Info-theoretic     │
+# ├────────────────────┼───────────────────────────────┼────────────────────┤
+# │ SCAR METRICS       │ scar_loss_proxy               │ Activation + Grad  │
+# ├────────────────────┼───────────────────────────────┼────────────────────┤
+# │ SUPERNODE-AWARE    │ supernode_protection_score    │ Protects important │
+# │                    │ supernode_connectivity_score  │ Connectivity-based │
+# ├────────────────────┼───────────────────────────────┼────────────────────┤
+# │ MAGNITUDE-BASED    │ activation_l2_norm            │ Common baseline    │
+# ├────────────────────┼───────────────────────────────┼────────────────────┤
+# │ SOTA BASELINES     │ wanda                         │ Sun et al. 2023    │
+# │                    │ sparsegpt                     │ Frantar+Alistarh'23│
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# EXPECTED RUNTIME: ~8-12 hours on H100 (with full few-shot benchmarks)
+# ============================================================================
+
+experiment:
+  name: "llama3_minitron_comparison"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_minitron_comparison"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Track all MLP layers for comprehensive analysis
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+# ============================================================================
+# IMPORTANCE METRICS - All custom metrics for scoring neurons
+# ============================================================================
+metrics:
+  enabled:
+    # Alignment-based metrics (our novel contributions)
+    - "rayleigh_quotient"       # Core alignment metric (RQ)
+    - "gaussian_mi_analytic"    # Mutual information (analytically related to RQ)
+    - "average_redundancy"      # Information-theoretic redundancy
+    # Magnitude-based (baseline for comparison)
+    - "activation_l2_norm"      # Standard activation magnitude
+  
+  num_samples: 64  # Calibration samples for metric computation
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+# ============================================================================
+# LLM-SPECIFIC SETTINGS WITH NVIDIA MINITRON-COMPATIBLE EVALUATION
+# ============================================================================
+llm:
+  # SCAR metrics (gradient-based neuron importance)
+  scar_metrics: true
+  scar_num_samples: 64
+  scar_max_length: 512
+  
+  # Evaluation settings
+  evaluate_perplexity: true
+  evaluation_num_samples: 200  # More samples for robust comparison
+  
+  # =========================================================================
+  # NVIDIA MINITRON FEW-SHOT SETTINGS
+  # Enable this to use official NVIDIA benchmark methodology
+  # =========================================================================
+  use_nvidia_fewshot: true   # Automatically applies correct few-shot for each benchmark
+  use_chain_of_thought: true # Enable CoT for GSM8k (as used by NVIDIA)
+  
+  # Manual few-shot settings (used if use_nvidia_fewshot is false)
+  # These match NVIDIA Minitron Table 1
+  fewshot_settings:
+    accuracy_mmlu: 5           # 5-shot
+    accuracy_hellaswag: 10     # 10-shot
+    accuracy_arc_challenge: 25 # 25-shot
+    accuracy_arc_easy: 25      # 25-shot
+    accuracy_winogrande: 5     # 5-shot
+    accuracy_gsm8k: 5          # 5-shot + CoT
+    accuracy_truthfulqa: 0     # 0-shot
+    accuracy_mbpp: 0           # 0-shot
+    accuracy_humaneval: 0      # 0-shot
+    accuracy_piqa: 0           # 0-shot
+    accuracy_boolq: 0          # 0-shot
+  
+  # COMPLETE NVIDIA MINITRON BENCHMARK SUITE
+  evaluation_metrics:
+    # Language modeling (core metrics)
+    - "perplexity"            # WikiText-2 perplexity
+    - "loss"                  # Cross-entropy loss
+    
+    # Core Minitron benchmarks (Table 1)
+    - "accuracy_winogrande"     # WinoGrande (5-shot)
+    - "accuracy_arc_challenge"  # ARC-Challenge (25-shot)
+    - "accuracy_mmlu"           # MMLU (5-shot)
+    - "accuracy_hellaswag"      # HellaSwag (10-shot)
+    #- "accuracy_gsm8k"          # GSM8k (5-shot + CoT)
+    #- "accuracy_truthfulqa"     # TruthfulQA (0-shot)
+    # NOTE: Code benchmarks disabled - exec() can hang on generated code
+    # - "accuracy_mbpp"         # MBPP (0-shot) - can hang
+    # - "accuracy_humaneval"    # HumanEval (0-shot) - can hang
+    
+    # Additional benchmarks for completeness
+    - "accuracy_arc_easy"       # ARC-Easy (25-shot)
+    - "accuracy_piqa"           # PIQA (0-shot)
+    - "accuracy_boolq"          # BoolQ (0-shot)
+
+# ============================================================================
+# SUPERNODE CONFIGURATION - Key for supernode-aware pruning
+# ============================================================================
+supernode:
+  enabled: true
+  
+  # Supernode identification
+  core_fraction: 0.01         # Top 1% = supernodes
+  follower_fraction: 0.10     # Top 10% connected = followers
+  score_metric: "activation_l2_norm"
+  
+  # Protection settings
+  protect_core: true
+  
+  # Analysis settings
+  cross_layer_analysis: true
+  compare_by_connection: true
+  
+  # Metrics to compute for supernodes
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+
+# ============================================================================
+# SUPERNODE ROBUSTNESS ANALYSIS
+# ============================================================================
+supernode_robustness:
+  enabled: true
+  supernode_fraction: 0.01
+  num_bootstrap_samples: 5    # Reduced for faster runtime
+  batch_size: 32
+  max_samples: 128
+  
+  metrics:
+    - "scar_activation_power"
+    - "scar_loss_proxy"
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+  
+  target_layers: null
+
+# ============================================================================
+# PRUNING CONFIGURATION - ALL METHODS & SPARSITY LEVELS
+# ============================================================================
+pruning:
+  enabled: true
+  
+  # Key sparsity levels: 50% matches Minitron-4B from 8B
+  sparsity_levels: [0.25, 0.5, 0.75]
+  
+  # Selection modes
+  selection_modes: ["low", "high"]  # Compare both pruning directions
+  
+  # Pruning structure
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  # =========================================================================
+  # ALL PRUNING ALGORITHMS - Complete comparison
+  # =========================================================================
+  algorithms:
+    # -----------------------------------------------------------------------
+    # ALIGNMENT-BASED (Our Novel Methods)
+    # -----------------------------------------------------------------------
+    - "rayleigh_quotient"            # RQ - alignment measure
+    - "gaussian_mi_analytic"         # MI - related to alignment
+    - "average_redundancy"           # Redundancy - info-theoretic
+    
+    # -----------------------------------------------------------------------
+    # SCAR-BASED (Gradient-Informed)
+    # -----------------------------------------------------------------------
+    - "scar_loss_proxy"              # Combines activation power + curvature
+    
+    # -----------------------------------------------------------------------
+    # SUPERNODE-AWARE (Novel Contribution)
+    # -----------------------------------------------------------------------
+    - "supernode_protection_score"   # Protects unique halo neurons
+    - "supernode_connectivity_score" # Low connectivity = safe to prune
+    
+    # -----------------------------------------------------------------------
+    # MAGNITUDE-BASED (Standard Baseline)
+    # -----------------------------------------------------------------------
+    - "activation_l2_norm"           # Standard magnitude pruning
+    
+    # -----------------------------------------------------------------------
+    # STATE-OF-THE-ART BASELINES (NVIDIA Minitron comparison)
+    # -----------------------------------------------------------------------
+    - "wanda"                        # Weight × Activation (Sun et al., 2023)
+    - "sparsegpt"                    # Second-order (Frantar & Alistarh, 2023)
+  
+  single_strategy: null
+  
+  fine_tune:
+    enabled: false
+
+# ============================================================================
+# ADVANCED ANALYSIS FLAGS
+# ============================================================================
+do_directed_redundancy: true
+do_connectivity_pruning: true
+
+# ============================================================================
+# PERFORMANCE SETTINGS
+# ============================================================================
+performance:
+  eval_batches: null
+
+# ============================================================================
+# ANALYSIS & VISUALIZATION
+# ============================================================================
+analysis:
+  save_scores: true
+  generate_plots: true
+  
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true
+  
+  scatter_pairs:
+    # Alignment vs magnitude
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["activation_l2_norm", "gaussian_mi_analytic"]
+    
+    # SCAR relationships
+    - ["scar_activation_power", "scar_loss_proxy"]
+    
+    # Alignment vs SCAR
+    - ["rayleigh_quotient", "scar_loss_proxy"]
+    
+    # Redundancy relationships
+    - ["average_redundancy", "rayleigh_quotient"]
+
+visualization:
+  format: "png"
+  dpi: 300
+
+# ============================================================================
+# EXPECTED OUTPUT STRUCTURE
+# ============================================================================
+# results/llama3_minitron_comparison_YYYYMMDD_HHMMSS/
+# ├── experiment_config.yaml
+# ├── results_YYYYMMDD_HHMMSS.json
+# ├── nvidia_benchmark_comparison.json  # NVIDIA Minitron vs our methods
+# ├── experiment.log
+# ├── plots/
+# │   ├── pruning/
+# │   │   ├── pruning_comparison_*.png
+# │   │   └── nvidia_minitron_comparison.png
+# │   ├── supernode_robustness/
+# │   │   └── *.png
+# │   └── ...
+# └── checkpoints/

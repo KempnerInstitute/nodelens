@@ -1,0 +1,148 @@
+# LLaMA-3 Full Benchmark Suite
+# Comprehensive evaluation using all available benchmarks including NVIDIA Minitron benchmarks
+# Reference: https://arxiv.org/abs/2407.14679 (NVIDIA Minitron)
+
+experiment:
+  name: "llama3_full_benchmark"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_full_benchmark"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Track MLP layers for pruning
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+# Core metrics: RQ, L2, MI (analytic), redundancy, and SCAR metrics
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+    - "gaussian_mi_analytic"    # MI analytically related to RQ (fast)
+    - "average_redundancy"
+  num_samples: 64
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+# LLM-specific settings with SCAR metrics and FULL benchmark suite
+llm:
+  # Enable SCAR metrics (activation power, taylor, curvature, loss proxy)
+  scar_metrics: true
+  scar_num_samples: 32
+  scar_max_length: 512
+  
+  # Evaluation settings
+  evaluate_perplexity: true
+  evaluation_num_samples: 100  # Use 100 samples per benchmark for reliability
+  
+  # FULL BENCHMARK SUITE including NVIDIA Minitron benchmarks
+  # Total: 10 metrics covering language modeling + 8 downstream tasks
+  evaluation_metrics:
+    # Language modeling metrics
+    - "perplexity"           # WikiText perplexity (lower is better)
+    - "loss"                 # Cross-entropy loss (lower is better)
+    - "bits_per_byte"        # Compression efficiency (lower is better)
+    
+    # NVIDIA Minitron benchmark suite (https://arxiv.org/abs/2407.14679)
+    - "accuracy_mmlu"        # MMLU - Massive Multitask LU (~20min)
+    - "accuracy_hellaswag"   # HellaSwag - Commonsense reasoning (~10min)
+    - "accuracy_arc_challenge"  # ARC-Challenge - Hard science questions (~10min)
+    - "accuracy_winogrande"  # WinoGrande - Winograd schemas (~10min)
+    - "accuracy_piqa"        # PIQA - Physical intuition (~5min)
+    - "accuracy_truthfulqa"  # TruthfulQA - Truthfulness (~10min)
+    
+    # Additional benchmarks
+    - "accuracy_arc_easy"    # ARC-Easy - Science questions (~5min)
+    - "accuracy_boolq"       # BoolQ - Boolean questions (~5min)
+    
+    # Math and Code benchmarks (NVIDIA Minitron)
+    - "accuracy_gsm8k"       # GSM8k - Grade school math (~15min)
+    - "accuracy_mbpp"        # MBPP - Python code (~10min)
+    - "accuracy_humaneval"   # HumanEval - Code generation (~10min)
+
+# Supernode configuration
+supernode:
+  enabled: true
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  score_metric: "activation_l2_norm"
+  protect_core: true
+  cross_layer_analysis: true
+  compare_by_connection: true
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+  
+# Pruning experiments with ALL strategies including baselines
+pruning:
+  enabled: true
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  selection_modes: ["low", "high"]  # Low prunes lowest-scored, high prunes highest-scored
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  # ALL pruning strategies including SOTA baselines
+  algorithms:
+    - "activation_l2_norm"           # L2 norm (magnitude-based pruning)
+    - "scar_loss_proxy"              # Loss proxy (combines activation power and curvature)
+    - "rayleigh_quotient"            # RQ (alignment-based)
+    - "gaussian_mi_analytic"         # MI (analytically related to RQ, fast)
+    - "average_redundancy"           # Redundancy (remove redundant neurons)
+    - "supernode_protection_score"   # Directed redundancy - protects unique halo neurons
+    - "supernode_connectivity_score" # Connectivity-based - low connectivity = safe to prune
+    # State-of-the-art LLM pruning baselines (NVIDIA Minitron comparison):
+    - "wanda"                        # Weight × Activation (Sun et al., 2023)
+    - "sparsegpt"                    # Second-order one-shot (Frantar & Alistarh, 2023)
+  
+  single_strategy: null
+  
+  fine_tune:
+    enabled: false
+    epochs: 1
+    learning_rate: 1.0e-5
+
+# Enable directed redundancy computation
+do_directed_redundancy: true
+do_connectivity_pruning: true
+
+# Performance
+performance:
+  eval_batches: null
+
+# Analysis and plots
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["scar_activation_power", "scar_loss_proxy"]
+    - ["scar_activation_power", "rayleigh_quotient"]
+
+visualization:
+  format: "png"
+  dpi: 300
+

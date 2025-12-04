@@ -1,0 +1,103 @@
+# CNN2P2 Pruning Experiment on MNIST
+# Smaller model to avoid saturation after fine-tuning
+# Tests composite metrics for optimal pruning
+
+experiment:
+  name: "cnn2p2_pruning_mnist"
+  type: "alignment_analysis"
+  seed: 42                        # Base seed - each network gets seed + network_idx
+  device: "auto"
+  output_dir: "./results/cnn2p2_pruning_mnist"
+  num_networks: 3                 # Multiple networks for error bars
+
+model:
+  name: "cnn2p2"
+  pretrained: false
+  tracked_layers: null
+  
+  # CNN2P2 specific parameters - SMALLER model to avoid saturation
+  cnn2p2_params:
+    in_channels: 1                # Grayscale images
+    output_dim: 10                # MNIST digits
+    conv_channels: [8, 16]        # Reduced from [32, 64] - smaller model
+    kernel_sizes: [3, 3]          # Smaller kernels
+    strides: [1, 1]
+    paddings: [1, 1]
+    pool_kernel_size: 2
+    pool_stride: 2
+    hidden_fc_dim: 32             # Reduced from 128 - smaller FC layer
+    dropout_rate: 0.3             # Less dropout for smaller model
+    example_input_hw: [28, 28]    # MNIST image size
+
+# MNIST dataset
+dataset:
+  name: "mnist"
+  data_path: null
+  batch_size: 128
+  num_workers: 4
+
+# Training configuration
+training:
+  enabled: true
+  epochs: 50                      # Fewer epochs for smaller model
+  learning_rate: 0.01
+  optimizer: "sgd"
+  momentum: 0.9
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  scheduler_config:
+    T_max: 15
+    eta_min: 0.0001
+
+# Metrics - comprehensive set with analytic MI and composite metrics
+metrics:
+  enabled:
+    # Core alignment metrics
+    - "rayleigh_quotient"
+    - "conditional_rayleigh_quotient"
+    # Analytic MI (similar to RQ, computed analytically)
+    - "gaussian_mi_analytic"
+    - "mutual_information_gaussian"
+    # Activation-based
+    - "activation_l2_norm"
+    # Redundancy metrics
+    - "average_redundancy"
+    - "pairwise_redundancy_gaussian"
+    # Class-based metrics
+    - "mi_about_class"
+    # Composite metrics for optimal pruning
+    - "alignment_minus_redundancy"    # RQ - Redundancy (alignment without redundancy)
+  num_samples: 256
+
+cnn:
+  mode: "unfold"
+  
+# Pruning experiments - includes random baseline
+pruning:
+  enabled: true
+  sparsity_levels: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+  selection_modes: ["low", "high", "random"]   # Added random baseline
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: false
+    epochs: 5                     # Fewer fine-tune epochs
+    learning_rate: 0.001
+
+performance:
+  eval_batches: null
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true
+
+visualization:
+  format: "png"
+  dpi: 300

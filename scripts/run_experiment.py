@@ -26,6 +26,44 @@ repo_root = os.path.dirname(current_dir)
 sys.path.insert(0, repo_root)
 sys.path.insert(0, os.path.join(repo_root, "src"))
 
+# Configure tqdm globally to avoid ANSI escape codes in log files
+# This is especially important when running under SLURM where output is redirected to files
+# The [A escape codes you see in logs are cursor movement codes from tqdm progress bars
+
+# Set environment variable for libraries that respect it (e.g., transformers)
+# This tells tqdm to use simpler formatting
+os.environ.setdefault('TQDM_DISABLE', '0')  # Keep tqdm enabled but configure it
+
+try:
+    from tqdm import tqdm
+    import tqdm as tqdm_module
+    
+    # Check if we're in a terminal (TTY) - if not, we're likely logging to a file
+    is_tty = hasattr(sys.stderr, 'isatty') and sys.stderr.isatty()
+    
+    # Also check if we're running under SLURM (common case where logs go to files)
+    is_slurm = 'SLURM_JOB_ID' in os.environ
+    
+    if not is_tty or is_slurm:
+        # When not in terminal or under SLURM, configure tqdm to avoid ANSI escape codes
+        # This prevents escape codes like [A from appearing in log files
+        original_tqdm = tqdm_module.tqdm
+        
+        def patched_tqdm(*args, **kwargs):
+            # Force ASCII mode and simpler formatting when output might go to a file
+            kwargs.setdefault('ascii', True)  # Use ASCII instead of Unicode blocks (prevents █▋ characters)
+            kwargs.setdefault('ncols', 100)   # Fixed width
+            kwargs.setdefault('file', sys.stderr)  # Always use stderr
+            # Disable dynamic resizing which can cause issues
+            kwargs.setdefault('dynamic_ncols', False)
+            # Minimize escape codes
+            kwargs.setdefault('leave', False)  # Don't leave progress bar after completion
+            return original_tqdm(*args, **kwargs)
+        
+        tqdm_module.tqdm = patched_tqdm
+except ImportError:
+    pass  # tqdm not available, skip configuration
+
 from alignment.experiments.general_alignment import GeneralAlignmentExperiment
 from alignment.pruning.experiments.cascading_layer import CascadingLayerPruningExperiment
 from alignment.pruning.experiments.layer_wise import LayerIsolatedPruningExperiment

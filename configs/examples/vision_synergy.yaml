@@ -1,0 +1,105 @@
+# Vision Synergy Paper: Redundancy, Synergy, and Alignment in Vision Networks
+# ICML 2025 Experiments
+# Run: python scripts/run_experiment.py --config configs/examples/vision_synergy.yaml
+
+experiment:
+  name: "vision_synergy_resnet18"
+  type: "vision_synergy"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision_synergy"
+  num_networks: 1
+
+model:
+  name: "resnet18"
+  pretrained: true
+  num_classes: 10
+
+dataset:
+  name: "cifar10"
+  batch_size: 128
+  num_workers: 4
+  train_split: 0.9  # Use 90% for train, 10% for calibration
+
+# Core alignment metrics for vision
+# NOTE: Synergy is very slow (O(n×k) with expensive MI). 
+# For fast runs, use only RQ + L2 + variance (like LLM experiment)
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+    - "activation_variance"
+    - "pairwise_redundancy_gaussian"
+    # - "gaussian_pid_synergy_mmi"  # SLOW: ~hours. Enable only for final runs
+  num_samples: 500  # Reduced from 5000 for faster calibration
+
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+    
+  pairwise_redundancy_gaussian:
+    num_partners: 10  # Reduced from 50 for speed
+    
+  gaussian_pid_synergy_mmi:
+    num_partners: 10  # Reduced from 50
+
+# Training settings (for fine-tuning if needed)
+training:
+  epochs: 10
+  learning_rate: 0.01
+  momentum: 0.9
+  weight_decay: 1.0e-4
+  lr_schedule: "cosine"
+
+# Pruning experiments
+pruning:
+  enabled: true
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+  selection_modes: ["low", "high", "random"]
+  distribution: "uniform"
+  structured: true  # Channel pruning
+  
+  # Pruning strategies to compare
+  algorithms:
+    - "random"                    # Random baseline
+    - "activation_l2_norm"        # Magnitude baseline
+    - "rayleigh_quotient"         # RQ-only
+    - "composite_rq_redundancy"   # RQ - redundancy (ours)
+    - "composite_full"            # RQ + MI + synergy - redundancy (ours)
+  
+  # Fine-tuning after pruning
+  fine_tune:
+    enabled: true
+    epochs: 5
+    learning_rate: 0.001
+
+# Composite score weights for pruning
+composite_scores:
+  rq_redundancy:
+    alpha_rq: 1.0
+    delta_redundancy: 0.5
+  full:
+    alpha_rq: 0.3
+    beta_mi: 0.3
+    gamma_synergy: 0.2
+    delta_redundancy: 0.2
+
+# Analysis settings
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    # Layerwise distributions (Figure 1)
+    layerwise_distributions: true
+    # Redundancy vs Synergy scatter (Figure 2)
+    redundancy_synergy_scatter: true
+    # RQ vs Synergy correlation (Figure 3)
+    rq_synergy_correlation: true
+    # Pruning curves (Figure 4)
+    pruning_curves: true
+    # Ablation plots (Figure 5)
+    ablation_curves: true
+
+visualization:
+  format: "png"
+  dpi: 300

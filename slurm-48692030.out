@@ -1,0 +1,4 @@
+Running vision synergy experiment with config: configs/projects/vision_synergy.yaml
+Working directory: /var/slurmd/spool/slurmd
+
+python: can't open file '/var/slurmd/spool/slurmd/scripts/run_experiment.py': [Errno 2] No such file or directory

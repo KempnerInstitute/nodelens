@@ -117,6 +117,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["tags"] = nested_config.get("tags", experiment_block.get("tags", []))
 
     # Map other top-level fields
+    # Note: pretrained may be at top-level or in model block - handled below
     flat_config["pretrained"] = nested_config.get("pretrained", False)
     if "tracked_layers" in nested_config:
         flat_config["tracked_layers"] = nested_config["tracked_layers"]
@@ -176,6 +177,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["model_name"] = model_name
         flat_config["model_config"] = {}
         
+        # Handle pretrained flag directly in model block
+        if "pretrained" in model:
+            flat_config["pretrained"] = model["pretrained"]
+        
         # Handle tracked_layers from model block
         if "tracked_layers" in model:
             flat_config["tracked_layers"] = model["tracked_layers"]
@@ -193,10 +198,14 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
                 flat_config["pretrained"] = external.get("pretrained", False)
         
         # Handle HuggingFace model config (for LLMs)
-        hf_fields = ["model_id", "model_backend", "torch_dtype", "device_map"]
+        hf_fields = ["model_id", "model_backend", "dtype", "torch_dtype", "device_map"]
         for field in hf_fields:
             if field in model:
-                flat_config["model_config"][field] = model[field]
+                # Normalize dtype field name (prefer 'dtype', but accept 'torch_dtype')
+                if field == "dtype":
+                    flat_config["model_config"]["torch_dtype"] = model[field]
+                else:
+                    flat_config["model_config"][field] = model[field]
         # Map hf_device_map -> device_map for backward compatibility
         if "hf_device_map" in model:
             flat_config["model_config"]["device_map"] = model["hf_device_map"]
@@ -206,6 +215,12 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["model_config"]["output_dim"] = model["output_dim"]
         if "dropout_rate" in model:
             flat_config["model_config"]["dropout_rate"] = model["dropout_rate"]
+        if "in_channels" in model:
+            flat_config["model_config"]["in_channels"] = model["in_channels"]
+        if "hidden_channels" in model:
+            flat_config["model_config"]["hidden_channels"] = model["hidden_channels"]
+        if "example_input_hw" in model:
+            flat_config["model_config"]["example_input_hw"] = tuple(model["example_input_hw"])
         if "alignment_layers" in model:
             flat_config["tracked_layers"] = (
                 list(model["alignment_layers"].keys()) if isinstance(model["alignment_layers"], dict) else model["alignment_layers"]
@@ -241,6 +256,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # Map training configuration
+    # Auto-disable training when using pretrained models (unless explicitly enabled)
+    is_pretrained = flat_config.get("pretrained", False)
+    
     if "training" in nested_config:
         training = nested_config["training"]
         # Handle both 'enabled' (new) and 'do_train' (old) keys
@@ -248,12 +266,28 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["do_train"] = training.get("enabled", False)
         elif "do_train" in training:
             flat_config["do_train"] = training.get("do_train", False)
+        else:
+            # If training block exists but enabled/do_train not specified,
+            # default to False for pretrained models, True otherwise
+            flat_config["do_train"] = not is_pretrained
         flat_config["training_epochs"] = training.get("epochs", 10)
         flat_config["learning_rate"] = training.get("learning_rate", 0.001)
         flat_config["optimizer"] = training.get("optimizer", "Adam").lower()
         flat_config["train_before_dropout"] = training.get("train_before_dropout", True)
         if "scheduler" in training:
             flat_config["scheduler"] = training.get("scheduler", "none")
+        if "scheduler_config" in training:
+            flat_config["scheduler_config"] = training["scheduler_config"]
+        if "momentum" in training:
+            flat_config["momentum"] = training["momentum"]
+        if "weight_decay" in training:
+            flat_config["weight_decay"] = training["weight_decay"]
+        # Multi-network support for statistical error bars
+        flat_config["num_networks"] = training.get("num_networks", 1)
+    else:
+        # No training block - auto-disable for pretrained models
+        if is_pretrained:
+            flat_config["do_train"] = False
 
     # Map alignment/metrics settings
     # Priority: metrics.enabled > alignment.methods > alignment_methods > default
@@ -313,6 +347,11 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map other settings (experiment-level overrides take precedence)
     flat_config["device"] = experiment_block.get("device", nested_config.get("device", "cuda"))
     flat_config["seed"] = experiment_block.get("seed", nested_config.get("seed", 42))
+    # num_networks: experiment > training > top-level > default (1)
+    if "num_networks" not in flat_config:
+        flat_config["num_networks"] = experiment_block.get(
+            "num_networks", nested_config.get("num_networks", 1)
+        )
     
     # Composite weights: metrics.composite_weights > alignment.composite_weights > top-level
     if "alignment_composite_weights" not in flat_config:
@@ -365,23 +404,59 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["do_eigenfeature_analysis"] = nested_config.get("do_eigenfeature_analysis", False)
 
     # Map pruning parameters (prioritize nested pruning block, fallback to top-level)
-    flat_config["pruning_strategies"] = pruning_block.get("algorithms", nested_config.get("pruning_strategies", ["magnitude", "random"]))
+    # Pruning uses metrics from metrics.enabled as scoring criteria.
+    # Random selection is handled via selection_modes, not as a separate strategy.
+    if "algorithms" in pruning_block:
+        # Backward compatibility: explicit algorithms list
+        flat_config["pruning_strategies"] = pruning_block["algorithms"]
+    elif flat_config.get("metrics"):
+        # Use computed metrics as pruning strategies
+        flat_config["pruning_strategies"] = list(flat_config["metrics"])
+    else:
+        # Fallback default
+        flat_config["pruning_strategies"] = nested_config.get("pruning_strategies", ["rayleigh_quotient"])
+    
     flat_config["pruning_amounts"] = pruning_block.get("sparsity_levels", nested_config.get("pruning_amounts", [0.1, 0.3, 0.5, 0.7, 0.9]))
     selection_modes = pruning_block.get("selection_modes", nested_config.get("pruning_selection_mode", "low"))
     flat_config["pruning_selection_mode"] = selection_modes
-    flat_config["fine_tune_after_pruning"] = pruning_block.get("fine_tune_after_pruning", nested_config.get("fine_tune_after_pruning", True))
-    flat_config["fine_tune_epochs"] = pruning_block.get("fine_tune_epochs", nested_config.get("fine_tune_epochs", 5))
+    # Only set fine_tune defaults if not already set from fine_tune block above
+    if "fine_tune_after_pruning" not in flat_config:
+        flat_config["fine_tune_after_pruning"] = pruning_block.get("fine_tune_after_pruning", nested_config.get("fine_tune_after_pruning", True))
+    if "fine_tune_epochs" not in flat_config:
+        flat_config["fine_tune_epochs"] = pruning_block.get("fine_tune_epochs", nested_config.get("fine_tune_epochs", 5))
+    # Deprecated: alignment_metric is no longer needed since we prune by all metrics
     flat_config["pruning_alignment_metric"] = pruning_block.get(
         "alignment_metric", nested_config.get("pruning_alignment_metric", "rayleigh_quotient")
     )
     flat_config["dependency_aware_pruning"] = pruning_block.get(
         "dependency_aware", nested_config.get("dependency_aware_pruning", False)
     )
+    
+    # Single-layer pruning: specify a layer name to prune only that layer
+    flat_config["pruning_target_layer"] = pruning_block.get(
+        "target_layer", nested_config.get("pruning_target_layer", None)
+    )
+
+    # Performance settings (all optimizations enabled by default)
+    # Check both old "optimization" block and new "performance" block
+    perf_block = nested_config.get("performance", nested_config.get("optimization", {}))
+    if isinstance(perf_block, dict):
+        if "eval_batches" in perf_block:
+            flat_config["eval_batches"] = perf_block["eval_batches"]
+    
+    # These are always enabled (no longer configurable)
+    flat_config["use_tensorized_training"] = True
+    flat_config["use_tensorized_pruning"] = True
+    flat_config["use_ultra_parallel_eval"] = True
 
     # Evaluation settings
     flat_config["do_perplexity_computation"] = nested_config.get("do_perplexity_computation", False)
     flat_config["evaluation_dataset"] = nested_config.get("evaluation_dataset", "wikitext")
     flat_config["evaluation_num_samples"] = nested_config.get("evaluation_num_samples", 100)
+    
+    # Directed redundancy and connectivity pruning flags
+    flat_config["do_directed_redundancy"] = nested_config.get("do_directed_redundancy", True)
+    flat_config["do_connectivity_pruning"] = nested_config.get("do_connectivity_pruning", True)
 
     # SCAR metrics (LLM-specific) - check both old top-level and new llm block
     flat_config["do_scar_metrics"] = nested_config.get("do_scar_metrics", False)
@@ -403,6 +478,17 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["evaluation_dataset"] = llm_block["evaluation_dataset"]
         if "evaluation_num_samples" in llm_block:
             flat_config["evaluation_num_samples"] = llm_block["evaluation_num_samples"]
+        if "evaluation_metrics" in llm_block:
+            flat_config["evaluation_metrics"] = llm_block["evaluation_metrics"]
+        # Few-shot and chain-of-thought settings (NVIDIA Minitron compatible)
+        if "use_nvidia_fewshot" in llm_block:
+            flat_config["use_nvidia_fewshot"] = llm_block["use_nvidia_fewshot"]
+        if "use_chain_of_thought" in llm_block:
+            flat_config["use_chain_of_thought"] = llm_block["use_chain_of_thought"]
+        if "fewshot_settings" in llm_block:
+            flat_config["fewshot_settings"] = llm_block["fewshot_settings"]
+        # Preserve the entire llm block for direct access
+        flat_config["llm"] = llm_block
     
     # Also check evaluation block (backward compatibility)
     eval_block = nested_config.get("evaluation", {})

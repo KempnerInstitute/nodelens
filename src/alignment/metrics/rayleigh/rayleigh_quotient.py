@@ -32,6 +32,9 @@ class RayleighQuotient(BaseMetric):
     proportion of total variance.
     """
 
+    # Class-level set to track warned dimension pairs (avoid spam)
+    _warned_dim_pairs: set = set()
+
     def __init__(
         self,
         relative: bool = True,
@@ -123,15 +126,23 @@ class RayleighQuotient(BaseMetric):
 
         # Check dimension compatibility
         if input_features != weight_features:
-            logger.warning(f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. " "Truncating to common dimensions.")
+            # Only warn once per unique dimension pair to avoid log spam
+            dim_pair = (input_features, weight_features)
+            if dim_pair not in RayleighQuotient._warned_dim_pairs:
+                RayleighQuotient._warned_dim_pairs.add(dim_pair)
+                logger.warning(f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. "
+                              "Truncating to common dimensions. (This warning shown once per dimension pair)")
             min_dim = min(input_features, weight_features)
             inputs = inputs[:, :min_dim]
             weights = weights[:, :min_dim]
             input_features = min_dim  # Update input_features after truncation
 
         # Move to appropriate device for computation
+        # Force CPU for large input dimensions (covariance matrix would be huge)
+        # down_proj has 14336 inputs -> cov is [14336, 14336] = 820MB
         compute_device = weights.device
-        if self._should_use_cpu(inputs, weights):
+        use_cpu = self._should_use_cpu(inputs, weights) or input_features > 8192
+        if use_cpu:
             logger.debug("RQ: Moving computation to CPU for large tensors")
             compute_device = torch.device("cpu")
             inputs = inputs.cpu()
@@ -143,26 +154,43 @@ class RayleighQuotient(BaseMetric):
             tgt = targets if targets is not None else self._cc_targets
             if tgt.ndim > 1:
                 tgt = tgt.squeeze()
-            classes = torch.unique(tgt)
-            cov = torch.zeros(input_features, input_features, device=inputs.device, dtype=inputs.dtype)
-            total_weight = 0.0
-            for c in classes:
-                mask = tgt == c
-                if mask.sum() < self.min_samples:
-                    continue
-                Xc = inputs[mask]
-                Xc_centered = Xc - Xc.mean(dim=0, keepdim=True)
-                cov_c = (Xc_centered.T @ Xc_centered) / max(1, (Xc.shape[0] - 1))
-                weight_c = float(mask.sum())
-                cov += cov_c * weight_c
-                total_weight += weight_c
-            if total_weight > 0:
-                cov = cov / total_weight
-            else:
-                inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
-                cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
-        else:
-            # Compute covariance matrix
+            
+            # Handle unfolded CNN inputs where each sample becomes multiple patches
+            # If inputs has more rows than targets, expand targets to match
+            original_batch_size = tgt.shape[0]
+            if original_batch_size != batch_size:
+                if batch_size % original_batch_size == 0:
+                    # Expand targets: each label applies to all patches from that sample
+                    num_patches = batch_size // original_batch_size
+                    tgt = tgt.repeat_interleave(num_patches)
+                    logger.debug(f"RQ: Expanded targets from {original_batch_size} to {batch_size} "
+                                f"({num_patches} patches per sample)")
+                else:
+                    logger.warning(f"RQ: Cannot expand targets {original_batch_size} to match "
+                                  f"batch_size {batch_size}, falling back to unconditional")
+                    use_class_cond = False
+            
+            if use_class_cond:
+                classes = torch.unique(tgt)
+                cov = torch.zeros(input_features, input_features, device=inputs.device, dtype=inputs.dtype)
+                total_weight = 0.0
+                for c in classes:
+                    mask = tgt == c
+                    if mask.sum() < self.min_samples:
+                        continue
+                    Xc = inputs[mask]
+                    Xc_centered = Xc - Xc.mean(dim=0, keepdim=True)
+                    cov_c = (Xc_centered.T @ Xc_centered) / max(1, (Xc.shape[0] - 1))
+                    weight_c = float(mask.sum())
+                    cov += cov_c * weight_c
+                    total_weight += weight_c
+                if total_weight > 0:
+                    cov = cov / total_weight
+                else:
+                    use_class_cond = False  # Fall back to unconditional
+        
+        if not use_class_cond:
+            # Compute unconditional covariance matrix
             inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
             cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
 
@@ -196,7 +224,8 @@ class RayleighQuotient(BaseMetric):
 
         # Normalize by trace if relative
         if self.relative:
-            trace_cov = torch.trace(cov)
+            # Convert to float32 for trace (bfloat16 not supported)
+            trace_cov = torch.trace(cov.float())
             if trace_cov > eps:
                 rq_values = rq_values / trace_cov
             else:
@@ -290,7 +319,8 @@ class RayleighQuotient(BaseMetric):
 
             # Normalize by trace if relative
             if self.relative:
-                trace_c = torch.trace(cov_c)
+                # Convert to float32 for trace (bfloat16 not supported)
+                trace_c = torch.trace(cov_c.float())
                 if trace_c > eps:
                     rq_c = rq_c / trace_c
 
@@ -387,7 +417,8 @@ class RayleighQuotient(BaseMetric):
 
             # Normalize by trace if relative
             if self.relative:
-                trace = torch.trace(patch_cov)
+                # Convert to float32 for trace (bfloat16 not supported)
+                trace = torch.trace(patch_cov.float())
                 if trace > eps:
                     patch_rq = patch_rq / trace
 

@@ -62,13 +62,16 @@ class ModelWrapper(BaseModelWrapper):
         """Forward pass through the wrapped model."""
         return self._model(*args, **kwargs)
 
-    def forward_with_activations(self, inputs: Any, preprocess: bool = True) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def forward_with_activations(
+        self, inputs: Any, preprocess: bool = True, layers: Optional[List[str]] = None
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Forward pass that also returns intermediate activations.
 
         Args:
             inputs: Input tensor
             preprocess: Whether to preprocess activations
+            layers: Optional list of layer names to capture (None = all tracked layers)
 
         Returns:
             Tuple of (model outputs, activation dictionary)
@@ -82,6 +85,18 @@ class ModelWrapper(BaseModelWrapper):
 
         # Get activations
         activations = self._activation_cache.copy()
+        
+        # Filter to requested layers if specified
+        if layers is not None:
+            filtered = {}
+            for layer in layers:
+                input_key = f"{layer}_input"
+                output_key = f"{layer}_output"
+                if input_key in activations:
+                    filtered[input_key] = activations[input_key]
+                if output_key in activations:
+                    filtered[output_key] = activations[output_key]
+            activations = filtered
 
         # Preprocess if requested
         if preprocess:

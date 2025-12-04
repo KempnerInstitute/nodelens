@@ -1,0 +1,84 @@
+# AlexNet Pruning Experiment on ImageNet
+# AlexNet requires 224x224 input, so we use ImageNet
+
+experiment:
+  name: "alexnet_pruning_test"
+  type: "alignment_analysis"
+  seed: 42
+  device: "auto"                  # Auto-detect GPU/CPU
+  output_dir: "./results/alexnet_pruning"
+  num_networks: 1                 # Single network
+
+model:
+  name: "alexnet"
+  pretrained: true                # Uses pretrained weights (auto-disables training)
+  tracked_layers: null            # Auto-detect conv/linear layers
+
+# ImageNet dataset path on Kempner cluster
+dataset:
+  name: "imagenet"
+  data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
+  batch_size: 128
+  num_workers: 4
+
+# Metrics to compute - these are also used for pruning
+# Note: mutual_information_gaussian requires outputs, excluded for now
+metrics:
+  enabled:
+    - "rayleigh_quotient"               # Alignment to input covariance
+    - "activation_l2_norm"              # Activation magnitude
+  num_samples: 256
+
+# CNN activation preprocessing
+# "unfold" (recommended): Best for RQ/covariance metrics
+# "patchwise": Good for patch-level analysis
+# "channel_variance": Faster but less accurate
+cnn:
+  mode: "unfold"
+
+# Pruning experiments
+pruning:
+  enabled: true
+  
+  # Sparsity levels to test (fraction of neurons to remove)
+  sparsity_levels: [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  
+  # Selection modes: WHICH neurons to prune based on their scores
+  #   "low"    - prune neurons with LOWEST scores (remove least important)
+  #   "high"   - prune neurons with HIGHEST scores (ablation study)
+  #   "random" - prune randomly (baseline comparison)
+  selection_modes: ["low", "high", "random"]
+  
+  # Distribution: HOW to allocate sparsity across layers
+  #   "uniform"              - same % per layer (simple, default)
+  #   "global_threshold"     - global score threshold
+  #   "adaptive_sensitivity" - prune robust layers more
+  #   "cascading"            - sequential layer-by-layer
+  distribution: "uniform"
+  
+  # Structured: prune entire neurons/channels (vs individual weights)
+  structured: true
+  
+  # Dependency-aware: handle layer dependencies
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0001
+
+# Performance (all optimizations enabled by default)
+performance:
+  eval_batches: null              # null = all batches
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+
+visualization:
+  format: "png"
+  dpi: 300

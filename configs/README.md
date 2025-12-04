@@ -19,16 +19,15 @@ configs/
 ## Usage
 
 ```bash
-python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
-python scripts/run_experiment.py --config configs/examples/llama3_pruning.yaml
-```
+python scripts/run_experiment.py --config configs/examples/llama3_comprehensive_pruning.yaml.yaml
+python scripts/run_experiment.py --config configs/examples/vision_pruning_test.yaml
 
 ## Configuration Blocks
 
 | Block | Purpose |
 |-------|---------|
 | `experiment` | Name, type (`alignment_analysis` or `llm_alignment`), seed, device |
-| `model` | Architecture, pretrained, tracked_layers. For LLMs: model_id, torch_dtype |
+| `model` | Architecture, pretrained, tracked_layers. For LLMs: model_id, dtype |
 | `dataset` | Dataset name, batch_size, data_path |
 | `metrics` | `enabled`: list of metrics. `num_samples`: calibration samples. `composite_weights`: for composite scoring |
 | `training` | `enabled`, epochs, learning_rate, optimizer |

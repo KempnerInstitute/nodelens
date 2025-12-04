@@ -1,76 +1,94 @@
-# ResNet-18 Redundancy-Aware Pruning
-# Complete pruning workflow with dependency handling
+# ResNet-18 Alignment-Aware Pruning on ImageNet
+# Complete pruning workflow with dependency handling for skip connections
 
 experiment:
   name: "resnet18_pruning"
+  type: "alignment_analysis"
   seed: 42
-  device: "cuda"
+  device: "auto"                  # Auto-detect cuda/cpu
   output_dir: "./results/resnet18_pruning"
+  num_networks: 3                 # Run 3 networks for error bars
 
 model:
   name: "resnet18"
-  pretrained: true
-  tracked_layers: null  # Auto-detect all conv and linear layers
+  pretrained: true                # Uses pretrained weights (auto-disables training)
+  tracked_layers: null            # Auto-detect all conv and linear layers
 
+# Dataset options:
+#   - cifar10/cifar100: ./data (auto-downloads, but ResNet expects 224x224)
+#   - imagenet: /n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k
 dataset:
-  name: "cifar10"
-  data_path: "./data"
+  name: "imagenet"
+  data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
   batch_size: 128
   num_workers: 4
-  augmentation: false  # No augmentation for evaluation
 
+# Metrics to compute - these are also used for pruning
+# Note: pairwise_redundancy_gaussian and synergy_gaussian_mmi have CNN
+#       compatibility issues, so we use simpler metrics for now
 metrics:
-  enabled: ['rayleigh_quotient', 'pairwise_redundancy_gaussian', 'synergy_gaussian_mmi']
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+  num_samples: 256
   
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
-  
-  pairwise_redundancy_gaussian:
-    mode: 'output_based'  # Fast for medium models
-    num_pairs: 10
-  
-  synergy_gaussian_mmi:
-    num_pairs: 10
 
+# CNN activation preprocessing
+# "unfold" (recommended): Best for RQ/covariance metrics
+cnn:
+  mode: "unfold"
+
+# Pruning experiments
 pruning:
   enabled: true
-  strategy: 'ultimate'  # Best performance: multi-stage with adaptive amounts
-  target_sparsity: 0.7  # Remove 70% of parameters
-  distribution: 'adaptive_sensitivity'  # Protect sensitive layers
-  scoring: 'composite'  # Redundancy-aware
-  direction: 'low'
-  structured: true  # Channel-level pruning
-  dependency_aware: true  # Critical for ResNet (handles skip connections)
+  
+  # Sparsity levels to test (fraction of neurons to remove)
+  sparsity_levels: [0.1, 0.2, 0.3, 0.5, 0.7]
+  
+  # Selection modes: WHICH neurons to prune based on their scores
+  #   "low"    - prune neurons with LOWEST scores (remove least important)
+  #   "high"   - prune neurons with HIGHEST scores (ablation study)
+  #   "random" - prune randomly (baseline comparison)
+  selection_modes: ["low", "high", "random"]
+  
+  # Distribution: HOW to allocate sparsity across layers
+  #   "uniform"              - same % per layer (simple, default)
+  #   "global_threshold"     - global score threshold
+  #   "adaptive_sensitivity" - prune robust layers more, sensitive layers less
+  #   "cascading"            - sequential layer-by-layer
+  distribution: "adaptive_sensitivity"
+  
+  # Structured: prune entire neurons/channels (vs individual weights)
+  # Required for alignment metrics (RQ is per-neuron)
+  structured: true
+  
+  # Dependency-aware: handle skip connections (critical for ResNet)
+  dependency_aware: true
   
   fine_tune:
     enabled: true
     epochs: 20
     learning_rate: 0.0001
-  
-  composite_weights:
-    alpha_mi: 0.0
-    beta_synergy: 0.3
-    gamma_redundancy: 0.4
-    delta_rq: 0.3
 
-layer_config:
-  cnn_mode: 'unfold'  # Options: 'unfold', 'patchwise', 'channel_variance'
+# Performance (all optimizations enabled by default)
+performance:
+  eval_batches: null
 
 analysis:
-  class_conditioned: true  # Compute class-conditioned RQ (ΔRQ)
+  class_conditioned: true         # Compute class-conditioned RQ
   save_scores: true
   generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
 
 visualization:
-  enabled: true
-  format: 'png'
+  format: "png"
   dpi: 300
-
-evaluation:
-  task: 'classification'
-  metrics: ['accuracy', 'loss']
 
 # Expected: ~5-6% accuracy drop at 70% sparsity (vs ~10% for magnitude)
 # Run: python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
-

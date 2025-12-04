@@ -3,6 +3,7 @@ Batch processing utilities for efficient metric computation on large datasets.
 """
 
 import logging
+import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
@@ -10,6 +11,20 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+# Configure tqdm to avoid ANSI escape codes when not in terminal
+def _get_tqdm_kwargs(**kwargs):
+    """Get tqdm kwargs with proper terminal detection."""
+    # Check if we're in a terminal (TTY)
+    is_tty = hasattr(sys.stderr, 'isatty') and sys.stderr.isatty()
+    
+    # If not in terminal, disable fancy formatting to avoid ANSI codes in log files
+    if not is_tty:
+        kwargs.setdefault('ascii', True)  # Use ASCII characters instead of Unicode blocks
+        kwargs.setdefault('ncols', 100)   # Fixed width to avoid issues
+        kwargs.setdefault('file', sys.stderr)  # Always use stderr for progress bars
+    
+    return kwargs
 
 
 class BatchMetricProcessor:
@@ -62,7 +77,8 @@ class BatchMetricProcessor:
 
         # Initialize progress bar
         total_batches = len(dataloader) if num_batches is None else min(num_batches, len(dataloader))
-        pbar = tqdm(total=total_batches, disable=not self.show_progress)
+        tqdm_kwargs = _get_tqdm_kwargs(total=total_batches, disable=not self.show_progress)
+        pbar = tqdm(**tqdm_kwargs)
 
         try:
             for batch_idx, (inputs, _) in enumerate(dataloader):
@@ -301,7 +317,8 @@ def compute_metrics_parallel(
             futures = {executor.submit(process_chunk, chunk, i): i for i, chunk in enumerate(chunks)}
 
             # Collect results
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing chunks"):
+            tqdm_kwargs = _get_tqdm_kwargs(total=len(futures), desc="Processing chunks")
+            for future in tqdm(as_completed(futures), **tqdm_kwargs):
                 try:
                     result = future.result()
                     all_results.append(result)

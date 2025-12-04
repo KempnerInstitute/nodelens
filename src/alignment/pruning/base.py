@@ -156,6 +156,9 @@ class BasePruningStrategy(ABC):
             raise ValueError(f"Module {module} does not have a weight parameter")
 
         weight = module.weight.data
+        
+        # Move mask to same device as weight (important for multi-GPU models)
+        mask = mask.to(weight.device)
 
         # Handle dimension
         if mask.dim() == 1:
@@ -240,6 +243,30 @@ class BasePruningStrategy(ABC):
         if hasattr(module, "_gradient_hook_handle"):
             module._gradient_hook_handle.remove()
             delattr(module, "_gradient_hook_handle")
+    
+    def clear_pruning_state(self, module: nn.Module):
+        """
+        Clear all pruning state from a module WITHOUT making pruning permanent.
+        This allows a fresh pruning to be applied later.
+        
+        Args:
+            module: Module to clear pruning state from
+        """
+        # Remove hooks first
+        if hasattr(module, "_pruning_hook"):
+            module._pruning_hook.remove()
+            delattr(module, "_pruning_hook")
+
+        if hasattr(module, "_gradient_hook_handle"):
+            module._gradient_hook_handle.remove()
+            delattr(module, "_gradient_hook_handle")
+        
+        # Remove buffers (original weight and mask)
+        if hasattr(module, "_original_weight"):
+            delattr(module, "_original_weight")
+        
+        if hasattr(module, "weight_mask"):
+            delattr(module, "weight_mask")
 
     def get_sparsity(self, module: nn.Module) -> float:
         """
@@ -280,6 +307,28 @@ class BasePruningStrategy(ABC):
         self.apply_pruning(module, mask)
 
         return mask
+
+
+class PrecomputedScorePruning(BasePruningStrategy):
+    """
+    Pruning strategy for use with pre-computed importance scores.
+    
+    This is a concrete implementation that doesn't compute scores itself,
+    but can apply masks and pruning using externally computed importance scores
+    (e.g., from SCAR metrics or other analysis methods).
+    """
+    
+    def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
+        """
+        Not used for pre-computed scores - raises error if called.
+        
+        For PrecomputedScorePruning, importance scores should be passed directly
+        to create_pruning_mask() rather than computed here.
+        """
+        raise NotImplementedError(
+            "PrecomputedScorePruning expects scores to be passed directly to create_pruning_mask(). "
+            "Do not call compute_importance_scores() on this class."
+        )
 
 
 class IterativePruningStrategy(BasePruningStrategy):

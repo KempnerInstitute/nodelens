@@ -178,6 +178,30 @@ class ActivationCaptureService:
 
         return ActivationData(inputs=aggregated_inputs, outputs=aggregated_outputs, weights=weights, layer_names=layers)
 
+    def _get_layer_module(self, layer_name: str) -> Optional[torch.nn.Module]:
+        """
+        Get the layer module by name, handling input/output suffixes.
+        
+        Args:
+            layer_name: Layer name (possibly with _input or _output suffix)
+            
+        Returns:
+            The layer module or None if not found
+        """
+        # Strip _input or _output suffix
+        actual_name = layer_name
+        if layer_name.endswith("_input"):
+            actual_name = layer_name[:-6]
+        elif layer_name.endswith("_output"):
+            actual_name = layer_name[:-7]
+        
+        # Try to get from model's named_modules
+        try:
+            modules = dict(self.model_wrapper._model.named_modules())
+            return modules.get(actual_name)
+        except Exception:
+            return None
+
     def _preprocess_activations(self, activations: Dict[str, torch.Tensor], mode: str) -> Dict[str, torch.Tensor]:
         """
         Preprocess activations based on mode.
@@ -212,6 +236,40 @@ class ActivationCaptureService:
                     processed[name] = tensor.reshape(B, C, H * W)
                 elif tensor.ndim == 3:  # Conv1d
                     processed[name] = tensor
+                else:
+                    processed[name] = tensor
+
+            elif mode == "unfold":
+                # For Conv: Use proper unfold with kernel parameters for RQ computation
+                # This requires access to the layer module to get kernel size, stride, padding
+                if tensor.ndim == 4:  # Conv2d
+                    # Try to get the layer module for proper unfolding
+                    layer_module = self._get_layer_module(name)
+                    if layer_module is not None and isinstance(layer_module, torch.nn.Conv2d):
+                        # Proper unfold using layer's kernel parameters
+                        try:
+                            unfolded = torch.nn.functional.unfold(
+                                tensor,
+                                kernel_size=layer_module.kernel_size,
+                                dilation=layer_module.dilation,
+                                padding=layer_module.padding,
+                                stride=layer_module.stride,
+                            )
+                            # [B, C*kH*kW, num_patches] -> [B*num_patches, C*kH*kW]
+                            B = tensor.shape[0]
+                            unfolded = unfolded.transpose(1, 2).contiguous()
+                            processed[name] = unfolded.view(-1, unfolded.size(2))
+                        except Exception as e:
+                            logger.debug(f"Proper unfold failed for {name}: {e}, using simple unfold")
+                            B, C, H, W = tensor.shape
+                            processed[name] = tensor.permute(0, 2, 3, 1).reshape(-1, C)
+                    else:
+                        # Fallback: simple unfold [B, C, H, W] -> [B*H*W, C]
+                        B, C, H, W = tensor.shape
+                        processed[name] = tensor.permute(0, 2, 3, 1).reshape(-1, C)
+                elif tensor.ndim == 3:  # Conv1d: [B, C, L]
+                    B, C, L = tensor.shape
+                    processed[name] = tensor.permute(0, 2, 1).reshape(-1, C)
                 else:
                     processed[name] = tensor
 

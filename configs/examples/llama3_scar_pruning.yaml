@@ -1,0 +1,148 @@
+# LLaMA-3 SCAR-Based Pruning with Supernode Protection
+# Uses SCAR metrics (activation power, loss proxy, curvature) for pruning
+# Implements supernode-aware pruning that protects important neurons
+
+experiment:
+  name: "llama3_scar_pruning"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_scar_pruning"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Track MLP layers for pruning
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+# Core metrics: RQ, L2, MI (analytic), redundancy, and SCAR metrics
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+    - "gaussian_mi_analytic"    # MI analytically related to RQ (fast)
+    - "average_redundancy"
+  num_samples: 64
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+# LLM-specific settings with SCAR metrics
+llm:
+  # Enable SCAR metrics (activation power, taylor, curvature, loss proxy)
+  scar_metrics: true
+  scar_num_samples: 32
+  scar_max_length: 512
+  
+  # Evaluation settings
+  evaluate_perplexity: true
+  evaluation_num_samples: 50
+  evaluation_metrics:
+    - "perplexity"
+    - "loss"                 # Cross-entropy loss (log of perplexity)
+    - "bits_per_byte"        # Compression efficiency (lower is better)
+    # Downstream tasks for ICML paper:
+    - "accuracy_mmlu"        # Zero-shot MMLU across 57 subjects (~20min)
+    - "accuracy_hellaswag"   # Commonsense reasoning (~10min)
+    - "accuracy_arc_easy"    # Science questions (~5min)
+    - "accuracy_winogrande"  # WinoGrande commonsense (~10min) - used in NVIDIA Minitron
+    # - "accuracy_piqa"        # Physical intuition (~5min)
+    # - "accuracy_boolq"       # Boolean questions (~5min)
+
+# Supernode configuration - this is the key for supernode-aware pruning!
+# Supernodes are neurons with high activation power that are protected from pruning
+supernode:
+  enabled: true
+  # Protect top 1% of neurons (supernodes) from being pruned
+  core_fraction: 0.01
+  # Also track "follower" neurons (top 10% by connection strength to supernodes)
+  follower_fraction: 0.10
+  # Metric to identify supernodes (choose one):
+  #   - scar_activation_power: neurons with highest activation magnitude
+  #   - scar_loss_proxy: neurons most impactful on loss
+  #   - scar_taylor: first-order saliency
+  # Use activation_l2_norm for initial supernode selection (available during importance computation)
+  # SCAR metrics (scar_loss_proxy) are computed afterward and used for visualization/analysis
+  score_metric: "activation_l2_norm"
+  # Protect supernodes during pruning
+  protect_core: true
+  # Analyze connections across layers
+  cross_layer_analysis: true
+  # Compare metrics between high/low supernode-connected neurons
+  compare_by_connection: true
+  # Compute these metrics for supernode analysis
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+    
+# Pruning experiments with SCAR metrics
+pruning:
+  enabled: true
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  selection_modes: ["low", "high"]  # Low prunes lowest-scored, high prunes highest-scored
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  # Pruning strategies to use - these metrics will be used to rank neurons for pruning
+  algorithms:
+    - "activation_l2_norm"           # L2 norm (magnitude-based pruning)
+    - "scar_loss_proxy"              # Loss proxy (combines activation power and curvature)
+    - "rayleigh_quotient"            # RQ (alignment-based)
+    - "gaussian_mi_analytic"         # MI (analytically related to RQ, fast)
+    - "average_redundancy"           # Redundancy (remove redundant neurons)
+    - "supernode_protection_score"   # Directed redundancy - protects unique halo neurons
+    - "supernode_connectivity_score" # Connectivity-based - low connectivity = safe to prune
+    # State-of-the-art LLM pruning baselines:
+    - "wanda"                        # Weight × Activation (Sun et al., 2023) https://arxiv.org/abs/2306.11695
+    - "sparsegpt"                    # Second-order one-shot (Frantar & Alistarh, 2023) https://arxiv.org/abs/2301.00774
+  
+  # For LLMs: limit to single strategy to reduce memory usage (or null for all)
+  single_strategy: null
+  
+  fine_tune:
+    enabled: false
+    epochs: 1
+    learning_rate: 1.0e-5
+
+# Enable directed redundancy computation (supernode -> halo analysis)
+do_directed_redundancy: true
+do_connectivity_pruning: true
+
+# Performance
+performance:
+  eval_batches: null
+
+# Analysis and plots
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["scar_activation_power", "scar_loss_proxy"]
+    - ["scar_activation_power", "rayleigh_quotient"]
+
+visualization:
+  format: "png"
+  dpi: 300
+

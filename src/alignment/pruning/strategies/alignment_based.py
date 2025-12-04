@@ -115,7 +115,8 @@ class AlignmentPruning(BasePruningStrategy):
 
         # Compute alignment scores (neuron-wise)
         # Shape: [num_output_neurons]
-        alignment_scores = self.metric.compute(inputs=inputs, weights=weights)
+        # Pass kwargs (e.g., targets for conditional metrics)
+        alignment_scores = self.metric.compute(inputs=inputs, weights=weights, **kwargs)
 
         # Ensure alignment_scores is on the same device as weights
         if alignment_scores.device != weights.device:

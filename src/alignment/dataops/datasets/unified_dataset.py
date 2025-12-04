@@ -178,8 +178,9 @@ class UnifiedDataset(BaseDataset):
             # SVHN uses 'split' instead of 'train'
             dataset_args["split"] = "train" if self.train else "test"
         elif self.dataset_type == "imagenet":
-            # ImageNet uses 'split' parameter
+            # ImageNet uses 'split' parameter and doesn't support 'download'
             dataset_args["split"] = "train" if self.train else "val"
+            dataset_args.pop("download", None)  # ImageNet doesn't support download
         else:
             # Most datasets use 'train' parameter
             dataset_args["train"] = self.train
@@ -228,13 +229,19 @@ class UnifiedDataset(BaseDataset):
         transforms_list = []
 
         # Add dataset-specific basic transforms
-        if self.dataset_type == "imagenet" and not self.train:
-            # ImageNet validation needs resize and center crop
-            val_config = self.dataset_config.get("val_transforms", {})
-            if "resize" in val_config:
-                transforms_list.append(transforms.Resize(val_config["resize"]))
-            if "center_crop" in val_config:
-                transforms_list.append(transforms.CenterCrop(val_config["center_crop"]))
+        if self.dataset_type == "imagenet":
+            if self.train and not self.augment:
+                # ImageNet training without augmentation: use resize + center crop
+                # (augmentation would use RandomResizedCrop instead)
+                transforms_list.append(transforms.Resize(256))
+                transforms_list.append(transforms.CenterCrop(224))
+            elif not self.train:
+                # ImageNet validation needs resize and center crop
+                val_config = self.dataset_config.get("val_transforms", {})
+                if "resize" in val_config:
+                    transforms_list.append(transforms.Resize(val_config["resize"]))
+                if "center_crop" in val_config:
+                    transforms_list.append(transforms.CenterCrop(val_config["center_crop"]))
 
         # Always convert to tensor
         transforms_list.append(transforms.ToTensor())

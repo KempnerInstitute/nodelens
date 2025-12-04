@@ -1,0 +1,104 @@
+# CNN2P2 Pruning Experiment on CIFAR-10
+# More challenging task to better differentiate pruning strategies
+# Tests composite metrics for optimal pruning
+
+experiment:
+  name: "cnn2p2_pruning_cifar10"
+  type: "alignment_analysis"
+  seed: 42
+  device: "auto"
+  output_dir: "./results/cnn2p2_pruning_cifar10"
+  num_networks: 1
+
+model:
+  name: "cnn2p2"
+  pretrained: false
+  tracked_layers: null
+  
+  # CNN2P2 for CIFAR-10 (3 channels, moderate size)
+  cnn2p2_params:
+    in_channels: 3                # RGB images
+    output_dim: 10                # CIFAR-10 classes
+    conv_channels: [16, 32]       # Moderate size
+    kernel_sizes: [3, 3]
+    strides: [1, 1]
+    paddings: [1, 1]
+    pool_kernel_size: 2
+    pool_stride: 2
+    hidden_fc_dim: 64             # Moderate FC layer
+    dropout_rate: 0.3
+    example_input_hw: [32, 32]    # CIFAR-10 image size
+
+# CIFAR-10 dataset (more challenging than MNIST)
+dataset:
+  name: "cifar10"
+  data_path: null
+  batch_size: 128
+  num_workers: 4
+
+# Training configuration
+training:
+  enabled: true
+  epochs: 30                      # CIFAR-10 needs more epochs
+  learning_rate: 0.01
+  optimizer: "sgd"
+  momentum: 0.9
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  scheduler_config:
+    T_max: 30
+    eta_min: 0.0001
+
+# Metrics - comprehensive set with analytic MI and composite metrics
+metrics:
+  enabled:
+    # Core alignment metrics
+    - "rayleigh_quotient"
+    - "conditional_rayleigh_quotient"
+    # Analytic MI (similar to RQ, computed analytically)
+    - "gaussian_mi_analytic"
+    - "mutual_information_gaussian"
+    # Activation-based
+    - "activation_l2_norm"
+    # Redundancy metrics
+    - "average_redundancy"
+    - "pairwise_redundancy_gaussian"
+    # Class-based metrics
+    - "mi_about_class"
+    # Composite metrics for optimal pruning
+    - "alignment_minus_redundancy"    # RQ - Redundancy
+  num_samples: 256
+
+cnn:
+  mode: "unfold"
+  
+# Pruning experiments
+pruning:
+  enabled: true
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  selection_modes: ["low", "high", "random"]
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.001
+
+performance:
+  eval_batches: null
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true
+
+visualization:
+  format: "png"
+  dpi: 300
+

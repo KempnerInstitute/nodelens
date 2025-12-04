@@ -11,7 +11,7 @@ experiment:
 model:
   name: "hf_causal_lm"
   model_id: "meta-llama/Llama-3.1-8B"
-  torch_dtype: "bfloat16"
+  dtype: "bfloat16"
   device_map: "auto"
   
   # LLaMA MLP: up_proj has 14336 intermediate neurons (pruning target)
@@ -26,6 +26,7 @@ dataset:
   batch_size: 1
   num_workers: 0
 
+# Metrics to compute - these are also used for pruning
 metrics:
   enabled:
     - "activation_l2_norm"
@@ -37,6 +38,7 @@ metrics:
     relative: true
     regularization: 1.0e-6
 
+# LLM-specific settings
 llm:
   scar_metrics: true
   scar_num_samples: 64
@@ -44,6 +46,7 @@ llm:
   evaluate_perplexity: true
   evaluation_num_samples: 100
 
+# Supernode identification
 supernode:
   enabled: true
   score_metric: "activation_l2_norm"
@@ -51,19 +54,37 @@ supernode:
   min_core_neurons: 32
   protect_core: true
 
+# Pruning experiments
 pruning:
   enabled: true
-  strategy: "alignment"
-  target_sparsity: 0.3
+  
+  # Sparsity levels to test (fraction of neurons to remove)
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5]
-  scoring: "activation_l2_norm"
-  direction: "low"
+  
+  # Selection modes: WHICH neurons to prune based on their scores
+  #   "low"    - prune neurons with LOWEST scores (remove least important)
+  #   "high"   - prune neurons with HIGHEST scores (ablation study)
+  #   "random" - prune randomly (baseline comparison)
+  selection_modes: ["low", "high"]
+  
+  # Distribution: HOW to allocate sparsity across layers
+  #   "uniform"              - same % per layer (simple, default)
+  #   "global_threshold"     - global score threshold
+  #   "adaptive_sensitivity" - prune robust layers more
+  #   "cascading"            - sequential layer-by-layer
+  distribution: "uniform"
+  
+  # Structured: prune entire neurons/channels
   structured: true
   
   fine_tune:
     enabled: false
     epochs: 1
     learning_rate: 1.0e-5
+
+# Performance (all optimizations enabled by default)
+performance:
+  eval_batches: null
 
 analysis:
   save_scores: true

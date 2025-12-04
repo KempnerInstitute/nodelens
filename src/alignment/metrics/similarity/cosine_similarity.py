@@ -265,7 +265,9 @@ class WeightActivationAlignment(BaseMetric):
             return torch.zeros(num_neurons, device=weights.device, dtype=weights.dtype)
 
         # Compute input covariance and eigendecomposition
-        inputs_centered = inputs - inputs.mean(dim=0, keepdim=True)
+        # Convert to float32 for eigendecomposition (linalg.eigh doesn't support bfloat16)
+        inputs_f32 = inputs.float()
+        inputs_centered = inputs_f32 - inputs_f32.mean(dim=0, keepdim=True)
         cov = torch.matmul(inputs_centered.T, inputs_centered) / (batch_size - 1)
 
         # Get top eigenvectors

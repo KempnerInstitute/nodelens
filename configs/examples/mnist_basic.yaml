@@ -1,13 +1,16 @@
 # MNIST Basic Analysis
-# Simple RQ analysis on MNIST
+# Simple RQ analysis on MNIST - minimal config for quick testing
 
 experiment:
   name: "mnist_rq_analysis"
+  type: "alignment_analysis"
   seed: 42
   device: "cuda"
+  output_dir: "./results/mnist_basic"
+  num_networks: 1                 # Single network for quick test
 
 model:
-  name: "mlp"  # Simple MLP
+  name: "mlp"                     # Simple MLP
   pretrained: false
   model_params:
     hidden_dims: [128, 64]
@@ -15,22 +18,46 @@ model:
 
 dataset:
   name: "mnist"
+  data_path: "./data"
   batch_size: 128
+  num_workers: 4
 
+# Metrics to compute
 metrics:
-  enabled: ['rayleigh_quotient']
+  enabled:
+    - "rayleigh_quotient"
+  num_samples: 256
+  
   rayleigh_quotient:
     relative: true
+    regularization: 1.0e-6
 
+# Train the model
 training:
   enabled: true
   epochs: 10
   learning_rate: 0.001
-  optimizer: 'adam'
+  optimizer: "adam"
+  scheduler: "none"
+
+# Optional pruning (disabled for basic test)
+pruning:
+  enabled: false
+  sparsity_levels: [0.1, 0.3, 0.5]
+  selection_modes: ["low", "random"]
+  distribution: "uniform"
+  structured: true
+
+# Performance (all optimizations enabled by default)
+performance:
+  eval_batches: null
 
 analysis:
   save_scores: true
+  generate_plots: true
 
-# Minimal config for quick testing
+visualization:
+  format: "png"
+  dpi: 150                        # Lower DPI for quick testing
+
 # Run: python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
-

@@ -1,0 +1,80 @@
+# Quick test config - includes both MLP and Attention layers
+# For testing that the code works on all layer types
+
+experiment:
+  name: "llama3_test_all_layers"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_test_all_layers"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Track BOTH MLP and Attention layers
+  tracked_layers:
+    # MLP layers (SwiGLU)
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+    # Attention layers (GQA)
+    - "model.model.layers.*.self_attn.q_proj"
+    - "model.model.layers.*.self_attn.k_proj"
+    - "model.model.layers.*.self_attn.v_proj"
+    - "model.model.layers.*.self_attn.o_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+# Core metrics
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "activation_l2_norm"
+    - "gaussian_mi_analytic"
+    - "average_redundancy"
+  num_samples: 16  # Reduced for quick test
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 8  # Reduced for quick test
+  scar_max_length: 256
+  evaluate_perplexity: true
+  evaluation_num_samples: 10  # Reduced for quick test
+  evaluation_metrics:
+    - "perplexity"
+
+supernode:
+  enabled: true
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  score_metric: "activation_l2_norm"
+  protect_core: true
+  cross_layer_analysis: false  # Disable for quick test
+  compare_by_connection: false
+
+# Minimal pruning test
+pruning:
+  enabled: true
+  sparsity_levels: [0.1, 0.3, 0.5]  # Just 3 levels for quick test
+  selection_modes: ["low", "random"]  # Just 2 modes
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  algorithms:
+    - "activation_l2_norm"
+    - "rayleigh_quotient"
+  single_strategy: null
+  fine_tune:
+    enabled: false
+
+analysis:
+  save_scores: true
+  generate_plots: true
+

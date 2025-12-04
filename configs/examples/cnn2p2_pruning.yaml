@@ -1,0 +1,105 @@
+# CNN2P2 Pruning Experiment on CIFAR-10
+# A simpler test case before using AlexNet - 2 conv layers + 2 pool layers
+# This model is faster to train and easier to debug pruning behavior
+
+experiment:
+  name: "cnn2p2_pruning_test"
+  type: "alignment_analysis"
+  seed: 42
+  device: "auto"                  # Auto-detect GPU/CPU
+  output_dir: "./results/cnn2p2_pruning"
+  num_networks: 1                 # Single network (can increase for statistical analysis)
+
+model:
+  name: "cnn2p2"
+  pretrained: false               # Train from scratch
+  tracked_layers: null            # Auto-detect conv/linear layers
+  
+  # CNN2P2 specific parameters (for CIFAR-10)
+  cnn2p2_params:
+    in_channels: 3                # RGB images
+    output_dim: 10                # CIFAR-10 classes
+    conv_channels: [32, 64]       # Channels per conv layer
+    kernel_sizes: [5, 5]
+    strides: [1, 1]
+    paddings: [2, 2]
+    pool_kernel_size: 2
+    pool_stride: 2
+    hidden_fc_dim: 128
+    dropout_rate: 0.5
+    example_input_hw: [32, 32]    # CIFAR-10 image size
+
+# CIFAR-10 dataset
+dataset:
+  name: "cifar10"
+  data_path: null                 # Uses torchvision default download
+  batch_size: 128
+  num_workers: 4
+
+# Training configuration (since we're not using pretrained)
+training:
+  enabled: true
+  epochs: 50                      # Enough to converge on CIFAR-10
+  learning_rate: 0.01
+  optimizer: "sgd"
+  momentum: 0.9
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  scheduler_config:
+    T_max: 50
+    eta_min: 0.0001
+
+# Metrics to compute - these are also used for pruning
+metrics:
+  enabled:
+    - "rayleigh_quotient"         # Alignment to input covariance
+    - "activation_l2_norm"        # Activation magnitude
+  num_samples: 256
+
+# CNN activation preprocessing
+cnn:
+  mode: "unfold"                  # Best for RQ/covariance metrics
+
+# Pruning experiments
+pruning:
+  enabled: true
+  
+  # Sparsity levels to test (fraction of neurons to remove)
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  
+  # Selection modes: WHICH neurons to prune based on their scores
+  #   "low"    - prune neurons with LOWEST scores (remove least important)
+  #   "high"   - prune neurons with HIGHEST scores (ablation study)
+  #   "random" - prune randomly (baseline comparison)
+  selection_modes: ["low", "high", "random"]
+  
+  # Distribution: HOW to allocate sparsity across layers
+  distribution: "uniform"
+  
+  # Structured: prune entire neurons/channels (vs individual weights)
+  structured: true
+  
+  # Dependency-aware: handle layer dependencies
+  dependency_aware: true
+  
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.001
+
+# Performance
+performance:
+  eval_batches: null              # null = all batches
+
+analysis:
+  save_scores: true
+  generate_plots: true
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+
+visualization:
+  format: "png"
+  dpi: 300
+

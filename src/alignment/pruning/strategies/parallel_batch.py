@@ -1,7 +1,14 @@
-"""Parallel batch pruning strategy for efficient evaluation of multiple configurations."""
+"""
+Parallel batch pruning strategy for efficient evaluation of multiple configurations.
+
+DEPRECATED: This functionality is now integrated directly into GeneralAlignmentExperiment.
+The _pruning_experiments_multi() method handles multi-network pruning automatically.
+This class is kept for backward compatibility only.
+"""
 
 import logging
 import time
+import warnings
 from typing import Dict, List
 
 import torch
@@ -14,11 +21,19 @@ class ParallelBatchPruning:
     """
     Pruning strategy that evaluates all networks and sparsity levels in parallel.
 
-    This strategy processes multiple networks and pruning configurations simultaneously
-    using vectorized operations for maximum efficiency.
+    DEPRECATED: Use GeneralAlignmentExperiment with num_networks > 1 instead.
+    The multi-network pruning is now handled automatically by the experiment class.
+    
+    This class is kept for backward compatibility only.
     """
 
     def __init__(self, config=None):
+        warnings.warn(
+            "ParallelBatchPruning is deprecated. Use GeneralAlignmentExperiment with "
+            "num_networks > 1 for multi-network pruning experiments.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.config = config
         self.eval_batches = getattr(config, "eval_batches", None) if config else None
 
