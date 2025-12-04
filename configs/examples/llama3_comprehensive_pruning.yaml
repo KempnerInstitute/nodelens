@@ -118,11 +118,12 @@ llm:
     - "accuracy_piqa"         # Physical intuition
     - "accuracy_boolq"        # Boolean questions
     
-    # Math & Code (harder tasks)
-    - "accuracy_gsm8k"        # Grade school math
-    - "accuracy_truthfulqa"   # Truthfulness
-    - "accuracy_mbpp"         # Python coding (MBPP)
-    - "accuracy_humaneval"    # Code generation (HumanEval)
+    # Math & Truthfulness
+    #- "accuracy_gsm8k"        # Grade school math
+    #- "accuracy_truthfulqa"   # Truthfulness
+    # NOTE: MBPP and HumanEval removed - code execution can hang indefinitely
+    # - "accuracy_mbpp"       # Python coding (MBPP) - SLOW, can hang
+    # - "accuracy_humaneval"  # Code generation (HumanEval) - SLOW, can hang
 
 # ============================================================================
 # SUPERNODE CONFIGURATION - Key for supernode-aware pruning
@@ -198,7 +199,7 @@ pruning:
   enabled: true
   
   # Comprehensive sparsity sweep for clear comparison curves
-  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
   
   # Selection modes
   selection_modes: ["low", "high"]  # "low" prunes lowest-scored, "high" prunes highest

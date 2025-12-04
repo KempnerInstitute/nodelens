@@ -480,6 +480,13 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["evaluation_num_samples"] = llm_block["evaluation_num_samples"]
         if "evaluation_metrics" in llm_block:
             flat_config["evaluation_metrics"] = llm_block["evaluation_metrics"]
+        # Few-shot and chain-of-thought settings (NVIDIA Minitron compatible)
+        if "use_nvidia_fewshot" in llm_block:
+            flat_config["use_nvidia_fewshot"] = llm_block["use_nvidia_fewshot"]
+        if "use_chain_of_thought" in llm_block:
+            flat_config["use_chain_of_thought"] = llm_block["use_chain_of_thought"]
+        if "fewshot_settings" in llm_block:
+            flat_config["fewshot_settings"] = llm_block["fewshot_settings"]
         # Preserve the entire llm block for direct access
         flat_config["llm"] = llm_block
     

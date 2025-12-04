@@ -179,35 +179,62 @@ class LLMAlignmentExperiment(BaseExperiment):
         logger.info(f"Perplexity: {perplexity:.2f}")
         return perplexity
 
+    # =========================================================================
+    # NVIDIA MINITRON-COMPATIBLE FEW-SHOT SETTINGS
+    # Reference: https://arxiv.org/abs/2408.11796
+    # =========================================================================
+    # These are the official few-shot settings used by NVIDIA Minitron:
+    NVIDIA_FEWSHOT_SETTINGS = {
+        "accuracy_mmlu": 5,           # MMLU: 5-shot
+        "accuracy_hellaswag": 10,     # HellaSwag: 10-shot
+        "accuracy_arc_challenge": 25, # ARC-Challenge: 25-shot
+        "accuracy_arc_easy": 25,      # ARC-Easy: 25-shot (same as Challenge)
+        "accuracy_winogrande": 5,     # WinoGrande: 5-shot
+        "accuracy_gsm8k": 5,          # GSM8k: 5-shot with chain-of-thought
+        "accuracy_truthfulqa": 0,     # TruthfulQA: 0-shot
+        "accuracy_mbpp": 0,           # MBPP: 0-shot
+        "accuracy_humaneval": 0,      # HumanEval: 0-shot
+        "accuracy_piqa": 0,           # PIQA: 0-shot
+        "accuracy_boolq": 0,          # BoolQ: 0-shot
+    }
+
     def evaluate_multiple_metrics(
         self,
         metrics: List[str] = None,
         num_samples: int = 50,
+        fewshot_settings: Dict[str, int] = None,
+        use_nvidia_settings: bool = False,
+        use_chain_of_thought: bool = False,
     ) -> Dict[str, float]:
         """
-        Evaluate model on multiple metrics.
+        Evaluate model on multiple metrics with configurable few-shot settings.
         
         Supported metrics:
         - perplexity: Language modeling perplexity on WikiText (lower is better)
         - bits_per_byte: Bits per byte on WikiText (lower is better)
-        - accuracy_hellaswag: Zero-shot accuracy on HellaSwag commonsense (higher is better)
-        - accuracy_arc_easy: Zero-shot accuracy on ARC-Easy science (higher is better)
-        - accuracy_arc_challenge: Zero-shot accuracy on ARC-Challenge science (higher is better)
-        - accuracy_piqa: Zero-shot accuracy on PIQA physical intuition (higher is better)
-        - accuracy_boolq: Zero-shot accuracy on BoolQ boolean questions (higher is better)
-        - accuracy_winogrande: Zero-shot accuracy on WinoGrande commonsense (higher is better)
-        - accuracy_truthfulqa: Zero-shot accuracy on TruthfulQA truthfulness (higher is better)
-        - accuracy_mmlu: Zero-shot accuracy on MMLU across 57 subjects (higher is better)
-        - accuracy_gsm8k: Zero-shot accuracy on GSM8k math problems (higher is better)
-        - accuracy_mbpp: Zero-shot accuracy on MBPP code generation (higher is better)
-        - accuracy_humaneval: Zero-shot accuracy on HumanEval code generation (higher is better)
+        - accuracy_hellaswag: HellaSwag commonsense (higher is better)
+        - accuracy_arc_easy: ARC-Easy science (higher is better)
+        - accuracy_arc_challenge: ARC-Challenge science (higher is better)
+        - accuracy_piqa: PIQA physical intuition (higher is better)
+        - accuracy_boolq: BoolQ boolean questions (higher is better)
+        - accuracy_winogrande: WinoGrande commonsense (higher is better)
+        - accuracy_truthfulqa: TruthfulQA truthfulness (higher is better)
+        - accuracy_mmlu: MMLU across 57 subjects (higher is better)
+        - accuracy_gsm8k: GSM8k math problems (higher is better)
+        - accuracy_mbpp: MBPP code generation (higher is better)
+        - accuracy_humaneval: HumanEval code generation (higher is better)
         
         NVIDIA Minitron benchmarks (https://arxiv.org/abs/2408.11796):
-        - MMLU, HellaSwag, ARC-Challenge, Winogrande, PIQA, TruthfulQA, GSM8k, MBPP, HumanEval
+        - MMLU (5-shot), HellaSwag (10-shot), ARC-Challenge (25-shot), 
+        - Winogrande (5-shot), GSM8k (5-shot+CoT), TruthfulQA (0-shot), 
+        - MBPP (0-shot), HumanEval (0-shot)
         
         Args:
             metrics: List of metrics to evaluate. If None, uses config.
             num_samples: Number of samples for evaluation
+            fewshot_settings: Dict mapping metric name to num_fewshot. If None, uses 0-shot.
+            use_nvidia_settings: If True, use NVIDIA Minitron official few-shot settings
+            use_chain_of_thought: If True, use chain-of-thought prompting for GSM8k
             
         Returns:
             Dict mapping metric name to value
@@ -217,9 +244,28 @@ class LLMAlignmentExperiment(BaseExperiment):
             llm_cfg = getattr(self.config, "llm", {}) or {}
             metrics = llm_cfg.get("evaluation_metrics") or getattr(self.config, "evaluation_metrics", ["perplexity"])
         
+        # Get few-shot settings from config if not provided
+        if fewshot_settings is None:
+            llm_cfg = getattr(self.config, "llm", {}) or {}
+            fewshot_settings = llm_cfg.get("fewshot_settings", {})
+        
+        # Check for NVIDIA mode from config
+        llm_cfg = getattr(self.config, "llm", {}) or {}
+        if llm_cfg.get("use_nvidia_fewshot", False):
+            use_nvidia_settings = True
+        if llm_cfg.get("use_chain_of_thought", False):
+            use_chain_of_thought = True
+        
+        # Apply NVIDIA settings if requested
+        if use_nvidia_settings:
+            fewshot_settings = {**self.NVIDIA_FEWSHOT_SETTINGS, **fewshot_settings}
+            use_chain_of_thought = True  # GSM8k uses CoT in Minitron
+            logger.info("Using NVIDIA Minitron few-shot settings")
+        
         results = {}
         
         for metric in metrics:
+            num_fewshot = fewshot_settings.get(metric, 0)
             try:
                 if metric == "perplexity":
                     results["perplexity"] = self.evaluate_perplexity(
@@ -242,23 +288,43 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Approximate: assume ~4 characters per token on average
                     results["bits_per_byte"] = np.log2(ppl) / 4.0
                 elif metric == "accuracy_hellaswag":
-                    results["accuracy_hellaswag"] = self._evaluate_hellaswag(num_samples=num_samples)
+                    results["accuracy_hellaswag"] = self._evaluate_hellaswag(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_arc_easy":
-                    results["accuracy_arc_easy"] = self._evaluate_arc_easy(num_samples=num_samples)
+                    results["accuracy_arc_easy"] = self._evaluate_arc_easy(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_arc_challenge":
-                    results["accuracy_arc_challenge"] = self._evaluate_arc_challenge(num_samples=num_samples)
+                    results["accuracy_arc_challenge"] = self._evaluate_arc_challenge(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_piqa":
-                    results["accuracy_piqa"] = self._evaluate_piqa(num_samples=num_samples)
+                    results["accuracy_piqa"] = self._evaluate_piqa(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_boolq":
-                    results["accuracy_boolq"] = self._evaluate_boolq(num_samples=num_samples)
+                    results["accuracy_boolq"] = self._evaluate_boolq(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_winogrande":
-                    results["accuracy_winogrande"] = self._evaluate_winogrande(num_samples=num_samples)
+                    results["accuracy_winogrande"] = self._evaluate_winogrande(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_truthfulqa":
-                    results["accuracy_truthfulqa"] = self._evaluate_truthfulqa(num_samples=num_samples)
+                    results["accuracy_truthfulqa"] = self._evaluate_truthfulqa(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_mmlu":
-                    results["accuracy_mmlu"] = self._evaluate_mmlu(num_samples=num_samples)
+                    results["accuracy_mmlu"] = self._evaluate_mmlu(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_gsm8k":
-                    results["accuracy_gsm8k"] = self._evaluate_gsm8k(num_samples=num_samples)
+                    results["accuracy_gsm8k"] = self._evaluate_gsm8k(
+                        num_samples=num_samples, 
+                        num_fewshot=num_fewshot,
+                        use_chain_of_thought=use_chain_of_thought
+                    )
                 elif metric == "accuracy_mbpp":
                     results["accuracy_mbpp"] = self._evaluate_mbpp(num_samples=num_samples)
                 elif metric == "accuracy_humaneval":
@@ -278,157 +344,19 @@ class LLMAlignmentExperiment(BaseExperiment):
                 results[metric] = None
         
         return results
-    
-    def _evaluate_hellaswag(self, num_samples: int = 100) -> float:
-        """
-        Zero-shot evaluation on HellaSwag dataset.
-        Returns accuracy (higher is better).
-        """
-        try:
-            from datasets import load_dataset
-        except ImportError:
-            logger.error("datasets library not installed, cannot evaluate HellaSwag")
-            return 0.0
-        
-        logger.info(f"Evaluating zero-shot accuracy on HellaSwag ({num_samples} samples)...")
-        
-        try:
-            dataset = load_dataset("hellaswag", split="validation", trust_remote_code=True)
-        except Exception as e:
-            logger.error(f"Failed to load HellaSwag dataset: {e}")
-            return 0.0
-        
-        self.model.eval()
-        correct = 0
-        total = 0
-        device = torch.device(self.config.device)
-        
-        with torch.no_grad():
-            for i, example in enumerate(dataset):
-                if i >= num_samples:
-                    break
-                
-                try:
-                    # Get context and endings
-                    ctx = example["ctx"]
-                    endings = example["endings"]
-                    label = int(example["label"])
-                    
-                    # Score each ending
-                    scores = []
-                    for ending in endings:
-                        text = ctx + " " + ending
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        # Use negative loss as score (higher = more likely)
-                        logits = outputs.logits
-                        # Compute log probability of the continuation
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())  # Higher score = lower loss = better
-                    
-                    predicted = np.argmax(scores)
-                    if predicted == label:
-                        correct += 1
-                    total += 1
-                    
-                    if (i + 1) % 20 == 0:
-                        logger.info(f"HellaSwag: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
-                        
-                except Exception as e:
-                    logger.warning(f"Error on HellaSwag sample {i}: {e}")
-                    continue
-        
-        accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"HellaSwag accuracy: {accuracy:.2f}%")
-        return accuracy
-    
-    def _evaluate_arc_easy(self, num_samples: int = 100) -> float:
-        """
-        Zero-shot evaluation on ARC-Easy dataset.
-        Returns accuracy (higher is better).
-        """
-        try:
-            from datasets import load_dataset
-        except ImportError:
-            logger.error("datasets library not installed, cannot evaluate ARC-Easy")
-            return 0.0
-        
-        logger.info(f"Evaluating zero-shot accuracy on ARC-Easy ({num_samples} samples)...")
-        
-        try:
-            dataset = load_dataset("ai2_arc", "ARC-Easy", split="test", trust_remote_code=True)
-        except Exception as e:
-            logger.error(f"Failed to load ARC-Easy dataset: {e}")
-            return 0.0
-        
-        self.model.eval()
-        correct = 0
-        total = 0
-        device = torch.device(self.config.device)
-        
-        with torch.no_grad():
-            for i, example in enumerate(dataset):
-                if i >= num_samples:
-                    break
-                
-                try:
-                    question = example["question"]
-                    choices = example["choices"]["text"]
-                    answer_key = example["answerKey"]
-                    
-                    # Map answer key to index
-                    if answer_key.isdigit():
-                        label = int(answer_key) - 1
-                    else:
-                        label = ord(answer_key) - ord('A')
-                    
-                    # Score each choice
-                    scores = []
-                    for choice in choices:
-                        text = f"Question: {question}\nAnswer: {choice}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
-                    
-                    predicted = np.argmax(scores)
-                    if predicted == label:
-                        correct += 1
-                    total += 1
-                    
-                    if (i + 1) % 20 == 0:
-                        logger.info(f"ARC-Easy: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
-                        
-                except Exception as e:
-                    logger.warning(f"Error on ARC-Easy sample {i}: {e}")
-                    continue
-        
-        accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"ARC-Easy accuracy: {accuracy:.2f}%")
-        return accuracy
 
-    def _evaluate_mmlu(self, num_samples: int = 100, subjects: List[str] = None) -> float:
+    def _evaluate_mmlu(self, num_samples: int = 100, subjects: List[str] = None, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on MMLU (Massive Multitask Language Understanding).
+        Few-shot evaluation on MMLU (Massive Multitask Language Understanding).
         Tests knowledge across 57 subjects.
         Returns accuracy (higher is better).
+        
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) with 5-shot.
         
         Args:
             num_samples: Number of samples per subject (or total if subjects is None)
             subjects: List of subjects to evaluate. If None, samples from all subjects.
+            num_fewshot: Number of few-shot examples (NVIDIA Minitron uses 5)
         """
         try:
             from datasets import load_dataset
@@ -436,7 +364,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate MMLU")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on MMLU ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on MMLU ({num_samples} samples)...")
         
         # Default subjects for quick evaluation (covers different domains)
         if subjects is None:
@@ -503,6 +432,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         correct = 0
         total = 0
         device = torch.device(self.config.device)
+        choice_labels = ["A", "B", "C", "D"]
         
         # Calculate samples per subject
         samples_per_subject = max(1, num_samples // len(subjects))
@@ -511,15 +441,32 @@ class LLMAlignmentExperiment(BaseExperiment):
             for subject in subjects:
                 try:
                     dataset = load_dataset("cais/mmlu", subject, split="test", trust_remote_code=True)
+                    # Load dev split for few-shot examples
+                    if num_fewshot > 0:
+                        dev_dataset = load_dataset("cais/mmlu", subject, split="dev", trust_remote_code=True)
                 except Exception as e:
                     logger.warning(f"Failed to load MMLU subject '{subject}': {e}")
                     continue
+                
+                # Build few-shot prompt for this subject
+                fewshot_prompt = ""
+                if num_fewshot > 0:
+                    for i, ex in enumerate(dev_dataset):
+                        if i >= num_fewshot:
+                            break
+                        q = ex["question"]
+                        choices = ex["choices"]
+                        answer_idx = ex["answer"]
+                        # Format: The following are multiple choice questions...
+                        choices_str = "\n".join([f"{choice_labels[j]}) {c}" for j, c in enumerate(choices)])
+                        correct_label = choice_labels[answer_idx]
+                        fewshot_prompt += f"Question: {q}\n{choices_str}\nAnswer: {correct_label}\n\n"
                 
                 subject_correct = 0
                 subject_total = 0
                 
                 for i, example in enumerate(dataset):
-                    if i >= samples_per_subject:
+                    if subject_total >= samples_per_subject:
                         break
                     
                     try:
@@ -527,15 +474,16 @@ class LLMAlignmentExperiment(BaseExperiment):
                         choices = example["choices"]
                         answer_idx = example["answer"]  # 0-indexed
                         
-                        # Format as multiple choice
-                        choice_labels = ["A", "B", "C", "D"]
-                        
                         # Score each choice
                         scores = []
                         for j, choice in enumerate(choices):
                             # Format: Question: ... Answer: A) choice
-                            text = f"Question: {question}\nAnswer: {choice_labels[j]}) {choice}"
-                            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                            if num_fewshot > 0:
+                                choices_str = "\n".join([f"{choice_labels[k]}) {c}" for k, c in enumerate(choices)])
+                                text = f"{fewshot_prompt}Question: {question}\n{choices_str}\nAnswer: {choice_labels[j]}"
+                            else:
+                                text = f"Question: {question}\nAnswer: {choice_labels[j]}) {choice}"
+                            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                             inputs = {k: v.to(device) for k, v in inputs.items()}
                             
                             outputs = self.model(**inputs)
@@ -565,13 +513,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                     break
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"MMLU accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"MMLU accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_hellaswag(self, num_samples: int = 100) -> float:
+    def _evaluate_hellaswag(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on HellaSwag (commonsense reasoning).
+        Few-shot evaluation on HellaSwag (commonsense reasoning).
         Returns accuracy (higher is better).
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples (NVIDIA Minitron uses 10)
         """
         try:
             from datasets import load_dataset
@@ -579,13 +531,30 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate HellaSwag")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on HellaSwag ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on HellaSwag ({num_samples} samples)...")
         
         try:
             dataset = load_dataset("Rowan/hellaswag", split="validation", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load HellaSwag dataset: {e}")
             return 0.0
+        
+        # Build few-shot examples from the beginning of the dataset
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(dataset):
+                if i >= num_fewshot:
+                    break
+                ctx = ex["ctx"]
+                endings = ex["endings"]
+                label = int(ex["label"])
+                correct_ending = endings[label]
+                fewshot_prompt += f"Context: {ctx}\nEnding: {correct_ending}\n\n"
+            # Skip the few-shot examples when evaluating
+            eval_start_idx = num_fewshot
+        else:
+            eval_start_idx = 0
         
         self.model.eval()
         correct = 0
@@ -594,7 +563,9 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if i < eval_start_idx:
+                    continue
+                if total >= num_samples:
                     break
                 
                 try:
@@ -605,8 +576,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Score each ending
                     scores = []
                     for ending in endings:
-                        text = f"{ctx} {ending}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        if num_fewshot > 0:
+                            text = f"{fewshot_prompt}Context: {ctx}\nEnding: {ending}"
+                        else:
+                            text = f"{ctx} {ending}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
                         outputs = self.model(**inputs)
@@ -628,13 +602,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"HellaSwag accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"HellaSwag accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_arc_easy(self, num_samples: int = 100) -> float:
+    def _evaluate_arc_easy(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on ARC-Easy (science questions).
+        Few-shot evaluation on ARC-Easy (science questions).
         Returns accuracy (higher is better).
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples (NVIDIA Minitron uses 25)
         """
         try:
             from datasets import load_dataset
@@ -642,13 +620,32 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate ARC")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on ARC-Easy ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on ARC-Easy ({num_samples} samples)...")
         
         try:
             dataset = load_dataset("allenai/ai2_arc", "ARC-Easy", split="test", trust_remote_code=True)
+            # Load train split for few-shot examples
+            if num_fewshot > 0:
+                train_dataset = load_dataset("allenai/ai2_arc", "ARC-Easy", split="train", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load ARC-Easy dataset: {e}")
             return 0.0
+        
+        # Build few-shot examples
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                q = ex["question"]
+                choices = ex["choices"]
+                answer_key = ex["answerKey"]
+                choice_texts = choices["text"]
+                choice_labels = choices["label"]
+                answer_idx = choice_labels.index(answer_key)
+                correct_answer = choice_texts[answer_idx]
+                fewshot_prompt += f"Question: {q}\nAnswer: {correct_answer}\n\n"
         
         self.model.eval()
         correct = 0
@@ -657,7 +654,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if total >= num_samples:
                     break
                 
                 try:
@@ -672,8 +669,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Score each choice
                     scores = []
                     for choice_text in choice_texts:
-                        text = f"Question: {question}\nAnswer: {choice_text}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        if num_fewshot > 0:
+                            text = f"{fewshot_prompt}Question: {question}\nAnswer: {choice_text}"
+                        else:
+                            text = f"Question: {question}\nAnswer: {choice_text}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
                         outputs = self.model(**inputs)
@@ -695,13 +695,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"ARC-Easy accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"ARC-Easy accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_piqa(self, num_samples: int = 100) -> float:
+    def _evaluate_piqa(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on PIQA (physical intuition).
+        Few-shot evaluation on PIQA (physical intuition).
         Returns accuracy (higher is better).
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples
         """
         try:
             from datasets import load_dataset
@@ -709,13 +713,29 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate PIQA")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on PIQA ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on PIQA ({num_samples} samples)...")
         
         try:
             dataset = load_dataset("piqa", split="validation", trust_remote_code=True)
+            if num_fewshot > 0:
+                train_dataset = load_dataset("piqa", split="train", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load PIQA dataset: {e}")
             return 0.0
+        
+        # Build few-shot examples
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                goal = ex["goal"]
+                sol1 = ex["sol1"]
+                sol2 = ex["sol2"]
+                label = ex["label"]
+                correct_sol = sol1 if label == 0 else sol2
+                fewshot_prompt += f"Goal: {goal}\nSolution: {correct_sol}\n\n"
         
         self.model.eval()
         correct = 0
@@ -724,7 +744,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if total >= num_samples:
                     break
                 
                 try:
@@ -736,8 +756,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Score each solution
                     scores = []
                     for sol in [sol1, sol2]:
-                        text = f"Goal: {goal}\nSolution: {sol}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        if num_fewshot > 0:
+                            text = f"{fewshot_prompt}Goal: {goal}\nSolution: {sol}"
+                        else:
+                            text = f"Goal: {goal}\nSolution: {sol}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
                         outputs = self.model(**inputs)
@@ -759,13 +782,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"PIQA accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"PIQA accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_boolq(self, num_samples: int = 100) -> float:
+    def _evaluate_boolq(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on BoolQ (boolean questions).
+        Few-shot evaluation on BoolQ (boolean questions).
         Returns accuracy (higher is better).
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples
         """
         try:
             from datasets import load_dataset
@@ -773,13 +800,27 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate BoolQ")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on BoolQ ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on BoolQ ({num_samples} samples)...")
         
         try:
             dataset = load_dataset("google/boolq", split="validation", trust_remote_code=True)
+            if num_fewshot > 0:
+                train_dataset = load_dataset("google/boolq", split="train", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load BoolQ dataset: {e}")
             return 0.0
+        
+        # Build few-shot examples
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                q = ex["question"]
+                p = ex["passage"][:200]  # Truncate passage for few-shot
+                a = "Yes" if ex["answer"] else "No"
+                fewshot_prompt += f"Passage: {p}...\nQuestion: {q}\nAnswer: {a}\n\n"
         
         self.model.eval()
         correct = 0
@@ -788,7 +829,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if total >= num_samples:
                     break
                 
                 try:
@@ -799,8 +840,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Score "Yes" vs "No" completions
                     scores = []
                     for response in ["Yes", "No"]:
-                        text = f"Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        if num_fewshot > 0:
+                            text = f"{fewshot_prompt}Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
+                        else:
+                            text = f"Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
                         outputs = self.model(**inputs)
@@ -823,18 +867,22 @@ class LLMAlignmentExperiment(BaseExperiment):
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"BoolQ accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"BoolQ accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_winogrande(self, num_samples: int = 100) -> float:
+    def _evaluate_winogrande(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on WinoGrande (commonsense reasoning with Winograd schemas).
+        Few-shot evaluation on WinoGrande (commonsense reasoning with Winograd schemas).
         Returns accuracy (higher is better).
         
         WinoGrande is a large-scale dataset of Winograd Schema Challenge problems.
         Each example has a sentence with a blank and two options to fill it.
         
-        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) for LLM evaluation.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) with 5-shot.
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples (NVIDIA Minitron uses 5)
         """
         try:
             from datasets import load_dataset
@@ -842,13 +890,30 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate WinoGrande")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on WinoGrande ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on WinoGrande ({num_samples} samples)...")
         
         try:
             dataset = load_dataset("winogrande", "winogrande_xl", split="validation", trust_remote_code=True)
+            if num_fewshot > 0:
+                train_dataset = load_dataset("winogrande", "winogrande_xl", split="train", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load WinoGrande dataset: {e}")
             return 0.0
+        
+        # Build few-shot examples
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                sentence = ex["sentence"]
+                option1 = ex["option1"]
+                option2 = ex["option2"]
+                answer = int(ex["answer"]) - 1
+                correct_option = option1 if answer == 0 else option2
+                completed = sentence.replace("_", correct_option)
+                fewshot_prompt += f"Sentence: {completed}\n\n"
         
         self.model.eval()
         correct = 0
@@ -857,7 +922,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if total >= num_samples:
                     break
                 
                 try:
@@ -869,8 +934,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Replace _ with each option and score
                     scores = []
                     for option in [option1, option2]:
-                        text = sentence.replace("_", option)
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        completed = sentence.replace("_", option)
+                        if num_fewshot > 0:
+                            text = f"{fewshot_prompt}Sentence: {completed}"
+                        else:
+                            text = completed
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
                         outputs = self.model(**inputs)
@@ -888,24 +957,28 @@ class LLMAlignmentExperiment(BaseExperiment):
                     total += 1
                     
                     if (i + 1) % 50 == 0:
-                        logger.info(f"WinoGrande: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        logger.info(f"WinoGrande: {total}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
                         
                 except Exception as e:
                     logger.warning(f"Error on WinoGrande sample {i}: {e}")
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"WinoGrande accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"WinoGrande accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_arc_challenge(self, num_samples: int = 100) -> float:
+    def _evaluate_arc_challenge(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on ARC-Challenge (harder science questions).
+        Few-shot evaluation on ARC-Challenge (harder science questions).
         Returns accuracy (higher is better).
         
         ARC-Challenge is the harder subset of the AI2 Reasoning Challenge,
         containing questions that require more complex reasoning.
-        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) for LLM evaluation.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) with 25-shot.
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples (NVIDIA Minitron uses 25)
         """
         try:
             from datasets import load_dataset
@@ -913,13 +986,31 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate ARC-Challenge")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on ARC-Challenge ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on ARC-Challenge ({num_samples} samples)...")
         
         try:
             dataset = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="test", trust_remote_code=True)
+            if num_fewshot > 0:
+                train_dataset = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="train", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load ARC-Challenge dataset: {e}")
             return 0.0
+        
+        # Build few-shot examples
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                q = ex["question"]
+                choices = ex["choices"]
+                answer_key = ex["answerKey"]
+                choice_texts = choices["text"]
+                choice_labels = choices["label"]
+                answer_idx = choice_labels.index(answer_key)
+                correct_answer = choice_texts[answer_idx]
+                fewshot_prompt += f"Question: {q}\nAnswer: {correct_answer}\n\n"
         
         self.model.eval()
         correct = 0
@@ -928,7 +1019,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if total >= num_samples:
                     break
                 
                 try:
@@ -943,8 +1034,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Score each choice
                     scores = []
                     for choice_text in choice_texts:
-                        text = f"Question: {question}\nAnswer: {choice_text}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        if num_fewshot > 0:
+                            text = f"{fewshot_prompt}Question: {question}\nAnswer: {choice_text}"
+                        else:
+                            text = f"Question: {question}\nAnswer: {choice_text}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
                         outputs = self.model(**inputs)
@@ -962,24 +1056,28 @@ class LLMAlignmentExperiment(BaseExperiment):
                     total += 1
                     
                     if (i + 1) % 50 == 0:
-                        logger.info(f"ARC-Challenge: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        logger.info(f"ARC-Challenge: {total}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
                     
                 except Exception as e:
                     logger.warning(f"Error on ARC-Challenge sample {i}: {e}")
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"ARC-Challenge accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"ARC-Challenge accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_truthfulqa(self, num_samples: int = 100) -> float:
+    def _evaluate_truthfulqa(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
         """
-        Zero-shot evaluation on TruthfulQA (truthfulness in answers).
+        Few-shot evaluation on TruthfulQA (truthfulness in answers).
         Returns accuracy (higher is better).
         
         TruthfulQA measures whether models generate truthful answers to questions
         that humans might answer incorrectly due to false beliefs or misconceptions.
-        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) for LLM evaluation.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2407.14679) with 0-shot.
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples (NVIDIA Minitron uses 0)
         """
         try:
             from datasets import load_dataset
@@ -987,7 +1085,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate TruthfulQA")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on TruthfulQA ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on TruthfulQA ({num_samples} samples)...")
         
         try:
             # TruthfulQA multiple choice format
@@ -996,6 +1095,23 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error(f"Failed to load TruthfulQA dataset: {e}")
             return 0.0
         
+        # Build few-shot examples (though NVIDIA uses 0-shot)
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(dataset):
+                if i >= num_fewshot:
+                    break
+                q = ex["question"]
+                mc1_targets = ex["mc1_targets"]
+                choices = mc1_targets["choices"]
+                labels = mc1_targets["labels"]
+                correct_idx = labels.index(1)
+                correct_answer = choices[correct_idx]
+                fewshot_prompt += f"Question: {q}\nAnswer: {correct_answer}\n\n"
+            eval_start_idx = num_fewshot
+        else:
+            eval_start_idx = 0
+        
         self.model.eval()
         correct = 0
         total = 0
@@ -1003,7 +1119,9 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if i < eval_start_idx:
+                    continue
+                if total >= num_samples:
                     break
                 
                 try:
@@ -1019,8 +1137,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Score each choice
                     scores = []
                     for choice in choices:
-                        text = f"Question: {question}\nAnswer: {choice}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                        if num_fewshot > 0:
+                            text = f"{fewshot_prompt}Question: {question}\nAnswer: {choice}"
+                        else:
+                            text = f"Question: {question}\nAnswer: {choice}"
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
                         outputs = self.model(**inputs)
@@ -1038,23 +1159,28 @@ class LLMAlignmentExperiment(BaseExperiment):
                     total += 1
                     
                     if (i + 1) % 50 == 0:
-                        logger.info(f"TruthfulQA: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        logger.info(f"TruthfulQA: {total}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
                     
                 except Exception as e:
                     logger.warning(f"Error on TruthfulQA sample {i}: {e}")
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"TruthfulQA accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"TruthfulQA accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
-    def _evaluate_gsm8k(self, num_samples: int = 100) -> float:
+    def _evaluate_gsm8k(self, num_samples: int = 100, num_fewshot: int = 0, use_chain_of_thought: bool = False) -> float:
         """
-        Zero-shot evaluation on GSM8k (grade school math word problems).
+        Few-shot evaluation on GSM8k (grade school math word problems) with chain-of-thought.
         Returns accuracy (higher is better).
         
         GSM8k tests mathematical reasoning with grade school level word problems.
-        Used in NVIDIA Minitron (https://arxiv.org/abs/2408.11796) for LLM evaluation.
+        Used in NVIDIA Minitron (https://arxiv.org/abs/2408.11796) with 5-shot + CoT.
+        
+        Args:
+            num_samples: Number of samples to evaluate
+            num_fewshot: Number of few-shot examples (NVIDIA Minitron uses 5)
+            use_chain_of_thought: If True, include step-by-step reasoning in few-shot examples
         """
         try:
             from datasets import load_dataset
@@ -1062,18 +1188,17 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("datasets library not installed, cannot evaluate GSM8k")
             return 0.0
         
-        logger.info(f"Evaluating zero-shot accuracy on GSM8k ({num_samples} samples)...")
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        cot_str = " + CoT" if use_chain_of_thought else ""
+        logger.info(f"Evaluating {shot_str}{cot_str} accuracy on GSM8k ({num_samples} samples)...")
         
         try:
             dataset = load_dataset("openai/gsm8k", "main", split="test", trust_remote_code=True)
+            if num_fewshot > 0:
+                train_dataset = load_dataset("openai/gsm8k", "main", split="train", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load GSM8k dataset: {e}")
             return 0.0
-        
-        self.model.eval()
-        correct = 0
-        total = 0
-        device = torch.device(self.config.device)
         
         def extract_answer(text: str) -> str:
             """Extract the final numerical answer from GSM8k format."""
@@ -1088,9 +1213,32 @@ class LLMAlignmentExperiment(BaseExperiment):
                 return numbers[-1].replace(',', '')
             return ""
         
+        # Build few-shot prompt with chain-of-thought
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                q = ex["question"]
+                a = ex["answer"]
+                gold = extract_answer(a)
+                
+                if use_chain_of_thought:
+                    # Include the full reasoning chain from the dataset
+                    # GSM8k answers contain step-by-step reasoning before ####
+                    reasoning = a.split("####")[0].strip() if "####" in a else a
+                    fewshot_prompt += f"Question: {q}\n\nLet's solve this step by step:\n{reasoning}\n\nThe answer is #### {gold}\n\n"
+                else:
+                    fewshot_prompt += f"Question: {q}\nAnswer: {gold}\n\n"
+        
+        self.model.eval()
+        correct = 0
+        total = 0
+        device = torch.device(self.config.device)
+        
         with torch.no_grad():
             for i, example in enumerate(dataset):
-                if i >= num_samples:
+                if total >= num_samples:
                     break
                 
                 try:
@@ -1099,15 +1247,21 @@ class LLMAlignmentExperiment(BaseExperiment):
                     gold_answer = extract_answer(answer)
                     
                     # Generate answer using the model
-                    prompt = f"Question: {question}\n\nLet's solve this step by step:\n"
-                    inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+                    if num_fewshot > 0 and use_chain_of_thought:
+                        prompt = f"{fewshot_prompt}Question: {question}\n\nLet's solve this step by step:\n"
+                    elif num_fewshot > 0:
+                        prompt = f"{fewshot_prompt}Question: {question}\nAnswer:"
+                    else:
+                        prompt = f"Question: {question}\n\nLet's solve this step by step:\n"
+                    
+                    inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
                     inputs = {k: v.to(device) for k, v in inputs.items()}
                     
                     # Generate response
                     with torch.no_grad():
                         outputs = self.model.generate(
                             **inputs,
-                            max_new_tokens=256,
+                            max_new_tokens=512 if use_chain_of_thought else 256,
                             do_sample=False,
                             pad_token_id=self.tokenizer.eos_token_id,
                         )
@@ -1127,14 +1281,14 @@ class LLMAlignmentExperiment(BaseExperiment):
                     total += 1
                     
                     if (i + 1) % 20 == 0:
-                        logger.info(f"GSM8k: {i+1}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
+                        logger.info(f"GSM8k: {total}/{num_samples}, accuracy so far: {100*correct/total:.1f}%")
                         
                 except Exception as e:
                     logger.warning(f"Error on GSM8k sample {i}: {e}")
                     continue
         
         accuracy = 100 * correct / total if total > 0 else 0.0
-        logger.info(f"GSM8k accuracy: {accuracy:.2f}% ({correct}/{total})")
+        logger.info(f"GSM8k accuracy ({shot_str}{cot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
     def _evaluate_mbpp(self, num_samples: int = 100) -> float:
@@ -4428,11 +4582,17 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         config = PruningConfig(amount=sparsity, structured=True, pruning_mode=mode)
         
-        # For SCAR metrics and other pre-computed scores, use PrecomputedScorePruning
-        # since they're not in the metric registry (computed separately by SCAR analysis)
-        scar_metrics = ["scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature", 
-                        "directed_redundancy", "supernode_protection_score", "supernode_connectivity_score"]
-        if metric in scar_metrics:
+        # For SCAR metrics, baseline methods (wanda, sparsegpt), and other pre-computed scores,
+        # use PrecomputedScorePruning since they're not in the metric registry
+        precomputed_metrics = [
+            # SCAR metrics (computed by SCAR analysis)
+            "scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature",
+            # Supernode/connectivity metrics
+            "directed_redundancy", "supernode_protection_score", "supernode_connectivity_score",
+            # LLM baseline methods (computed by compute_baseline_pruning_scores)
+            "wanda", "sparsegpt",
+        ]
+        if metric in precomputed_metrics:
             from alignment.pruning.base import PrecomputedScorePruning
             pruner = PrecomputedScorePruning(config=config)
         else:

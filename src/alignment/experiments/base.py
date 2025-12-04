@@ -155,6 +155,11 @@ class ExperimentConfig:
     evaluation_metrics: List[str] = field(default_factory=lambda: ["perplexity"])
     llm: Dict[str, Any] = field(default_factory=dict)  # Full LLM config block
     
+    # Few-shot evaluation settings (NVIDIA Minitron compatible)
+    use_nvidia_fewshot: bool = False  # Use NVIDIA Minitron official few-shot settings
+    use_chain_of_thought: bool = False  # Enable chain-of-thought for GSM8k
+    fewshot_settings: Dict[str, int] = field(default_factory=dict)  # Per-benchmark few-shot counts
+    
     # Directed redundancy and connectivity pruning
     do_directed_redundancy: bool = True
     do_connectivity_pruning: bool = True

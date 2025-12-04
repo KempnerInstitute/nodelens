@@ -1,0 +1,207 @@
+# ============================================================================
+# LLaMA-3 FAST PRUNING COMPARISON
+# ============================================================================
+# 
+# PURPOSE: Quick iteration version of comprehensive pruning comparison
+# 
+# CHANGES FROM COMPREHENSIVE VERSION:
+# - 3 sparsity levels instead of 9
+# - 1 selection mode instead of 2
+# - 4 key algorithms instead of 9
+# - Dropped slow benchmarks (GSM8k, MBPP, HumanEval)
+# - Reduced evaluation samples (50 instead of 100)
+# - Disabled supernode robustness analysis
+#
+# EXPECTED RUNTIME: ~30-60 minutes on H100 (vs 6-12 hours for comprehensive)
+# ============================================================================
+
+experiment:
+  name: "llama3_fast_pruning"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_fast_pruning"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Track all MLP layers for comprehensive analysis
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+# ============================================================================
+# IMPORTANCE METRICS - Reduced for speed
+# ============================================================================
+metrics:
+  enabled:
+    - "rayleigh_quotient"       # Core alignment metric
+    - "activation_l2_norm"      # Baseline for comparison
+  
+  num_samples: 32  # Reduced from 64 for faster calibration
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+# ============================================================================
+# LLM-SPECIFIC SETTINGS - Optimized for speed
+# ============================================================================
+llm:
+  # SCAR metrics (reduced samples)
+  scar_metrics: true
+  scar_num_samples: 32    # Reduced from 64
+  scar_max_length: 512
+  
+  # Evaluation settings - reduced
+  evaluate_perplexity: true
+  evaluation_num_samples: 50  # Reduced from 100
+  
+  # FAST EVALUATION SUITE - dropped slow benchmarks
+  evaluation_metrics:
+    # Language modeling (core metrics) - FAST
+    - "perplexity"            # ~2 sec
+    - "loss"                  # ~1 sec
+    - "bits_per_byte"         # ~1 sec
+    
+    # Knowledge & Reasoning - FAST
+    - "accuracy_mmlu"         # ~15 sec with 50 samples
+    - "accuracy_hellaswag"    # ~5 sec
+    - "accuracy_arc_easy"     # ~5 sec
+    - "accuracy_arc_challenge" # ~5 sec
+    
+    # Common Sense - FAST
+    - "accuracy_winogrande"   # ~3 sec
+    - "accuracy_piqa"         # ~3 sec
+    - "accuracy_boolq"        # ~3 sec
+    - "accuracy_truthfulqa"   # ~5 sec
+    
+    # REMOVED SLOW BENCHMARKS:
+    # - "accuracy_gsm8k"      # SLOW: ~3+ min (requires generation)
+    # - "accuracy_mbpp"       # SLOW: ~1.5+ min (code generation)
+    # - "accuracy_humaneval"  # SLOW: ~2+ min (code generation)
+
+# ============================================================================
+# SUPERNODE CONFIGURATION - Simplified
+# ============================================================================
+supernode:
+  enabled: true
+  
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  score_metric: "activation_l2_norm"
+  
+  protect_core: true
+  cross_layer_analysis: false  # Disabled for speed
+  compare_by_connection: false # Disabled for speed
+  
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+
+# ============================================================================
+# SUPERNODE ROBUSTNESS ANALYSIS - DISABLED for speed
+# ============================================================================
+supernode_robustness:
+  enabled: false  # Disabled to save ~10 minutes
+
+# ============================================================================
+# PRUNING CONFIGURATION - Optimized for speed
+# ============================================================================
+pruning:
+  enabled: true
+  
+  # KEY sparsity levels only (3 instead of 9)
+  sparsity_levels: [0.3, 0.5, 0.7]
+  
+  # Single selection mode (saves 2x time)
+  selection_modes: ["low"]
+  
+  # Pruning structure
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  # =========================================================================
+  # REDUCED PRUNING ALGORITHMS - 3 key methods instead of 9
+  # =========================================================================
+  algorithms:
+    # Our main method
+    - "rayleigh_quotient"
+    
+    # SCAR-based (gradient-informed)
+    - "scar_loss_proxy"
+    
+    # Baseline
+    - "activation_l2_norm"
+    
+    # REMOVED FOR SPEED:
+    # - "gaussian_mi_analytic"       # Similar to RQ
+    # - "average_redundancy"         # Can add later
+    # - "supernode_protection_score" # Can add later
+    # - "supernode_connectivity_score"
+    # NOTE: wanda/sparsegpt require special calibration that's not fully integrated
+    # - "wanda"                      # Needs calibration (not yet fully integrated)
+    # - "sparsegpt"                  # SLOW: second-order optimization
+  
+  single_strategy: null
+  
+  fine_tune:
+    enabled: false
+
+# ============================================================================
+# ADVANCED ANALYSIS FLAGS - Disabled for speed
+# ============================================================================
+do_directed_redundancy: false
+do_connectivity_pruning: false
+
+# ============================================================================
+# PERFORMANCE SETTINGS
+# ============================================================================
+performance:
+  eval_batches: null
+
+# ============================================================================
+# ANALYSIS & VISUALIZATION - Simplified
+# ============================================================================
+analysis:
+  save_scores: true
+  generate_plots: true
+  
+  plots:
+    histograms: true
+    scatter_plots: false        # Disabled for speed
+    pruning_curves: true
+    redundancy_heatmaps: false  # Disabled for speed
+  
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+
+visualization:
+  format: "png"
+  dpi: 150  # Reduced for faster plot generation
+
+# ============================================================================
+# EXPECTED CONFIGURATIONS TO RUN
+# ============================================================================
+# 
+# Sparsity levels: 3 (0.3, 0.5, 0.7)
+# Selection modes: 1 (low)
+# Algorithms: 4 (rayleigh_quotient, scar_loss_proxy, activation_l2_norm, wanda)
+# 
+# Total configs: 3 × 1 × 3 = 9 configurations (vs 162 in comprehensive)
+# 
+# Time per config: ~2-3 minutes
+# Estimated total: ~30-45 minutes
+# ============================================================================
+
