@@ -190,6 +190,16 @@ supernode_robustness:
   target_layers: null
 
 # ============================================================================
+# SUPERNODE SUMMARY ANALYSIS (NEW)
+# ============================================================================
+# Generates summary plots:
+# 1. Halo vs Non-Halo metrics by layer (mean activation, RQ, MI, redundancy)
+# 2. Supernode outlier z-scores by layer (how much of an outlier)
+supernode_summary:
+  enabled: true
+  outlier_analysis: true  # Generate z-score plots
+
+# ============================================================================
 # PRUNING CONFIGURATION - ALL METHODS & SPARSITY LEVELS
 # ============================================================================
 pruning:

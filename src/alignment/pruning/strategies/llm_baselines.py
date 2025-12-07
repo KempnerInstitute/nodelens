@@ -558,8 +558,12 @@ class SparseGPTPruning(BasePruningStrategy):
             logger.warning("No Hessian available, returning simple magnitude pruning")
             scores = W.abs()
             k = int(sparsity * W.numel())
-            threshold = scores.flatten().kthvalue(k).values
-            mask = (scores > threshold).float()
+            # Use topk for exact k selection (avoids threshold tie issues)
+            flat_scores = scores.flatten()
+            _, indices_to_prune = torch.topk(flat_scores, k, largest=False)
+            mask = torch.ones(flat_scores.numel(), dtype=torch.bool, device=W.device)
+            mask[indices_to_prune] = False
+            mask = mask.view(W.shape).float()
             return mask, W * mask
         
         # Compute H^{-1} using Cholesky

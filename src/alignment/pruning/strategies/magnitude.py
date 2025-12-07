@@ -153,19 +153,24 @@ class GlobalMagnitudePruning(BasePruningStrategy):
         # Concatenate all scores
         global_scores = torch.cat(all_scores)
 
-        # Find global threshold
+        # Find global k weights to prune using topk (avoids threshold tie issues)
         k = int(amount * global_scores.numel())
         if k == 0:
             return {}
 
-        threshold = global_scores.kthvalue(k).values
+        # Get indices of k smallest scores (weights to prune)
+        _, prune_indices = torch.topk(global_scores, k, largest=False)
+        global_mask = torch.ones(global_scores.numel(), dtype=torch.bool, device=global_scores.device)
+        global_mask[prune_indices] = False
 
-        # Apply threshold to each module
+        # Apply mask to each module by extracting corresponding region
         masks = {}
+        offset = 0
         for name, module, shape in module_info:
-            scores = module.weight.data.abs()
-            mask = (scores > threshold).float()
-            self.apply_pruning(module, mask)
-            masks[name] = mask
+            num_weights = shape.numel()
+            module_mask = global_mask[offset:offset + num_weights].view(shape).float()
+            self.apply_pruning(module, module_mask)
+            masks[name] = module_mask
+            offset += num_weights
 
         return masks

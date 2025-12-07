@@ -2,7 +2,7 @@
 Metrics for measuring neural network alignment, redundancy, and synergy.
 
 =============================================================================
-METRIC TAXONOMY (from alignment_notes/main.tex and vision_synergy_icml.tex)
+METRIC TAXONOMY (from alignment_notes/main.tex and new.tex)
 =============================================================================
 
 1. ALIGNMENT METRICS (Rayleigh Quotient based)
@@ -30,6 +30,11 @@ METRIC TAXONOMY (from alignment_notes/main.tex and vision_synergy_icml.tex)
      
    - average_redundancy: Per-neuron redundancy averaged over partners
      R(i) = (1/K) Σ_j I(Y_i; Y_j)
+     
+   - halo_redundancy: Redundancy analysis by neuron groups (halo vs non-halo)
+   
+   - cross_layer_redundancy: Redundancy with previous layer neurons
+     R(Y_i^l || Y^{l-1}) = mean_j I(Y_i^l; Y_j^{l-1})
 
 4. SYNERGY METRICS (PID with MMI redundancy)
    - gaussian_pid_synergy_mmi: Target-conditional synergy
@@ -41,10 +46,22 @@ METRIC TAXONOMY (from alignment_notes/main.tex and vision_synergy_icml.tex)
    Score(i) = α * log RQ(w_i) + β * I(Z; Y_i) + γ * S(i) - δ * R(i)
    
    High RQ + High target MI + High synergy + Low redundancy = Important neuron
+   
+   Extended with cross-layer term:
+   Score(Y_i^l) = α·RQ + β·MI - γ·R_within - δ·R_cross
 
 6. ACTIVATION STATISTICS
    - activation_l2_norm: ||Y_i||_2 averaged over batch
    - activation_variance: Var(Y_i) over batch
+
+7. MULTI-SUPERNODE METRICS (Extension)
+   - multi_supernode: Cluster supernodes into k groups
+   - multi_supernode_importance: Importance based on cluster membership
+
+8. CROSS-LAYER METRICS (SCAR-aligned Extension)
+   - cross_layer_redundancy: Downstream importance (how much next layer depends on each neuron)
+   - cross_layer_importance: RQ + Downstream_Importance - Redundancy (SCAR logic)
+   - layer_transition_efficiency: Downstream_Importance / (1 + Redundancy)
    
 =============================================================================
 """
@@ -61,6 +78,11 @@ from . import conditional_metrics  # Register conditional RQ, MI about class, et
 
 # Import composite metrics (combinations for pruning)
 from . import composite  # Register composite_importance, alignment_minus_redundancy, etc.
+
+# Import halo and multi-supernode metrics (extensions)
+from . import halo_redundancy  # Register halo_redundancy
+from . import multi_supernode  # Register multi_supernode, multi_supernode_importance
+from . import cross_layer  # Register cross_layer_redundancy, cross_layer_importance, layer_transition_efficiency
 
 
 def get_metric(name: str, **kwargs):
@@ -117,6 +139,30 @@ def get_recommended_metrics():
     ]
 
 
+def get_extended_metrics():
+    """
+    Get extended metrics for advanced analysis.
+    
+    These include:
+    1. halo_redundancy - Redundancy by neuron groups
+    2. multi_supernode - Cluster-based supernode analysis
+    3. cross_layer_redundancy - Inter-layer redundancy
+    4. cross_layer_importance - Combined score with cross-layer terms
+    5. layer_transition_efficiency - New information per layer
+    
+    Returns:
+        List of extended metric names
+    """
+    return [
+        "halo_redundancy",
+        "multi_supernode",
+        "multi_supernode_importance",
+        "cross_layer_redundancy",
+        "cross_layer_importance",
+        "layer_transition_efficiency",
+    ]
+
+
 def get_metric_category(name: str) -> str:
     """
     Get the category of a metric.
@@ -149,5 +195,6 @@ __all__ = [
     "get_metric", 
     "list_metrics",
     "get_recommended_metrics",
+    "get_extended_metrics",
     "get_metric_category",
 ]

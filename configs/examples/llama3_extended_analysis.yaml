@@ -1,0 +1,211 @@
+# ============================================================================
+# LLaMA-3 EXTENDED ANALYSIS CONFIGURATION
+# ============================================================================
+# 
+# This configuration enables all the extended metrics:
+# 1. Halo redundancy analysis (within-halo, within-non-halo, cross-group)
+# 2. Multi-supernode clustering (k clusters of supernodes)
+# 3. Cross-layer redundancy (redundancy with previous layer)
+# 4. Layer transition efficiency (new information per layer)
+#
+# Based on theoretical framework in drafts/alignment_notes/new.tex
+# ============================================================================
+
+experiment:
+  name: "llama3_extended_analysis"
+  type: "llm_alignment"
+  output_dir: "./results/llama3_extended_analysis"
+  seed: 42
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+model:
+  name: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "float16"
+  device_map: "auto"
+
+# ============================================================================
+# ANALYSIS CONFIGURATION
+# ============================================================================
+analysis:
+  # Layers to analyze
+  layer_indices: [4, 8, 12, 16, 20, 24, 28]
+  
+  # Calibration data
+  num_samples: 16
+  max_length: 256
+  
+  # Metrics to compute
+  metrics:
+    # Standard metrics
+    - "rayleigh_quotient"
+    - "gaussian_mi_analytic"
+    - "average_redundancy"
+    - "activation_l2_norm"
+    
+    # Extended metrics (NEW)
+    - "halo_redundancy"
+    - "multi_supernode"
+    - "multi_supernode_importance"
+    - "cross_layer_redundancy"
+    - "cross_layer_importance"
+    - "layer_transition_efficiency"
+
+# ============================================================================
+# HALO REDUNDANCY ANALYSIS
+# ============================================================================
+# Analyzes redundancy patterns:
+# - Within-Halo: Both neurons in halo (high connectivity to supernodes)
+# - Within-Non-Halo: Both neurons NOT in halo
+# - Cross-group: One in halo, one not
+#
+# Theory: I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
+# ============================================================================
+halo_analysis:
+  enabled: true
+  supernode_fraction: 0.01    # Top 1% = supernodes
+  halo_fraction: 0.10         # Top 10% of non-supernodes = halo
+  max_samples: 1000           # Activation samples per layer
+  max_pairs_per_group: 500    # Pairs to sample per group
+  
+  # Plots
+  plots:
+    depth_comparison: true    # Bar chart by layer depth
+    histograms: true          # Distribution plots
+    heatmaps: true            # Layer x group heatmaps
+
+# ============================================================================
+# MULTI-SUPERNODE CLUSTERING
+# ============================================================================
+# Instead of treating all supernodes as one group, cluster them into k groups.
+# Each cluster may represent a different functional specialization.
+#
+# Metrics computed:
+# - Per-cluster internal redundancy
+# - Between-cluster redundancy matrix
+# - Cluster separation score
+# ============================================================================
+multi_supernode:
+  enabled: true
+  supernode_fraction: 0.05    # Top 5% = supernodes for clustering
+  n_clusters: 4               # Number of supernode clusters
+  halo_fraction: 0.10         # Halo per cluster
+  clustering_features: "weights"  # "weights", "activations", or "combined"
+  
+  # Importance scoring
+  supernode_weight: 1.0       # Weight for supernode neurons
+  halo_weight: 0.7            # Weight for halo neurons
+  regular_weight: 0.3         # Weight for regular neurons
+  redundancy_penalty: 0.5     # Penalty for redundant neurons
+
+# ============================================================================
+# CROSS-LAYER IMPORTANCE (SCAR-aligned)
+# ============================================================================
+# Following SCAR/supernode logic: importance is about DOWNSTREAM dependencies
+#
+# Downstream Importance: I(Y_i^l; Y^{l+1})
+# = How much does the NEXT layer depend on this neuron?
+#
+# High downstream importance = neuron is critical (like supernode)
+# Low downstream importance + High redundancy = safe to prune
+#
+# Efficiency = Downstream_Importance / (1 + Redundancy)
+# ============================================================================
+cross_layer:
+  enabled: true
+  max_refs: 512               # Reference neurons per layer
+  
+  # Importance scoring weights (SCAR-aligned)
+  # Score = α·RQ + β·Downstream_Importance - γ·R_within + δ·Activation
+  rq_weight: 0.25             # α: Rayleigh Quotient (input alignment)
+  downstream_weight: 0.35     # β: Downstream importance (POSITIVE - next layer needs this)
+  within_redundancy_weight: 0.25  # γ: Within-layer redundancy (PENALTY)
+  activation_weight: 0.15     # δ: Activation magnitude
+  normalize: true             # Normalize each component to [0, 1]
+
+# ============================================================================
+# SUPERNODE CONFIGURATION (Standard)
+# ============================================================================
+supernode:
+  score_metric: "activation_l2_norm"
+  core_fraction: 0.01         # Top 1% = supernodes
+  halo_fraction: 0.10         # Top 10% non-supernodes = halo
+  protect_core: true          # Prevent pruning supernodes
+
+# ============================================================================
+# PRUNING CONFIGURATION
+# ============================================================================
+pruning:
+  enabled: false              # Disable pruning for analysis-only run
+  sparsity_levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+  
+  # Scoring methods to compare
+  scoring_methods:
+    - "activation_l2_norm"
+    - "rayleigh_quotient"
+    - "multi_supernode_importance"
+    - "cross_layer_importance"
+
+# ============================================================================
+# EVALUATION
+# ============================================================================
+evaluation:
+  enabled: true
+  benchmarks:
+    - name: "boolq"
+      num_fewshot: 5
+    - name: "arc_challenge"
+      num_fewshot: 5
+  perplexity: true
+  max_eval_batches: 50
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+visualization:
+  save_plots: true
+  format: "png"
+  dpi: 150
+  
+  plots:
+    # Standard plots
+    histograms: true
+    scatter_plots: true
+    heatmaps: true
+    
+    # Extended plots
+    halo_redundancy_depth: true    # Redundancy by layer depth
+    multi_supernode_clusters: true # Cluster visualizations
+    cross_layer_efficiency: true   # Layer transition efficiency
+    
+  # Scatter plot pairs
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["rayleigh_quotient", "average_redundancy"]
+    - ["cross_layer_redundancy", "within_layer_redundancy"]
+    - ["multi_supernode_importance", "activation_l2_norm"]
+
+# ============================================================================
+# OUTPUT
+# ============================================================================
+# Expected outputs:
+# - results/llama3_extended_analysis_YYYYMMDD_HHMMSS/
+#   ├── metrics/
+#   │   ├── layer_metrics.json
+#   │   ├── halo_redundancy_results.json
+#   │   ├── multi_supernode_results.json
+#   │   └── cross_layer_results.json
+#   ├── plots/
+#   │   ├── halo/
+#   │   │   ├── halo_redundancy_by_depth.png
+#   │   │   ├── halo_redundancy_comprehensive.png
+#   │   │   └── halo_redundancy_heatmap.png
+#   │   ├── multi_supernode/
+#   │   │   └── cluster_analysis_*.png
+#   │   └── cross_layer/
+#   │       ├── cross_layer_redundancy.png
+#   │       └── layer_efficiency.png
+#   └── evaluation/
+#       └── benchmark_results.json
+# ============================================================================

@@ -362,6 +362,19 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["alignment_composite_weights"] = alignment_block["composite_weights"]
 
     flat_config["supernode_config"] = nested_config.get("supernode", {})
+    
+    # Map supernode-related nested configs directly
+    flat_config["supernode"] = nested_config.get("supernode", {})
+    flat_config["supernode_robustness"] = nested_config.get("supernode_robustness", {})
+    flat_config["supernode_summary"] = nested_config.get("supernode_summary", {})
+    flat_config["halo_analysis"] = nested_config.get("halo_analysis", {})
+    flat_config["generalized_importance"] = nested_config.get("generalized_importance", {})
+    
+    # Map flags for these analyses
+    if "halo_analysis" in nested_config and nested_config["halo_analysis"].get("enabled", False):
+        flat_config["do_halo_analysis"] = True
+    if "generalized_importance" in nested_config and nested_config["generalized_importance"].get("enabled", False):
+        flat_config["do_generalized_importance"] = True
 
     # Map pruning configuration (check both top-level and nested 'pruning' block)
     pruning_block = nested_config.get("pruning", {})
