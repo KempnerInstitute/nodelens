@@ -196,35 +196,41 @@ class TensorizedPruning(BasePruningStrategy):
         scores_flat = importance_scores.flatten()
         n_params = scores_flat.numel()
 
-        # Pre-compute all thresholds
-        thresholds = {}
-        for amount in amounts:
-            k = int(amount * n_params)
-            if k > 0 and k < n_params:
-                thresholds[amount] = {"low": scores_flat.kthvalue(k).values, "high": scores_flat.kthvalue(n_params - k).values}
+        # Pre-compute sorted indices for efficient mask creation
+        # Sort once, then use slicing to get indices for each sparsity level
+        sorted_indices_asc = torch.argsort(scores_flat)  # low scores first
+        sorted_indices_desc = torch.argsort(scores_flat, descending=True)  # high scores first
 
         # Create pruning tensor
         pruning_tensor = torch.zeros(len(modes), len(amounts), *weight_shape, dtype=torch.float32, device=importance_scores.device)
 
         for i, mode in enumerate(modes):
             for j, amount in enumerate(amounts):
-                if amount in thresholds:
+                k = int(amount * n_params)
+                
+                if k == 0:
+                    # No pruning
+                    pruning_tensor[i, j] = torch.ones_like(importance_scores)
+                elif k >= n_params:
+                    # Prune everything
+                    pruning_tensor[i, j] = torch.zeros_like(importance_scores)
+                else:
+                    # Use topk-based selection for exact k pruning (avoids threshold tie issues)
+                    mask = torch.ones(n_params, dtype=torch.bool, device=importance_scores.device)
+                    
                     if mode == "low":
-                        mask = importance_scores > thresholds[amount]["low"]
+                        # Prune k neurons with LOWEST scores
+                        indices_to_prune = sorted_indices_asc[:k]
                     elif mode == "high":
-                        mask = importance_scores < thresholds[amount]["high"]
+                        # Prune k neurons with HIGHEST scores
+                        indices_to_prune = sorted_indices_desc[:k]
                     elif mode == "random":
-                        mask = torch.rand_like(importance_scores) > amount
+                        indices_to_prune = torch.randperm(n_params, device=scores_flat.device)[:k]
                     else:
                         continue
-
-                    pruning_tensor[i, j] = mask.float()
-                else:
-                    # Edge cases (0% or 100% pruning)
-                    if amount == 0:
-                        pruning_tensor[i, j] = torch.ones_like(importance_scores)
-                    else:
-                        pruning_tensor[i, j] = torch.zeros_like(importance_scores)
+                    
+                    mask[indices_to_prune] = False
+                    pruning_tensor[i, j] = mask.view(weight_shape).float()
 
         return pruning_tensor
 

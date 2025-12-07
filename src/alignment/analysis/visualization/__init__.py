@@ -5,6 +5,7 @@ Structure:
 - UnifiedVisualizer: Primary interface for all visualization needs
 - PruningVisualizer: Specialized pruning analysis plots (advanced use)
 - AlignmentVisualizer: Specialized alignment plots (advanced use)
+- HaloPlots: Halo redundancy visualization (by layer depth)
 
 For most use cases, use UnifiedVisualizer:
 
@@ -20,6 +21,15 @@ For advanced pruning visualizations (multi-seed, ablations):
     
     viz = PruningVisualizer()
     viz.plot_sparsity_perplexity_curves(df, save_path="curves.png")
+
+For halo redundancy analysis:
+
+    from alignment.analysis.visualization import (
+        plot_halo_redundancy_by_depth,
+        plot_halo_redundancy_comprehensive
+    )
+    
+    plot_halo_redundancy_by_depth(layers, halo_means, non_halo_means, cross_means)
 """
 
 # Primary interface
@@ -29,6 +39,13 @@ from .unified_visualizer import UnifiedVisualizer, plot_quick_summary, generate_
 from .pruning_plots import PruningVisualizer
 from .alignment_plots import AlignmentVisualizer
 
+# Halo redundancy plots
+from .halo_plots import (
+    plot_halo_redundancy_by_depth,
+    plot_halo_redundancy_comprehensive,
+    plot_halo_redundancy_heatmap,
+)
+
 __all__ = [
     # Primary
     "UnifiedVisualizer",
@@ -37,4 +54,8 @@ __all__ = [
     # Specialized
     "PruningVisualizer",
     "AlignmentVisualizer",
+    # Halo plots
+    "plot_halo_redundancy_by_depth",
+    "plot_halo_redundancy_comprehensive",
+    "plot_halo_redundancy_heatmap",
 ]

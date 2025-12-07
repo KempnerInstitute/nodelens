@@ -315,16 +315,23 @@ class ParallelBatchPruning:
         if k == 0:
             return torch.ones_like(importance)
 
+        # Use topk-based selection to guarantee exactly k weights are pruned
+        # This avoids non-monotonic behavior caused by ties at threshold values
+        mask = torch.ones(flat_importance.numel(), dtype=torch.bool, device=importance.device)
+        
         if selection_mode == "low":
-            threshold = torch.kthvalue(flat_importance, k).values
-            mask = importance > threshold
+            # Prune k weights with LOWEST scores
+            _, indices = torch.topk(flat_importance, k, largest=False)
         elif selection_mode == "high":
-            threshold = torch.kthvalue(flat_importance, flat_importance.numel() - k).values
-            mask = importance < threshold
+            # Prune k weights with HIGHEST scores
+            _, indices = torch.topk(flat_importance, k, largest=True)
         elif selection_mode == "random":
-            mask = torch.rand_like(importance) > amount
+            indices = torch.randperm(flat_importance.numel(), device=flat_importance.device)[:k]
         else:
             raise ValueError(f"Unknown selection mode: {selection_mode}")
+        
+        mask[indices] = False
+        mask = mask.view(importance.shape)
 
         return mask.float()
 

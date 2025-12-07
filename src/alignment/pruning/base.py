@@ -103,17 +103,22 @@ class BasePruningStrategy(ABC):
             if k == 0:
                 return torch.ones_like(importance_scores)
 
+            # Use topk-based selection to guarantee exactly k neurons are pruned
+            # This avoids issues with ties at threshold values that can cause non-monotonic behavior
+            flat_scores = aggregated_scores.flatten()
+            mask = torch.ones(flat_scores.numel(), dtype=torch.bool, device=aggregated_scores.device)
+            
             if pruning_mode == "random":
                 # Random selection of structures
-                indices = torch.randperm(aggregated_scores.numel(), device=aggregated_scores.device)[:k]
-                mask = torch.ones(aggregated_scores.numel(), dtype=torch.bool, device=aggregated_scores.device)
-                mask[indices] = False
+                indices = torch.randperm(flat_scores.numel(), device=flat_scores.device)[:k]
             elif pruning_mode == "low":
-                threshold = aggregated_scores.flatten().kthvalue(k).values
-                mask = aggregated_scores > threshold
+                # Prune k neurons with LOWEST scores (keep high-scoring neurons)
+                _, indices = torch.topk(flat_scores, k, largest=False)
             else:  # pruning_mode == 'high'
-                threshold = aggregated_scores.flatten().kthvalue(aggregated_scores.numel() - k).values
-                mask = aggregated_scores < threshold
+                # Prune k neurons with HIGHEST scores (keep low-scoring neurons)
+                _, indices = torch.topk(flat_scores, k, largest=True)
+            
+            mask[indices] = False
 
             # Expand mask to original shape
             shape = [1] * importance_scores.ndim
@@ -127,15 +132,22 @@ class BasePruningStrategy(ABC):
             if k == 0:
                 return torch.ones_like(importance_scores)
 
+            # Use topk-based selection to guarantee exactly k weights are pruned
+            # This avoids issues with ties at threshold values
+            mask = torch.ones(importance_flat.numel(), dtype=torch.bool, device=importance_scores.device)
+            
             if pruning_mode == "random":
                 # Random selection of weights
-                mask = torch.rand_like(importance_scores) > amount
+                indices = torch.randperm(importance_flat.numel(), device=importance_flat.device)[:k]
             elif pruning_mode == "low":
-                threshold = importance_flat.kthvalue(k).values
-                mask = importance_scores > threshold
+                # Prune k weights with LOWEST scores (keep high-scoring weights)
+                _, indices = torch.topk(importance_flat, k, largest=False)
             else:  # pruning_mode == 'high'
-                threshold = importance_flat.kthvalue(importance_flat.numel() - k).values
-                mask = importance_scores < threshold
+                # Prune k weights with HIGHEST scores (keep low-scoring weights)
+                _, indices = torch.topk(importance_flat, k, largest=True)
+            
+            mask[indices] = False
+            mask = mask.view(importance_scores.shape)
 
         return mask.float()
 

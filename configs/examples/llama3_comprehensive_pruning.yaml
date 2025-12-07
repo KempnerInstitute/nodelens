@@ -21,6 +21,8 @@
 # │ SUPERNODE-AWARE    │ supernode_protection_score    │ Protects important │
 # │                    │ supernode_connectivity_score  │ Connectivity-based │
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
+# │ GENERALIZED        │ generalized_importance        │ No outlier needed  │
+# ├────────────────────┼───────────────────────────────┼────────────────────┤
 # │ MAGNITUDE-BASED    │ activation_l2_norm            │ Common baseline    │
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
 # │ SOTA BASELINES     │ wanda                         │ Sun et al. 2023    │
@@ -193,6 +195,16 @@ supernode_robustness:
   #   - "model.layers.25"
 
 # ============================================================================
+# SUPERNODE SUMMARY ANALYSIS (NEW)
+# ============================================================================
+# Generates summary plots:
+# 1. Halo vs Non-Halo metrics by layer (mean activation, RQ, MI, redundancy)
+# 2. Supernode outlier z-scores by layer (how much of an outlier)
+supernode_summary:
+  enabled: true
+  outlier_analysis: true  # Generate z-score plots
+
+# ============================================================================
 # PRUNING CONFIGURATION - All methods & sparsity levels
 # ============================================================================
 pruning:
@@ -235,6 +247,11 @@ pruning:
     - "supernode_connectivity_score" # Low connectivity = safe to prune
     
     # -----------------------------------------------------------------------
+    # GENERALIZED IMPORTANCE (No Outlier Assumption)
+    # -----------------------------------------------------------------------
+    - "generalized_importance"       # Works without clear supernode structure
+    
+    # -----------------------------------------------------------------------
     # MAGNITUDE-BASED (Standard Baseline)
     # -----------------------------------------------------------------------
     - "activation_l2_norm"           # Standard magnitude pruning
@@ -262,6 +279,40 @@ pruning:
 # ============================================================================
 do_directed_redundancy: true    # Compute supernode -> halo redundancy
 do_connectivity_pruning: true   # Enable connectivity-based pruning
+do_halo_analysis: true          # Analyze halo vs non-halo redundancy (NEW)
+do_generalized_importance: true # Compute generalized importance (no outlier assumption)
+
+# ============================================================================
+# HALO ANALYSIS CONFIGURATION - Compare halo vs non-halo redundancy
+# ============================================================================
+# This analysis helps validate whether halo membership correlates with redundancy
+# by computing pairwise correlations for three groups:
+# - Halo-Halo: Both neurons in halo (high connectivity to supernodes)
+# - Non-halo: Both neurons NOT in halo (low connectivity)
+# - Cross-group: One in halo, one not
+halo_analysis:
+  enabled: true
+  supernode_fraction: 0.01      # Top 1% = supernodes
+  halo_fraction: 0.10           # Top 10% non-supernodes = halo
+  num_samples: 8                # Calibration samples
+  max_length: 256
+  sample_pairs: 2000            # Number of pairs to sample per group
+
+# ============================================================================
+# GENERALIZED IMPORTANCE - No outlier assumption
+# ============================================================================
+# For models without clear outlier supernodes, this metric uses:
+# 1. Per-neuron activation magnitude (continuous, no threshold)
+# 2. Local neighborhood redundancy (defined per-neuron by weight similarity)
+# 3. Downstream importance propagation (backward from later layers)
+# Score = base_importance * downstream_influence * (1 - redundancy)
+generalized_importance:
+  enabled: true
+  neighborhood_fraction: 0.10   # Fraction of neurons in each neuron's neighborhood
+  propagation_weight: 0.3       # Weight for downstream importance propagation
+  redundancy_penalty: 0.5       # How much to penalize redundant neurons (0-1)
+  num_samples: 8                # Calibration samples
+  max_length: 256
 
 # ============================================================================
 # PERFORMANCE SETTINGS

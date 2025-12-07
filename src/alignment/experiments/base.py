@@ -168,6 +168,15 @@ class ExperimentConfig:
     do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i)
     scar_num_samples: int = 0      # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
     scar_max_length: int = 512     # Max sequence length for SCAR calibration passes
+    
+    # Supernode analysis configs (nested dicts from YAML)
+    supernode: Dict[str, Any] = field(default_factory=dict)  # Core supernode analysis config
+    supernode_robustness: Dict[str, Any] = field(default_factory=dict)  # Robustness analysis config
+    supernode_summary: Dict[str, Any] = field(default_factory=dict)  # Summary visualization config
+    halo_analysis: Dict[str, Any] = field(default_factory=dict)  # Halo vs non-halo analysis
+    generalized_importance: Dict[str, Any] = field(default_factory=dict)  # Generalized importance config
+    do_halo_analysis: bool = False  # Flag for halo analysis
+    do_generalized_importance: bool = False  # Flag for generalized importance
 
     # Performance optimization
     eval_batches: Optional[int] = None  # Limit evaluation to N batches (None = all)
