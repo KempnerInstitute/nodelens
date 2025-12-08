@@ -1,0 +1,451 @@
+# =============================================================================
+# LLAMA-3.1-8B COMPREHENSIVE ANALYSIS - UNIFIED FORMAT
+# =============================================================================
+# This is the same config as prune_llm/llama3_8b_full.yaml
+# but converted to the unified format.
+#
+# Key features of unified format:
+# - Consistent section names across vision/LLM experiments
+# - Unified metric naming (redundancy instead of gaussian_mi_analytic)
+# - All experiment-specific settings in `extra:` section
+# - Same pruning/evaluation/visualization structure
+#
+# Usage: python scripts/run_experiment.py --config configs/unified/llama3_8b_unified.yaml
+# Estimated runtime: ~6-8 hours on 1x A100
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXPERIMENT
+# -----------------------------------------------------------------------------
+experiment:
+  name: "llama3_8b_paper_results"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/paper/llama3_8b"
+
+# -----------------------------------------------------------------------------
+# MODEL
+# -----------------------------------------------------------------------------
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+  
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+# -----------------------------------------------------------------------------
+# DATASET
+# -----------------------------------------------------------------------------
+dataset:
+  name: "wikitext"
+  subset: "wikitext-2-raw-v1"
+  split: "train"
+  batch_size: 1
+  num_workers: 0
+
+# -----------------------------------------------------------------------------
+# CALIBRATION
+# -----------------------------------------------------------------------------
+calibration:
+  num_samples: 128
+  max_length: 2048
+  batch_size: 4
+
+# -----------------------------------------------------------------------------
+# METRICS
+# -----------------------------------------------------------------------------
+# Unified naming with LLM-specific extensions
+# Core metrics (same names as vision):
+#   rayleigh_quotient, redundancy, synergy, magnitude
+# LLM-specific:
+#   scar (activation_power, curvature, loss_proxy, taylor)
+# Note: supernode_protection_score, supernode_connectivity_score are computed
+#       by the supernode analysis pipeline, not as standalone metrics
+# -----------------------------------------------------------------------------
+metrics:
+  rayleigh_quotient:
+    enabled: true
+    relative: true
+    regularization: 1.0e-6
+  
+  redundancy:
+    enabled: true
+    # LLM uses: gaussian_mi_analytic, average_redundancy
+  
+  magnitude:
+    enabled: true
+    # LLM uses: activation_l2_norm
+  
+  # LLM-specific SCAR metrics
+  scar:
+    enabled: true
+    num_samples: 64
+    max_length: 512
+    # Computes: scar_activation_power, scar_curvature, scar_loss_proxy, scar_taylor
+  
+  composite_weights:
+    rayleigh_quotient: 0.25
+    redundancy: -0.25
+    magnitude: 0.15
+    scar_loss_proxy: 0.35
+
+# -----------------------------------------------------------------------------
+# SUPERNODE (LLM outlier detection - alternative to clustering)
+# -----------------------------------------------------------------------------
+supernode:
+  enabled: true
+  score_metric: "scar_loss_proxy"
+  core_fraction: 0.01
+  halo_fraction: 0.10
+  follower_fraction: 0.10
+  protect_core: true
+  cross_layer_analysis: true
+  compare_by_connection: true
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+
+# -----------------------------------------------------------------------------
+# CLUSTERING (disabled for LLM, uses supernode instead)
+# -----------------------------------------------------------------------------
+clustering:
+  enabled: false
+  n_clusters: 4
+  features: ["rayleigh_quotient", "redundancy", "magnitude"]
+
+# -----------------------------------------------------------------------------
+# HALO ANALYSIS
+# -----------------------------------------------------------------------------
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  sample_pairs: 2000
+  max_refs: 512
+  max_pairs_per_group: 1000
+
+# -----------------------------------------------------------------------------
+# CASCADE ANALYSIS
+# -----------------------------------------------------------------------------
+cascade_analysis:
+  enabled: true
+  n_remove_per_group: 5
+  damage_sample_fraction: 0.2
+
+# -----------------------------------------------------------------------------
+# PRUNING
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  selection_modes: ["low", "high"]
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+  
+  # Algorithms to test (unified + LLM-specific)
+  algorithms:
+    # Core (same as vision)
+    - "random"
+    - "magnitude"
+    - "rayleigh_quotient"
+    - "redundancy"
+    
+    # LLM-specific
+    - "scar_loss_proxy"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+    - "generalized_importance"
+    - "cross_layer_importance"
+    
+    # SOTA baselines
+    - "wanda"
+    - "sparsegpt"
+  
+  scoring_methods:
+    - "random"
+    - "magnitude"
+    - "rayleigh_quotient"
+    - "redundancy"
+    - "scar_loss_proxy"
+    - "scar_taylor"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+    - "generalized_importance"
+    - "cross_layer_importance"
+    - "within_layer_importance"
+    - "wanda"
+    - "sparsegpt"
+  
+  fine_tune:
+    enabled: false
+    epochs: 1
+    learning_rate: 1.0e-5
+
+# -----------------------------------------------------------------------------
+# EVALUATION
+# -----------------------------------------------------------------------------
+evaluation:
+  enabled: true
+  accuracy: false  # Not applicable to LLM
+  loss: true
+  
+  # LLM-specific: Perplexity
+  perplexity_enabled: true
+  perplexity_datasets:
+    - name: "wikitext"
+      subset: "wikitext-2-raw-v1"
+      split: "test"
+    - name: "c4"
+      split: "validation"
+      max_samples: 1000
+  
+  # LLM-specific: Benchmarks
+  benchmarks_enabled: true
+  benchmark_tasks:
+    - name: "hellaswag"
+      num_fewshot: 0
+    - name: "piqa"
+      num_fewshot: 0
+    - name: "boolq"
+      num_fewshot: 0
+    - name: "winogrande"
+      num_fewshot: 0
+    - name: "arc_easy"
+      num_fewshot: 0
+    - name: "arc_challenge"
+      num_fewshot: 0
+    - name: "openbookqa"
+      num_fewshot: 0
+    - name: "hellaswag"
+      num_fewshot: 5
+    - name: "piqa"
+      num_fewshot: 5
+    - name: "arc_challenge"
+      num_fewshot: 5
+    - name: "mmlu"
+      num_fewshot: 5
+  benchmark_fewshot: 0
+  benchmark_batch_size: 8
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION
+# -----------------------------------------------------------------------------
+visualization:
+  enabled: true
+  format: "pdf"
+  dpi: 300
+  
+  # Plot types (same as vision)
+  histograms: true
+  violin_plots: true
+  correlation_heatmap: true
+  pruning_comparison: true
+  pruning_recovery: true
+  
+  # LLM-specific plots
+  supernode_distribution: true
+  halo_structure: true
+  cross_layer_heatmap: true
+  
+  scatter_pairs:
+    - ["magnitude", "rayleigh_quotient"]
+    - ["magnitude", "scar_loss_proxy"]
+    - ["rayleigh_quotient", "scar_loss_proxy"]
+    - ["redundancy", "rayleigh_quotient"]
+    - ["scar_loss_proxy", "supernode_connectivity_score"]
+    - ["cross_layer_importance", "magnitude"]
+
+# -----------------------------------------------------------------------------
+# OUTPUT
+# -----------------------------------------------------------------------------
+output:
+  dir: "./results/paper/llama3_8b"
+  save_metrics: true
+  save_figures: true
+  save_checkpoints: false
+
+# -----------------------------------------------------------------------------
+# EXTRA (LLM-specific settings not in unified schema)
+# -----------------------------------------------------------------------------
+extra:
+  # Analysis configuration (same as original llama3_8b_full.yaml)
+  analysis:
+    layer_indices: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 31]
+    save_scores: true
+    generate_plots: true
+    metrics:
+      # Standard alignment metrics
+      - "activation_l2_norm"
+      - "rayleigh_quotient"
+      - "gaussian_mi_analytic"
+      - "average_redundancy"
+      # SCAR metrics
+      - "scar_activation_power"
+      - "scar_curvature"
+      - "scar_loss_proxy"
+      - "scar_taylor"
+      # Supernode-aware metrics
+      - "supernode_protection_score"
+      - "supernode_connectivity_score"
+      # Extended metrics
+      - "halo_redundancy"
+      - "multi_supernode"
+      - "cross_layer_redundancy"
+      - "cross_layer_importance"
+      - "within_layer_importance"
+    plots:
+      histograms: true
+      scatter_plots: true
+      pruning_curves: true
+      redundancy_heatmaps: true
+    scatter_pairs:
+      # Alignment vs magnitude
+      - ["activation_l2_norm", "rayleigh_quotient"]
+      - ["activation_l2_norm", "gaussian_mi_analytic"]
+      # SCAR relationships
+      - ["scar_activation_power", "scar_loss_proxy"]
+      - ["scar_activation_power", "scar_curvature"]
+      - ["scar_taylor", "scar_loss_proxy"]
+      # Alignment vs SCAR
+      - ["rayleigh_quotient", "scar_loss_proxy"]
+      - ["gaussian_mi_analytic", "scar_loss_proxy"]
+      # Redundancy relationships
+      - ["average_redundancy", "rayleigh_quotient"]
+      - ["average_redundancy", "activation_l2_norm"]
+      # Cross-layer
+      - ["scar_loss_proxy", "supernode_connectivity_score"]
+      - ["cross_layer_importance", "activation_l2_norm"]
+  
+  # Supernode robustness analysis
+  supernode_robustness:
+    enabled: true
+    supernode_fraction: 0.01
+    num_bootstrap_samples: 10
+    batch_size: 32
+    max_samples: 256
+    metrics:
+      - "scar_activation_power"
+      - "scar_loss_proxy"
+      - "scar_taylor"
+      - "rayleigh_quotient"
+      - "gaussian_mi_analytic"
+      - "activation_l2_norm"
+    target_layers: null
+  
+  # Supernode summary analysis
+  supernode_summary:
+    enabled: true
+    outlier_analysis: true
+  
+  # Halo analysis (detailed settings)
+  halo_analysis:
+    enabled: true
+    supernode_fraction: 0.01
+    halo_fraction: 0.10
+    num_samples: 8
+    max_length: 256
+    sample_pairs: 2000
+    max_samples: 2000
+    max_pairs_per_group: 1000
+    plots:
+      depth_comparison: true
+      histograms: true
+      heatmaps: true
+      comprehensive: true
+  
+  # Multi-supernode clustering
+  multi_supernode:
+    enabled: true
+    supernode_fraction: 0.05
+    n_clusters: 4
+    halo_fraction: 0.10
+    clustering_features: "weights"
+  
+  # Cross-layer importance weights
+  cross_layer:
+    enabled: true
+    max_refs: 512
+    rq_weight: 0.25
+    downstream_weight: 0.35
+    within_redundancy_weight: 0.25
+    activation_weight: 0.15
+    normalize: true
+  
+  # Generalized importance
+  generalized_importance:
+    enabled: true
+    neighborhood_fraction: 0.10
+    propagation_weight: 0.3
+    redundancy_penalty: 0.5
+    num_samples: 8
+    max_length: 256
+  
+  # Visualization for paper figures (detailed)
+  visualization:
+    save_plots: true
+    format: "pdf"
+    dpi: 300
+    style: "seaborn-v0_8-paper"
+    histograms: true
+    scatter_plots: true
+    heatmaps: true
+    # Figure 1: Supernode distribution
+    supernode_distribution:
+      enabled: true
+      plot_loss_proxy_histogram: true
+      plot_concentration_by_layer: true
+      highlight_top_percent: [1, 5, 10]
+    # Figure 2: Halo redundancy structure
+    halo_structure:
+      enabled: true
+      plot_redundancy_by_depth: true
+      plot_protection_vs_connection: true
+      plot_within_vs_cross_group: true
+    # Figure 3: Cross-layer importance
+    cross_layer:
+      enabled: true
+      plot_downstream_importance_by_layer: true
+      plot_importance_vs_redundancy: true
+      plot_efficiency_heatmap: true
+    # Figure 4: Pruning comparison curves
+    pruning_curves:
+      enabled: true
+      plot_sparsity_vs_perplexity: true
+      plot_sparsity_vs_accuracy: true
+      metrics_to_compare:
+        - "supernode_connectivity_score"
+        - "cross_layer_importance"
+        - "generalized_importance"
+        - "scar_loss_proxy"
+        - "wanda"
+        - "sparsegpt"
+        - "activation_l2_norm"
+        - "random"
+    # Supernode robustness plots
+    supernode_robustness:
+      enabled: true
+      jaccard_heatmap: true
+      spearman_heatmap: true
+      bootstrap_stability: true
+      consistency_bars: true
+    scatter_pairs:
+      - ["activation_l2_norm", "scar_loss_proxy"]
+      - ["scar_loss_proxy", "supernode_connectivity_score"]
+      - ["downstream_importance", "within_layer_redundancy"]
+      - ["cross_layer_importance", "activation_l2_norm"]
+      - ["generalized_importance", "scar_loss_proxy"]
+  
+  # Advanced analysis flags
+  do_scar_metrics: true
+  do_directed_redundancy: true
+  do_connectivity_pruning: true
+  do_halo_analysis: true
+  do_generalized_importance: true

@@ -1,0 +1,272 @@
+# =============================================================================
+# UNIFIED ALIGNMENT FRAMEWORK - CONFIG TEMPLATE
+# =============================================================================
+# Works for both Vision (ResNet, VGG) and LLM (Llama, Qwen) experiments
+# Usage: python scripts/run_experiment.py --config configs/unified_template.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXPERIMENT (unified structure)
+# -----------------------------------------------------------------------------
+experiment:
+  name: "my_experiment"
+  # Types: "alignment_analysis" (general), "cluster_analysis" (vision clustering),
+  #        "llm_alignment" (LLM pruning)
+  type: "alignment_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results"
+
+# -----------------------------------------------------------------------------
+# MODEL (unified for vision and LLM)
+# -----------------------------------------------------------------------------
+model:
+  # Vision: "resnet18", "resnet50", "vgg16", "mobilenet_v2"
+  # LLM: "hf_causal_lm" (requires model_id)
+  name: "resnet18"
+  pretrained: true
+  num_classes: 10               # Vision only
+  
+  # HuggingFace (LLM only)
+  model_id: null                # e.g., "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Layers to track (null = auto-detect)
+  tracked_layers: null
+
+# -----------------------------------------------------------------------------
+# DATASET (unified)
+# -----------------------------------------------------------------------------
+dataset:
+  name: "cifar10"               # Vision: cifar10, cifar100, imagenet
+                                # LLM: wikitext, c4
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+# -----------------------------------------------------------------------------
+# CALIBRATION (samples for metric computation)
+# -----------------------------------------------------------------------------
+calibration:
+  num_samples: 5000             # Vision: typically 5000
+                                # LLM: typically 64-128
+  max_length: 2048              # LLM only: sequence length
+
+# -----------------------------------------------------------------------------
+# METRICS (unified naming with aliases)
+# -----------------------------------------------------------------------------
+metrics:
+  # Core metrics (available for both vision and LLM)
+  rayleigh_quotient:
+    enabled: true
+    relative: true
+    regularization: 1.0e-6
+  
+  redundancy:                   # Gaussian pairwise MI
+    enabled: true
+    sampling: "all"             # all, random, top_k
+    num_pairs: 10               # For pairwise computation
+  
+  synergy:                      # PID-based synergy with target
+    enabled: true
+    target: "logit_margin"      # Vision: logit_margin, correct_logit
+                                # LLM: loss_proxy, perplexity_delta
+    num_pairs: 10
+  
+  magnitude:
+    enabled: true
+    type: "l2_norm"             # l2_norm, l1_norm, max
+  
+  # LLM-specific metrics (ignored for vision)
+  scar:
+    enabled: false              # Enable for LLM
+    activation_power: true
+    curvature: true
+    loss_proxy: true
+    taylor: true
+
+# -----------------------------------------------------------------------------
+# CLUSTERING (unified for both)
+# -----------------------------------------------------------------------------
+clustering:
+  enabled: true
+  n_clusters: 4
+  # Cluster type names (semantic mapping)
+  type_names: ["critical", "redundant", "synergistic", "background"]
+  normalize_features: true
+  
+  # Features to cluster on
+  features:
+    - "rayleigh_quotient"
+    - "redundancy" 
+    - "synergy"
+  
+  # Stability analysis
+  stability:
+    enabled: true
+    n_bootstrap: 50
+
+# -----------------------------------------------------------------------------
+# SUPERNODE DETECTION (alternative to clustering)
+# -----------------------------------------------------------------------------
+supernode:
+  enabled: false                # Enable for outlier-based analysis
+  score_metric: "synergy"       # Or: rayleigh_quotient, scar_loss_proxy
+  core_fraction: 0.01           # Top 1% as supernodes
+  halo_fraction: 0.10           # 10% as halo neurons
+  protect_core: true
+
+# -----------------------------------------------------------------------------
+# HALO / CROSS-LAYER ANALYSIS (unified)
+# -----------------------------------------------------------------------------
+halo_analysis:
+  enabled: true
+  percentile: 90.0              # Top X% by influence
+  use_activation_weight: true   # Weight by activation magnitude
+  
+  # Compute influence/dependency matrices
+  compute_influence_matrix: true
+  
+  # For LLM: analyze downstream impact
+  cross_layer:
+    enabled: true
+    max_refs: 512
+
+# -----------------------------------------------------------------------------
+# CASCADE / DAMAGE ANALYSIS
+# -----------------------------------------------------------------------------
+cascade_analysis:
+  enabled: true
+  n_remove_per_group: 5         # Neurons to remove per cluster/supernode
+  damage_sample_fraction: 0.2   # Fraction of data to evaluate damage
+
+# -----------------------------------------------------------------------------
+# PRUNING (unified interface)
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  
+  # Sparsity levels
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  
+  # Methods to compare (available for both vision and LLM)
+  methods:
+    # Baselines
+    - name: "random"
+    - name: "magnitude"
+    
+    # Alignment-based
+    - name: "rayleigh_quotient"
+      selection: "low"          # Prune low-RQ neurons
+    - name: "redundancy"
+      selection: "high"         # Prune high-redundancy neurons
+    - name: "synergy"
+      selection: "low"          # Prune low-synergy neurons
+    
+    # Composite methods
+    - name: "composite"
+      weights:
+        rayleigh_quotient: 0.33
+        redundancy: -0.33       # Negative = penalize redundancy
+        synergy: 0.33
+    
+    # Structure-aware
+    - name: "cluster_aware"     # Respects cluster boundaries
+    - name: "supernode_aware"   # Protects supernodes
+    
+    # LLM-specific (ignored for vision)
+    - name: "wanda"
+    - name: "sparsegpt"
+    - name: "scar_loss_proxy"
+  
+  # Selection modes
+  selection_modes: ["low", "high"]
+  
+  # Fine-tuning after pruning
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0001
+
+# -----------------------------------------------------------------------------
+# EVALUATION
+# -----------------------------------------------------------------------------
+evaluation:
+  # Vision
+  accuracy: true
+  loss: true
+  
+  # LLM
+  perplexity:
+    enabled: false              # Enable for LLM
+    datasets: ["wikitext"]
+  
+  benchmarks:                   # LLM benchmarks
+    enabled: false
+    tasks: ["hellaswag", "piqa", "arc_easy"]
+    num_fewshot: 0
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION (unified)
+# -----------------------------------------------------------------------------
+visualization:
+  enabled: true
+  format: "png"                 # png, pdf, svg
+  dpi: 300
+  
+  # Plots to generate (works for both)
+  plots:
+    # Metric distributions
+    histograms: true
+    violin_plots: true
+    correlation_heatmap: true
+    
+    # Clustering/Supernode
+    cluster_scatter: true       # 2D/3D metric space scatter
+    cluster_evolution: true     # Type composition across depth
+    
+    # Cross-layer
+    influence_matrix: true
+    halo_properties: true
+    
+    # Pruning
+    pruning_comparison: true
+    pruning_recovery: true
+    
+    # Cascade
+    cascade_test: true
+  
+  # Scatter plot pairs
+  scatter_pairs:
+    - ["rayleigh_quotient", "redundancy"]
+    - ["rayleigh_quotient", "synergy"]
+    - ["redundancy", "synergy"]
+
+# -----------------------------------------------------------------------------
+# OUTPUT
+# -----------------------------------------------------------------------------
+output:
+  dir: "./results"
+  save_metrics: true
+  save_clusters: true
+  save_figures: true
+  save_checkpoints: false
+
+# =============================================================================
+# PRESETS (inherit and override)
+# =============================================================================
+# You can create preset files and inherit from them:
+#
+# # In configs/presets/vision_base.yaml:
+# _preset: vision_base
+# experiment:
+#   type: cluster_analysis
+# model:
+#   name: resnet18
+#
+# # In your config:
+# _inherit: presets/vision_base
+# model:
+#   name: resnet50  # Override
+# =============================================================================

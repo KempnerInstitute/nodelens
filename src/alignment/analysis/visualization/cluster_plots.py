@@ -640,7 +640,7 @@ def plot_layer_metric_summary(
                     n_valid += 1
         except:
             continue
-    
+        
     if n_valid > 0:
         avg_corr = corr_sum / n_valid
         im = ax.imshow(avg_corr, cmap='RdBu_r', vmin=-1, vmax=1)

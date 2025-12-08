@@ -1,5 +1,7 @@
 """
 Configuration loading and saving utilities.
+
+Supports both original format and unified format configs.
 """
 
 import json
@@ -15,9 +17,387 @@ from ..experiments.base import ExperimentConfig
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# UNIFIED FORMAT DETECTION AND CONVERSION
+# =============================================================================
+
+# Metric name mappings: unified -> original
+METRIC_UNIFIED_TO_ORIGINAL = {
+    "rayleigh_quotient": "rayleigh_quotient",
+    "redundancy": "gaussian_mi_analytic",
+    "synergy": "synergy_gaussian_mmi",
+    "magnitude": "activation_l2_norm",
+}
+
+# Reverse mapping: original -> unified
+METRIC_ORIGINAL_TO_UNIFIED = {v: k for k, v in METRIC_UNIFIED_TO_ORIGINAL.items()}
+METRIC_ORIGINAL_TO_UNIFIED.update({
+    "average_redundancy": "redundancy",
+    "pairwise_redundancy_gaussian": "redundancy",
+    "gaussian_mi": "redundancy",
+})
+
+
+def _is_unified_format(config_dict: Dict[str, Any]) -> bool:
+    """
+    Detect if config is in unified format.
+    
+    Unified format characteristics:
+    - metrics block has nested dicts with 'enabled' keys (not a list)
+    - Has 'extra' section for experiment-specific settings
+    - Uses unified metric names (redundancy, magnitude, etc.)
+    """
+    metrics = config_dict.get("metrics", {})
+    if not isinstance(metrics, dict):
+        return False
+    
+    # Unified format: metrics.rayleigh_quotient.enabled exists
+    # Original format: metrics.enabled is a list
+    if "enabled" in metrics and isinstance(metrics["enabled"], list):
+        return False
+    
+    # Check for unified metric structure
+    unified_metrics = ["rayleigh_quotient", "redundancy", "synergy", "magnitude", "scar"]
+    for metric in unified_metrics:
+        if metric in metrics and isinstance(metrics[metric], dict):
+            if "enabled" in metrics[metric]:
+                return True
+    
+    # Check for 'extra' section (strong indicator of unified format)
+    if "extra" in config_dict:
+        return True
+    
+    return False
+
+
+def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert unified format config to original format.
+    
+    This ensures that the unified config produces the exact same
+    ExperimentConfig as the original format would.
+    """
+    original = {}
+    
+    # -------------------------------------------------------------------------
+    # EXPERIMENT
+    # -------------------------------------------------------------------------
+    if "experiment" in unified:
+        exp = unified["experiment"]
+        original["experiment"] = {
+            "name": exp.get("name", "experiment"),
+            "type": exp.get("type", "alignment_analysis"),
+        }
+        original["seed"] = exp.get("seed", 42)
+        original["device"] = exp.get("device", "cuda")
+        if "output_dir" in exp:
+            original["results_path"] = exp["output_dir"]
+        if "num_networks" in exp:
+            original["num_networks"] = exp["num_networks"]
+    
+    # -------------------------------------------------------------------------
+    # MODEL
+    # -------------------------------------------------------------------------
+    if "model" in unified:
+        model = unified["model"]
+        original["model"] = {
+            "name": model.get("name", "resnet18"),
+            "pretrained": model.get("pretrained", True),
+        }
+        # LLM fields
+        if "model_id" in model:
+            original["model"]["model_id"] = model["model_id"]
+        if "dtype" in model:
+            original["model"]["dtype"] = model["dtype"]
+        if "device_map" in model:
+            original["model"]["device_map"] = model["device_map"]
+        if "trust_remote_code" in model:
+            original["model"]["trust_remote_code"] = model["trust_remote_code"]
+        if "tracked_layers" in model:
+            original["model"]["tracked_layers"] = model["tracked_layers"]
+        if "num_classes" in model:
+            original["model"]["num_classes"] = model["num_classes"]
+    
+    # -------------------------------------------------------------------------
+    # DATASET
+    # -------------------------------------------------------------------------
+    if "dataset" in unified:
+        dataset = unified["dataset"]
+        original["dataset"] = {
+            "name": dataset.get("name", "cifar10"),
+            "batch_size": dataset.get("batch_size", 128),
+            "num_workers": dataset.get("num_workers", 4),
+        }
+        if "subset" in dataset:
+            original["dataset"]["subset"] = dataset["subset"]
+        if "split" in dataset:
+            original["dataset"]["split"] = dataset["split"]
+        if "root" in dataset:
+            original["dataset"]["data_path"] = dataset["root"]
+    
+    # -------------------------------------------------------------------------
+    # CALIBRATION
+    # -------------------------------------------------------------------------
+    if "calibration" in unified:
+        cal = unified["calibration"]
+        # Put calibration info in metrics block (where original format expects it)
+        if "metrics" not in original:
+            original["metrics"] = {}
+        original["metrics"]["num_samples"] = cal.get("num_samples", 5000)
+        # Also keep calibration block for LLM experiments
+        original["calibration"] = cal
+    
+    # -------------------------------------------------------------------------
+    # METRICS - Convert unified names to original names
+    # -------------------------------------------------------------------------
+    if "metrics" in unified:
+        metrics = unified["metrics"]
+        enabled_metrics = []
+        metric_configs = {}
+        
+        # Check each unified metric
+        for unified_name, original_name in METRIC_UNIFIED_TO_ORIGINAL.items():
+            if unified_name in metrics:
+                metric_cfg = metrics[unified_name]
+                if isinstance(metric_cfg, dict):
+                    if metric_cfg.get("enabled", True):
+                        enabled_metrics.append(original_name)
+                        # Copy metric-specific params
+                        params = {k: v for k, v in metric_cfg.items() if k != "enabled"}
+                        if params:
+                            metric_configs[original_name] = params
+                elif metric_cfg is True:
+                    enabled_metrics.append(original_name)
+        
+        # Handle SCAR metrics (LLM-specific)
+        if "scar" in metrics:
+            scar = metrics["scar"]
+            if isinstance(scar, dict) and scar.get("enabled", True):
+                original["do_scar_metrics"] = True
+                original["scar_num_samples"] = scar.get("num_samples", 64)
+                original["scar_max_length"] = scar.get("max_length", 512)
+        
+        # Handle additional metrics
+        # Note: Skip analysis-derived metrics that are computed by analysis pipelines
+        # (not standalone metrics that can be computed independently)
+        ANALYSIS_DERIVED_METRICS = {
+            "supernode_protection_score",
+            "supernode_connectivity_score", 
+            "scar_activation_power",
+            "scar_curvature",
+            "scar_loss_proxy",
+            "scar_taylor",
+        }
+        if "additional" in metrics:
+            for name, cfg in metrics["additional"].items():
+                if name in ANALYSIS_DERIVED_METRICS:
+                    continue  # Skip analysis-derived metrics
+                if isinstance(cfg, dict) and cfg.get("enabled", True):
+                    enabled_metrics.append(name)
+        
+        original["metrics"] = {
+            "enabled": enabled_metrics,
+            **metric_configs,
+        }
+        
+        # Composite weights - convert unified names to original
+        if "composite_weights" in metrics:
+            comp_weights = {}
+            for name, weight in metrics["composite_weights"].items():
+                original_name = METRIC_UNIFIED_TO_ORIGINAL.get(name, name)
+                comp_weights[original_name] = weight
+            original["metrics"]["composite_weights"] = comp_weights
+    
+    # -------------------------------------------------------------------------
+    # SUPERNODE (LLM outlier detection)
+    # -------------------------------------------------------------------------
+    if "supernode" in unified:
+        original["supernode"] = unified["supernode"]
+    
+    # -------------------------------------------------------------------------
+    # CLUSTERING (Vision)
+    # -------------------------------------------------------------------------
+    if "clustering" in unified:
+        original["clustering"] = unified["clustering"]
+    
+    # -------------------------------------------------------------------------
+    # HALO ANALYSIS
+    # -------------------------------------------------------------------------
+    if "halo_analysis" in unified:
+        original["halo_analysis"] = unified["halo_analysis"]
+        if unified["halo_analysis"].get("enabled"):
+            original["do_halo_analysis"] = True
+    
+    # -------------------------------------------------------------------------
+    # CASCADE ANALYSIS
+    # -------------------------------------------------------------------------
+    if "cascade_analysis" in unified:
+        original["cascade_analysis"] = unified["cascade_analysis"]
+    
+    # -------------------------------------------------------------------------
+    # PRUNING - Convert unified metric names in algorithms/scoring_methods
+    # -------------------------------------------------------------------------
+    if "pruning" in unified:
+        pruning = unified["pruning"]
+        original_pruning = {
+            "enabled": pruning.get("enabled", True),
+        }
+        
+        # Ratios/sparsity levels
+        if "ratios" in pruning:
+            original_pruning["sparsity_levels"] = pruning["ratios"]
+        elif "sparsity_levels" in pruning:
+            original_pruning["sparsity_levels"] = pruning["sparsity_levels"]
+        
+        # Selection modes
+        if "selection_modes" in pruning:
+            original_pruning["selection_modes"] = pruning["selection_modes"]
+        
+        # Convert algorithm names
+        if "algorithms" in pruning:
+            converted_algorithms = []
+            for alg in pruning["algorithms"]:
+                converted_algorithms.append(METRIC_UNIFIED_TO_ORIGINAL.get(alg, alg))
+            original_pruning["algorithms"] = converted_algorithms
+        
+        # Convert scoring methods
+        if "scoring_methods" in pruning:
+            converted_scoring = []
+            for method in pruning["scoring_methods"]:
+                converted_scoring.append(METRIC_UNIFIED_TO_ORIGINAL.get(method, method))
+            original_pruning["scoring_methods"] = converted_scoring
+        
+        # Other pruning fields
+        for key in ["distribution", "structured", "dependency_aware", "target", "single_strategy"]:
+            if key in pruning:
+                original_pruning[key] = pruning[key]
+        
+        # Fine-tune settings
+        if "fine_tune" in pruning:
+            original_pruning["fine_tune"] = pruning["fine_tune"]
+        
+        original["pruning"] = original_pruning
+    
+    # -------------------------------------------------------------------------
+    # EVALUATION
+    # -------------------------------------------------------------------------
+    if "evaluation" in unified:
+        ev = unified["evaluation"]
+        original["evaluation"] = {"enabled": ev.get("enabled", True)}
+        
+        # Perplexity (LLM)
+        if ev.get("perplexity_enabled"):
+            original["do_perplexity_computation"] = True
+            if "perplexity_datasets" in ev:
+                # Convert to original format
+                original["evaluation"]["perplexity"] = {
+                    "enabled": True,
+                    "datasets": ev["perplexity_datasets"],
+                }
+        
+        # Benchmarks (LLM)
+        if ev.get("benchmarks_enabled"):
+            if "benchmark_tasks" in ev:
+                original["evaluation"]["benchmarks"] = ev["benchmark_tasks"]
+            original["evaluation"]["batch_size"] = ev.get("benchmark_batch_size", 8)
+    
+    # -------------------------------------------------------------------------
+    # VISUALIZATION
+    # -------------------------------------------------------------------------
+    if "visualization" in unified:
+        viz = unified["visualization"]
+        original["visualization"] = viz
+        if viz.get("enabled", True):
+            original["generate_plots"] = True
+        if "format" in viz:
+            original["plot_format"] = viz["format"]
+        if "dpi" in viz:
+            original["plot_dpi"] = viz["dpi"]
+    
+    # -------------------------------------------------------------------------
+    # OUTPUT
+    # -------------------------------------------------------------------------
+    if "output" in unified:
+        out = unified["output"]
+        if "dir" in out:
+            original["results_path"] = out["dir"]
+            # Also set experiment.output_dir for compatibility
+            if "experiment" in original:
+                original["experiment"]["output_dir"] = out["dir"]
+    
+    # -------------------------------------------------------------------------
+    # EXTRA - Expand LLM-specific settings from extra block
+    # -------------------------------------------------------------------------
+    if "extra" in unified:
+        extra = unified["extra"]
+        
+        # Analysis options (with all detailed settings)
+        if "analysis" in extra:
+            original["analysis"] = extra["analysis"]
+        
+        # Supernode robustness
+        if "supernode_robustness" in extra:
+            original["supernode_robustness"] = extra["supernode_robustness"]
+        
+        # Supernode summary
+        if "supernode_summary" in extra:
+            original["supernode_summary"] = extra["supernode_summary"]
+        
+        # Multi-supernode
+        if "multi_supernode" in extra:
+            original["multi_supernode"] = extra["multi_supernode"]
+        
+        # Cross-layer
+        if "cross_layer" in extra:
+            original["cross_layer"] = extra["cross_layer"]
+        
+        # Generalized importance
+        if "generalized_importance" in extra:
+            original["generalized_importance"] = extra["generalized_importance"]
+            if extra["generalized_importance"].get("enabled"):
+                original["do_generalized_importance"] = True
+        
+        # Halo analysis (detailed settings from extra override top-level)
+        if "halo_analysis" in extra:
+            if "halo_analysis" not in original:
+                original["halo_analysis"] = {}
+            original["halo_analysis"].update(extra["halo_analysis"])
+        
+        # Visualization (detailed paper figure settings)
+        if "visualization" in extra:
+            if "visualization" not in original:
+                original["visualization"] = {}
+            original["visualization"].update(extra["visualization"])
+        
+        # Top-level flags
+        for flag in ["do_scar_metrics", "do_directed_redundancy", "do_connectivity_pruning", 
+                     "do_halo_analysis", "do_generalized_importance"]:
+            if flag in extra:
+                original[flag] = extra[flag]
+        
+        # LLM block reconstruction
+        llm_block = {}
+        if original.get("do_scar_metrics"):
+            llm_block["scar_metrics"] = True
+        if "scar_num_samples" in original:
+            llm_block["scar_num_samples"] = original["scar_num_samples"]
+        if "scar_max_length" in original:
+            llm_block["scar_max_length"] = original["scar_max_length"]
+        if original.get("do_perplexity_computation"):
+            llm_block["evaluate_perplexity"] = True
+        if llm_block:
+            original["llm"] = llm_block
+    
+    logger.info("Converted unified config to original format")
+    return original
+
+
 def load_config(config_path: Union[str, Path]) -> ExperimentConfig:
     """
     Load configuration from a YAML or JSON file.
+    
+    Supports both original format and unified format configs.
+    Unified format configs are automatically detected and converted.
 
     Args:
         config_path: Path to configuration file
@@ -46,6 +426,11 @@ def load_config(config_path: Union[str, Path]) -> ExperimentConfig:
 
     # Handle environment variable substitution
     config_dict = _substitute_env_vars(config_dict)
+
+    # Detect and convert unified format to original format
+    if _is_unified_format(config_dict):
+        logger.info(f"Detected unified config format in {config_path}")
+        config_dict = _convert_unified_to_original(config_dict)
 
     # Map nested config to flat ExperimentConfig structure
     config_dict = _map_nested_to_flat_config(config_dict)

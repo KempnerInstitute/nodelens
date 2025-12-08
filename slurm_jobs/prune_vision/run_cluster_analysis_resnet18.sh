@@ -50,9 +50,9 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 echo ""
 echo "Running ResNet-18 cluster analysis..."
 echo ""
-
+    
 python scripts/run_experiment.py \
-    --config configs/cluster_analysis/resnet18_cifar10_full.yaml \
+    --config configs/vision_prune/resnet18_cifar10_unified.yaml \
     --device cuda
 
 EXIT_CODE=$?

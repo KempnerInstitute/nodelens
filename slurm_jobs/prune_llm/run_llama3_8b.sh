@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=12:00:00
 #SBATCH --mem=320GB
-#SBATCH --partition=kempner_h100
+#SBATCH --partition=kempner_eng
 #SBATCH --account=kempner_dev
 
 # ============================================================================
@@ -55,8 +55,11 @@ echo ""
 echo "Running LLaMA-3.1-8B full paper analysis..."
 echo ""
 
+# python scripts/run_experiment.py \
+#     --config configs/paper/llama3_8b_full.yaml \
+#     --device cuda
 python scripts/run_experiment.py \
-    --config configs/paper/llama3_8b_full.yaml \
+    --config configs/prune_llm/llama3_8b_unified.yaml \
     --device cuda
 
 echo ""

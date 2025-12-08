@@ -61,7 +61,7 @@ metrics:
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
-
+  
 # ============================================================================
 # LLM-SPECIFIC SETTINGS
 # ============================================================================
@@ -223,7 +223,7 @@ pruning:
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
   selection_modes: ["low", "high"]
   
