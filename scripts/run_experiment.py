@@ -18,6 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import torch
 import yaml
 
 # Add the project root and src directory to Python path
