@@ -16,6 +16,8 @@ experiment:
   seed: 42
   device: "cuda"
   output_dir: "./results/paper/mistral_7b"
+  num_networks: 1
+  save_activations: true
 
 # -----------------------------------------------------------------------------
 # MODEL
@@ -134,15 +136,21 @@ pruning:
   dependency_aware: true
   
   algorithms:
-    - "random"
-    - "magnitude"
+    # Alignment-based
     - "rayleigh_quotient"
     - "redundancy"
+    - "average_redundancy"
+    # SCAR-based
     - "scar_loss_proxy"
+    # Supernode-aware
     - "supernode_protection_score"
     - "supernode_connectivity_score"
+    # Generalized
     - "generalized_importance"
     - "cross_layer_importance"
+    # Magnitude baseline
+    - "magnitude"
+    # SOTA baselines
     - "wanda"
     - "sparsegpt"
   
@@ -151,8 +159,11 @@ pruning:
     - "magnitude"
     - "rayleigh_quotient"
     - "redundancy"
+    - "average_redundancy"
     - "scar_loss_proxy"
     - "scar_taylor"
+    - "scar_activation_power"
+    - "scar_curvature"
     - "supernode_protection_score"
     - "supernode_connectivity_score"
     - "generalized_importance"
@@ -173,8 +184,10 @@ evaluation:
   enabled: true
   accuracy: false
   loss: true
+  bits_per_byte: true
   
   perplexity_enabled: true
+  evaluation_num_samples: 100
   perplexity_datasets:
     - name: "wikitext"
       subset: "wikitext-2-raw-v1"
@@ -243,6 +256,12 @@ output:
   save_metrics: true
   save_figures: true
   save_checkpoints: false
+
+# -----------------------------------------------------------------------------
+# PERFORMANCE SETTINGS
+# -----------------------------------------------------------------------------
+performance:
+  eval_batches: null  # null = use all batches
 
 # -----------------------------------------------------------------------------
 # EXTRA

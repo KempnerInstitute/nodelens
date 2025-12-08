@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 METRIC_UNIFIED_TO_ORIGINAL = {
     "rayleigh_quotient": "rayleigh_quotient",
     "redundancy": "gaussian_mi_analytic",
+    "average_redundancy": "average_redundancy",  # Keep as-is
     "synergy": "synergy_gaussian_mmi",
     "magnitude": "activation_l2_norm",
+    "taylor": "taylor",  # Vision taylor importance
 }
 
 # Reverse mapping: original -> unified
@@ -94,6 +96,8 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original["results_path"] = exp["output_dir"]
         if "num_networks" in exp:
             original["num_networks"] = exp["num_networks"]
+        if "save_activations" in exp:
+            original["save_activations"] = exp["save_activations"]
     
     # -------------------------------------------------------------------------
     # MODEL
@@ -295,11 +299,25 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                     "datasets": ev["perplexity_datasets"],
                 }
         
+        # bits_per_byte
+        if ev.get("bits_per_byte"):
+            original["evaluation"]["bits_per_byte"] = True
+        
+        # evaluation_num_samples
+        if "evaluation_num_samples" in ev:
+            original["evaluation_num_samples"] = ev["evaluation_num_samples"]
+        
         # Benchmarks (LLM)
         if ev.get("benchmarks_enabled"):
             if "benchmark_tasks" in ev:
                 original["evaluation"]["benchmarks"] = ev["benchmark_tasks"]
             original["evaluation"]["batch_size"] = ev.get("benchmark_batch_size", 8)
+    
+    # -------------------------------------------------------------------------
+    # PERFORMANCE
+    # -------------------------------------------------------------------------
+    if "performance" in unified:
+        original["performance"] = unified["performance"]
     
     # -------------------------------------------------------------------------
     # VISUALIZATION
@@ -326,32 +344,34 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                 original["experiment"]["output_dir"] = out["dir"]
     
     # -------------------------------------------------------------------------
-    # EXTRA - Expand LLM-specific settings from extra block
+    # EXTRA - Expand LLM-specific settings from extra block to top-level
     # -------------------------------------------------------------------------
     if "extra" in unified:
         extra = unified["extra"]
         
-        # Analysis options (with all detailed settings)
+        # Analysis options (with all detailed settings) - TOP LEVEL
         if "analysis" in extra:
             original["analysis"] = extra["analysis"]
         
-        # Supernode robustness
+        # Supernode robustness - TOP LEVEL
         if "supernode_robustness" in extra:
             original["supernode_robustness"] = extra["supernode_robustness"]
         
-        # Supernode summary
+        # Supernode summary - TOP LEVEL
         if "supernode_summary" in extra:
             original["supernode_summary"] = extra["supernode_summary"]
         
-        # Multi-supernode
+        # Multi-supernode - TOP LEVEL
         if "multi_supernode" in extra:
             original["multi_supernode"] = extra["multi_supernode"]
         
-        # Cross-layer
+        # Cross-layer - TOP LEVEL
         if "cross_layer" in extra:
             original["cross_layer"] = extra["cross_layer"]
+            if extra["cross_layer"].get("enabled"):
+                original["do_connectivity_pruning"] = True
         
-        # Generalized importance
+        # Generalized importance - TOP LEVEL
         if "generalized_importance" in extra:
             original["generalized_importance"] = extra["generalized_importance"]
             if extra["generalized_importance"].get("enabled"):
@@ -362,31 +382,133 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             if "halo_analysis" not in original:
                 original["halo_analysis"] = {}
             original["halo_analysis"].update(extra["halo_analysis"])
+            if extra["halo_analysis"].get("enabled"):
+                original["do_halo_analysis"] = True
         
-        # Visualization (detailed paper figure settings)
+        # Visualization (detailed paper figure settings) - MERGE with top-level
         if "visualization" in extra:
             if "visualization" not in original:
                 original["visualization"] = {}
-            original["visualization"].update(extra["visualization"])
+            # Merge extra.visualization into top-level visualization
+            extra_viz = extra["visualization"]
+            for key, value in extra_viz.items():
+                original["visualization"][key] = value
         
-        # Top-level flags
+        # Top-level flags from extra
         for flag in ["do_scar_metrics", "do_directed_redundancy", "do_connectivity_pruning", 
                      "do_halo_analysis", "do_generalized_importance"]:
             if flag in extra:
                 original[flag] = extra[flag]
         
-        # LLM block reconstruction
-        llm_block = {}
-        if original.get("do_scar_metrics"):
-            llm_block["scar_metrics"] = True
-        if "scar_num_samples" in original:
-            llm_block["scar_num_samples"] = original["scar_num_samples"]
-        if "scar_max_length" in original:
-            llm_block["scar_max_length"] = original["scar_max_length"]
-        if original.get("do_perplexity_computation"):
-            llm_block["evaluate_perplexity"] = True
-        if llm_block:
-            original["llm"] = llm_block
+        # Pretrain settings (for vision)
+        if "pretrain_epochs" in extra:
+            original["pretrain_epochs"] = extra["pretrain_epochs"]
+        if "pretrain_lr" in extra:
+            original["pretrain_lr"] = extra["pretrain_lr"]
+        
+        # Baselines (for vision)
+        if "baselines" in extra:
+            original["baselines"] = extra["baselines"]
+        
+        # Sensitivity analysis (for vision)
+        if "sensitivity_analysis" in extra:
+            original["sensitivity_analysis"] = extra["sensitivity_analysis"]
+        
+        # Structured pruning (for vision)
+        if "structured_pruning" in extra:
+            original["structured_pruning"] = extra["structured_pruning"]
+        
+        # Feature analysis (for vision)
+        if "feature_analysis" in extra:
+            original["feature_analysis"] = extra["feature_analysis"]
+        
+        # Efficiency tracking (for vision)
+        if "efficiency" in extra:
+            original["efficiency"] = extra["efficiency"]
+    
+    # -------------------------------------------------------------------------
+    # BUILD LLM BLOCK - Reconstruct full llm: section as original expects
+    # -------------------------------------------------------------------------
+    llm_block = {}
+    
+    # SCAR settings
+    if original.get("do_scar_metrics"):
+        llm_block["scar_metrics"] = True
+    if "scar_num_samples" in original:
+        llm_block["scar_num_samples"] = original["scar_num_samples"]
+    if "scar_max_length" in original:
+        llm_block["scar_max_length"] = original["scar_max_length"]
+    
+    # Perplexity settings
+    if original.get("do_perplexity_computation"):
+        llm_block["evaluate_perplexity"] = True
+    
+    # Build evaluation_metrics list from evaluation.benchmarks
+    evaluation_metrics = []
+    if "evaluation" in original:
+        ev = original["evaluation"]
+        
+        # Perplexity metrics
+        if ev.get("perplexity", {}).get("enabled") or original.get("do_perplexity_computation"):
+            evaluation_metrics.extend(["perplexity", "loss", "bits_per_byte"])
+        
+        # Build benchmark metrics from benchmark tasks
+        if "benchmarks" in ev:
+            for benchmark in ev["benchmarks"]:
+                if isinstance(benchmark, dict):
+                    task_name = benchmark.get("name", "")
+                    # Map task name to evaluation_metrics format
+                    if task_name == "mmlu":
+                        evaluation_metrics.append("accuracy_mmlu")
+                    elif task_name == "hellaswag":
+                        evaluation_metrics.append("accuracy_hellaswag")
+                    elif task_name == "piqa":
+                        evaluation_metrics.append("accuracy_piqa")
+                    elif task_name == "boolq":
+                        evaluation_metrics.append("accuracy_boolq")
+                    elif task_name == "winogrande":
+                        evaluation_metrics.append("accuracy_winogrande")
+                    elif task_name == "arc_easy":
+                        evaluation_metrics.append("accuracy_arc_easy")
+                    elif task_name == "arc_challenge":
+                        evaluation_metrics.append("accuracy_arc_challenge")
+                    elif task_name == "openbookqa":
+                        evaluation_metrics.append("accuracy_openbookqa")
+                    elif task_name == "gsm8k":
+                        evaluation_metrics.append("accuracy_gsm8k")
+                    elif task_name == "truthfulqa":
+                        evaluation_metrics.append("accuracy_truthfulqa")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_metrics = []
+    for m in evaluation_metrics:
+        if m not in seen:
+            seen.add(m)
+            unique_metrics.append(m)
+    
+    if unique_metrics:
+        llm_block["evaluation_metrics"] = unique_metrics
+    
+    if llm_block:
+        original["llm"] = llm_block
+    
+    # -------------------------------------------------------------------------
+    # ENSURE TOP-LEVEL FLAGS ARE SET based on section enables
+    # -------------------------------------------------------------------------
+    # Set do_scar_metrics if SCAR section is enabled
+    if unified.get("metrics", {}).get("scar", {}).get("enabled"):
+        original["do_scar_metrics"] = True
+        original["scar_num_samples"] = unified["metrics"]["scar"].get("num_samples", 64)
+        original["scar_max_length"] = unified["metrics"]["scar"].get("max_length", 512)
+    
+    # Set flags based on section enablement
+    if unified.get("supernode", {}).get("enabled"):
+        if unified["supernode"].get("cross_layer_analysis"):
+            original["do_connectivity_pruning"] = True
+    
+    if unified.get("halo_analysis", {}).get("enabled"):
+        original["do_halo_analysis"] = True
     
     logger.info("Converted unified config to original format")
     return original

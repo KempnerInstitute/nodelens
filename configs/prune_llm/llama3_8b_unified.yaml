@@ -23,6 +23,8 @@ experiment:
   seed: 42
   device: "cuda"
   output_dir: "./results/paper/llama3_8b"
+  num_networks: 1
+  save_activations: true
 
 # -----------------------------------------------------------------------------
 # MODEL
@@ -152,18 +154,26 @@ pruning:
   
   # Algorithms to test (unified + LLM-specific)
   algorithms:
-    # Core (same as vision)
-    - "random"
-    - "magnitude"
+    # Alignment-based (core metrics)
     - "rayleigh_quotient"
-    - "redundancy"
+    - "redundancy"              # maps to gaussian_mi_analytic
+    - "average_redundancy"      # info-theoretic redundancy
     
-    # LLM-specific
+    # SCAR-based (gradient-informed)
     - "scar_loss_proxy"
+    
+    # Supernode-aware (novel contribution)
     - "supernode_protection_score"
     - "supernode_connectivity_score"
+    
+    # Generalized (no outlier assumption)
     - "generalized_importance"
+    
+    # Cross-layer importance
     - "cross_layer_importance"
+    
+    # Magnitude baseline
+    - "magnitude"               # maps to activation_l2_norm
     
     # SOTA baselines
     - "wanda"
@@ -171,11 +181,14 @@ pruning:
   
   scoring_methods:
     - "random"
-    - "magnitude"
+    - "magnitude"               # activation_l2_norm
     - "rayleigh_quotient"
-    - "redundancy"
+    - "redundancy"              # gaussian_mi_analytic
+    - "average_redundancy"
     - "scar_loss_proxy"
     - "scar_taylor"
+    - "scar_activation_power"
+    - "scar_curvature"
     - "supernode_protection_score"
     - "supernode_connectivity_score"
     - "generalized_importance"
@@ -196,9 +209,11 @@ evaluation:
   enabled: true
   accuracy: false  # Not applicable to LLM
   loss: true
+  bits_per_byte: true  # Compression efficiency metric
   
   # LLM-specific: Perplexity
   perplexity_enabled: true
+  evaluation_num_samples: 100  # Samples per benchmark
   perplexity_datasets:
     - name: "wikitext"
       subset: "wikitext-2-raw-v1"
@@ -271,6 +286,12 @@ output:
   save_metrics: true
   save_figures: true
   save_checkpoints: false
+
+# -----------------------------------------------------------------------------
+# PERFORMANCE SETTINGS
+# -----------------------------------------------------------------------------
+performance:
+  eval_batches: null  # null = use all batches
 
 # -----------------------------------------------------------------------------
 # EXTRA (LLM-specific settings not in unified schema)
