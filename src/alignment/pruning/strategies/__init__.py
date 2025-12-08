@@ -4,6 +4,7 @@ Pruning strategies for the alignment framework.
 
 from .alignment_based import AlignmentPruning, GlobalAlignmentPruning, HybridPruning
 from .cascading import CascadingAlignmentPruning
+from .cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig, CompositePruning
 from .gradient import FisherPruning, GradientPruning, MomentumPruning
 from .llm_baselines import WandaPruning, SparseGPTPruning
 from .magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, MagnitudePruning
@@ -34,6 +35,10 @@ __all__ = [
     "HybridPruning",
     "GlobalAlignmentPruning",
     "CascadingAlignmentPruning",
+    # Cluster-aware (vision paper)
+    "ClusterAwarePruning",
+    "ClusterAwarePruningConfig",
+    "CompositePruning",
     # LLM Baselines (Wanda, SparseGPT)
     "WandaPruning",
     "SparseGPTPruning",

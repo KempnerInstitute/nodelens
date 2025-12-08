@@ -68,8 +68,216 @@ from alignment.experiments.general_alignment import GeneralAlignmentExperiment
 from alignment.pruning.experiments.cascading_layer import CascadingLayerPruningExperiment
 from alignment.pruning.experiments.layer_wise import LayerIsolatedPruningExperiment
 from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+from alignment.experiments.cluster_experiments import (
+    ClusterAnalysisExperiment,
+    ClusterAnalysisConfig,
+    VisionExperiment,  # backward compat
+    VisionExperimentConfig,  # backward compat
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _create_cluster_experiment(config):
+    """Create ClusterAnalysisExperiment from unified config."""
+    import torch
+    import torchvision
+    import torchvision.transforms as transforms
+    
+    # Helper to safely get nested config values
+    def _get_nested(obj, key, default):
+        """Get nested config value, handling both dict and object attributes."""
+        if hasattr(obj, key):
+            val = getattr(obj, key)
+            if isinstance(val, dict):
+                return val
+            return default
+        return default
+    
+    # Extract nested configs with proper defaults
+    model_cfg = _get_nested(config, "model", {})
+    dataset_cfg = _get_nested(config, "dataset", {})
+    metrics_cfg = _get_nested(config, "metrics", {})
+    clustering_cfg = _get_nested(config, "clustering", {})
+    halo_cfg = _get_nested(config, "halo_analysis", {})
+    
+    # Build ClusterAnalysisConfig from the loaded config
+    cluster_config = ClusterAnalysisConfig(
+        model_name=getattr(config, "model_name", model_cfg.get("name", "resnet18") if isinstance(model_cfg, dict) else "resnet18"),
+        dataset_name=getattr(config, "dataset_name", dataset_cfg.get("name", "cifar10") if isinstance(dataset_cfg, dict) else "cifar10"),
+        n_calibration=getattr(config, "n_calibration", metrics_cfg.get("n_calibration_samples", 5000) if isinstance(metrics_cfg, dict) else 5000),
+        n_clusters=getattr(config, "n_clusters", clustering_cfg.get("n_clusters", 4) if isinstance(clustering_cfg, dict) else 4),
+        synergy_target=getattr(config, "synergy_target", metrics_cfg.get("synergy_target", "logit_margin") if isinstance(metrics_cfg, dict) else "logit_margin"),
+        synergy_pairs=getattr(config, "synergy_pairs", metrics_cfg.get("synergy_num_pairs", 10) if isinstance(metrics_cfg, dict) else 10),
+        halo_percentile=getattr(config, "halo_percentile", halo_cfg.get("percentile", 90.0) if isinstance(halo_cfg, dict) else 90.0),
+        output_dir=getattr(config, "experiment_dir", "results/cluster_analysis"),
+        device=getattr(config, "device", "cuda"),
+        seed=getattr(config, "seed", 42),
+    )
+    
+    # Load model
+    model_name = cluster_config.model_name.lower()
+    num_classes = 10 if "cifar" in cluster_config.dataset_name.lower() else 1000
+    
+    if "resnet18" in model_name:
+        model = torchvision.models.resnet18(pretrained=True)
+        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+    elif "resnet50" in model_name:
+        model = torchvision.models.resnet50(pretrained=True)
+        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+    elif "vgg16" in model_name:
+        model = torchvision.models.vgg16_bn(pretrained=True)
+        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+    elif "mobilenet" in model_name:
+        model = torchvision.models.mobilenet_v2(pretrained=True)
+        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
+    
+    # Load dataset
+    dataset_name = cluster_config.dataset_name.lower()
+    if "cifar10" in dataset_name:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+        ])
+        train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+        test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+    elif "cifar100" in dataset_name:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ])
+        train_dataset = torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform)
+        test_dataset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+    
+    batch_size = getattr(config, "batch_size", 128)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=4)
+    
+    # Fine-tune the model on target dataset before experiments
+    # This is necessary because we replaced the classifier head with random weights
+    model = _finetune_model_for_dataset(
+        model, train_loader, test_loader, 
+        device=cluster_config.device,
+        epochs=getattr(config, "pretrain_epochs", 20),
+        lr=getattr(config, "pretrain_lr", 0.001),
+    )
+    
+    return ClusterAnalysisExperiment(cluster_config, model, train_loader, test_loader)
+
+
+def _finetune_model_for_dataset(
+    model: torch.nn.Module,
+    train_loader: torch.utils.data.DataLoader,
+    test_loader: torch.utils.data.DataLoader,
+    device: str = "cuda",
+    epochs: int = 20,
+    lr: float = 0.001,
+) -> torch.nn.Module:
+    """
+    Fine-tune a pretrained model on the target dataset.
+    
+    This is necessary when using ImageNet pretrained models on CIFAR-10/100
+    because the classifier head is replaced with random weights.
+    
+    Args:
+        model: Model with replaced classifier head
+        train_loader: Training data loader
+        test_loader: Test data loader
+        device: Device to train on
+        epochs: Number of fine-tuning epochs
+        lr: Learning rate
+        
+    Returns:
+        Fine-tuned model
+    """
+    import torch.optim as optim
+    
+    model = model.to(device)
+    
+    # Check initial accuracy
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for x, y in test_loader:
+            x, y = x.to(device), y.to(device)
+            out = model(x)
+            correct += (out.argmax(1) == y).sum().item()
+            total += y.size(0)
+    initial_acc = correct / total
+    
+    # If already trained (>50% accuracy), skip fine-tuning
+    if initial_acc > 0.5:
+        logger.info(f"Model already trained (accuracy: {initial_acc:.2%}), skipping fine-tuning")
+        return model
+    
+    logger.info(f"Fine-tuning model on target dataset (initial accuracy: {initial_acc:.2%})...")
+    
+    # Use different learning rates for pretrained vs new layers
+    # Freeze early layers, fine-tune later layers + new classifier
+    pretrained_params = []
+    new_params = []
+    
+    for name, param in model.named_parameters():
+        if 'fc' in name or 'classifier' in name:
+            new_params.append(param)
+        else:
+            pretrained_params.append(param)
+    
+    optimizer = optim.Adam([
+        {'params': pretrained_params, 'lr': lr * 0.1},  # Lower LR for pretrained
+        {'params': new_params, 'lr': lr},  # Higher LR for new classifier
+    ], weight_decay=1e-4)
+    
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    criterion = torch.nn.CrossEntropyLoss()
+    
+    best_acc = 0
+    best_state = None
+    
+    for epoch in range(epochs):
+        # Train
+        model.train()
+        train_loss = 0
+        for x, y in train_loader:
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            out = model(x)
+            loss = criterion(out, y)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+        
+        scheduler.step()
+        
+        # Evaluate
+        model.eval()
+        correct, total = 0, 0
+        with torch.no_grad():
+            for x, y in test_loader:
+                x, y = x.to(device), y.to(device)
+                out = model(x)
+                correct += (out.argmax(1) == y).sum().item()
+                total += y.size(0)
+        
+        acc = correct / total
+        if acc > best_acc:
+            best_acc = acc
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        
+        if (epoch + 1) % 5 == 0 or epoch == 0:
+            logger.info(f"  Epoch {epoch+1}/{epochs}: loss={train_loss/len(train_loader):.4f}, acc={acc:.2%}")
+    
+    # Load best model
+    if best_state is not None:
+        model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
+    
+    logger.info(f"Fine-tuning complete. Best accuracy: {best_acc:.2%}")
+    
+    return model
 
 
 def run_post_analysis(config, results_file: Path, output_dir: Path):
@@ -214,6 +422,9 @@ def main():
         experiment = LLMAlignmentExperiment(config)
     elif experiment_type in {"alignment_analysis", "vision_synergy", "general_alignment"}:
         experiment = GeneralAlignmentExperiment(config)
+    elif experiment_type in {"cluster_analysis", "vision_cluster_analysis", "metric_cluster_analysis"}:
+        # Cluster-based analysis experiment (works for any architecture)
+        experiment = _create_cluster_experiment(config)
     elif experiment_type == "layer_isolated_pruning":
         experiment = LayerIsolatedPruningExperiment(config)
     elif experiment_type == "cascading_layer_pruning":

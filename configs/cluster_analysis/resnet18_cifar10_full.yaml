@@ -1,0 +1,110 @@
+# ResNet-18 on CIFAR-10 - Full Cluster Analysis
+# This config runs the complete cluster-based analysis pipeline
+
+experiment_name: resnet18_cifar10_cluster_analysis
+experiment_type: cluster_analysis
+
+# Model configuration
+model:
+  name: resnet18
+  pretrained: true
+  num_classes: 10
+  
+# Dataset configuration  
+dataset:
+  name: cifar10
+  root: ./data
+  train_batch_size: 128
+  test_batch_size: 256
+  num_workers: 4
+  augmentation: true
+
+# Metric computation
+metrics:
+  n_calibration_samples: 5000
+  
+  # Rayleigh Quotient
+  compute_rq: true
+  rq_shrinkage: true
+  
+  # Redundancy (Gaussian pairwise MI)
+  compute_redundancy: true
+  redundancy_sampling: all  # all, random, top_k
+  
+  # Synergy with continuous target
+  compute_synergy: true
+  synergy_target: logit_margin  # logit_margin, correct_logit, logit_pc1
+  synergy_num_pairs: 10
+  synergy_sampling: top_k  # random, top_k, all
+
+# Clustering
+clustering:
+  enabled: true
+  n_clusters: 4
+  normalize_features: true
+  compute_stability: true
+  n_bootstrap: 50
+  
+# Cross-layer halo analysis
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  use_activation_weight: true
+  compute_influence_matrix: true
+
+# Cascade/damage analysis
+cascade_analysis:
+  enabled: true
+  n_remove_per_cluster: 5
+  damage_sample_fraction: 0.2
+
+# Pruning experiments
+pruning:
+  enabled: true
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  
+  methods:
+    - name: random
+    - name: magnitude
+    - name: taylor
+    - name: rq_only
+    - name: composite  # RQ + Red + Syn
+    - name: cluster_aware  # Full cluster + halo aware
+  
+  fine_tuning:
+    epochs: 10
+    lr: 0.0001
+    
+# Baselines to compare against
+baselines:
+  - magnitude
+  - taylor
+  - network_slimming
+  
+# Visualization
+visualization:
+  enabled: true
+  figures:
+    - cluster_scatter
+    - cluster_evolution
+    - influence_matrix
+    - cascade_test
+    - halo_properties
+    - pruning_curves
+    - metric_distributions
+
+# Output
+output:
+  dir: results/vision/resnet18_cifar10
+  save_metrics: true
+  save_clusters: true
+  save_figures: true
+  
+# Pre-training (required for ImageNet pretrained models on CIFAR)
+# This fine-tunes the model on CIFAR-10 before running experiments
+pretrain_epochs: 20
+pretrain_lr: 0.001
+
+# Hardware
+device: cuda
+seed: 42

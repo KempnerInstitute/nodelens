@@ -19,6 +19,12 @@ from .config_components import (
 )
 from .general_alignment import GeneralAlignmentConfig, GeneralAlignmentExperiment
 from .llm_experiments import LLMAlignmentExperiment
+from .cluster_experiments import (
+    ClusterAnalysisExperiment,
+    ClusterAnalysisConfig,
+    VisionExperiment,  # backward compat
+    VisionExperimentConfig,  # backward compat
+)
 
 # Training utilities
 from .training_utils import convert_training_history, create_experiment_trainer, evaluate_with_metrics, train_with_metrics
@@ -31,6 +37,10 @@ __all__ = [
     "GeneralAlignmentExperiment",
     "GeneralAlignmentConfig",
     "LLMAlignmentExperiment",
+    "ClusterAnalysisExperiment",
+    "ClusterAnalysisConfig",
+    "VisionExperiment",  # backward compat alias
+    "VisionExperimentConfig",  # backward compat alias
     # Configuration components
     "TrainingConfig",
     "PruningConfig",

@@ -46,6 +46,15 @@ from .halo_plots import (
     plot_halo_redundancy_heatmap,
 )
 
+# Cluster visualization plots
+from .cluster_plots import (
+    plot_metric_scatter,
+    plot_cluster_evolution,
+    plot_influence_matrix,
+    plot_cascade_test,
+    plot_halo_properties,
+)
+
 __all__ = [
     # Primary
     "UnifiedVisualizer",
@@ -58,4 +67,10 @@ __all__ = [
     "plot_halo_redundancy_by_depth",
     "plot_halo_redundancy_comprehensive",
     "plot_halo_redundancy_heatmap",
+    # Cluster plots
+    "plot_metric_scatter",
+    "plot_cluster_evolution",
+    "plot_influence_matrix",
+    "plot_cascade_test",
+    "plot_halo_properties",
 ]

@@ -1,24 +1,65 @@
 # Training Module
 
-Training utilities and callbacks.
+Training utilities, trainers, and evaluation functions.
 
 ## Components
 
-- `BaseTrainer` - Training loop with metric tracking
-- `AlignmentMetricsCallback` - Track alignment during training
+### Trainers
+- `BaseTrainer` - Base trainer class
+- `ExperimentTrainer` - Trainer for alignment experiments
+- `TensorizedNetworkWrapper` - Multi-network training
+
+### Evaluation
+- `evaluate_classification()` - Classification accuracy and loss
+- `evaluate_perplexity()` - Language model perplexity
+- `evaluate_regression()` - Regression MSE and MAE
+- `evaluate_model()` - General dispatcher
+- `EvaluationManager` - Track evaluation metrics over time
+
+### Callbacks
+- `AlignmentCallback` - Track alignment metrics during training
 
 ## Usage
 
+### Training
+
 ```python
-from alignment.training.callbacks import AlignmentMetricsCallback
+from alignment.training import ExperimentTrainer, ExperimentTrainingConfig
 
-callback = AlignmentMetricsCallback(
-    metrics={'rq': get_metric('rayleigh_quotient')},
-    layers=['conv1'],
-    frequency=100
+config = ExperimentTrainingConfig(
+    epochs=10,
+    learning_rate=0.001,
+    batch_size=128
 )
+trainer = ExperimentTrainer(model, config)
+trainer.train(train_loader, val_loader)
+```
 
-# In training loop
-callback.on_batch_end(wrapper, inputs, targets, step)
-history = callback.get_history()
+### Evaluation
+
+```python
+from alignment.training import evaluate_classification, evaluate_perplexity
+
+# Classification
+results = evaluate_classification(model, test_loader, device="cuda")
+# Returns: {"loss": 0.32, "accuracy": 91.5}
+
+# Language modeling
+results = evaluate_perplexity(model, text_loader, device="cuda")
+# Returns: {"perplexity": 12.4, "loss": 2.52}
+```
+
+### Evaluation Manager
+
+```python
+from alignment.training import EvaluationManager
+
+manager = EvaluationManager(task="classification")
+
+for epoch in range(epochs):
+    train(...)
+    results = manager.evaluate(model, val_loader, step=epoch)
+    
+best = manager.get_best(metric="accuracy")
+history = manager.get_history()
 ```

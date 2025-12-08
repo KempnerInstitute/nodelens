@@ -12,6 +12,7 @@ from .pid import SynergisticInformation as PIDSynergisticInformation
 from .pid import UniqueInformationX, UniqueInformationY
 from .redundancy import AverageRedundancy
 from .synergy_mmi import SynergyGaussianMMI
+from .synergy_continuous import SynergyContinuousTarget
 
 # Import higher-order metrics if available
 try:

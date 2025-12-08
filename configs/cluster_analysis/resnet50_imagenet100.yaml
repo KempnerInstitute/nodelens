@@ -1,0 +1,113 @@
+# ResNet-50 on ImageNet-100 - Full Cluster Analysis
+# This config runs the complete cluster-based analysis pipeline on ImageNet subset
+#
+# ImageNet-100 is a 100-class subset of ImageNet for tractable experiments.
+# Classes are selected to maintain semantic diversity.
+
+experiment_name: resnet50_imagenet100_cluster_analysis
+experiment_type: cluster_analysis
+
+# Model configuration
+model:
+  name: resnet50
+  pretrained: true
+  num_classes: 100
+  weights: IMAGENET1K_V2  # Use torchvision pretrained weights
+  
+# Dataset configuration  
+dataset:
+  name: imagenet100
+  root: ./data/imagenet100  # Path to ImageNet-100 subset
+  train_batch_size: 64
+  test_batch_size: 128
+  num_workers: 8
+  image_size: 224
+  normalize: true
+  # If using full ImageNet, specify class indices:
+  # class_indices: [0, 10, 20, ...]  # 100 selected classes
+
+# Metric computation
+metrics:
+  n_calibration_samples: 5000
+  
+  # Rayleigh Quotient
+  compute_rq: true
+  rq_shrinkage: true
+  
+  # Redundancy (Gaussian pairwise MI)
+  compute_redundancy: true
+  redundancy_sampling: all
+  
+  # Synergy with continuous target
+  compute_synergy: true
+  synergy_target: logit_margin
+  synergy_num_pairs: 10
+  synergy_sampling: top_k
+
+# Clustering
+clustering:
+  enabled: true
+  n_clusters: 4
+  normalize_features: true
+  compute_stability: true
+  n_bootstrap: 30  # Fewer for larger model
+  
+# Cross-layer halo analysis
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  use_activation_weight: true  # Account for BN scaling
+  compute_influence_matrix: true
+
+# Cascade/damage analysis
+cascade_analysis:
+  enabled: true
+  n_remove_per_cluster: 5
+  damage_sample_fraction: 0.1  # Smaller for faster computation
+
+# Pruning experiments
+pruning:
+  enabled: true
+  ratios: [0.2, 0.3, 0.4, 0.5, 0.6]
+  
+  methods:
+    - name: random
+    - name: magnitude
+    - name: taylor
+    - name: composite  # RQ + Red + Syn (per-channel)
+    - name: cluster_aware  # Full cluster + halo aware
+  
+  fine_tuning:
+    epochs: 5  # Fewer epochs for ImageNet
+    lr: 0.00001
+    weight_decay: 0.0001
+    
+# Baselines to compare against
+baselines:
+  - magnitude
+  - taylor
+  - network_slimming
+  
+# Visualization
+visualization:
+  enabled: true
+  figures:
+    - cluster_scatter
+    - cluster_evolution
+    - influence_matrix
+    - cascade_test
+    - halo_properties
+    - pruning_curves
+    - metric_distributions
+
+# Output
+output:
+  dir: results/vision/resnet50_imagenet100
+  save_metrics: true
+  save_clusters: true
+  save_figures: true
+  
+# Hardware
+device: cuda
+seed: 42
+num_workers: 8

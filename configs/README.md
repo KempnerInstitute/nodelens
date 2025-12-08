@@ -5,60 +5,106 @@
 ```
 configs/
 ├── template.yaml              # Complete template with all options
-├── examples/                  # Ready-to-use examples
-│   ├── mnist_basic.yaml       # MNIST RQ analysis
-│   ├── resnet_pruning.yaml    # ResNet pruning
-│   ├── llama3_pruning.yaml    # Llama-3 pruning
-│   ├── llm_alignment.yaml     # LLM supernode analysis
-│   └── vision_comprehensive.yaml
-└── projects/                  # Project configs
-    ├── llm_supernode.yaml
-    └── vision_synergy.yaml
+├── cluster_analysis/          # Cluster-based analysis configs
+│   ├── resnet18_cifar10_full.yaml
+│   ├── vgg16_cifar10_full.yaml
+│   └── mobilenetv2_cifar10_full.yaml
+├── paper/                     # LLM paper experiment configs
+│   ├── llama3_8b_full.yaml
+│   ├── llama2_7b_full.yaml
+│   ├── mistral_7b_full.yaml
+│   └── qwen2_7b_full.yaml
+└── examples/                  # Example configs
+    ├── mnist_basic.yaml
+    ├── resnet_pruning.yaml
+    └── llm_alignment.yaml
 ```
 
 ## Usage
 
 ```bash
-python scripts/run_experiment.py --config configs/examples/llama3_comprehensive_pruning.yaml.yaml
-python scripts/run_experiment.py --config configs/examples/vision_pruning_test.yaml
+python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
+python scripts/run_experiment.py --config configs/paper/llama3_8b_full.yaml
+python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+```
+
+## Experiment Types
+
+| Type | Description |
+|------|-------------|
+| `alignment_analysis` | General alignment metrics |
+| `llm_alignment` | LLM supernode/SCAR analysis |
+| `cluster_analysis` | Metric-space clustering with halos |
 
 ## Configuration Blocks
 
 | Block | Purpose |
 |-------|---------|
-| `experiment` | Name, type (`alignment_analysis` or `llm_alignment`), seed, device |
-| `model` | Architecture, pretrained, tracked_layers. For LLMs: model_id, dtype |
+| `experiment` | Name, type, seed, device |
+| `model` | Architecture, pretrained, tracked_layers |
 | `dataset` | Dataset name, batch_size, data_path |
-| `metrics` | `enabled`: list of metrics. `num_samples`: calibration samples. `composite_weights`: for composite scoring |
-| `training` | `enabled`, epochs, learning_rate, optimizer |
-| `supernode` | Detection settings: score_metric, core_fraction, protect_core |
-| `pruning` | strategy, sparsity_levels, scoring, direction, structured |
+| `metrics` | Enabled metrics, num_samples, composite_weights |
+| `clustering` | n_clusters, compute_stability, n_bootstrap |
+| `halo_analysis` | percentile, use_activation_weight |
+| `cascade_analysis` | n_remove_per_cluster |
+| `supernode` | Detection settings for LLMs |
+| `pruning` | Strategy, sparsity_levels, scoring |
 | `llm` | LLM-specific: scar_metrics, evaluate_perplexity |
-| `cnn` | CNN-specific: mode (unfold, patchwise) |
-| `analysis` | save_scores, generate_plots, plots to enable |
-| `visualization` | format, dpi |
 
 ## Metrics
 
-Specify metrics to compute in `metrics.enabled`:
+Available metrics for `metrics.enabled`:
 
 - `rayleigh_quotient` - Input-weight alignment
 - `activation_l2_norm` - Activation magnitude
-- `activation_outlier_index` - Outlier detection
 - `pairwise_redundancy_gaussian` - Pairwise redundancy
 - `synergy_gaussian_mmi` - Synergistic information
 - `mutual_information_gaussian` - MI estimate
 
 ## Composite Scoring
 
-Define weights in `metrics.composite_weights` for combining metrics:
+Define weights in `metrics.composite_weights`:
 
 ```yaml
 metrics:
   composite_weights:
     activation_l2_norm: 0.2
     rayleigh_quotient: 0.3
-    pairwise_redundancy_gaussian: -0.2  # Negative penalizes redundancy
+    pairwise_redundancy_gaussian: -0.2
 ```
 
-Used when `pruning.scoring: "composite"` or `supernode.score_metric: "composite"`.
+## Cluster Analysis Configuration
+
+```yaml
+experiment_type: cluster_analysis
+
+clustering:
+  n_clusters: 4
+  compute_stability: true
+  n_bootstrap: 50
+
+halo_analysis:
+  percentile: 90.0
+  use_activation_weight: true
+
+cascade_analysis:
+  n_remove_per_cluster: 5
+```
+
+## LLM Configuration
+
+```yaml
+experiment_type: llm_alignment
+
+model_config:
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+
+do_scar_metrics: true
+scar_num_samples: 100
+
+supernode:
+  enabled: true
+  core_fraction: 0.01
+  protect_core: true
+```

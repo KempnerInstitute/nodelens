@@ -7,12 +7,12 @@ definitions in `drafts/alignment_notes/main.tex` and `drafts/alignment_notes/new
 
 | Metric | LaTeX Reference | Code Implementation | Status |
 |--------|-----------------|---------------------|--------|
-| Rayleigh Quotient | Eq. 3.1 in new.tex | `src/alignment/metrics/rayleigh/rayleigh_quotient.py` | ✅ Consistent |
-| Pairwise Redundancy | Eq. 5.1-5.2 in new.tex | `src/alignment/metrics/information/redundancy.py` | ✅ Consistent |
-| Composite Score | Eq. 6.1 in new.tex | `src/alignment/metrics/composite.py` | ✅ Consistent |
-| Class-conditioned RQ | Eq. 4.1-4.3 in new.tex | `src/alignment/metrics/conditional_metrics.py` | ✅ Consistent |
-| Gaussian MI | Section 3.2 in new.tex | `src/alignment/metrics/information/gaussian_mi.py` | ✅ Consistent |
-| PID Synergy | Eq. 5.4 in new.tex | `src/alignment/metrics/information/gaussian_pid.py` | ✅ Consistent |
+| Rayleigh Quotient | Eq. 3.1 in new.tex | `src/alignment/metrics/rayleigh/rayleigh_quotient.py` | [x] Consistent |
+| Pairwise Redundancy | Eq. 5.1-5.2 in new.tex | `src/alignment/metrics/information/redundancy.py` | [x] Consistent |
+| Composite Score | Eq. 6.1 in new.tex | `src/alignment/metrics/composite.py` | [x] Consistent |
+| Class-conditioned RQ | Eq. 4.1-4.3 in new.tex | `src/alignment/metrics/conditional_metrics.py` | [x] Consistent |
+| Gaussian MI | Section 3.2 in new.tex | `src/alignment/metrics/information/gaussian_mi.py` | [x] Consistent |
+| PID Synergy | Eq. 5.4 in new.tex | `src/alignment/metrics/information/gaussian_pid.py` | [x] Consistent |
 
 ---
 
@@ -36,7 +36,7 @@ rq_values = numerator / denominator
 ### Verification
 - **Formula**: Matches exactly. Computes w^T Σ w / w^T w
 - **Normalization**: Code supports both absolute and relative (divided by trace) modes
-- **Status**: ✅ **CONSISTENT**
+- **Status**: [x] **CONSISTENT**
 
 ---
 
@@ -65,7 +65,7 @@ mi_with_refs = -0.5 * torch.log(1.0 - rho_sq)
 - **Formula**: Matches exactly. Uses -0.5 * log(1 - ρ²)
 - **Correlation**: Computed from normalized activations (equivalent to ρ in theory)
 - **Clamping**: Properly handles edge cases (ρ² < 1)
-- **Status**: ✅ **CONSISTENT**
+- **Status**: [x] **CONSISTENT**
 
 ---
 
@@ -96,7 +96,7 @@ for metric_name, weight in self.metric_weights.items():
 - **Formula**: Matches. Supports arbitrary metric weights
 - **Log RQ**: Correctly applies log transform when configured
 - **Signs**: Redundancy can be given negative weight (penalty)
-- **Status**: ✅ **CONSISTENT**
+- **Status**: [x] **CONSISTENT**
 
 ---
 
@@ -134,7 +134,7 @@ delta_rq = rq_uncond - rq_cond
 - **Per-class RQ**: Correctly computes RQ with class-specific covariance
 - **Weighted average**: Uses class proportions p(y) as weights
 - **Delta RQ**: Matches definition exactly
-- **Status**: ✅ **CONSISTENT**
+- **Status**: [x] **CONSISTENT**
 
 ---
 
@@ -164,7 +164,7 @@ mi_scores = 0.5 * torch.log(output_var / noise_variance + 1.0)
 ### Verification
 - **Formula**: Matches the Gaussian channel capacity formula
 - **RQ Connection**: log(MI) ∝ log(RQ) for fixed noise (documented in code)
-- **Status**: ✅ **CONSISTENT**
+- **Status**: [x] **CONSISTENT**
 
 ---
 
@@ -193,7 +193,7 @@ S = I_z_y12 - I_z_y1 - I_z_y2 + R_mmi
 - **MMI Redundancy**: Uses min correctly
 - **Synergy formula**: Matches exactly
 - **Gaussian MI terms**: All I() computed using same Gaussian formulas
-- **Status**: ✅ **CONSISTENT**
+- **Status**: [x] **CONSISTENT**
 
 ---
 

@@ -1,0 +1,57 @@
+# VGG-16-BN on CIFAR-10 - Full Cluster Analysis
+
+experiment_name: vgg16_cifar10_cluster_analysis
+experiment_type: cluster_analysis
+
+model:
+  name: vgg16_bn
+  pretrained: true
+  num_classes: 10
+  
+dataset:
+  name: cifar10
+  root: ./data
+  train_batch_size: 128
+  test_batch_size: 256
+
+metrics:
+  n_calibration_samples: 5000
+  compute_rq: true
+  compute_redundancy: true
+  compute_synergy: true
+  synergy_target: logit_margin
+  synergy_num_pairs: 10
+
+clustering:
+  enabled: true
+  n_clusters: 4
+  compute_stability: true
+  n_bootstrap: 50
+
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  use_activation_weight: true
+
+cascade_analysis:
+  enabled: true
+  n_remove_per_cluster: 5
+
+pruning:
+  enabled: true
+  ratios: [0.1, 0.3, 0.5, 0.7]
+  methods:
+    - magnitude
+    - taylor
+    - network_slimming
+    - composite
+    - cluster_aware
+
+visualization:
+  enabled: true
+
+output:
+  dir: results/vision/vgg16_cifar10
+
+device: cuda
+seed: 42

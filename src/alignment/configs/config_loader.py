@@ -362,7 +362,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["alignment_composite_weights"] = alignment_block["composite_weights"]
 
     flat_config["supernode_config"] = nested_config.get("supernode", {})
-    
+
     # Map supernode-related nested configs directly
     flat_config["supernode"] = nested_config.get("supernode", {})
     flat_config["supernode_robustness"] = nested_config.get("supernode_robustness", {})
