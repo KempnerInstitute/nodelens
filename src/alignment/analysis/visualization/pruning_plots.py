@@ -711,3 +711,363 @@ class PruningVisualizer:
             table[(0, i)].set_text_props(weight="bold", color="white")
 
         ax.set_title("Accuracy at Key Sparsity Levels", pad=20)
+
+
+# ==============================================================================
+# Unified Pruning Comparison Functions (for both Vision and LLM experiments)
+# ==============================================================================
+
+# Standard colors for pruning methods
+PRUNING_METHOD_COLORS = {
+    # Standard methods
+    "random": "#95a5a6",
+    "magnitude": "#e74c3c",
+    "taylor": "#3498db",
+    "gradient": "#ff7f0e",
+    "fisher": "#2ca02c",
+    # Cluster/composite methods
+    "composite": "#9b59b6",
+    "cluster_aware": "#2ecc71",
+    "rq_only": "#f39c12",
+    # LLM-specific methods
+    "wanda": "#1abc9c",
+    "sparsegpt": "#e91e63",
+    "scar": "#00bcd4",
+    # Low/high variants
+    "magnitude_low": "#e74c3c",
+    "magnitude_high": "#c0392b",
+    "gradient_low": "#ff7f0e",
+    "gradient_high": "#d35400",
+    "scar_low": "#00bcd4",
+    "scar_high": "#0097a7",
+    # Network slimming
+    "network_slimming": "#8e44ad",
+    "chip": "#16a085",
+}
+
+PRUNING_METHOD_MARKERS = {
+    "random": "o",
+    "magnitude": "s",
+    "taylor": "^",
+    "gradient": "d",
+    "composite": "p",
+    "cluster_aware": "*",
+    "wanda": "v",
+    "sparsegpt": "<",
+    "scar": ">",
+}
+
+
+def plot_unified_pruning_comparison(
+    results: Dict[str, Dict[float, Dict[str, Any]]],
+    baseline_value: Optional[float] = None,
+    metric: str = "accuracy",
+    higher_is_better: bool = True,
+    title: str = "Pruning Method Comparison",
+    save_path: Optional[Union[str, Path]] = None,
+    figsize: Tuple[int, int] = (12, 7),
+    show_before_ft: bool = False,
+    x_as_percentage: bool = True,
+) -> "plt.Figure":
+    """
+    Unified pruning comparison plot that works for both vision and LLM experiments.
+    
+    Args:
+        results: Dict mapping method_name -> {sparsity -> {metric: value, ...}}
+                 Supports both 'accuracy' (vision) and 'perplexity' (LLM) metrics.
+                 Can include 'accuracy_before_ft', 'accuracy_after_ft', 'perplexity', etc.
+        baseline_value: Baseline (unpruned) metric value
+        metric: Which metric to plot ('accuracy', 'perplexity', 'loss', etc.)
+        higher_is_better: Whether higher metric values are better (True for accuracy, False for perplexity)
+        title: Plot title
+        save_path: Optional path to save figure
+        figsize: Figure size
+        show_before_ft: Whether to show before-fine-tuning values (dashed lines)
+        x_as_percentage: Whether to display x-axis as percentage
+        
+    Returns:
+        Matplotlib Figure
+        
+    Example:
+        >>> results = {
+        ...     'magnitude': {0.3: {'accuracy_after_ft': 0.85}, 0.5: {'accuracy_after_ft': 0.78}},
+        ...     'cluster_aware': {0.3: {'accuracy_after_ft': 0.88}, 0.5: {'accuracy_after_ft': 0.82}},
+        ... }
+        >>> plot_unified_pruning_comparison(results, baseline_value=0.92, metric='accuracy')
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Determine the actual metric key to use
+    # Support multiple naming conventions
+    metric_keys = {
+        'accuracy': ['accuracy_after_ft', 'accuracy', 'acc'],
+        'perplexity': ['perplexity', 'ppl'],
+        'loss': ['loss', 'test_loss'],
+    }
+    
+    for method, method_results in results.items():
+        if not method_results:
+            continue
+        
+        sparsities = sorted([s for s in method_results.keys() if isinstance(s, (int, float))])
+        values = []
+        values_before = []
+        
+        for sparsity in sparsities:
+            data = method_results[sparsity]
+            if isinstance(data, dict):
+                # Try different key names
+                value = None
+                for key in metric_keys.get(metric, [metric]):
+                    if key in data:
+                        value = data[key]
+                        break
+                
+                if value is None and 'error' not in data:
+                    # Try any key containing the metric name
+                    for k, v in data.items():
+                        if metric in k.lower() and isinstance(v, (int, float)):
+                            value = v
+                            break
+                
+                values.append(value)
+                
+                # Check for before-fine-tuning value
+                if show_before_ft:
+                    before_key = f'{metric}_before_ft' if metric != 'accuracy' else 'accuracy_before_ft'
+                    values_before.append(data.get(before_key))
+            else:
+                values.append(data if isinstance(data, (int, float)) else None)
+                values_before.append(None)
+        
+        # Filter out None values
+        valid_data = [(s, v) for s, v in zip(sparsities, values) if v is not None]
+        if not valid_data:
+            continue
+        
+        valid_sparsities, valid_values = zip(*valid_data)
+        
+        # Convert to percentage for display
+        if metric == 'accuracy' and max(valid_values) <= 1.0:
+            valid_values = [v * 100 for v in valid_values]
+        
+        x_values = [s * 100 for s in valid_sparsities] if x_as_percentage else list(valid_sparsities)
+        
+        # Get style
+        color = PRUNING_METHOD_COLORS.get(method.lower(), None)
+        marker = PRUNING_METHOD_MARKERS.get(method.lower().split('_')[0], 'o')
+        label = method.replace('_', ' ').title()
+        
+        # Plot main line (after fine-tuning)
+        ax.plot(x_values, valid_values, marker=marker, color=color, 
+                label=label, linewidth=2.5, markersize=8)
+        
+        # Plot before fine-tuning (dashed) if requested
+        if show_before_ft:
+            valid_before = [(s * 100 if x_as_percentage else s, v) 
+                          for s, v in zip(sparsities, values_before) if v is not None]
+            if valid_before:
+                x_before, y_before = zip(*valid_before)
+                if metric == 'accuracy' and max(y_before) <= 1.0:
+                    y_before = [v * 100 for v in y_before]
+                ax.plot(x_before, y_before, linestyle='--', color=color, 
+                       alpha=0.5, linewidth=1.5)
+    
+    # Add baseline
+    if baseline_value is not None:
+        baseline_display = baseline_value * 100 if metric == 'accuracy' and baseline_value <= 1.0 else baseline_value
+        ax.axhline(y=baseline_display, color='gray', linestyle='--', linewidth=1.5,
+                   label=f'Unpruned ({baseline_display:.1f}{"%" if metric == "accuracy" else ""})')
+    
+    # Labels and formatting
+    xlabel = "Sparsity (%)" if x_as_percentage else "Sparsity"
+    ax.set_xlabel(xlabel, fontsize=12)
+    
+    ylabel = metric.replace('_', ' ').title()
+    if metric == 'accuracy':
+        ylabel += " (%)"
+    ax.set_ylabel(ylabel, fontsize=12)
+    
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.legend(loc='lower left' if higher_is_better else 'upper left', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved unified pruning comparison to {save_path}")
+    
+    return fig
+
+
+def plot_pruning_accuracy_loss_grid(
+    results: Dict[str, Dict[float, Dict[str, float]]],
+    baseline_acc: Optional[float] = None,
+    baseline_loss: Optional[float] = None,
+    title: str = "Pruning Analysis",
+    save_path: Optional[Union[str, Path]] = None,
+    figsize: Tuple[int, int] = (14, 6),
+) -> "plt.Figure":
+    """
+    Plot pruning results showing both accuracy and loss in a grid.
+    
+    Args:
+        results: Dict mapping method -> {sparsity -> {'accuracy': v, 'loss': v}}
+        baseline_acc: Baseline accuracy
+        baseline_loss: Baseline loss
+        title: Plot title
+        save_path: Optional path to save figure
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib Figure
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+    
+    for method, method_results in results.items():
+        if not method_results:
+            continue
+        
+        sparsities = sorted([s for s in method_results.keys() if isinstance(s, (int, float))])
+        accuracies = []
+        losses = []
+        
+        for s in sparsities:
+            data = method_results[s]
+            if isinstance(data, dict):
+                acc = data.get('accuracy_after_ft') or data.get('accuracy')
+                loss = data.get('loss') or data.get('test_loss')
+                accuracies.append(acc * 100 if acc and acc <= 1.0 else acc)
+                losses.append(loss)
+            else:
+                accuracies.append(None)
+                losses.append(None)
+        
+        color = PRUNING_METHOD_COLORS.get(method.lower(), None)
+        marker = PRUNING_METHOD_MARKERS.get(method.lower().split('_')[0], 'o')
+        label = method.replace('_', ' ').title()
+        
+        # Plot accuracy
+        valid_acc = [(s * 100, a) for s, a in zip(sparsities, accuracies) if a is not None]
+        if valid_acc:
+            x, y = zip(*valid_acc)
+            ax1.plot(x, y, marker=marker, color=color, label=label, linewidth=2, markersize=7)
+        
+        # Plot loss
+        valid_loss = [(s * 100, l) for s, l in zip(sparsities, losses) if l is not None]
+        if valid_loss:
+            x, y = zip(*valid_loss)
+            ax2.plot(x, y, marker=marker, color=color, label=label, linewidth=2, markersize=7)
+    
+    # Baselines
+    if baseline_acc is not None:
+        baseline_acc_display = baseline_acc * 100 if baseline_acc <= 1.0 else baseline_acc
+        ax1.axhline(y=baseline_acc_display, color='gray', linestyle='--', 
+                    linewidth=1.5, label='Unpruned')
+    if baseline_loss is not None:
+        ax2.axhline(y=baseline_loss, color='gray', linestyle='--', 
+                    linewidth=1.5, label='Unpruned')
+    
+    # Format axes
+    ax1.set_xlabel("Sparsity (%)", fontsize=12)
+    ax1.set_ylabel("Accuracy (%)", fontsize=12)
+    ax1.set_title("Accuracy vs Sparsity", fontsize=13)
+    ax1.legend(loc='lower left', fontsize=9)
+    ax1.grid(True, alpha=0.3)
+    
+    ax2.set_xlabel("Sparsity (%)", fontsize=12)
+    ax2.set_ylabel("Loss", fontsize=12)
+    ax2.set_title("Loss vs Sparsity", fontsize=13)
+    ax2.legend(loc='upper left', fontsize=9)
+    ax2.grid(True, alpha=0.3)
+    
+    fig.suptitle(title, fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved pruning accuracy/loss grid to {save_path}")
+    
+    return fig
+
+
+def plot_pruning_recovery_chart(
+    results: Dict[str, Dict[float, Dict[str, float]]],
+    baseline_value: float,
+    metric: str = "accuracy",
+    title: str = "Accuracy Recovery After Pruning",
+    save_path: Optional[Union[str, Path]] = None,
+    figsize: Tuple[int, int] = (12, 6),
+) -> "plt.Figure":
+    """
+    Plot the percentage of original performance retained after pruning.
+    
+    Args:
+        results: Dict mapping method -> {sparsity -> {metric: value}}
+        baseline_value: Baseline (unpruned) value
+        metric: Which metric to use
+        title: Plot title
+        save_path: Optional path to save figure
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib Figure
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    for method, method_results in results.items():
+        if not method_results:
+            continue
+        
+        sparsities = sorted([s for s in method_results.keys() if isinstance(s, (int, float))])
+        recoveries = []
+        
+        for s in sparsities:
+            data = method_results[s]
+            if isinstance(data, dict):
+                value = data.get(f'{metric}_after_ft') or data.get(metric)
+                if value is not None and baseline_value > 0:
+                    recovery = (value / baseline_value) * 100
+                    recoveries.append(recovery)
+                else:
+                    recoveries.append(None)
+            else:
+                recoveries.append(None)
+        
+        valid_data = [(s * 100, r) for s, r in zip(sparsities, recoveries) if r is not None]
+        if not valid_data:
+            continue
+        
+        x, y = zip(*valid_data)
+        
+        color = PRUNING_METHOD_COLORS.get(method.lower(), None)
+        marker = PRUNING_METHOD_MARKERS.get(method.lower().split('_')[0], 'o')
+        label = method.replace('_', ' ').title()
+        
+        ax.plot(x, y, marker=marker, color=color, label=label, linewidth=2.5, markersize=8)
+    
+    # Reference lines
+    ax.axhline(y=100, color='gray', linestyle='--', linewidth=1.5, label='100% (Unpruned)')
+    ax.axhline(y=90, color='green', linestyle=':', linewidth=1, alpha=0.7, label='90% Threshold')
+    
+    ax.set_xlabel("Sparsity (%)", fontsize=12)
+    ax.set_ylabel(f"{metric.title()} Recovery (%)", fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.legend(loc='lower left', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim([50, 105])
+    
+    plt.tight_layout()
+    
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved pruning recovery chart to {save_path}")
+    
+    return fig

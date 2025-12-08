@@ -1,5 +1,5 @@
 """
-Cluster visualization module for vision network analysis.
+Cluster visualization module for neural network analysis.
 
 Provides visualizations for:
 1. Metric space scatter plots (RQ vs Red, RQ vs Syn, Red vs Syn)
@@ -7,6 +7,9 @@ Provides visualizations for:
 3. Cross-layer influence matrices (heatmaps)
 4. Cluster stability analysis
 5. Cascade test results by cluster type
+6. Pruning comparisons (unified with LLM experiments)
+
+This module works for both vision (ResNet, VGG) and LLM (Qwen, Llama) experiments.
 """
 
 import logging
@@ -22,6 +25,24 @@ try:
     HAS_MPL = True
 except ImportError:
     HAS_MPL = False
+
+# Import unified pruning functions
+from .pruning_plots import (
+    plot_unified_pruning_comparison,
+    plot_pruning_accuracy_loss_grid,
+    plot_pruning_recovery_chart,
+    PRUNING_METHOD_COLORS,
+)
+
+# Import metric plotting functions
+from .metric_plots import (
+    plot_metric_histogram,
+    plot_metric_violin,
+    plot_multi_metric_histogram,
+    plot_metric_correlation_heatmap,
+    plot_top_neurons_bar,
+    METRIC_COLORS,
+)
 
 
 CLUSTER_COLORS = {
@@ -468,86 +489,216 @@ def plot_pruning_comparison(
     """
     Plot pruning accuracy comparison across methods and sparsity levels.
     
+    This is a convenience wrapper around plot_unified_pruning_comparison
+    for backward compatibility with vision experiments.
+    
     Args:
         results: Dict mapping method -> {ratio -> {'accuracy_after_ft': float}}
         baseline_acc: Baseline (unpruned) accuracy
         save_path: Optional path to save figure
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib Figure or None
     """
     if not HAS_MPL:
         return None
     
-    fig, ax = plt.subplots(figsize=figsize)
+    # Use the unified pruning comparison function
+    return plot_unified_pruning_comparison(
+        results=results,
+        baseline_value=baseline_acc,
+        metric='accuracy',
+        higher_is_better=True,
+        title='Pruning Method Comparison',
+        save_path=save_path,
+        figsize=figsize,
+    )
+
+
+def plot_metric_distributions_for_layer(
+    metrics: Dict[str, np.ndarray],
+    layer_name: str = "",
+    save_dir: Optional[Path] = None,
+    figsize: Tuple[int, int] = (15, 5),
+) -> Optional["plt.Figure"]:
+    """
+    Plot histograms of all metrics (RQ, Redundancy, Synergy) for a single layer.
     
-    # Colors for methods
-    method_colors = {
-        'random': '#95a5a6',
-        'magnitude': '#e74c3c',
-        'taylor': '#3498db',
-        'composite': '#9b59b6',
-        'cluster_aware': '#2ecc71',
-        'network_slimming': '#f39c12',
-        'chip': '#1abc9c',
-    }
+    This is a convenience function that combines multiple metric histograms
+    into a single figure for a given layer.
     
-    method_markers = {
-        'random': 'o',
-        'magnitude': 's',
-        'taylor': '^',
-        'composite': 'd',
-        'cluster_aware': '*',
-        'network_slimming': 'v',
-        'chip': 'p',
-    }
-    
-    for method, ratio_results in results.items():
-        if not ratio_results:
-            continue
+    Args:
+        metrics: Dict with keys like 'rq', 'redundancy', 'synergy' mapping to arrays
+        layer_name: Name of the layer for title
+        save_dir: Directory to save figure (filename auto-generated)
+        figsize: Figure size
         
-        ratios = sorted(ratio_results.keys())
-        accs = []
-        for r in ratios:
-            data = ratio_results[r]
-            if isinstance(data, dict) and 'accuracy_after_ft' in data:
-                accs.append(data['accuracy_after_ft'] * 100)
-            elif isinstance(data, dict) and 'error' not in data:
-                accs.append(0)
+    Returns:
+        Matplotlib Figure or None
+    """
+    if not HAS_MPL or not metrics:
+        return None
+    
+    # Use the multi-metric histogram from metric_plots
+    save_path = None
+    if save_dir:
+        safe_name = layer_name.replace('.', '_').replace('/', '_')
+        save_path = Path(save_dir) / f"metric_distributions_{safe_name}.png"
+    
+    return plot_multi_metric_histogram(
+        metrics=metrics,
+        layer_name=layer_name,
+        bins=30,
+        save_path=save_path,
+        figsize=figsize,
+    )
+
+
+def plot_layer_metric_summary(
+    layer_metrics: Dict[str, Dict[str, np.ndarray]],
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (14, 10),
+) -> Optional["plt.Figure"]:
+    """
+    Plot summary statistics of all metrics across all layers.
+    
+    Creates a 2x2 grid with:
+    - Mean values heatmap
+    - Standard deviation heatmap
+    - Metric correlations (averaged across layers)
+    - Layer-wise metric ranges
+    
+    Args:
+        layer_metrics: Dict mapping layer_name -> {metric_name -> values}
+        save_path: Optional path to save figure
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib Figure or None
+    """
+    if not HAS_MPL or not layer_metrics:
+        return None
+    
+    layer_names = list(layer_metrics.keys())
+    if not layer_names:
+        return None
+    
+    # Get all metric names from first layer
+    metric_names = list(layer_metrics[layer_names[0]].keys())
+    if not metric_names:
+        return None
+    
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    
+    # 1. Mean values heatmap
+    ax = axes[0, 0]
+    mean_matrix = np.zeros((len(layer_names), len(metric_names)))
+    for i, layer in enumerate(layer_names):
+        for j, metric in enumerate(metric_names):
+            values = layer_metrics[layer].get(metric, [])
+            mean_matrix[i, j] = np.mean(values) if len(values) > 0 else 0
+    
+    im = ax.imshow(mean_matrix, aspect='auto', cmap='YlOrRd')
+    ax.set_xticks(range(len(metric_names)))
+    ax.set_yticks(range(len(layer_names)))
+    ax.set_xticklabels(metric_names, rotation=45, ha='right', fontsize=9)
+    ax.set_yticklabels(layer_names, fontsize=8)
+    ax.set_title('Mean Values by Layer', fontsize=12)
+    plt.colorbar(im, ax=ax)
+    
+    # 2. Std values heatmap
+    ax = axes[0, 1]
+    std_matrix = np.zeros((len(layer_names), len(metric_names)))
+    for i, layer in enumerate(layer_names):
+        for j, metric in enumerate(metric_names):
+            values = layer_metrics[layer].get(metric, [])
+            std_matrix[i, j] = np.std(values) if len(values) > 0 else 0
+    
+    im = ax.imshow(std_matrix, aspect='auto', cmap='Blues')
+    ax.set_xticks(range(len(metric_names)))
+    ax.set_yticks(range(len(layer_names)))
+    ax.set_xticklabels(metric_names, rotation=45, ha='right', fontsize=9)
+    ax.set_yticklabels(layer_names, fontsize=8)
+    ax.set_title('Std Dev by Layer', fontsize=12)
+    plt.colorbar(im, ax=ax)
+    
+    # 3. Average correlation across layers
+    ax = axes[1, 0]
+    corr_sum = np.zeros((len(metric_names), len(metric_names)))
+    n_valid = 0
+    for layer in layer_names:
+        try:
+            data = np.column_stack([
+                np.asarray(layer_metrics[layer].get(m, [])).flatten() 
+                for m in metric_names
+            ])
+            if data.shape[0] > 10:  # Need enough samples
+                corr = np.corrcoef(data.T)
+                if not np.any(np.isnan(corr)):
+                    corr_sum += corr
+                    n_valid += 1
+        except:
+            continue
+    
+    if n_valid > 0:
+        avg_corr = corr_sum / n_valid
+        im = ax.imshow(avg_corr, cmap='RdBu_r', vmin=-1, vmax=1)
+        ax.set_xticks(range(len(metric_names)))
+        ax.set_yticks(range(len(metric_names)))
+        ax.set_xticklabels(metric_names, rotation=45, ha='right', fontsize=9)
+        ax.set_yticklabels(metric_names, fontsize=9)
+        for i in range(len(metric_names)):
+            for j in range(len(metric_names)):
+                ax.text(j, i, f'{avg_corr[i, j]:.2f}', ha='center', va='center', fontsize=8)
+        plt.colorbar(im, ax=ax)
+    ax.set_title('Average Metric Correlation', fontsize=12)
+    
+    # 4. Metric ranges across depth
+    ax = axes[1, 1]
+    for i, metric in enumerate(metric_names):
+        means = []
+        stds = []
+        for layer in layer_names:
+            values = layer_metrics[layer].get(metric, [])
+            if len(values) > 0:
+                means.append(np.mean(values))
+                stds.append(np.std(values))
             else:
-                accs.append(None)
+                means.append(0)
+                stds.append(0)
         
-        # Filter out None values
-        valid = [(r, a) for r, a in zip(ratios, accs) if a is not None]
-        if not valid:
-            continue
-        
-        ratios_plot, accs_plot = zip(*valid)
-        ratios_pct = [r * 100 for r in ratios_plot]
-        
-        color = method_colors.get(method, '#333333')
-        marker = method_markers.get(method, 'o')
-        label = method.replace('_', ' ').title()
-        
-        ax.plot(ratios_pct, accs_plot, marker=marker, color=color, 
-                label=label, linewidth=2, markersize=8)
+        color = METRIC_COLORS.get(metric.lower(), f'C{i}')
+        x = np.arange(len(layer_names))
+        ax.plot(x, means, 'o-', label=metric, color=color, linewidth=1.5, markersize=4)
+        ax.fill_between(x, np.array(means) - np.array(stds), 
+                       np.array(means) + np.array(stds), alpha=0.2, color=color)
     
-    # Add baseline
-    ax.axhline(y=baseline_acc * 100, color='gray', linestyle='--', 
-               label=f'Unpruned ({baseline_acc*100:.1f}%)', linewidth=1.5)
-    
-    ax.set_xlabel('Channel Sparsity (%)', fontsize=12)
-    ax.set_ylabel('Test Accuracy (%)', fontsize=12)
-    ax.set_title('Pruning Method Comparison', fontsize=14)
-    ax.legend(loc='lower left', fontsize=10)
+    ax.set_xticks(range(len(layer_names)))
+    ax.set_xticklabels(layer_names, rotation=45, ha='right', fontsize=8)
+    ax.set_ylabel('Value (mean ± std)', fontsize=10)
+    ax.set_title('Metrics Across Depth', fontsize=12)
+    ax.legend(loc='best', fontsize=9)
     ax.grid(True, alpha=0.3)
     
-    # Set reasonable y-axis limits
-    ax.set_ylim([60, 100])
-    
+    fig.suptitle('Layer Metric Summary', fontsize=14, fontweight='bold')
     plt.tight_layout()
     
     if save_path:
         save_path = Path(save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        logger.info(f"Saved pruning comparison to {save_path}")
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        logger.info(f"Saved layer metric summary to {save_path}")
     
     return fig
+
+
+# Legacy function name kept for backward compatibility
+def plot_vision_pruning_comparison(
+    results: Dict[str, Dict[float, Dict[str, float]]],
+    baseline_acc: float,
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (12, 6),
+) -> Optional["plt.Figure"]:
+    """Alias for plot_pruning_comparison for backward compatibility."""
+    return plot_pruning_comparison(results, baseline_acc, save_path, figsize)
