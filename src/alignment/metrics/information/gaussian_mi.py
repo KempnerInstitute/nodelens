@@ -340,3 +340,90 @@ class GaussianMIAnalytic(BaseMetric):
 
             # Return same value for all neurons
             return torch.full((output_dim,), total_mi.item(), device=original_device)
+
+
+@register_metric("mi_fast", aliases=["gaussian_mi_fast", "mi_gap"])
+class FastGaussianMI(GaussianMIAnalytic):
+    """
+    Fast Gaussian MI approximation for CNNs using Global Average Pooling.
+
+    Instead of unfolding patches or spatial reshaping, uses GAP to reduce
+    spatial dimensions to get a channel-wise computation.
+
+    This is an APPROXIMATION but is:
+    - 10-100x faster than spatial MI
+    - Uses O(C^2) memory instead of O((C*H*W)^2)
+    - Better for early conv layers with large spatial dimensions
+
+    For inputs [B, C_in, H, W] and weights [C_out, C_in, k, k]:
+    1. Apply GAP: inputs -> [B, C_in]
+    2. Sum weights over kernel: weights -> [C_out, C_in]
+    3. Compute standard MI on channel dimension
+
+    Example:
+        >>> mi_fast = FastGaussianMI()
+        >>> scores = mi_fast.compute(inputs=inputs, weights=conv.weight)
+    """
+
+    def __init__(
+        self,
+        noise_std: float = 0.1,
+        regularization: float = 1e-6,
+        **config,
+    ):
+        """
+        Initialize fast MI metric.
+
+        Args:
+            noise_std: Assumed noise standard deviation
+            regularization: Regularization for covariance
+            **config: Additional configuration
+        """
+        super().__init__(
+            expansion_order=0,  # Skip Edgeworth for speed
+            noise_std=noise_std,
+            regularization=regularization,
+            per_neuron=True,
+            **config,
+        )
+
+    def compute(
+        self,
+        inputs: torch.Tensor,
+        weights: torch.Tensor,
+        outputs: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """
+        Compute fast MI using GAP for CNN inputs.
+
+        Args:
+            inputs: Input activations [B, C_in, H, W] or [B, C_in]
+            weights: Conv weights [C_out, C_in, k_H, k_W] or [C_out, C_in]
+            outputs: Not used
+
+        Returns:
+            MI values for each output channel [C_out]
+        """
+        if weights is None:
+            raise ValueError("FastMI requires weights")
+        if inputs is None:
+            raise ValueError("FastMI requires inputs")
+
+        # Handle CNN inputs: [B, C_in, H, W] -> GAP -> [B, C_in]
+        if inputs.ndim == 4:
+            # Global Average Pooling over spatial dimensions
+            inputs = inputs.mean(dim=(2, 3))  # [B, C_in]
+        elif inputs.ndim == 3:
+            # Patchwise input [B, F, P] -> average over patches
+            inputs = inputs.mean(dim=2)  # [B, F]
+
+        # Handle Conv weights: [C_out, C_in, k_H, k_W] -> sum over kernel -> [C_out, C_in]
+        if weights.ndim == 4:
+            # Sum over kernel dimensions to get channel-wise weights
+            weights = weights.sum(dim=(2, 3))  # [C_out, C_in]
+        elif weights.ndim > 2:
+            weights = weights.reshape(weights.shape[0], -1)
+
+        # Now use standard 2D MI computation
+        return super().compute(inputs=inputs, weights=weights, **kwargs)

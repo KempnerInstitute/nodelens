@@ -44,20 +44,26 @@ import logging
 from typing import Optional, Type, Union
 
 from .base import BasePruningStrategy, IterativePruningStrategy, PruningConfig
+from .pipeline import PruningPipelineOptions, run_pruning_pipeline
 from .strategies import (
+    AdaptiveMovementPruning,
+    AdaptiveSensitivityPruning,
     AlignmentPruning,
     AsyncParallelPruning,
     BernoulliPruning,
     CascadingAlignmentPruning,
+    EigenvectorPruning,
     FisherPruning,
     GlobalAlignmentPruning,
     GlobalMagnitudePruning,
     GradientPruning,
     HybridPruning,
     IterativeMagnitudePruning,
+    LayerSensitivity,
     LayerwiseRandomPruning,
     MagnitudePruning,
     MomentumPruning,
+    MovementPruning,
     ParallelModePruning,
     RandomPruning,
     SparseGPTPruning,
@@ -82,6 +88,13 @@ PRUNING_STRATEGIES = {
     "hybrid": HybridPruning,
     "global_alignment": GlobalAlignmentPruning,
     "cascading_alignment": CascadingAlignmentPruning,
+    # Eigenvector-based (PCA pruning)
+    "eigenvector": EigenvectorPruning,
+    # Movement-based (Sanh et al. NeurIPS 2020)
+    "movement": MovementPruning,
+    "adaptive_movement": AdaptiveMovementPruning,
+    # Adaptive sensitivity-based
+    "adaptive_sensitivity": AdaptiveSensitivityPruning,
     # Random strategies (kept for backward compatibility)
     # Note: Consider using selection_mode='random' instead
     "random": RandomPruning,
@@ -158,6 +171,14 @@ __all__ = [
     "HybridPruning",
     "GlobalAlignmentPruning",
     "CascadingAlignmentPruning",
+    # Eigenvector (PCA) strategy
+    "EigenvectorPruning",
+    # Movement-based (Sanh et al. 2020)
+    "MovementPruning",
+    "AdaptiveMovementPruning",
+    # Adaptive sensitivity-based
+    "AdaptiveSensitivityPruning",
+    "LayerSensitivity",
     # Random strategies
     "RandomPruning",
     "LayerwiseRandomPruning",
@@ -172,4 +193,7 @@ __all__ = [
     # Functions
     "get_pruning_strategy",
     "list_pruning_strategies",
+    # Pipeline helpers
+    "PruningPipelineOptions",
+    "run_pruning_pipeline",
 ]

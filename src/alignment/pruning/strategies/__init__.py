@@ -2,10 +2,13 @@
 Pruning strategies for the alignment framework.
 """
 
+from .adaptive import AdaptiveSensitivityPruning, LayerSensitivity
 from .alignment_based import AlignmentPruning, GlobalAlignmentPruning, HybridPruning
 from .cascading import CascadingAlignmentPruning
 from .cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig, CompositePruning
+from .eigenvector import EigenvectorPruning
 from .gradient import FisherPruning, GradientPruning, MomentumPruning
+from .movement import AdaptiveMovementPruning, MovementPruning
 from .llm_baselines import WandaPruning, SparseGPTPruning
 from .magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, MagnitudePruning
 from .parallel import AsyncParallelPruning, ParallelModePruning, TensorizedPruning
@@ -35,6 +38,14 @@ __all__ = [
     "HybridPruning",
     "GlobalAlignmentPruning",
     "CascadingAlignmentPruning",
+    # Eigenvector-based (PCA pruning)
+    "EigenvectorPruning",
+    # Movement-based (Sanh et al. 2020)
+    "MovementPruning",
+    "AdaptiveMovementPruning",
+    # Adaptive sensitivity-based
+    "AdaptiveSensitivityPruning",
+    "LayerSensitivity",
     # Cluster-aware (vision paper)
     "ClusterAwarePruning",
     "ClusterAwarePruningConfig",

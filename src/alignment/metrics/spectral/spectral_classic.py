@@ -37,6 +37,18 @@ class SpectralAlignment(BaseMetric):
         self.normalize = normalize
         self.epsilon = epsilon
 
+    @property
+    def requires_inputs(self) -> bool:
+        return True
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return False
+
     def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute spectral alignment scores.
@@ -112,6 +124,18 @@ class SpectralNormRatio(BaseMetric):
         super().__init__()
         self.epsilon = epsilon
 
+    @property
+    def requires_inputs(self) -> bool:
+        return False
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return False
+
     def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Compute spectral norm ratio for each layer.
@@ -159,6 +183,18 @@ class EigenvalueEntropy(BaseMetric):
         super().__init__()
         self.temperature = temperature
         self.epsilon = epsilon
+
+    @property
+    def requires_inputs(self) -> bool:
+        return True
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return False  # Computed from inputs and weights if not provided
 
     def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
@@ -229,6 +265,18 @@ class SpectralClusteringScore(BaseMetric):
         self.n_clusters = n_clusters
         self.similarity_type = similarity_type
         self.epsilon = epsilon
+
+    @property
+    def requires_inputs(self) -> bool:
+        return False
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return False
 
     def compute(self, inputs: torch.Tensor, weights: torch.Tensor, outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """

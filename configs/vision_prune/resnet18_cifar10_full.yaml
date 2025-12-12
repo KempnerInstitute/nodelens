@@ -40,6 +40,10 @@ metrics:
 # Clustering
 clustering:
   enabled: true
+  distribution: "uniform"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
   n_clusters: 4
   normalize_features: true
   compute_stability: true
@@ -48,6 +52,10 @@ clustering:
 # Cross-layer halo analysis
 halo_analysis:
   enabled: true
+  distribution: "uniform"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
   percentile: 90.0
   use_activation_weight: true
   compute_influence_matrix: true
@@ -55,21 +63,53 @@ halo_analysis:
 # Cascade/damage analysis
 cascade_analysis:
   enabled: true
+  distribution: "uniform"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
   n_remove_per_cluster: 5
   damage_sample_fraction: 0.2
 
-# Pruning experiments
+# Pruning experiments - Comprehensive metric testing
+# Tests individual metrics and combinations to validate CNN pruning assumptions
 pruning:
   enabled: true
-  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  distribution: "uniform"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  ratios: [0.1, 0.3, 0.5, 0.7]
   
-  methods:
-    - name: random
-    - name: magnitude
-    - name: taylor
-    - name: rq_only
-    - name: composite  # RQ + Red + Syn
-    - name: cluster_aware  # Full cluster + halo aware
+  # Comprehensive algorithm list for exploration
+  algorithms:
+    # Baselines
+    - random
+    - magnitude
+    - taylor
+    
+    # Single metrics - prune LOW
+    - rq_low              # Prune low Rayleigh Quotient
+    - redundancy_low      # Prune low redundancy (MI)
+    - synergy_low         # Prune low synergy
+    
+    # Single metrics - prune HIGH (test assumptions)
+    - rq_high             # Prune high RQ
+    - redundancy_high     # Prune high redundancy
+    - synergy_high        # Prune high synergy
+    - magnitude_high      # Prune high magnitude
+    
+    # Composite combinations
+    - composite           # score = RQ + syn - red (original)
+    - composite_pos_red   # score = RQ + syn + red (flipped redundancy)
+    - rq_minus_red        # score = RQ - redundancy
+    - rq_plus_red         # score = RQ + redundancy
+    - magnitude_plus_rq   # score = magnitude + RQ
+    - magnitude_minus_red # score = magnitude - redundancy
+    - magnitude_plus_red  # score = magnitude + redundancy
+    
+    # Cluster-aware
+    - cluster_aware
+    - cluster_aware_protect_redundant
   
   fine_tuning:
     epochs: 10
@@ -84,6 +124,10 @@ baselines:
 # Visualization
 visualization:
   enabled: true
+  distribution: "uniform"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
   figures:
     - cluster_scatter
     - cluster_evolution

@@ -3,7 +3,7 @@ Information-theoretic metrics for neural network alignment.
 """
 
 from .conditional_mutual_information import ConditionalMutualInformation
-from .gaussian_mi import GaussianMIAnalytic
+from .gaussian_mi import GaussianMIAnalytic, FastGaussianMI
 from .mi_projection import MIProjectionVsMeanInput
 from .mutual_information import MutualInformationBinning, MutualInformationGaussian
 from .pairwise_gaussian import PairwiseRedundancyGaussian
@@ -27,11 +27,13 @@ __all__ = [
     "MutualInformationGaussian",
     "MutualInformationBinning",
     "GaussianMIAnalytic",
+    "FastGaussianMI",  # Fast MI variant using GAP for CNNs
     # Redundancy
     "AverageRedundancy",
     "PairwiseRedundancyGaussian",
     # Synergy
     "SynergyGaussianMMI",
+    "SynergyContinuousTarget",
     # PID
     "SharedInformation",
     "UniqueInformationX",

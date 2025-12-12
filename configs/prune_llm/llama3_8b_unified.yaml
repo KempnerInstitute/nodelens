@@ -71,6 +71,13 @@ calibration:
 #       by the supernode analysis pipeline, not as standalone metrics
 # -----------------------------------------------------------------------------
 metrics:
+  # Optimization options for faster metric computation
+  optimization:
+    use_jit: false                 # Enable JIT-compiled computations (20-50% faster)
+    use_gpu_acceleration: false    # Enable GPU-accelerated functions
+    force_cpu_for_large_ops: true  # Prevent OOM for large covariance matrices
+    cpu_threshold: 100000000       # 1e8 elements threshold
+  
   rayleigh_quotient:
     enabled: true
     relative: true
@@ -149,6 +156,8 @@ pruning:
   ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
   selection_modes: ["low", "high"]
   distribution: "uniform"
+  min_per_layer: 0.0
+  max_per_layer: 0.95
   structured: true
   dependency_aware: true
   
@@ -281,7 +290,11 @@ visualization:
 # -----------------------------------------------------------------------------
 # OUTPUT
 # -----------------------------------------------------------------------------
+# Uses job directory structure: creates unique folders for each run
+# Directory format: {base_dir}/{experiment_name}_{timestamp}_{job_id}/
 output:
+  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+  # dir is ignored when base_dir is set
   dir: "./results/paper/llama3_8b"
   save_metrics: true
   save_figures: true

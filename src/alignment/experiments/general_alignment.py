@@ -30,6 +30,7 @@ from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 from alignment.models import ModelWrapper
 from alignment.pruning.base import PruningConfig
 from alignment.pruning.dependency_aware import DependencyAwarePruning
+from alignment.pruning.pipeline import PruningPipelineOptions, run_pruning_pipeline
 from alignment.pruning.strategies import MagnitudePruning, RandomPruning
 from alignment.services import ActivationCaptureService, MaskOperations
 
@@ -2445,6 +2446,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         """
         Apply dependency-aware pruning by converting per-layer scores into masks that respect
         downstream dependencies (e.g., Conv blocks, residual connections).
+        
+        Uses the shared pruning pipeline with configurable distribution options.
         """
         layer_scores: Dict[str, torch.Tensor] = {}
         layer_outputs = layer_outputs or {}
@@ -2479,9 +2482,22 @@ class GeneralAlignmentExperiment(BaseExperiment):
             logger.warning("Dependency-aware pruning requested but no valid layer scores were computed.")
             return None
 
-        dep_pruner = DependencyAwarePruning(self.model)
+        # Use shared pruning pipeline with config-driven options
+        pipeline_options = PruningPipelineOptions(
+            distribution=getattr(self.config, "pruning_distribution", "uniform"),
+            dependency_aware=True,  # Always true for this method
+            min_amount=getattr(self.config, "pruning_min_per_layer", 0.0),
+            max_amount=getattr(self.config, "pruning_max_per_layer", 0.95),
+        )
+        
         try:
-            result = dep_pruner.prune(layer_scores, amount=amount, mode=selection_mode)
+            result = run_pruning_pipeline(
+                model=self.model,
+                layer_scores=layer_scores,
+                target_sparsity=amount,
+                selection_mode=selection_mode,
+                options=pipeline_options,
+            )
         except ValueError as exc:
             logger.error(f"Dependency-aware pruning failed validation: {exc}")
             return None

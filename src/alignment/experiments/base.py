@@ -68,6 +68,8 @@ class ExperimentConfig:
     # Metrics configuration
     metrics: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
     metric_configs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Optimization options for metric computation (use_jit, use_gpu_acceleration, etc.)
+    metric_optimization: Dict[str, Any] = field(default_factory=dict)
     tracked_layers: Optional[List[str]] = None
     scale_by_norm: bool = False  # Whether to scale alignment scores by weight norm
     force_cpu_for_large_metric_ops: bool = True  # Move large operations to CPU
@@ -113,6 +115,9 @@ class ExperimentConfig:
     pruning_alignment_metric: str = "rayleigh_quotient"
     pruning_hybrid_alpha: float = 0.5
     pruning_scope: str = "layer"  # "global" or "layer"
+    pruning_distribution: str = "uniform"
+    pruning_min_per_layer: float = 0.0
+    pruning_max_per_layer: float = 0.95
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
@@ -136,10 +141,12 @@ class ExperimentConfig:
     checkpoint_interval: int = 1000
     save_best: bool = True
 
-    # Logging
+    # Logging and Output Directories
     log_dir: str = "./logs"
     log_interval: int = 100
     plots_dir: str = "./plots"  # Directory for saving plots
+    experiment_dir: Optional[str] = None  # Root experiment directory (set by runner)
+    base_output_dir: Optional[str] = None  # Base directory for creating job-specific output folders
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
 

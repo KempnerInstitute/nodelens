@@ -28,6 +28,18 @@ class SpectralGapMetric(BaseMetric):
         super().__init__()
         self.normalize = normalize
 
+    @property
+    def requires_inputs(self) -> bool:
+        return False
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return False
+
     def compute(
         self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
@@ -87,6 +99,18 @@ class EigenvalueAlignmentMetric(BaseMetric):
         self.p = p
         self.top_k = top_k
         self._reference_eigenvalues = None
+
+    @property
+    def requires_inputs(self) -> bool:
+        return False
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return False
 
     def set_reference(self, weights: torch.Tensor):
         """Set reference weight matrix for comparison."""
@@ -167,6 +191,18 @@ class SpectralClusteringAlignment(BaseMetric):
         self.n_components = n_components
         self.n_clusters = n_clusters
 
+    @property
+    def requires_inputs(self) -> bool:
+        return False
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return True
+
     def compute(
         self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
@@ -231,6 +267,18 @@ class PowerIterationAlignment(BaseMetric):
         super().__init__()
         self.max_iterations = max_iterations
         self.tolerance = tolerance
+
+    @property
+    def requires_inputs(self) -> bool:
+        return False
+
+    @property
+    def requires_weights(self) -> bool:
+        return True
+
+    @property
+    def requires_outputs(self) -> bool:
+        return False
 
     def compute(
         self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs

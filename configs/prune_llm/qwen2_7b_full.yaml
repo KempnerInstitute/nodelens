@@ -221,6 +221,8 @@ pruning:
   enabled: true
   target: "ffn"
   distribution: "uniform"
+  min_per_layer: 0.0
+  max_per_layer: 0.95
   structured: true
   dependency_aware: true
 

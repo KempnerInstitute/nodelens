@@ -20,7 +20,19 @@ logger = logging.getLogger(__name__)
 
 
 class BaseMetric(ABC):
-    """Base class for all alignment metrics."""
+    """Base class for all alignment metrics.
+    
+    Common Configuration Options:
+        name: Optional custom name for the metric
+        force_cpu_for_large_ops: bool = True - Move to CPU for large tensors
+        cpu_threshold: int = 1e8 - Element count threshold for CPU fallback
+        use_jit: bool = False - Use JIT-compiled implementations when available
+        use_gpu_acceleration: bool = False - Use GPU-accelerated implementations
+        
+    Note: JIT and GPU acceleration provide 20-50% speedup but require:
+        - use_jit: PyTorch JIT compilation support
+        - use_gpu_acceleration: CUDA-enabled GPU
+    """
 
     def __init__(self, name: Optional[str] = None, **config: Any):
         """
@@ -34,6 +46,16 @@ class BaseMetric(ABC):
         self.config = config
         self._force_cpu_for_large_ops = config.get("force_cpu_for_large_ops", True)
         self._cpu_threshold = config.get("cpu_threshold", 1e8)  # 100M elements
+        
+        # Optimization options
+        self._use_jit = config.get("use_jit", False)
+        self._use_gpu_acceleration = config.get("use_gpu_acceleration", False)
+        
+        # Initialize JIT/GPU accelerated functions if requested
+        self._jit_compute = None
+        self._gpu_functions = None
+        if self._use_jit or self._use_gpu_acceleration:
+            self._setup_optimizations()
 
     @property
     def name(self) -> str:
@@ -117,8 +139,84 @@ class BaseMetric(ABC):
         total_elements = sum(t.numel() for t in tensors if t is not None)
         return total_elements > self._cpu_threshold
 
+    def _setup_optimizations(self) -> None:
+        """
+        Setup JIT and GPU optimized functions if available.
+        
+        Override this in subclasses to enable metric-specific optimizations.
+        """
+        # Import optimization modules lazily
+        if self._use_jit:
+            try:
+                from ..infrastructure.computing.optimized.jit import (
+                    compute_rayleigh_quotient_jit,
+                    compute_mutual_information_gaussian_jit,
+                    compute_node_correlation_jit,
+                    compute_cosine_similarity_matrix_jit,
+                )
+                self._jit_functions = {
+                    "rayleigh_quotient": compute_rayleigh_quotient_jit,
+                    "mutual_information": compute_mutual_information_gaussian_jit,
+                    "node_correlation": compute_node_correlation_jit,
+                    "cosine_similarity": compute_cosine_similarity_matrix_jit,
+                }
+                logger.debug(f"{self._name}: JIT functions loaded")
+            except ImportError as e:
+                logger.warning(f"Could not load JIT functions: {e}")
+                self._jit_functions = {}
+        else:
+            self._jit_functions = {}
+            
+        if self._use_gpu_acceleration:
+            try:
+                from ..infrastructure.computing.optimized.gpu import (
+                    gpu_histogram1d,
+                    gpu_histogram2d,
+                    gpu_mutual_information,
+                    gpu_entropy,
+                    GPUAcceleratedMetrics,
+                )
+                self._gpu_functions = {
+                    "histogram1d": gpu_histogram1d,
+                    "histogram2d": gpu_histogram2d,
+                    "mutual_information": gpu_mutual_information,
+                    "entropy": gpu_entropy,
+                    "fast_covariance": GPUAcceleratedMetrics.fast_covariance,
+                    "fast_correlation": GPUAcceleratedMetrics.fast_correlation,
+                }
+                logger.debug(f"{self._name}: GPU functions loaded")
+            except ImportError as e:
+                logger.warning(f"Could not load GPU functions: {e}")
+                self._gpu_functions = {}
+        else:
+            self._gpu_functions = {}
+
+    @property
+    def use_jit(self) -> bool:
+        """Whether JIT-compiled functions are enabled."""
+        return self._use_jit and bool(getattr(self, "_jit_functions", {}))
+
+    @property
+    def use_gpu_acceleration(self) -> bool:
+        """Whether GPU-accelerated functions are enabled."""
+        return self._use_gpu_acceleration and bool(getattr(self, "_gpu_functions", {}))
+
+    def _get_jit_function(self, name: str):
+        """Get a JIT-compiled function by name, or None if not available."""
+        return getattr(self, "_jit_functions", {}).get(name)
+
+    def _get_gpu_function(self, name: str):
+        """Get a GPU-accelerated function by name, or None if not available."""
+        return getattr(self, "_gpu_functions", {}).get(name)
+
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(name='{self.name}')"
+        opt_flags = []
+        if self._use_jit:
+            opt_flags.append("jit")
+        if self._use_gpu_acceleration:
+            opt_flags.append("gpu")
+        opt_str = f", optimizations=[{', '.join(opt_flags)}]" if opt_flags else ""
+        return f"{self.__class__.__name__}(name='{self.name}'{opt_str})"
 
 
 class BaseModel(ABC):

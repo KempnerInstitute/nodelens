@@ -87,9 +87,18 @@ from .cluster_plots import (
     plot_pruning_comparison,
     plot_metric_distributions_for_layer,
     plot_layer_metric_summary,
+    plot_layer_metric_trends,
+    plot_metric_statistics_table,
     plot_centroid_evolution,
     plot_centroid_depth_profiles,
     CLUSTER_COLORS,
+)
+
+# New bar chart functions for pruning
+from .pruning_plots import (
+    plot_pruning_bar_comparison,
+    plot_pruning_heatmap,
+    plot_pruning_ranking,
 )
 
 __all__ = [
@@ -128,7 +137,13 @@ __all__ = [
     "plot_pruning_comparison",
     "plot_metric_distributions_for_layer",
     "plot_layer_metric_summary",
+    "plot_layer_metric_trends",
+    "plot_metric_statistics_table",
     "plot_centroid_evolution",
     "plot_centroid_depth_profiles",
     "CLUSTER_COLORS",
+    # New bar chart functions
+    "plot_pruning_bar_comparison",
+    "plot_pruning_heatmap",
+    "plot_pruning_ranking",
 ]

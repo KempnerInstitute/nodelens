@@ -131,7 +131,14 @@ class DependencyAwarePruning:
         self.model = model
         self.dependency_graph = DependencyGraph(model)
 
-    def prune(self, layer_scores: Dict[str, torch.Tensor], amount: float, mode: str = "low", dry_run: bool = False) -> Dict[str, Any]:
+    def prune(
+        self,
+        layer_scores: Dict[str, torch.Tensor],
+        amount: float,
+        mode: str = "low",
+        dry_run: bool = False,
+        per_layer_amounts: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, Any]:
         """
         Apply structured pruning with dependency awareness.
 
@@ -148,7 +155,7 @@ class DependencyAwarePruning:
                 - 'validation': Shape validation results
         """
         # 1. Create initial masks from scores
-        initial_masks = self._create_initial_masks(layer_scores, amount, mode)
+        initial_masks = self._create_initial_masks(layer_scores, amount, mode, per_layer_amounts)
 
         # 2. Propagate masks to handle dependencies
         propagated_masks = self._propagate_masks(initial_masks)
@@ -170,7 +177,13 @@ class DependencyAwarePruning:
 
         return {"masks": propagated_masks, "stats": stats, "validation": validation}
 
-    def _create_initial_masks(self, layer_scores: Dict[str, torch.Tensor], amount: float, mode: str) -> Dict[str, torch.Tensor]:
+    def _create_initial_masks(
+        self,
+        layer_scores: Dict[str, torch.Tensor],
+        default_amount: float,
+        mode: str,
+        per_layer_amounts: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, torch.Tensor]:
         """Create initial output masks from importance scores."""
         from ..services.mask_ops import MaskOperations
 
@@ -181,8 +194,11 @@ class DependencyAwarePruning:
                 logger.warning(f"Layer {layer_name} not in dependency graph, skipping")
                 continue
 
+            layer_amount = default_amount
+            if per_layer_amounts and layer_name in per_layer_amounts:
+                layer_amount = per_layer_amounts[layer_name]
             # Create structured mask (output neurons/channels)
-            mask = MaskOperations.create_structured_mask(scores, amount=amount, mode=mode)
+            mask = MaskOperations.create_structured_mask(scores, amount=layer_amount, mode=mode)
 
             initial_masks[layer_name] = mask
 

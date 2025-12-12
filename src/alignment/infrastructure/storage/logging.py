@@ -4,6 +4,7 @@ Logging utilities for the alignment framework.
 
 import json
 import logging
+import logging.config
 import sys
 from datetime import datetime
 from pathlib import Path

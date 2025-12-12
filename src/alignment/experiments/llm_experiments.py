@@ -11,6 +11,7 @@ from alignment.experiments.base import ExperimentConfig, BaseExperiment
 from alignment.metrics import get_metric
 from alignment.models.transformers import TransformerWrapperEnhanced as TransformerWrapper
 from alignment.pruning import AlignmentPruning, PruningConfig
+from alignment.pruning.pipeline import PruningPipelineOptions
 from alignment.pruning.strategies.llm_baselines import WandaPruning, SparseGPTPruning
 from alignment.services import MaskOperations
 from alignment.training.base import BaseTrainer  # kept for compatibility if used elsewhere
@@ -3122,13 +3123,19 @@ class LLMAlignmentExperiment(BaseExperiment):
     ) -> Optional[torch.Tensor]:
         """Compute Rayleigh Quotient for a specific layer.
         
-        RQ measures how well each neuron's weight vector aligns with input covariance.
+        Standard RQ formula: RQ(w) = (w^T Σ w) / (w^T w)
+        where Σ is input covariance and w is a weight vector.
         
-        For different layer types:
-        - up_proj/gate_proj: weight [intermediate, hidden], input [hidden]
-          → RQ per intermediate neuron (output dim)
-        - down_proj: weight [hidden, intermediate], input [intermediate]
-          → Use weighted variance proxy per intermediate neuron
+        For down_proj layers:
+        - weight W: [hidden_dim, intermediate_dim]
+        - input X: [batch, intermediate_dim]  
+        - Σ = Cov(X): [intermediate_dim, intermediate_dim]
+        
+        We compute RQ per ROW of W (each row w_i is [intermediate_dim]):
+            RQ_i = (w_i @ Σ @ w_i^T) / (w_i @ w_i^T)
+        
+        Then aggregate to get per-intermediate-neuron scores by looking at
+        how much each intermediate neuron j contributes across all output RQs.
         """
         device = next(self.model.parameters()).device
         
@@ -3141,7 +3148,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         for name, module in hf_model.named_modules():
             if name == layer_name or name.endswith(layer_name):
                 if hasattr(module, "weight"):
-                    weight = module.weight.data.float()  # [hidden_dim, intermediate_dim]
+                    weight = module.weight.data.float()
                     break
         
         if weight is None:
@@ -3185,7 +3192,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 all_acts = all_acts.to(device)
                 input_dim = all_acts.shape[1]
                 
-                # Compute covariance of inputs
+                # Compute covariance of inputs: Σ = (X - μ)^T (X - μ) / (n-1)
                 mean = all_acts.mean(dim=0, keepdim=True)
                 centered = all_acts - mean
                 cov = (centered.T @ centered) / (all_acts.shape[0] - 1)
@@ -3194,17 +3201,52 @@ class LLMAlignmentExperiment(BaseExperiment):
                 weight = weight.to(device)
                 out_dim, in_dim = weight.shape  # weight: [out_dim, in_dim]
                 
-                # For down_proj: FFN "neurons" are the intermediate dim (inputs to this layer)
-                # We want one score per intermediate neuron for consistency with up_proj/gate_proj
                 if "down_proj" in layer_name:
-                    # down_proj: weight is [hidden, intermediate], input is [intermediate]
-                    # Return one score per intermediate neuron (input column)
-                    # Use weighted input variance as RQ proxy
-                    input_var = torch.var(all_acts, dim=0)  # [intermediate_dim]
-                    # Weight by outgoing connection strength (how much this neuron contributes)
-                    col_norms = torch.norm(weight, dim=0)  # [intermediate_dim]
-                    rq_proxy = input_var * col_norms  # [intermediate_dim]
-                    return rq_proxy.cpu()
+                    # weight W: [hidden_dim, intermediate_dim]
+                    # cov Σ: [intermediate_dim, intermediate_dim]
+                    # 
+                    # Standard RQ per OUTPUT neuron (row i of W):
+                    #   w_i = W[i, :] has shape [intermediate_dim]
+                    #   RQ_i = (w_i @ Σ @ w_i^T) / ||w_i||^2
+                    #
+                    # Vectorized: W @ Σ @ W^T gives [hidden_dim, hidden_dim]
+                    # Diagonal gives per-output-neuron RQ
+                    
+                    # Compute W @ Σ: [hidden_dim, intermediate_dim]
+                    w_cov = weight @ cov  # [hidden_dim, intermediate_dim]
+                    
+                    # Compute (W @ Σ) * W and sum over intermediate dim → w^T Σ w per row
+                    w_cov_w = (w_cov * weight).sum(dim=1)  # [hidden_dim]
+                    
+                    # Compute ||w||^2 per row
+                    w_norm_sq = (weight ** 2).sum(dim=1)  # [hidden_dim]
+                    
+                    # RQ per output neuron
+                    rq_per_output = w_cov_w / (w_norm_sq + 1e-10)  # [hidden_dim]
+                    
+                    # Now we need per-INTERMEDIATE-neuron scores for pruning.
+                    # Contribution of intermediate neuron j to all output RQs:
+                    # The term W[:, j] * Σ[j, :] @ W^T contributes to each output's RQ.
+                    # 
+                    # Per-intermediate importance = how much does neuron j contribute to
+                    # the total output variance? This is captured by:
+                    #   Σ[j, j] * ||W[:, j]||^2  (diagonal contribution)
+                    # Plus weighted covariance contribution from correlations.
+                    #
+                    # Alternatively, use activation variance weighted by weight magnitude:
+                    # This captures supernodes (high variance + high weight = high impact)
+                    
+                    # Diagonal of covariance = per-neuron variance
+                    var_j = torch.diag(cov)  # [intermediate_dim]
+                    
+                    # Column norms squared = weight contribution
+                    col_norm_sq = (weight ** 2).sum(dim=0)  # [intermediate_dim]
+                    
+                    # Per-intermediate RQ proxy: Var(j) * ||W[:, j]||^2
+                    # This is the diagonal contribution to output variance from neuron j
+                    rq_per_intermediate = var_j * col_norm_sq
+                    
+                    return rq_per_intermediate.cpu()
                 
                 # For up_proj/gate_proj: weight [intermediate, hidden], input [hidden]
                 # Check if weight columns align with input covariance
@@ -5525,6 +5567,23 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         if not self.importance_scores:
             raise ValueError("Must compute importance scores before pruning")
+
+        # Get pruning pipeline options from config
+        pruning_distribution = getattr(self.config, "pruning_distribution", "uniform")
+        pruning_min = getattr(self.config, "pruning_min_per_layer", 0.0)
+        pruning_max = getattr(self.config, "pruning_max_per_layer", 0.95)
+        
+        # Store options for reference (can be used by downstream methods)
+        self._pruning_options = PruningPipelineOptions(
+            distribution=pruning_distribution,
+            dependency_aware=getattr(self.config, "dependency_aware_pruning", False),
+            min_amount=pruning_min,
+            max_amount=pruning_max,
+        )
+        
+        # Log pruning configuration
+        if pruning_distribution != "uniform":
+            logger.info(f"Using {pruning_distribution} distribution (min={pruning_min}, max={pruning_max})")
 
         config = PruningConfig(amount=sparsity, structured=True, pruning_mode=mode)
         

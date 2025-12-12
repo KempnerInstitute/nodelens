@@ -56,6 +56,13 @@ calibration:
 #   magnitude (alias: activation_l2_norm)
 # -----------------------------------------------------------------------------
 metrics:
+  # Optimization options for faster metric computation
+  optimization:
+    use_jit: false                 # Enable JIT-compiled computations (20-50% faster)
+    use_gpu_acceleration: false    # Enable GPU-accelerated functions
+    force_cpu_for_large_ops: true  # Prevent OOM for large covariance matrices
+    cpu_threshold: 100000000       # 1e8 elements threshold
+  
   rayleigh_quotient:
     enabled: true
     relative: true
@@ -119,37 +126,80 @@ cascade_analysis:
   damage_sample_fraction: 0.2
 
 # -----------------------------------------------------------------------------
-# PRUNING
+# PRUNING - Comprehensive testing of all metrics
+# -----------------------------------------------------------------------------
+# This tests individual metrics and combinations to validate basic assumptions
+# about what makes channels important in CNNs vs what works for LLMs.
+#
+# Key questions to answer:
+# 1. Do low-RQ channels safely prune? (rq_low)
+# 2. Is high redundancy bad (redundancy_high) or good (redundancy_low)?
+# 3. Does synergy matter for CNNs?
+# 4. What combinations work best?
 # -----------------------------------------------------------------------------
 pruning:
   enabled: true
-  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-  selection_modes: ["low", "high"]
+  distribution: "uniform"            # uniform, global_threshold, size_proportional, importance_weighted
+  dependency_aware: true             # Propagate masks through BN/skip connections
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  # Include high sparsity (80%, 90%) to clearly see degradation
+  ratios: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
   
-  # Algorithms to test (unified naming)
+  # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:
-    - "random"
-    - "magnitude"
-    - "taylor"
-    - "rayleigh_quotient"
-    - "redundancy"
-    - "synergy"
-    - "composite"
-    - "cluster_aware"
+    # =========================================================================
+    # BASELINES
+    # =========================================================================
+    - "random"              # Random baseline
+    - "magnitude"           # Standard magnitude pruning (prune low)
+    - "taylor"              # Gradient-based importance
+    
+    # =========================================================================
+    # SINGLE METRICS - Prune LOW (assumes low = unimportant)
+    # =========================================================================
+    - "rq_low"              # Prune low Rayleigh Quotient
+    - "redundancy_low"      # Prune low redundancy (MI)
+    - "synergy_low"         # Prune low synergy
+    
+    # =========================================================================
+    # SINGLE METRICS - Prune HIGH (assumes high = unimportant)
+    # =========================================================================
+    - "rq_high"             # Prune high RQ (TEST: is high RQ bad?)
+    - "redundancy_high"     # Prune high redundancy (TEST: is high corr bad?)
+    - "synergy_high"        # Prune high synergy
+    - "magnitude_high"      # Prune high magnitude (inverse of standard)
+    
+    # =========================================================================
+    # COMPOSITE COMBINATIONS
+    # =========================================================================
+    - "composite"           # Original: score = RQ + syn - red (prune low)
+    - "composite_pos_red"   # Flipped: score = RQ + syn + red (prune low)
+    - "rq_minus_red"        # score = RQ - redundancy
+    - "rq_plus_red"         # score = RQ + redundancy
+    - "magnitude_plus_rq"   # score = magnitude + RQ
+    - "magnitude_minus_red" # score = magnitude - redundancy
+    - "magnitude_plus_red"  # score = magnitude + redundancy
+    
+    # =========================================================================
+    # CLUSTER-AWARE
+    # =========================================================================
+    - "cluster_aware"               # Original: protect critical, target redundant
+    - "cluster_aware_protect_redundant"  # Inverted: protect redundant
   
-  # Scoring methods (for comparison)
   scoring_methods:
     - "random"
     - "magnitude"
-    - "taylor"
-    - "rayleigh_quotient"
-    - "redundancy"
-    - "synergy"
+    - "rq_low"
+    - "rq_high"
+    - "redundancy_low"
+    - "redundancy_high"
+    - "synergy_low"
     - "composite"
-    - "cluster_aware"
+    - "composite_pos_red"
   
   fine_tune:
-    enabled: true
+    enabled: false  # Disabled to see pure pruning impact without recovery
     epochs: 10
     learning_rate: 0.0001
     weight_decay: 0.0001
@@ -261,7 +311,10 @@ visualization:
 # -----------------------------------------------------------------------------
 # OUTPUT
 # -----------------------------------------------------------------------------
+# Uses job directory structure: creates unique folders for each run
+# Directory format: {base_dir}/{experiment_name}_{timestamp}_{job_id}/
 output:
+  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
   dir: "./results/vision/resnet18_cifar10"
   save_metrics: true
   save_clusters: true
@@ -274,7 +327,8 @@ output:
 # -----------------------------------------------------------------------------
 extra:
   # Pre-training for ImageNet pretrained models on CIFAR
-  pretrain_epochs: 20
+  # Train until model achieves ~90% accuracy on CIFAR-10
+  pretrain_epochs: 30
   pretrain_lr: 0.001
   
   # Baselines to compare against

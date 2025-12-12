@@ -237,7 +237,7 @@ def plot_halo_redundancy_comprehensive(
         colors.append('#2ecc71')
     
     if data_to_plot:
-        bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
+        bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True, showfliers=False)
         for patch, color in zip(bp['boxes'], colors):
             patch.set_facecolor(color)
             patch.set_alpha(0.6)

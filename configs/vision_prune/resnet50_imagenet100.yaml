@@ -65,17 +65,42 @@ cascade_analysis:
   n_remove_per_cluster: 5
   damage_sample_fraction: 0.1  # Smaller for faster computation
 
-# Pruning experiments
+# Pruning experiments - Comprehensive metric testing
+# ResNet-50 on ImageNet: larger model, more channels, tests scalability
 pruning:
   enabled: true
-  ratios: [0.2, 0.3, 0.4, 0.5, 0.6]
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
   
-  methods:
-    - name: random
-    - name: magnitude
-    - name: taylor
-    - name: composite  # RQ + Red + Syn (per-channel)
-    - name: cluster_aware  # Full cluster + halo aware
+  # Comprehensive algorithm list
+  algorithms:
+    # Baselines
+    - random
+    - magnitude
+    - taylor
+    
+    # Single metrics - prune LOW
+    - rq_low              # Prune low Rayleigh Quotient
+    - redundancy_low      # Prune low redundancy (MI)
+    - synergy_low         # Prune low synergy
+    
+    # Single metrics - prune HIGH
+    - rq_high             # Prune high RQ
+    - redundancy_high     # Prune high redundancy
+    - synergy_high        # Prune high synergy
+    - magnitude_high      # Prune high magnitude
+    
+    # Composite combinations
+    - composite           # score = RQ + syn - red (original)
+    - composite_pos_red   # score = RQ + syn + red (flipped)
+    - rq_minus_red        # score = RQ - redundancy
+    - rq_plus_red         # score = RQ + redundancy
+    - magnitude_plus_rq   # score = magnitude + RQ
+    - magnitude_minus_red # score = magnitude - redundancy
+    - magnitude_plus_red  # score = magnitude + redundancy
+    
+    # Cluster-aware
+    - cluster_aware
+    - cluster_aware_protect_redundant
   
   fine_tuning:
     epochs: 5  # Fewer epochs for ImageNet

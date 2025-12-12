@@ -702,3 +702,215 @@ def plot_vision_pruning_comparison(
 ) -> Optional["plt.Figure"]:
     """Alias for plot_pruning_comparison for backward compatibility."""
     return plot_pruning_comparison(results, baseline_acc, save_path, figsize)
+
+
+def plot_layer_metric_trends(
+    layer_metrics: Dict[str, Dict[str, np.ndarray]],
+    metrics_to_plot: List[str] = ['rq', 'redundancy', 'synergy'],
+    smooth_window: int = 3,
+    show_ci: bool = True,
+    ci_percentile: float = 95,
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (14, 8),
+) -> Optional["plt.Figure"]:
+    """
+    Plot layer-wise metric trends with smoothing and confidence intervals.
+    
+    This produces cleaner, more interpretable plots than raw layer values.
+    
+    Args:
+        layer_metrics: Dict mapping layer_name -> {metric_name -> values}
+        metrics_to_plot: Which metrics to include
+        smooth_window: Window size for moving average smoothing (1 = no smoothing)
+        show_ci: Whether to show confidence intervals
+        ci_percentile: Percentile for confidence interval
+        save_path: Optional path to save figure
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib Figure or None
+    """
+    if not HAS_MPL or not layer_metrics:
+        return None
+    
+    layer_names = list(layer_metrics.keys())
+    n_layers = len(layer_names)
+    
+    if n_layers == 0:
+        return None
+    
+    fig, axes = plt.subplots(len(metrics_to_plot), 1, figsize=figsize, sharex=True)
+    if len(metrics_to_plot) == 1:
+        axes = [axes]
+    
+    x = np.arange(n_layers)
+    
+    for ax, metric_name in zip(axes, metrics_to_plot):
+        # Extract layer-wise statistics
+        means = []
+        stds = []
+        ci_low = []
+        ci_high = []
+        
+        for layer in layer_names:
+            values = layer_metrics[layer].get(metric_name, np.array([]))
+            if len(values) > 0:
+                means.append(np.mean(values))
+                stds.append(np.std(values))
+                ci_low.append(np.percentile(values, (100 - ci_percentile) / 2))
+                ci_high.append(np.percentile(values, 100 - (100 - ci_percentile) / 2))
+            else:
+                means.append(0)
+                stds.append(0)
+                ci_low.append(0)
+                ci_high.append(0)
+        
+        means = np.array(means)
+        stds = np.array(stds)
+        ci_low = np.array(ci_low)
+        ci_high = np.array(ci_high)
+        
+        # Apply smoothing (moving average)
+        if smooth_window > 1 and n_layers >= smooth_window:
+            kernel = np.ones(smooth_window) / smooth_window
+            means_smooth = np.convolve(means, kernel, mode='same')
+            # Fix edges
+            for i in range(smooth_window // 2):
+                means_smooth[i] = np.mean(means[:i+smooth_window//2+1])
+                means_smooth[-(i+1)] = np.mean(means[-(i+smooth_window//2+1):])
+        else:
+            means_smooth = means
+        
+        # Get color for metric
+        color = METRIC_COLORS.get(metric_name.lower(), '#333333')
+        
+        # Plot smoothed line
+        ax.plot(x, means_smooth, 'o-', color=color, linewidth=2.5, markersize=6,
+                label=f'{metric_name.upper()} (smoothed)')
+        
+        # Show confidence interval
+        if show_ci:
+            ax.fill_between(x, ci_low, ci_high, alpha=0.2, color=color,
+                           label=f'{int(ci_percentile)}% CI')
+        
+        # Also show raw means as smaller points
+        ax.scatter(x, means, s=20, alpha=0.5, color=color, zorder=5)
+        
+        ax.set_ylabel(f'{metric_name.upper()}', fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right', fontsize=9)
+        
+        # Add layer depth indicator
+        ax.axhline(y=np.mean(means), color='gray', linestyle='--', alpha=0.5)
+    
+    # X-axis labels on bottom plot only
+    axes[-1].set_xlabel('Layer Index', fontsize=11)
+    
+    # Simplify x-tick labels if too many layers
+    if n_layers > 20:
+        tick_positions = np.linspace(0, n_layers-1, min(10, n_layers), dtype=int)
+        axes[-1].set_xticks(tick_positions)
+        axes[-1].set_xticklabels([layer_names[i].split('.')[-1] for i in tick_positions],
+                                 rotation=45, ha='right', fontsize=9)
+    else:
+        axes[-1].set_xticks(x)
+        axes[-1].set_xticklabels([n.split('.')[-1] for n in layer_names],
+                                rotation=45, ha='right', fontsize=9)
+    
+    fig.suptitle('Layer-wise Metric Trends (with smoothing)', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved layer metric trends to {save_path}")
+    
+    return fig
+
+
+def plot_metric_statistics_table(
+    layer_metrics: Dict[str, Dict[str, np.ndarray]],
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (12, 8),
+) -> Optional["plt.Figure"]:
+    """
+    Create a summary table showing global statistics for each metric.
+    
+    Args:
+        layer_metrics: Dict mapping layer_name -> {metric_name -> values}
+        save_path: Optional path to save figure
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib Figure or None
+    """
+    if not HAS_MPL or not layer_metrics:
+        return None
+    
+    # Aggregate all values per metric
+    metric_stats = {}
+    for layer_name, metrics in layer_metrics.items():
+        for metric_name, values in metrics.items():
+            if metric_name.startswith('_'):  # Skip internal
+                continue
+            if metric_name not in metric_stats:
+                metric_stats[metric_name] = []
+            if len(values) > 0:
+                metric_stats[metric_name].extend(values.tolist() if hasattr(values, 'tolist') else list(values))
+    
+    if not metric_stats:
+        return None
+    
+    # Compute statistics
+    table_data = []
+    for metric_name, all_values in metric_stats.items():
+        if len(all_values) == 0:
+            continue
+        arr = np.array(all_values)
+        table_data.append([
+            metric_name.upper(),
+            f'{np.mean(arr):.4f}',
+            f'{np.std(arr):.4f}',
+            f'{np.median(arr):.4f}',
+            f'{np.min(arr):.4f}',
+            f'{np.max(arr):.4f}',
+            f'{np.percentile(arr, 5):.4f}',
+            f'{np.percentile(arr, 95):.4f}',
+        ])
+    
+    # Create figure with table
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis('off')
+    
+    headers = ['Metric', 'Mean', 'Std', 'Median', 'Min', 'Max', 'P5', 'P95']
+    
+    table = ax.table(
+        cellText=table_data,
+        colLabels=headers,
+        cellLoc='center',
+        loc='center',
+    )
+    
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1.2, 1.8)
+    
+    # Style header row
+    for i in range(len(headers)):
+        table[(0, i)].set_facecolor('#4CAF50')
+        table[(0, i)].set_text_props(weight='bold', color='white')
+    
+    # Alternate row colors
+    for i in range(1, len(table_data) + 1):
+        for j in range(len(headers)):
+            if i % 2 == 0:
+                table[(i, j)].set_facecolor('#f0f0f0')
+    
+    ax.set_title('Metric Statistics Summary (All Layers)', fontsize=14, fontweight='bold', pad=20)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved metric statistics table to {save_path}")
+    
+    return fig

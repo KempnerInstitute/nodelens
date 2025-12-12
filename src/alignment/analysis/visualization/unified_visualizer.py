@@ -190,7 +190,7 @@ class UnifiedVisualizer:
                 pc.set_facecolor("lightblue")
                 pc.set_alpha(0.7)
         elif plot_type == "box":
-            ax.boxplot(data, positions=positions, labels=layer_names)
+            ax.boxplot(data, positions=positions, labels=layer_names, showfliers=False)
         elif plot_type == "bar":
             means = [np.mean(d) for d in data]
             stds = [np.std(d) for d in data]
@@ -530,7 +530,7 @@ class UnifiedVisualizer:
             data = [supernode_vals, non_supernode_vals]
             labels = [f"Supernodes\n(n={len(supernode_vals)})", f"Non-supernodes\n(n={len(non_supernode_vals)})"]
             
-            bp = ax.boxplot(data, labels=labels, patch_artist=True, notch=True)
+            bp = ax.boxplot(data, labels=labels, patch_artist=True, notch=True, showfliers=False)
             bp['boxes'][0].set_facecolor('coral')
             bp['boxes'][1].set_facecolor('steelblue')
             ax.set_ylabel(metric_name)
@@ -2543,10 +2543,10 @@ Generated visualization report for alignment analysis.
                         dpi=self.dpi, bbox_inches='tight')
         figures.append(fig)
 
-        # Plot 3: Box plot comparison
+        # Plot 3: Box plot comparison (without outlier dots for cleaner visualization)
         fig, ax = plt.subplots(figsize=(8, 6))
         bp = ax.boxplot([high_vals, low_vals], labels=['High-connected', 'Low-connected'],
-                        patch_artist=True, notch=True)
+                        patch_artist=True, notch=True, showfliers=False)
         bp['boxes'][0].set_facecolor('coral')
         bp['boxes'][1].set_facecolor('steelblue')
         ax.set_ylabel("Absolute Pairwise Correlation (Redundancy)")

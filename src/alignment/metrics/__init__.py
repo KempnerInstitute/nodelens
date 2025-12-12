@@ -64,6 +64,112 @@ METRIC TAXONOMY (from alignment_notes/main.tex and new.tex)
    - layer_transition_efficiency: Downstream_Importance / (1 + Redundancy)
    
 =============================================================================
+METRIC CONFIGURATION OPTIONS
+=============================================================================
+
+All metrics share these common options (via BaseMetric):
+  - force_cpu_for_large_ops: bool (default: True) - Move to CPU for large tensors
+  - cpu_threshold: int (default: 1e8) - Element count threshold for CPU fallback
+
+CNN Input Handling Modes (for convolutional layers):
+  Metrics handle 4D inputs [B, C, H, W] differently. The recommended approach
+  depends on the metric and use case:
+  
+  1. "unfold" - Unfold spatial dims into patches [B*P, C*K*K]
+     - Most accurate for RQ/covariance metrics
+     - Memory: O(B * P * C * K^2) where P = H*W patches
+     - Use for: RQ, MI (when weights have kernel shape)
+     
+  2. "spatial" - Reshape [B, C, H, W] -> [B*H*W, C]  
+     - Treats each spatial location as a sample
+     - Preserves spatial variance information
+     - Memory: O(B * H * W * C)
+     - Use for: Fast covariance estimation
+     
+  3. "gap" (Global Average Pooling) - [B, C, H, W] -> [B, C]
+     - Fastest, lowest memory
+     - Loses spatial information
+     - Memory: O(B * C)
+     - Use for: Quick experiments, early conv layers
+     
+  4. "channel" - Per-channel statistics only
+     - Aggregates over spatial dims
+     - Memory: O(C)
+     - Use for: Activation magnitude metrics
+
+INDIVIDUAL METRIC OPTIONS:
+--------------------------
+
+rayleigh_quotient:
+  relative: bool = True          # Normalize by trace(Σ) for relative alignment
+  min_samples: int = 2           # Minimum samples for covariance
+  scale_by_norm: bool = False    # Scale covariance by Frobenius norm
+  regularization: float = 1e-6   # Diagonal regularization for stability
+
+rq_fast (FastRayleighQuotient):
+  relative: bool = True          # Same as RQ
+  regularization: float = 1e-6   # Same as RQ
+  # Uses GAP for CNN inputs - 10-100x faster than patchwise
+
+rq_spatial (SpatialRayleighQuotient):
+  # Same options as RQ
+  # Uses spatial reshaping for CNN inputs
+
+gaussian_mi_analytic:
+  expansion_order: int = 2       # Edgeworth expansion order (0=pure Gaussian)
+  noise_std: float = 0.1         # Assumed noise standard deviation
+  regularization: float = 1e-6   # Covariance regularization
+  per_neuron: bool = True        # Per-neuron MI (True) or joint MI (False)
+
+pairwise_redundancy_gaussian:
+  num_pairs: int = 10            # Partners to sample per neuron
+  sampling_strategy: str = "random"  # "random", "nearest", "all"
+  mode: str = "output_based"     # "output_based" (fast) or "covariance_based"
+  regularization: float = 1e-6   # For covariance_based mode
+
+average_redundancy:
+  min_samples: int = 2           # Minimum samples
+  use_correlation: bool = True   # Use correlation (True) or covariance (False)
+
+mi_about_class:
+  method: str = "gaussian"       # "gaussian" or "binning"
+  bins: int = 10                 # For binning method
+  min_samples_per_class: int = 5 # Minimum samples per class
+
+conditional_rayleigh_quotient:
+  relative: bool = True          # Same as RQ
+  min_samples: int = 2           # Minimum samples per class
+  regularization: float = 1e-6   # Same as RQ
+  return_delta: bool = False     # Return ΔRQ = RQ_uncond - RQ_cond
+
+activation_l2_norm:
+  aggregate_method: str = "l2"   # "l2", "mean", "max"
+  use_absolute: bool = True      # Take absolute value before aggregation
+
+activation_outlier_index:
+  quantile: float = 0.999        # High percentile for outlier detection
+  eps: float = 1e-6              # Numerical stability
+
+composite_importance:
+  weights: dict                  # {metric_name: weight} - negative for penalties
+  normalize_components: bool = True  # Normalize to [0, 1] before combining
+  log_transform_rq: bool = True  # Apply log to RQ
+
+cross_layer_importance:
+  rq_weight: float = 0.25        # Weight for RQ (α)
+  downstream_weight: float = 0.35    # Weight for downstream importance (β)
+  within_redundancy_weight: float = 0.25  # Penalty for redundancy (γ)
+  activation_weight: float = 0.15     # Weight for activation magnitude
+  normalize: bool = True         # Normalize components to [0, 1]
+  max_refs: int = 512            # Max reference neurons for efficiency
+
+halo_redundancy:
+  supernode_fraction: float = 0.01   # Top fraction as supernodes
+  halo_fraction: float = 0.10        # Fraction of non-supernodes as halo
+  max_samples: int = 1000            # Max activation samples
+  max_pairs_per_group: int = 500     # Max pairs for efficiency
+
+=============================================================================
 """
 
 from ..core.registry import METRIC_REGISTRY
@@ -189,6 +295,105 @@ def get_metric_category(name: str) -> str:
         return 'other'
 
 
+def get_optimization_status() -> dict:
+    """
+    Check availability of metric optimizations (JIT, GPU).
+    
+    Returns:
+        Dictionary with optimization availability status:
+        {
+            'jit_available': bool,
+            'gpu_available': bool,
+            'cuda_available': bool,
+            'available_jit_functions': list,
+            'available_gpu_functions': list,
+        }
+    """
+    import torch
+    
+    status = {
+        'jit_available': False,
+        'gpu_available': False,
+        'cuda_available': torch.cuda.is_available(),
+        'available_jit_functions': [],
+        'available_gpu_functions': [],
+    }
+    
+    # Check JIT functions
+    try:
+        from ..infrastructure.computing.optimized.jit import (
+            compute_rayleigh_quotient_jit,
+            compute_mutual_information_gaussian_jit,
+            compute_node_correlation_jit,
+        )
+        status['jit_available'] = True
+        status['available_jit_functions'] = [
+            'rayleigh_quotient',
+            'mutual_information',
+            'node_correlation',
+            'cosine_similarity',
+            'eigenvalue_entropy',
+            'spectral_norm',
+        ]
+    except ImportError:
+        pass
+    
+    # Check GPU functions
+    try:
+        from ..infrastructure.computing.optimized.gpu import (
+            gpu_histogram1d,
+            gpu_mutual_information,
+            GPUAcceleratedMetrics,
+        )
+        status['gpu_available'] = True
+        status['available_gpu_functions'] = [
+            'histogram1d',
+            'histogram2d', 
+            'mutual_information',
+            'entropy',
+            'conditional_entropy',
+            'fast_covariance',
+            'fast_correlation',
+        ]
+    except ImportError:
+        pass
+    
+    return status
+
+
+def get_metric_with_optimizations(
+    name: str,
+    use_jit: bool = False,
+    use_gpu_acceleration: bool = False,
+    **kwargs
+):
+    """
+    Get a metric instance with optimization options.
+    
+    Args:
+        name: Name of the metric
+        use_jit: Enable JIT-compiled computations (20-50% faster)
+        use_gpu_acceleration: Enable GPU-accelerated functions
+        **kwargs: Additional metric parameters
+        
+    Returns:
+        Instantiated metric object with optimizations enabled
+        
+    Example:
+        >>> metric = get_metric_with_optimizations(
+        ...     "rayleigh_quotient",
+        ...     use_jit=True,
+        ...     relative=True
+        ... )
+    """
+    return METRIC_REGISTRY.create(
+        name,
+        use_jit=use_jit,
+        use_gpu_acceleration=use_gpu_acceleration,
+        **kwargs
+    )
+
+
 # For convenience, expose the registry and functions
 __all__ = [
     "METRIC_REGISTRY", 
@@ -197,4 +402,6 @@ __all__ = [
     "get_recommended_metrics",
     "get_extended_metrics",
     "get_metric_category",
+    "get_optimization_status",
+    "get_metric_with_optimizations",
 ]

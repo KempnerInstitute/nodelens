@@ -159,6 +159,15 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         enabled_metrics = []
         metric_configs = {}
         
+        # Extract optimization options (apply to all metrics)
+        optimization = metrics.get("optimization", {})
+        global_optimization_opts = {
+            "use_jit": optimization.get("use_jit", False),
+            "use_gpu_acceleration": optimization.get("use_gpu_acceleration", False),
+            "force_cpu_for_large_ops": optimization.get("force_cpu_for_large_ops", True),
+            "cpu_threshold": optimization.get("cpu_threshold", 100000000),
+        }
+        
         # Check each unified metric
         for unified_name, original_name in METRIC_UNIFIED_TO_ORIGINAL.items():
             if unified_name in metrics:
@@ -166,12 +175,16 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(metric_cfg, dict):
                     if metric_cfg.get("enabled", True):
                         enabled_metrics.append(original_name)
-                        # Copy metric-specific params
+                        # Copy metric-specific params + optimization options
                         params = {k: v for k, v in metric_cfg.items() if k != "enabled"}
+                        # Apply global optimization options
+                        params.update(global_optimization_opts)
                         if params:
                             metric_configs[original_name] = params
                 elif metric_cfg is True:
                     enabled_metrics.append(original_name)
+                    # Apply optimization options even for simple enabled metrics
+                    metric_configs[original_name] = global_optimization_opts.copy()
         
         # Handle SCAR metrics (LLM-specific)
         if "scar" in metrics:
@@ -342,6 +355,9 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             # Also set experiment.output_dir for compatibility
             if "experiment" in original:
                 original["experiment"]["output_dir"] = out["dir"]
+        # Handle base_output_dir for job directory structure
+        if "base_dir" in out:
+            original["base_output_dir"] = out["base_dir"]
     
     # -------------------------------------------------------------------------
     # EXTRA - Expand LLM-specific settings from extra block to top-level
@@ -668,12 +684,24 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         if enabled_metrics is not None:
             flat_config["metrics"] = enabled_metrics
 
+        # Extract optimization options (apply to all metrics)
+        optimization = metric_block.get("optimization", {})
+        global_optimization_opts = {
+            "use_jit": optimization.get("use_jit", False),
+            "use_gpu_acceleration": optimization.get("use_gpu_acceleration", False),
+            "force_cpu_for_large_ops": optimization.get("force_cpu_for_large_ops", True),
+            "cpu_threshold": optimization.get("cpu_threshold", 100000000),
+        }
+        flat_config["metric_optimization"] = global_optimization_opts
+
         metric_configs = flat_config.get("metric_configs", {}).copy()
         for metric_name, metric_cfg in metric_block.items():
-            if metric_name == "enabled" or metric_cfg is None:
+            if metric_name in ("enabled", "optimization") or metric_cfg is None:
                 continue
             if isinstance(metric_cfg, dict):
-                metric_configs[metric_name] = metric_cfg
+                # Merge optimization options into each metric config
+                merged_cfg = {**global_optimization_opts, **metric_cfg}
+                metric_configs[metric_name] = merged_cfg
         if metric_configs:
             flat_config["metric_configs"] = metric_configs
 
@@ -939,6 +967,15 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["pruning_amounts"] = pruning_block.get("sparsity_levels", nested_config.get("pruning_amounts", [0.1, 0.3, 0.5, 0.7, 0.9]))
     selection_modes = pruning_block.get("selection_modes", nested_config.get("pruning_selection_mode", "low"))
     flat_config["pruning_selection_mode"] = selection_modes
+    flat_config["pruning_distribution"] = pruning_block.get(
+        "distribution", nested_config.get("pruning_distribution", "uniform")
+    )
+    flat_config["pruning_min_per_layer"] = pruning_block.get(
+        "min_per_layer", nested_config.get("pruning_min_per_layer", 0.0)
+    )
+    flat_config["pruning_max_per_layer"] = pruning_block.get(
+        "max_per_layer", nested_config.get("pruning_max_per_layer", 0.95)
+    )
     # Only set fine_tune defaults if not already set from fine_tune block above
     if "fine_tune_after_pruning" not in flat_config:
         flat_config["fine_tune_after_pruning"] = pruning_block.get("fine_tune_after_pruning", nested_config.get("fine_tune_after_pruning", True))
@@ -1067,6 +1104,16 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map paths
     flat_config["log_dir"] = nested_config.get("results_path", "./logs")
     flat_config["checkpoint_dir"] = os.path.join(flat_config["log_dir"], "checkpoints")
+    
+    # Handle base_output_dir for job directory structure
+    # Priority: output.base_dir > experiment.base_output_dir > top-level base_output_dir
+    output_block = nested_config.get("output", {})
+    if isinstance(output_block, dict) and "base_dir" in output_block:
+        flat_config["base_output_dir"] = output_block["base_dir"]
+    elif "base_output_dir" in experiment_block:
+        flat_config["base_output_dir"] = experiment_block["base_output_dir"]
+    elif "base_output_dir" in nested_config:
+        flat_config["base_output_dir"] = nested_config["base_output_dir"]
 
     return flat_config
 

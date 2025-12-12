@@ -53,6 +53,13 @@ calibration:
 # METRICS
 # -----------------------------------------------------------------------------
 metrics:
+  # Optimization options for faster metric computation
+  optimization:
+    use_jit: false                 # Enable JIT-compiled computations (20-50% faster)
+    use_gpu_acceleration: false    # Enable GPU-accelerated functions
+    force_cpu_for_large_ops: true  # Prevent OOM for large covariance matrices
+    cpu_threshold: 100000000       # 1e8 elements threshold
+  
   rayleigh_quotient:
     enabled: true
     relative: true
@@ -117,33 +124,72 @@ cascade_analysis:
 # -----------------------------------------------------------------------------
 # PRUNING
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# PRUNING - Comprehensive metric testing
+# -----------------------------------------------------------------------------
+# MobileNet uses inverted residuals with depthwise separable convs
+# More sensitive to pruning - interesting to see which metrics matter
 pruning:
   enabled: true
-  ratios: [0.1, 0.2, 0.3, 0.4, 0.5]  # MobileNet is already efficient - conservative pruning
-  selection_modes: ["low", "high"]
+  distribution: "uniform"            # uniform, global_threshold, adaptive_sensitivity
+  dependency_aware: true             # MobileNet has inverted residuals
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5]  # Conservative for MobileNet
   
+  # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:
-    - "random"
-    - "magnitude"
-    - "taylor"
-    - "rayleigh_quotient"
-    - "redundancy"
-    - "synergy"
-    - "composite"
-    - "cluster_aware"
-  
+    # =========================================================================
+    # BASELINES
+    # =========================================================================
+    - "random"              # Random baseline
+    - "magnitude"           # Standard magnitude pruning (prune low)
+    - "taylor"              # Gradient-based importance
+    
+    # =========================================================================
+    # SINGLE METRICS - Prune LOW (assumes low = unimportant)
+    # =========================================================================
+    - "rq_low"              # Prune low Rayleigh Quotient
+    - "redundancy_low"      # Prune low redundancy (MI)
+    - "synergy_low"         # Prune low synergy
+    
+    # =========================================================================
+    # SINGLE METRICS - Prune HIGH (assumes high = unimportant)
+    # =========================================================================
+    - "rq_high"             # Prune high RQ (TEST: is high RQ bad?)
+    - "redundancy_high"     # Prune high redundancy (TEST: is high corr bad?)
+    - "synergy_high"        # Prune high synergy
+    - "magnitude_high"      # Prune high magnitude (inverse of standard)
+    
+    # =========================================================================
+    # COMPOSITE COMBINATIONS
+    # =========================================================================
+    - "composite"           # Original: score = RQ + syn - red (prune low)
+    - "composite_pos_red"   # Flipped: score = RQ + syn + red (prune low)
+    - "rq_minus_red"        # score = RQ - redundancy
+    - "rq_plus_red"         # score = RQ + redundancy
+    - "magnitude_plus_rq"   # score = magnitude + RQ
+    - "magnitude_minus_red" # score = magnitude - redundancy
+    - "magnitude_plus_red"  # score = magnitude + redundancy
+    
+    # =========================================================================
+    # CLUSTER-AWARE
+    # =========================================================================
+    - "cluster_aware"               # Original: protect critical, target redundant
+    - "cluster_aware_protect_redundant"  # Inverted: protect redundant
+
   scoring_methods:
     - "random"
     - "magnitude"
-    - "taylor"
-    - "rayleigh_quotient"
-    - "redundancy"
-    - "synergy"
+    - "rq_low"
+    - "rq_high"
+    - "redundancy_low"
+    - "redundancy_high"
     - "composite"
-    - "cluster_aware"
-  
+    - "composite_pos_red"
+
   fine_tune:
-    enabled: true
+    enabled: false  # Disabled to see pure pruning impact without recovery
     epochs: 15  # MobileNet may need more fine-tuning
     learning_rate: 0.0001
     weight_decay: 0.00001
@@ -255,6 +301,7 @@ visualization:
 # OUTPUT
 # -----------------------------------------------------------------------------
 output:
+  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
   dir: "./results/vision/mobilenetv2_cifar10"
   save_metrics: true
   save_clusters: true

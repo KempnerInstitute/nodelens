@@ -2,6 +2,14 @@
 
 from .checkpoint import load_checkpoint, save_checkpoint, save_model_for_inference
 from .logging import MetricLogger, get_logger, log_metrics, setup_logging
+from .job_directory import (
+    create_job_directory,
+    get_job_directory_paths,
+    setup_job_logging,
+    get_slurm_job_id,
+    get_slurm_array_task_id,
+    JobDirectory,
+)
 
 __all__ = [
     # Checkpointing
@@ -13,4 +21,11 @@ __all__ = [
     "get_logger",
     "log_metrics",
     "MetricLogger",
+    # Job Directory
+    "create_job_directory",
+    "get_job_directory_paths",
+    "setup_job_logging",
+    "get_slurm_job_id",
+    "get_slurm_array_task_id",
+    "JobDirectory",
 ]
