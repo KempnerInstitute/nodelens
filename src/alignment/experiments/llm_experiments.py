@@ -3,9 +3,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import re
+
 import torch
 import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
 
 from alignment.experiments.base import ExperimentConfig, BaseExperiment
 from alignment.metrics import get_metric
@@ -344,6 +347,457 @@ class LLMAlignmentExperiment(BaseExperiment):
                 results[metric] = None
         
         return results
+
+    def sliding_window_pruning_visualizer(
+        self,
+        step_size: int = 1,
+        sparsity: float = 0.2,
+        max_window_size: Optional[int] = None,
+        plots_dir: Optional[Union[str, Path]] = None,
+        eval_per_window: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Run `sliding_window_pruning` for all window sizes from 1..`max_window_size`
+        (or up to number of layers) and plot the resulting evaluation metric
+        (perplexity) as multiple lines — one line per window size.
+
+        Returns a dictionary with raw results and the saved plot path (if any).
+        """
+        # Determine number of layers
+        def _extract_layer_idx(key: str) -> Optional[int]:
+            m = re.search(r"layers\.(\d+)\.mlp", key)
+            if m:
+                return int(m.group(1))
+            m = re.search(r"model\.layers\.(\d+)\.mlp", key)
+            if m:
+                return int(m.group(1))
+            return None
+
+        num_layers = 0
+        try:
+            num_layers = len(self.wrapped_model._model.layers)
+        except Exception:
+            layer_idxs = set()
+            for k in self.importance_scores.keys():
+                idx = _extract_layer_idx(k)
+                if idx is not None:
+                    layer_idxs.add(idx)
+            if layer_idxs:
+                num_layers = max(layer_idxs) + 1
+
+        if num_layers == 0:
+            logger.warning("Cannot determine number of layers; aborting sliding_window_pruning_visualizer")
+            return {}
+
+        if max_window_size is None:
+            max_window_size = num_layers
+        else:
+            max_window_size = min(max_window_size, num_layers)
+
+        # For each window size, determine valid start positions (windows that fit completely)
+        # A window of size w starting at position s is valid if s + w <= num_layers
+        def get_valid_steps(window_size: int, step: int) -> List[int]:
+            valid = []
+            for start in range(0, num_layers, step):
+                if start + window_size <= num_layers:
+                    valid.append(start)
+            return valid
+
+        viz = UnifiedVisualizer()
+        all_values: Dict[str, List[float]] = {}
+        raw_results: Dict[int, Dict[str, Any]] = {}
+
+        for w in range(1, max_window_size + 1):
+            logger.info(f"Running sliding windows with window_size={w}")
+            res = self.sliding_window_pruning(window_size=w, step_size=step_size, sparsity=sparsity)
+            raw_results[w] = res
+
+            # Get valid step positions for this window size
+            valid_steps = get_valid_steps(w, step_size)
+            
+            # Build list of perplexities in the order of valid steps
+            perfs: List[float] = []
+            for s in valid_steps:
+                key = f"layers_{s}_{s + w - 1}"
+                entry = res.get(key)
+                if entry is None:
+                    perfs.append(float("nan"))
+                else:
+                    p = entry.get("perplexity") if isinstance(entry, dict) else None
+                    perfs.append(float(p) if (p is not None) else float("nan"))
+
+            # Use the valid steps for this window size as its x-axis
+            all_values[f"w={w}"] = {"steps": valid_steps, "perfs": perfs}
+
+        # Plot
+        save_path = None
+        try:
+            # Prepare data for visualization
+            # Find the maximum valid steps to use as common x-axis (from largest window size that ran)
+            max_steps = []
+            plot_values: Dict[str, List[float]] = {}
+            
+            for w in sorted(all_values.keys()):
+                w_data = all_values[w]
+                steps_w = w_data["steps"]
+                perfs_w = w_data["perfs"]
+                
+                # Use this window size's steps as x-axis
+                if not max_steps or len(steps_w) > len(max_steps):
+                    max_steps = steps_w
+                
+                # Store perfs with window size label
+                plot_values[f"w={w}"] = perfs_w
+            
+            title = f"Sliding-window pruning: Perplexity by window start (sparsity={sparsity})"
+            fig = viz.plot_metric_evolution(steps=max_steps, values=plot_values, title=title, xlabel="Window start (layer)", ylabel="Perplexity", legend_title="Window size")
+
+            if plots_dir:
+                plots_dir = Path(plots_dir)
+                plots_dir.mkdir(parents=True, exist_ok=True)
+                save_path = plots_dir / f"sliding_window_pruning_comparison_s{int(100*sparsity)}.png"
+                fig.savefig(save_path, dpi=300, bbox_inches="tight")
+                logger.info(f"Saved sliding-window pruning comparison plot to {save_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate sliding window visualization: {e}")
+
+        return {"values": all_values, "raw_results": raw_results, "plot_path": str(save_path) if save_path else None}
+
+    def plot_neuron_activation_over_sequence(
+        self,
+        layer_idx: int,
+        projection_type: str = "down_proj",
+        texts: Optional[List[str]] = None,
+        max_length: int = 256,
+        batch_size: int = 8,
+        neuron_indices: Optional[List[int]] = None,
+        top_k: Optional[int] = 10,
+        return_raw: bool = False,
+        plots_dir: Optional[Union[str, Path]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Plot activation curves across token positions for neurons in a single layer/projection.
+
+        - X-axis: token index in sequence (0..max_length-1)
+        - Y-axis: mean activation at that token position (averaged across calibration texts)
+        - One line per neuron (either `neuron_indices` or top_k selected by variance)
+
+        Args:
+            layer_idx: Numeric layer index (e.g., 14)
+            projection_type: Projection module name within MLP (e.g., "gate_proj", "down_proj", "up_proj")
+            texts: Optional list of strings to use as calibration examples. If None, uses `self.dataset.texts` when available.
+            max_length: Maximum token sequence length to consider
+            batch_size: Tokenization / evaluation batch size
+            neuron_indices: Explicit list of neuron indices to plot. If None, `top_k` used.
+            top_k: When `neuron_indices` is None, select top_k neurons by activation variance across positions
+            plots_dir: Directory to save the figure
+
+        Returns:
+            Dict with metadata and saved plot path
+        """
+        # Prepare texts
+        if texts is None:
+            if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+                texts = list(self.dataset.texts)
+            else:
+                logger.warning("No texts provided and no dataset available to compute activations")
+                return {}
+
+        if len(texts) == 0:
+            logger.warning("Empty texts list provided")
+            return {}
+
+        # Tokenizer
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is None and hasattr(self, "wrapped_model"):
+            try:
+                tokenizer = getattr(self.wrapped_model, "tokenizer", None) or getattr(self.wrapped_model, "_tokenizer", None)
+            except Exception:
+                tokenizer = None
+
+        if tokenizer is None:
+            logger.warning("Tokenizer not found on experiment; cannot tokenize texts")
+            return {}
+
+        # Underlying HF model
+        hf_model = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = hf_model.model
+
+        # Find target module
+        target_name = None
+        target_module = None
+        search_patterns = [f"model.layers.{layer_idx}.mlp.{projection_type}", f"layers.{layer_idx}.mlp.{projection_type}", f"model.model.layers.{layer_idx}.mlp.{projection_type}"]
+        for name, module in hf_model.named_modules():
+            if name in search_patterns:
+                target_name = name
+                target_module = module
+                break
+
+        if target_module is None:
+            logger.warning(f"Projection module for layer {layer_idx} ('{projection_type}') not found")
+            return {}
+
+        device = next(hf_model.parameters()).device if any(p is not None for p in hf_model.parameters()) else torch.device("cpu")
+
+        # Storage for activations and masks
+        accumulated_sums = None  # will be [max_length, num_neurons]
+        accumulated_counts = None  # [max_length]
+
+        # Hook to capture outputs
+        captured: List[torch.Tensor] = []
+
+        def hook_fn(module, inputs, outputs):
+            # outputs expected shape: [batch, seq_len, dim] or [batch, dim] (skip latter)
+            if isinstance(outputs, torch.Tensor):
+                captured.append(outputs.detach().cpu())
+
+        handle = target_module.register_forward_hook(hook_fn)
+
+        # Tokenize and run in batches
+        hf_model.eval()
+        with torch.no_grad():
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i : i + batch_size]
+                try:
+                    enc = tokenizer(batch_texts, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
+                except Exception as e:
+                    logger.error(f"Tokenizer failed: {e}")
+                    handle.remove()
+                    return {}
+
+                input_ids = enc["input_ids"].to(device)
+                attention_mask = enc.get("attention_mask", None)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+
+                try:
+                    # Use model call that accepts tokenized inputs
+                    hf_model(input_ids=input_ids, attention_mask=attention_mask)
+                except Exception as e:
+                    logger.error(f"Model forward failed during activation capture: {e}")
+                    handle.remove()
+                    return {}
+
+        handle.remove()
+
+        if not captured:
+            logger.warning("No activations were captured from the target module")
+            return {}
+
+        # Concatenate captured tensors along batch dimension
+        # Each element may correspond to a forward batch: shape [batch, seq_len, dim]
+        # Different batches can have different seq_len due to per-batch padding.
+        # Pad shorter tensors along seq_len to match the maximum observed seq_len.
+        seq_lens = [t.shape[1] for t in captured]
+        max_seq_len = int(max(seq_lens))
+        padded_batches: List[torch.Tensor] = []
+        for t in captured:
+            if t.shape[1] < max_seq_len:
+                pad_shape = (t.shape[0], max_seq_len - t.shape[1], t.shape[2])
+                pad = torch.zeros(pad_shape, dtype=t.dtype)
+                t = torch.cat([t, pad], dim=1)
+            padded_batches.append(t)
+
+        all_batches = torch.cat(padded_batches, dim=0)  # [total_samples, max_seq_len, dim]
+        total_samples, seq_len, dim = all_batches.shape
+
+        # We'll compute mean activation per token position across samples that have that token (using attention)
+        # Re-tokenize to get attention masks in same batching scheme for counting
+        # Re-tokenize all texts in same order
+        enc_all = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
+        attn_all = enc_all.get("attention_mask")
+        if attn_all is None:
+            attn_all = torch.ones((len(texts), seq_len), dtype=torch.long)
+        else:
+            # attn_all shape may differ from captured seq_len; align it to `seq_len`.
+            if attn_all.shape[1] < seq_len:
+                # pad attention mask columns with zeros
+                pad_cols = seq_len - attn_all.shape[1]
+                pad = torch.zeros((attn_all.shape[0], pad_cols), dtype=attn_all.dtype)
+                attn_all = torch.cat([attn_all, pad], dim=1)
+            elif attn_all.shape[1] > seq_len:
+                # truncate extra columns
+                attn_all = attn_all[:, :seq_len]
+
+        # Truncate or pad all_batches if number of tokenized texts differs from captured total_samples
+        # We assume captured order matches tokenization order and batch slicing
+        N = min(all_batches.shape[0], attn_all.shape[0])
+        acts = all_batches[:N].cpu()  # [N, seq_len, dim]
+        attn = attn_all[:N].cpu()
+
+        sums = torch.zeros((seq_len, dim), dtype=torch.float64)
+        counts = torch.zeros((seq_len,), dtype=torch.float64)
+
+        for n in range(N):
+            mask = attn[n].bool()
+            if mask.sum() == 0:
+                continue
+            valid_len = int(mask.sum().item())
+            # sum over batch sample (here single sample per iteration)
+            for pos in range(valid_len):
+                sums[pos] += acts[n, pos].double()
+                counts[pos] += 1.0
+
+        # Avoid division by zero
+        counts_mask = counts > 0
+        mean_per_pos = torch.zeros((seq_len, dim), dtype=torch.float32)
+        mean_per_pos[counts_mask] = (sums[counts_mask] / counts[counts_mask].unsqueeze(1)).float()
+
+        # Select neurons to plot
+        if neuron_indices is None:
+            # If top_k is None, user requested ALL neurons
+            if top_k is None:
+                neuron_indices = list(range(dim))
+            else:
+                # choose top_k by variance across token positions
+                var = mean_per_pos.var(dim=0)
+                k = min(int(top_k), dim)
+                if k <= 0:
+                    neuron_indices = []
+                else:
+                    _, top_idx = torch.topk(var, k=k)
+                    neuron_indices = top_idx.tolist()
+        else:
+            # validate explicit indices
+            neuron_indices = [int(x) for x in neuron_indices if 0 <= int(x) < dim]
+
+        if not neuron_indices:
+            logger.warning("No neuron indices selected for plotting")
+            return {}
+
+        # Plot
+        fig, ax = plt.subplots(figsize=(14, 8))
+        x = list(range(seq_len))
+
+        n_neurons = len(neuron_indices)
+        if n_neurons == 0:
+            logger.warning("No neurons selected for plotting after validation")
+            return {}
+
+        # If plotting many neurons, reduce line width and omit legend for readability
+        show_legend = n_neurons <= 50
+        lw = 0.9 if n_neurons > 200 else (1.2 if n_neurons > 100 else 1.5)
+        alpha = 0.8 if n_neurons <= 200 else 0.6
+
+        for nid in neuron_indices:
+            y = mean_per_pos[:, nid].numpy()
+            ax.plot(x, y, label=f"neuron_{nid}", linewidth=lw, alpha=alpha)
+
+        ax.set_xlabel("Token Index in Sequence", fontsize=12)
+        ax.set_ylabel("Mean Activation", fontsize=12)
+        ax.set_title(f"Layer {layer_idx} {projection_type} — Neuron activations over sequence", fontsize=14)
+        ax.grid(True, alpha=0.3)
+        if show_legend:
+            ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+        else:
+            logger.info(f"Plotted {n_neurons} neurons; legend omitted for readability")
+
+        plt.tight_layout()
+
+        save_path = None
+        if plots_dir:
+            plots_dir = Path(plots_dir)
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            save_path = plots_dir / f"layer_{layer_idx}_{projection_type}_activation_over_sequence.png"
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Saved neuron activation over sequence plot to {save_path}")
+
+        plt.close(fig)
+
+        result: Dict[str, Any] = {
+            "layer_idx": layer_idx,
+            "projection_type": projection_type,
+            "neuron_indices": neuron_indices,
+            "seq_len": seq_len,
+            "plot_path": str(save_path) if save_path else None,
+        }
+
+        if return_raw:
+            # Return the raw mean-per-position activation matrix (seq_len x dim)
+            result["mean_per_pos"] = mean_per_pos.numpy()
+
+        return result
+
+    def plot_activation_heatmap(
+        self,
+        layer_idx: int,
+        projection_type: str = "down_proj",
+        texts: Optional[List[str]] = None,
+        max_length: int = 256,
+        batch_size: int = 8,
+        plots_dir: Optional[Union[str, Path]] = None,
+        cmap: str = "viridis",
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        show_colorbar: bool = True,
+        return_raw: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Generate and save a heatmap of neuron activations (neurons x token positions).
+
+        This wraps `plot_neuron_activation_over_sequence` with `return_raw=True` to
+        obtain the activation matrix (shape [seq_len, dim]) and then renders a heatmap
+        with neurons on the Y axis and token positions on the X axis.
+
+        Args:
+            layer_idx: Numeric layer index
+            projection_type: Projection module name within MLP (e.g., "gate_proj", "down_proj")
+            texts: Optional list of strings to use as calibration examples
+            max_length: Maximum token sequence length to consider
+            batch_size: Tokenization / evaluation batch size
+            plots_dir: Directory to save the figure
+            cmap: Matplotlib colormap name
+            vmin, vmax: Optional color scale limits
+            show_colorbar: Whether to include a colorbar
+            return_raw: If True, include the raw activation matrix in the return dict
+
+        Returns:
+            Dict with metadata and saved plot path, optionally with raw activation matrix
+        """
+        # Reuse the existing activation capture to get the mean-per-position matrix
+        res = self.plot_neuron_activation_over_sequence(
+            layer_idx=layer_idx,
+            projection_type=projection_type,
+            texts=texts,
+            max_length=max_length,
+            batch_size=batch_size,
+            neuron_indices=None,
+            top_k=None,
+            return_raw=True,
+            plots_dir=None,
+        )
+
+        if not res or "mean_per_pos" not in res:
+            logger.warning("Could not obtain activation matrix for heatmap")
+            return {}
+
+        mean_mat = res["mean_per_pos"]  # shape [seq_len, dim]
+        seq_len, dim = mean_mat.shape
+
+        fig, ax = plt.subplots(figsize=(12, max(3, dim / 50)))
+        # Display with rows = token index (seq_len) and columns = neuron index (dim)
+        im = ax.imshow(mean_mat, aspect="auto", origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
+        ax.set_xlabel("Neuron Index", fontsize=12)
+        ax.set_ylabel("Token Index", fontsize=12)
+        ax.set_title(f"Layer {layer_idx} {projection_type} activations (tokens x neurons)", fontsize=14)
+        if show_colorbar:
+            fig.colorbar(im, ax=ax, label="Mean Activation")
+        plt.tight_layout()
+
+        save_path = None
+        if plots_dir:
+            plots_dir = Path(plots_dir)
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            save_path = plots_dir / f"layer_{layer_idx}_{projection_type}_activation_heatmap.png"
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Saved activation heatmap to {save_path}")
+        plt.close(fig)
+
+        out = {"layer_idx": layer_idx, "projection_type": projection_type, "seq_len": seq_len, "dim": dim, "plot_path": str(save_path) if save_path else None}
+        if return_raw:
+            out["mean_per_pos"] = mean_mat
+        return out
 
     def _evaluate_mmlu(self, num_samples: int = 100, subjects: List[str] = None, num_fewshot: int = 0) -> float:
         """
@@ -4979,6 +5433,21 @@ class LLMAlignmentExperiment(BaseExperiment):
             num_samples=self.config.alignment_data_num_samples
         )
 
+        plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        # self.sliding_window_pruning_visualizer(plots_dir=plots_dir)
+        self.plot_neuron_activation_over_sequence(
+            layer_idx=14,
+            projection_type="down_proj",
+            max_length=128,
+            batch_size=4,
+            top_k=None,           # select all neurons
+            return_raw=True,      # get the raw matrix back
+            plots_dir=plots_dir     # optional: function will still save a line-plot if requested
+        )
+        self.plot_activation_heatmap(14, 'down_proj', plots_dir=plots_dir)
+
         # Optional: SCAR-style supernode metrics (T_i, R_i, loss proxy) for FFN layers
         scar_scores: Dict[str, Any] = {}
         if getattr(self.config, "do_scar_metrics", False):
@@ -5670,3 +6139,128 @@ class LLMAlignmentExperiment(BaseExperiment):
             "top5_values": [outgoing[i].item() for i in top_idxs],
             "plot_path": str(save_path),
         }
+
+    def sliding_window_pruning(self, window_size: int, step_size: int, sparsity: float):
+        """
+        Sliding-window pruning over model layers.
+
+        For each window of layers, this method:
+        - backs up the model parameters to CPU
+        - temporarily restricts `self.importance_scores` to the layers in the window
+        - calls the existing `apply_pruning` method to apply pruning for that window
+        - evaluates model perplexity (if evaluation config present)
+        - restores original weights and pruning state
+
+        This avoids calling `apply_pruning` with incorrect arguments and ensures
+        the rest of the experiment API is used consistently.
+        """
+        if not hasattr(self, "importance_scores") or not self.importance_scores:
+            logger.warning("No importance scores available. Run compute_importance_scores() first.")
+            return {}
+
+        # Helper to extract numeric layer idx from a layer key
+        def _extract_layer_idx(key: str) -> Optional[int]:
+            m = re.search(r"layers\.(\d+)\.mlp", key)
+            if m:
+                return int(m.group(1))
+            m = re.search(r"model\.layers\.(\d+)\.mlp", key)
+            if m:
+                return int(m.group(1))
+            return None
+
+        num_layers = 0
+        # try to infer number of layers from wrapped model if possible
+        try:
+            num_layers = len(self.wrapped_model._model.layers)
+        except Exception:
+            # fallback: infer from importance_scores keys
+            layer_idxs = set()
+            for k in self.importance_scores.keys():
+                idx = _extract_layer_idx(k)
+                if idx is not None:
+                    layer_idxs.add(idx)
+            if layer_idxs:
+                num_layers = max(layer_idxs) + 1
+
+        if num_layers == 0:
+            logger.warning("Cannot determine number of layers; aborting sliding_window_pruning")
+            return {}
+
+        results: Dict[str, Any] = {}
+
+        # Save original importance_scores mapping and model params
+        original_importance = self.importance_scores
+
+        # Helper to backup model weights (cpu tensors)
+        def _backup_weights() -> Dict[str, torch.Tensor]:
+            state: Dict[str, torch.Tensor] = {}
+            for name, param in self.wrapped_model._model.named_parameters():
+                state[name] = param.data.detach().cpu().clone()
+            return state
+
+        # Helper to restore backup
+        def _restore_weights(state: Dict[str, torch.Tensor]):
+            for name, param in self.wrapped_model._model.named_parameters():
+                if name in state:
+                    try:
+                        param.data.copy_(state[name].to(param.device))
+                    except Exception:
+                        param.data = state[name].to(param.device)
+
+        # Loop windows
+        for start in range(0, num_layers, step_size):
+            end = start + window_size
+            # Stop if window doesn't fit completely within layer range
+            if end > num_layers:
+                logger.info(f"Stopping sliding window pruning: window starting at layer {start} would extend beyond layer {num_layers - 1}")
+                break
+            logger.info(f"Sliding window pruning: layers {start} to {end - 1}")
+
+            # Build importance_scores subset for this window (only MLP layer entries)
+            subset: Dict[str, Dict[str, torch.Tensor]] = {}
+            for key, val in original_importance.items():
+                idx = _extract_layer_idx(key)
+                if idx is not None and start <= idx < end:
+                    subset[key] = val
+
+            if not subset:
+                logger.info(f"  No importance score entries for layers {start}-{end-1}; skipping")
+                continue
+
+            # Backup weights
+            backup = _backup_weights()
+
+            # Temporarily set importance_scores to subset so apply_pruning only touches these MLPs
+            self.importance_scores = subset
+
+            print("self.importance_scores keys:", list(self.importance_scores.keys()))
+
+            try:
+                # Use default metric from config or fallback
+                # metric = getattr(self.config, "pruning_alignment_metric", "activation_l2_norm")
+                metric = "activation_l2_norm"
+                # apply_pruning acts across all MLPs present in self.importance_scores
+                masks = self.apply_pruning(sparsity=sparsity, metric=metric, mode="high")
+
+                # Evaluate after pruning window (if evaluation configured)
+                ppl = None
+                if getattr(self.config, "do_perplexity_computation", False):
+                    try:
+                        ppl = self.evaluate_perplexity(dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples)
+                        logger.info(f"  Perplexity after pruning layers {start}-{end-1}: {ppl}")
+                    except Exception as e:
+                        logger.warning(f"  Evaluation failed after pruning window {start}-{end-1}: {e}")
+
+                results[f"layers_{start}_{end-1}"] = {"masks": masks, "perplexity": ppl}
+
+            finally:
+                # Restore original weights and importance scores
+                _restore_weights(backup)
+                self.importance_scores = original_importance
+                # Clear CUDA cache in case of GPU memory churn
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+        return results

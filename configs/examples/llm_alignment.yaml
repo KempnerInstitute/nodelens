@@ -17,8 +17,12 @@ model:
   # LLaMA FFN: input(4096) -> gate_proj/up_proj(14336) -> down_proj -> output(4096)
   # Note: HFCausalLM wraps LlamaForCausalLM, so paths include both 'model.' prefixes
   tracked_layers:
-    - "model.model.layers.10.mlp.up_proj"     # 14336 intermediate neurons
-    - "model.model.layers.10.mlp.down_proj"   # For SCAR: hooks capture 14336-dim input
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.down_proj"  
+    - "model.model.layers.*.mlp.gate_proj"  
+          # 14336 intermediate neurons
+    # - "model.model.layers.10.mlp.up_proj"     # 14336 intermediate neurons
+    # - "model.model.layers.10.mlp.down_proj"   # For SCAR: hooks capture 14336-dim input
 
 dataset:
   name: "wikitext-2-v1"
