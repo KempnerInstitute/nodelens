@@ -137,19 +137,20 @@ class CrossLayerHaloAnalysis:
             target_types: Mapping from cluster ID to type name
             
         Returns:
-            Nested dict: flow[source_type][target_type] = mean influence
+            Nested dict: flow[source_type][target_type] = normalized influence mass
         """
         flow = {}
         for src_id, src_type in source_types.items():
             flow[src_type] = {}
             src_mask = source_labels == src_id
             src_infl = influence[:, src_mask].sum(axis=1)  # [out]
+            denom = float(src_infl.sum()) + 1e-10
             
             for tgt_id, tgt_type in target_types.items():
                 tgt_mask = target_labels == tgt_id
                 if tgt_mask.sum() > 0:
-                    mean_infl = float(np.mean(src_infl[tgt_mask]))
-                    flow[src_type][tgt_type] = mean_infl
+                    # Fraction of total outgoing influence mass from src cluster
+                    flow[src_type][tgt_type] = float(src_infl[tgt_mask].sum()) / denom
                 else:
                     flow[src_type][tgt_type] = 0.0
         

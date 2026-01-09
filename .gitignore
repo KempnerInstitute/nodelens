@@ -1,6 +1,9 @@
 # Archive and draft directories
 _arxiv/
+# Ignore drafts by default, but keep the SCAR paper folder tracked (it has its own .gitignore).
 drafts/
+!drafts/LLM_prune/
+!drafts/LLM_prune/**
 checkpoints/
 results/
 logs/

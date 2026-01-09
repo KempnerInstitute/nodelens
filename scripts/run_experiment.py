@@ -138,7 +138,26 @@ def _create_cluster_experiment(config):
         dataset_name=getattr(config, "dataset_name", dataset_cfg.get("name", "cifar10") if isinstance(dataset_cfg, dict) else "cifar10"),
         n_calibration=getattr(config, "n_calibration", metrics_cfg.get("n_calibration_samples", 5000) if isinstance(metrics_cfg, dict) else 5000),
         n_clusters=getattr(config, "n_clusters", clustering_cfg.get("n_clusters", 4) if isinstance(clustering_cfg, dict) else 4),
+        activation_samples=getattr(
+            config,
+            "activation_samples",
+            metrics_cfg.get("activation_samples", "flatten_spatial") if isinstance(metrics_cfg, dict) else "flatten_spatial",
+        ),
+        spatial_samples_per_image=int(
+            getattr(
+                config,
+                "spatial_samples_per_image",
+                metrics_cfg.get("spatial_samples_per_image", 16) if isinstance(metrics_cfg, dict) else 16,
+            )
+        ),
         synergy_target=getattr(config, "synergy_target", metrics_cfg.get("synergy_target", "logit_margin") if isinstance(metrics_cfg, dict) else "logit_margin"),
+        synergy_candidate_pool=int(
+            getattr(
+                config,
+                "synergy_candidate_pool",
+                metrics_cfg.get("synergy_candidate_pool", 50) if isinstance(metrics_cfg, dict) else 50,
+            )
+        ),
         synergy_pairs=getattr(config, "synergy_pairs", metrics_cfg.get("synergy_num_pairs", 10) if isinstance(metrics_cfg, dict) else 10),
         halo_percentile=getattr(config, "halo_percentile", halo_cfg.get("percentile", 90.0) if isinstance(halo_cfg, dict) else 90.0),
         pruning_ratios=pruning_ratios,
@@ -153,24 +172,33 @@ def _create_cluster_experiment(config):
     
     # Load model
     model_name = cluster_config.model_name.lower()
-    num_classes = 10 if "cifar" in cluster_config.dataset_name.lower() else 1000
+    dataset_name = cluster_config.dataset_name.lower()
+    # Prefer explicit num_classes from config.model.num_classes when present
+    num_classes = (
+        int(model_cfg.get("num_classes")) if isinstance(model_cfg, dict) and model_cfg.get("num_classes") is not None
+        else (10 if "cifar10" in dataset_name else 100 if "cifar100" in dataset_name else 100 if "imagenet100" in dataset_name else 1000)
+    )
     
     # Check for pre-trained checkpoint
     model_cfg = _get_nested(config, "model", {})
     checkpoint_path = model_cfg.get("checkpoint", None) if isinstance(model_cfg, dict) else None
     checkpoint_path = checkpoint_path or getattr(config, "model_checkpoint", None)
     
+    pretrained = bool(model_cfg.get("pretrained", True)) if isinstance(model_cfg, dict) else True
+    weights_name = model_cfg.get("weights", None) if isinstance(model_cfg, dict) else None
+    weights_arg = weights_name if pretrained else None
+
     if "resnet18" in model_name:
-        model = torchvision.models.resnet18(weights='IMAGENET1K_V1')
+        model = torchvision.models.resnet18(weights=weights_arg or 'IMAGENET1K_V1')
         model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
     elif "resnet50" in model_name:
-        model = torchvision.models.resnet50(weights='IMAGENET1K_V1')
+        model = torchvision.models.resnet50(weights=weights_arg or 'IMAGENET1K_V1')
         model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
     elif "vgg16" in model_name:
-        model = torchvision.models.vgg16_bn(weights='IMAGENET1K_V1')
+        model = torchvision.models.vgg16_bn(weights=weights_arg or 'IMAGENET1K_V1')
         model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
     elif "mobilenet" in model_name:
-        model = torchvision.models.mobilenet_v2(weights='IMAGENET1K_V1')
+        model = torchvision.models.mobilenet_v2(weights=weights_arg or 'IMAGENET1K_V1')
         model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -188,27 +216,56 @@ def _create_cluster_experiment(config):
         needs_training = True
     
     # Load dataset
-    dataset_name = cluster_config.dataset_name.lower()
     if "cifar10" in dataset_name:
         transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
         ])
-        train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-        test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+        root = dataset_cfg.get("root", "./data") if isinstance(dataset_cfg, dict) else "./data"
+        train_dataset = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=transform)
+        test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=transform)
     elif "cifar100" in dataset_name:
         transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
         ])
-        train_dataset = torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform)
-        test_dataset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform)
+        root = dataset_cfg.get("root", "./data") if isinstance(dataset_cfg, dict) else "./data"
+        train_dataset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=transform)
+        test_dataset = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=transform)
+    elif "imagenet100" in dataset_name:
+        # Expected folder structure: {root}/train/* and {root}/val/* (ImageFolder)
+        root = dataset_cfg.get("root", "./data/imagenet100") if isinstance(dataset_cfg, dict) else "./data/imagenet100"
+        train_dir = Path(root) / "train"
+        val_dir = Path(root) / "val"
+        if not train_dir.exists() or not val_dir.exists():
+            raise FileNotFoundError(
+                f"ImageNet-100 not found. Expected ImageFolder dirs at: {train_dir} and {val_dir}"
+            )
+
+        imagenet_mean = (0.485, 0.456, 0.406)
+        imagenet_std = (0.229, 0.224, 0.225)
+        image_size = int(dataset_cfg.get("image_size", 224)) if isinstance(dataset_cfg, dict) else 224
+        train_transform = transforms.Compose([
+            transforms.RandomResizedCrop(image_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(imagenet_mean, imagenet_std),
+        ])
+        val_transform = transforms.Compose([
+            transforms.Resize(int(image_size * 256 / 224)),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize(imagenet_mean, imagenet_std),
+        ])
+        train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
+        test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
-    batch_size = getattr(config, "batch_size", 128)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=4)
+    batch_size = int(dataset_cfg.get("batch_size", getattr(config, "batch_size", 128))) if isinstance(dataset_cfg, dict) else int(getattr(config, "batch_size", 128))
+    num_workers = int(dataset_cfg.get("num_workers", 4)) if isinstance(dataset_cfg, dict) else 4
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=num_workers)
     
     # Fine-tune the model on target dataset before experiments
     # This is necessary because we replaced the classifier head with random weights
@@ -229,12 +286,13 @@ def _create_cluster_experiment(config):
         extra_cfg.get("pretrain_lr") if isinstance(extra_cfg, dict) else None
     ) or getattr(config, "pretrain_lr", 0.001)
     
-    model = _finetune_model_for_dataset(
-        model, train_loader, test_loader, 
-        device=cluster_config.device,
-        epochs=pretrain_epochs,
-        lr=pretrain_lr,
-    )
+    if needs_training:
+        model = _finetune_model_for_dataset(
+            model, train_loader, test_loader, 
+            device=cluster_config.device,
+            epochs=pretrain_epochs,
+            lr=pretrain_lr,
+        )
     
     # Save the trained model checkpoint
     output_dir = Path(cluster_config.output_dir)

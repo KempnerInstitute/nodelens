@@ -103,6 +103,126 @@ def plot_metric_scatter(
     return fig
 
 
+def plot_metric_scatter_3d(
+    rq: np.ndarray,
+    redundancy: np.ndarray,
+    synergy: np.ndarray,
+    labels: np.ndarray,
+    type_mapping: Dict[int, str],
+    layer_name: str = "",
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (7, 6),
+    max_points: int = 20000,
+) -> Optional["plt.Figure"]:
+    """
+    Plot a 3D scatter in (log(RQ), Redundancy, Synergy) space.
+
+    This is primarily intended for the vision paper's representative "cluster_3d_scatter.png".
+    """
+    if not HAS_MPL:
+        return None
+
+    try:
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    except Exception:
+        return None
+
+    log_rq = np.log(np.clip(np.asarray(rq).reshape(-1), 1e-10, None))
+    red = np.asarray(redundancy).reshape(-1)
+    syn = np.asarray(synergy).reshape(-1)
+    lab = np.asarray(labels).reshape(-1).astype(int)
+
+    n = int(log_rq.shape[0])
+    if n == 0:
+        return None
+
+    # Downsample for plot readability
+    if n > max_points:
+        rng = np.random.default_rng(0)
+        idx = rng.choice(np.arange(n), size=max_points, replace=False)
+        log_rq = log_rq[idx]
+        red = red[idx]
+        syn = syn[idx]
+        lab = lab[idx]
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="3d")
+
+    for cid, ctype in type_mapping.items():
+        mask = lab == int(cid)
+        if mask.sum() == 0:
+            continue
+        color = CLUSTER_COLORS.get(ctype, "#999999")
+        ax.scatter(
+            log_rq[mask],
+            red[mask],
+            syn[mask],
+            c=color,
+            label=ctype,
+            alpha=0.55,
+            s=10,
+            depthshade=False,
+        )
+
+    ax.set_xlabel("log(RQ)")
+    ax.set_ylabel("Redundancy")
+    ax.set_zlabel("Synergy")
+    ax.set_title(f"Metric Space Clusters (3D): {layer_name}")
+    ax.legend(loc="best")
+
+    plt.tight_layout()
+
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+        logger.info(f"Saved 3D cluster scatter to {save_path}")
+
+    return fig
+
+
+def plot_pruning_by_cluster_type(
+    pruned: Dict[str, int],
+    total: Dict[str, int],
+    save_path: Optional[Path] = None,
+    title: str = "Pruned fraction by cluster type",
+    figsize: Tuple[int, int] = (7, 4),
+) -> Optional["plt.Figure"]:
+    """Bar chart showing fraction pruned per cluster type."""
+    if not HAS_MPL:
+        return None
+
+    types = ["critical", "redundant", "synergistic", "background"]
+    frac = []
+    for t in types:
+        denom = float(total.get(t, 0) or 0)
+        num = float(pruned.get(t, 0) or 0)
+        frac.append(num / denom if denom > 0 else 0.0)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    x = np.arange(len(types))
+    colors = [CLUSTER_COLORS.get(t, "#999999") for t in types]
+    ax.bar(x, frac, color=colors, alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels([t.capitalize() for t in types])
+    ax.set_ylim(0, 1.0)
+    ax.set_ylabel("Fraction pruned")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.25, axis="y")
+
+    for i, v in enumerate(frac):
+        ax.text(i, min(0.98, v + 0.03), f"{v:.2f}", ha="center", va="bottom", fontsize=10)
+
+    plt.tight_layout()
+
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+        logger.info(f"Saved pruning-by-cluster plot to {save_path}")
+
+    return fig
+
 def plot_cluster_evolution(
     layer_results: List[Dict[str, Any]],
     save_path: Optional[Path] = None,

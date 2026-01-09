@@ -11,7 +11,7 @@ Run experiments from YAML configuration:
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
 # LLM analysis  
-python scripts/run_experiment.py --config configs/paper/llama3_8b_full.yaml
+python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_full.yaml
 
 # Cluster-based analysis
 python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
@@ -41,10 +41,7 @@ Options:
 - `--analyses LIST` - Specific analyses to run
 - `--quick` - Run all analyses with defaults
 
-## analyze_halo_redundancy.py
+## Paper-specific helpers
 
-Specialized script for halo redundancy analysis:
-
-```bash
-python scripts/analyze_halo_redundancy.py --results-dir ./results --output-dir ./plots
-```
+The SCAR/LLM-pruning paper batch scripts and artifact collectors live under:
+- `drafts/LLM_prune/paper/`

@@ -2272,11 +2272,11 @@ class LLMAlignmentExperiment(BaseExperiment):
             m = re.search(r"layers\.(\d+)\.mlp", k)
             if m:
                 layer_indices.add(int(m.group(1)))
-
+        
         if not layer_indices:
             logger.warning("No MLP layers found in importance_scores; cannot compute baseline channel scores.")
             return {}
-
+        
         underlying_model = self._get_underlying_model()
         module_dict = dict(underlying_model.named_modules())
 
@@ -2393,17 +2393,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                             if store_name not in self.importance_scores:
                                 self.importance_scores[store_name] = {}
                             self.importance_scores[store_name]["sparsegpt"] = channel_scores
-
+                            
                             if store_name not in results:
                                 results[store_name] = {}
                             results[store_name]["sparsegpt"] = channel_scores
-
+                            
                         logger.debug(
                             f"SparseGPT channel scores for {mlp_path}: shape={tuple(channel_scores.shape)}, mean={channel_scores.mean().item():.4f}"
                         )
                     except Exception as e:
                         logger.warning(f"Failed to compute SparseGPT channel scores for {mlp_path}: {e}")
-
+                
                 logger.info(f"SparseGPT: computed channel scores for {len(layer_indices)} MLP layers")
             except Exception as e:
                 logger.error(f"SparseGPT calibration failed: {e}")
@@ -4044,7 +4044,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         """
         (Legacy/diagnostic) Compute redundancy among *hidden-dimension* output neurons that are strongly
         influenced by supernodes.
-
+        
         Note: This is NOT the SCAR paper's "directed redundancy" (which is defined on loss-relevant
         per-channel contribution signals). This helper is kept for exploratory plots and is not used
         for pruning decisions.
@@ -4601,19 +4601,19 @@ class LLMAlignmentExperiment(BaseExperiment):
         logger.info("Computing SCAR halo connectivity + protection pruning scores...")
         logger.info(f"  Supernode fraction (rho): {supernode_fraction*100:.1f}%")
         logger.info(f"  Halo fraction (eta): {high_connectivity_fraction*100:.1f}%")
-
+        
         eps = 1e-8
         results: Dict[str, Dict[str, Any]] = {}
         supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
         positive_redundancy = bool(supernode_cfg.get("positive_redundancy", False))
         if positive_redundancy:
             logger.info("  Redundancy: using positive-only correlation (anti-correlation does NOT count as redundancy)")
-
+        
         # Underlying HF model for module lookup / hook registration
         hf_model = self.model
         if hasattr(hf_model, "model"):
             hf_model = hf_model.model
-
+        
         module_dict = dict(hf_model.named_modules())
 
         # Calibration texts
@@ -4623,7 +4623,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         if not calibration_texts:
             logger.warning("No calibration texts available for SCAR protection/connectivity computation")
             return {}
-
+        
         # Determine which layers to process (down_proj layers only)
         layer_names = [ln for ln in scar_scores.keys() if "mlp.down_proj" in ln]
         if not layer_names:
@@ -4647,19 +4647,19 @@ class LLMAlignmentExperiment(BaseExperiment):
             m = lp_cpu.numel()
             if m == 0:
                 continue
-
+            
             module = module_dict.get(layer_name)
             if module is None or not hasattr(module, "weight"):
                 logger.warning(f"SCAR connectivity: could not resolve module/weight for {layer_name}")
                 continue
-
+            
             # Identify supernodes by LP
             num_supernodes = max(1, int(supernode_fraction * m))
             _, super_idx = torch.topk(lp_cpu, k=num_supernodes, largest=True)
             super_idx = super_idx.long()
             super_mask = torch.zeros(m, dtype=torch.bool)
             super_mask[super_idx] = True
-
+            
             # Compute Conn_i from down_proj weights (write-pattern overlap)
             W = module.weight.detach().float().cpu()  # [hidden_dim, m]
             abs_W = W.abs()
@@ -4761,7 +4761,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 q_halo = q_sel[:, n_super:]   # [N, |H|]
 
                 N = q_sel.shape[0]
-
+                
                 # Initialize streaming sums on first batch
                 if st["sum_q_super"] is None:
                     st["sum_q_super"] = torch.zeros(q_super.shape[1], device=q_super.device, dtype=torch.float32)
@@ -4876,6 +4876,13 @@ class LLMAlignmentExperiment(BaseExperiment):
             protect_full[halo_idx] = protect_halo
             protect_full[super_idx] = 1.0
 
+            # Store redundancy-to-core in full channel space (defined only for halo channels)
+            redundancy_full = torch.full((m,), float("nan"), dtype=torch.float32)
+            try:
+                redundancy_full[halo_idx] = redundancy_to_core.float()
+            except Exception:
+                pass
+
             # SCAR-Prot and SCAR-Conn importance scores (high=keep)
             prot_score = (lp * protect_full).float()
             conn_score = (lp * ((1.0 - conn) + conn * protect_full)).float()
@@ -4897,10 +4904,11 @@ class LLMAlignmentExperiment(BaseExperiment):
             layer_scores["supernode_connectivity_score"] = conn_score
             layer_scores["connectivity_score"] = conn
             layer_scores["protection_score"] = protect_full
+            layer_scores["redundancy_to_core"] = redundancy_full
             layer_scores["halo_mask"] = halo_mask
             layer_scores["supernode_mask"] = super_mask
             self.importance_scores[layer_name] = layer_scores
-
+            
             results[layer_name] = {
                 "num_supernodes": int(super_idx.numel()),
                 "num_halo": int(halo_idx.numel()),
@@ -4909,7 +4917,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "protect_halo_mean": float(protect_halo.mean().item()) if protect_halo.numel() else 0.0,
                 "redundancy_to_core_mean": float(redundancy_to_core.mean().item()) if redundancy_to_core.numel() else 0.0,
             }
-
+        
         logger.info(f"Computed SCAR protection/connectivity scores for {len(results)} layers")
         return results
     
@@ -4924,7 +4932,7 @@ class LLMAlignmentExperiment(BaseExperiment):
     ) -> Dict[str, Dict[str, Any]]:
         """
         Paper-aligned halo redundancy analysis using the loss-relevant contribution signal.
-
+        
         We compare redundancy between three groups (per layer), then aggregate across layers:
           1) **Halo-Halo**: both channels in the halo (high Conn to supernode write pattern)
           2) **Non-halo**: both channels outside halo and outside supernodes
@@ -4943,7 +4951,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         - Supernodes are identified by `scar_loss_proxy` when available (paper definition).
         - Halo membership is identified by Conn overlap with the aggregated supernode write pattern
           (same as `compute_supernode_connectivity_pruning_score`).
-
+            
         Returns:
           Dict with:
             - per_layer: per-layer group stats
@@ -5036,7 +5044,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 lp = layer_metrics.get("scar_activation_power")
             if lp is None:
                 continue
-
+            
             lp_cpu = lp.detach().float().cpu()
             m = int(lp_cpu.numel())
             if m <= 0:
@@ -5046,14 +5054,14 @@ class LLMAlignmentExperiment(BaseExperiment):
             if module is None or not hasattr(module, "weight"):
                 logger.warning(f"Halo redundancy: could not resolve module/weight for {layer_name}")
                 continue
-
+            
             # Identify supernodes by LP (paper definition)
             num_supernodes = max(1, int(supernode_fraction * m))
             _, super_idx = torch.topk(lp_cpu, k=num_supernodes, largest=True)
             super_idx = super_idx.long()
             super_mask = torch.zeros(m, dtype=torch.bool)
             super_mask[super_idx] = True
-
+            
             # Compute Conn_i from down_proj weights (write-pattern overlap)
             W = module.weight.detach().float().cpu()  # [hidden_dim, m]
             abs_W = W.abs()
@@ -5069,7 +5077,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             num_halo = max(1, int(halo_fraction * non_super_idx.numel()))
             _, halo_rel = torch.topk(conn[non_super_idx], k=num_halo, largest=True)
             halo_idx = non_super_idx[halo_rel].long()
-
+            
             halo_mask = torch.zeros(m, dtype=torch.bool)
             halo_mask[halo_idx] = True
             non_halo_idx = ((~super_mask) & (~halo_mask)).nonzero(as_tuple=True)[0].long()
@@ -5145,7 +5153,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # Phase 2: Calibration passes (forward+backward) to accumulate q correlations
         # ------------------------------------------------------------------
         hooks: List[Any] = []
-
+            
         def make_hooks(name: str):
             def fwd_hook(mod: nn.Module, inputs: Tuple[torch.Tensor, ...], output: torch.Tensor):
                 if not inputs or inputs[0] is None:
@@ -5282,7 +5290,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     h.remove()
                 except Exception:
                     pass
-
+            
         # ------------------------------------------------------------------
         # Phase 3: Compute redundancy distributions and aggregate across layers
         # ------------------------------------------------------------------
@@ -5300,7 +5308,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             N = int(st.get("count", 0))
             if N <= 1 or st["sum_qij_hh"] is None:
                 continue
-
+            
             sum_q_h = st["sum_q_halo"].detach().cpu()
             sum_q2_h = st["sum_q2_halo"].detach().cpu()
             sum_q_n = st["sum_q_nonhalo"].detach().cpu()
@@ -5324,7 +5332,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             e_hh = st["sum_qij_hh"].detach().cpu() / float(N)
             e_nn = st["sum_qij_nn"].detach().cpu() / float(N)
             e_cn = st["sum_qij_cross"].detach().cpu() / float(N)
-
+            
             # corr (halo-halo)
             cov = e_hh - (mean_h[hh_i] * mean_h[hh_j])
             corr_hh = cov / (std_h[hh_i] * std_h[hh_j] + eps)
@@ -5362,7 +5370,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             agg_vals["halo_halo"].extend(red_hh.tolist())
             agg_vals["non_halo"].extend(red_nn.tolist())
             agg_vals["cross"].extend(red_cn.tolist())
-
+        
         aggregate_stats: Dict[str, Dict[str, Any]] = {}
         for group, vals in agg_vals.items():
             if not vals:
@@ -5375,12 +5383,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "median": float(np.median(arr)),
                 "count": int(arr.size),
             }
-
+        
         logger.info("\nHALO vs NON-HALO REDUNDANCY SUMMARY (q-signal):")
         logger.info(f"  Halo-Halo:     mean={aggregate_stats['halo_halo']['mean']:.4f}")
         logger.info(f"  Non-halo:      mean={aggregate_stats['non_halo']['mean']:.4f}")
         logger.info(f"  Cross-group:   mean={aggregate_stats['cross']['mean']:.4f}")
-
+        
         return {
             "signal": "q",
             "positive_redundancy": positive_redundancy,
@@ -7223,6 +7231,159 @@ class LLMAlignmentExperiment(BaseExperiment):
                     
                 except Exception as e:
                     logger.error(f"Failed to generate pruning visualizations: {e}")
+
+        # ------------------------------------------------------------------
+        # Paper-oriented mechanism figures (supernodes + halo structure)
+        # ------------------------------------------------------------------
+        if getattr(self.config, "generate_plots", True):
+            try:
+                from alignment.analysis.visualization import (
+                    plot_halo_structure,
+                    plot_loss_proxy_concentration,
+                    plot_supernode_halo_summary,
+                )
+
+                plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+                paper_dir = plots_dir / "paper"
+                paper_dir.mkdir(parents=True, exist_ok=True)
+
+                # 1) Loss proxy concentration for a representative layer
+                rho = float((getattr(self.config, "supernode", {}) or {}).get("core_fraction", 0.01))
+                down_layers = sorted([k for k in scar_scores.keys() if "mlp.down_proj" in k])
+                if down_layers:
+                    # Choose a stable "middle" layer as representative
+                    mid_layer = down_layers[len(down_layers) // 2]
+                    lp = scar_scores.get(mid_layer, {}).get("scar_loss_proxy")
+                    if lp is not None:
+                        plot_loss_proxy_concentration(
+                            loss_proxy=lp,
+                            rho=rho,
+                            layer_label=mid_layer,
+                            save_path=paper_dir / "fig_supernode_distribution.png",
+                            dpi=getattr(self.config, "plot_dpi", 300),
+                        )
+
+                # 2) Halo structure (global): aggregate across many layers for a cleaner story
+                if down_layers:
+                    conn_all = []
+                    prot_all = []
+                    red_all = []
+                    halo_all = []
+                    super_all = []
+                    for ln in down_layers:
+                        layer_scores = self.importance_scores.get(ln, {})
+                        conn = layer_scores.get("connectivity_score")
+                        prot = layer_scores.get("protection_score")
+                        red = layer_scores.get("redundancy_to_core")
+                        halo_mask = layer_scores.get("halo_mask")
+                        super_mask = layer_scores.get("supernode_mask")
+                        if (
+                            conn is None
+                            or prot is None
+                            or red is None
+                            or halo_mask is None
+                            or super_mask is None
+                        ):
+                            continue
+                        # Ensure consistent shapes
+                        try:
+                            if conn.numel() == 0 or conn.numel() != prot.numel() or conn.numel() != halo_mask.numel():
+                                continue
+                            if red.numel() != conn.numel() or super_mask.numel() != conn.numel():
+                                continue
+                        except Exception:
+                            continue
+
+                        conn_all.append(conn.detach().cpu())
+                        prot_all.append(prot.detach().cpu())
+                        red_all.append(red.detach().cpu())
+                        halo_all.append(halo_mask.detach().cpu())
+                        super_all.append(super_mask.detach().cpu())
+
+                    if conn_all:
+                        import torch
+
+                        conn_cat = torch.cat(conn_all, dim=0)
+                        prot_cat = torch.cat(prot_all, dim=0)
+                        red_cat = torch.cat(red_all, dim=0)
+                        halo_cat = torch.cat(halo_all, dim=0)
+                        super_cat = torch.cat(super_all, dim=0)
+
+                        plot_halo_structure(
+                            conn=conn_cat,
+                            redundancy_to_core=red_cat,
+                            protect=prot_cat,
+                            super_mask=super_cat,
+                            halo_mask=halo_cat,
+                            layer_label="All layers (aggregated)",
+                            save_path=paper_dir / "fig_halo_structure.png",
+                            dpi=getattr(self.config, "plot_dpi", 300),
+                        )
+
+                # 2b) Halo structure (example layer): keep a representative layer for debugging/supplementary
+                if down_layers:
+                    mid_layer = down_layers[len(down_layers) // 2]
+                    layer_scores = self.importance_scores.get(mid_layer, {})
+                    conn = layer_scores.get("connectivity_score")
+                    prot = layer_scores.get("protection_score")
+                    red = layer_scores.get("redundancy_to_core")
+                    halo_mask = layer_scores.get("halo_mask")
+                    super_mask = layer_scores.get("supernode_mask")
+                    if conn is not None and prot is not None and red is not None and halo_mask is not None and super_mask is not None:
+                        plot_halo_structure(
+                            conn=conn,
+                            redundancy_to_core=red,
+                            protect=prot,
+                            super_mask=super_mask,
+                            halo_mask=halo_mask,
+                            layer_label=mid_layer,
+                            save_path=paper_dir / "fig_halo_structure_layer.png",
+                            dpi=getattr(self.config, "plot_dpi", 300),
+                        )
+
+                # 3) Supernode mass ratio across layers + halo redundancy summary
+                try:
+                    halo_agg = (results.get("halo_analysis") or {}).get("aggregate") or {}
+                    # Compute top-rho mass ratio per layer from scar_loss_proxy
+                    layer_idxs: List[int] = []
+                    ratios: List[float] = []
+                    for ln in down_layers:
+                        lp = scar_scores.get(ln, {}).get("scar_loss_proxy")
+                        if lp is None:
+                            continue
+                        lp_cpu = lp.detach().float().cpu()
+                        m = int(lp_cpu.numel())
+                        if m <= 0:
+                            continue
+                        k = max(1, int(round(rho * m)))
+                        top = torch.topk(lp_cpu, k=k, largest=True).values
+                        denom = float(lp_cpu.sum().item()) if float(lp_cpu.sum().item()) > 0 else 1.0
+                        ratio = float(top.sum().item()) / denom
+                        try:
+                            idx = int(ln.split("layers.")[-1].split(".")[0])
+                        except Exception:
+                            idx = len(layer_idxs)
+                        layer_idxs.append(idx)
+                        ratios.append(ratio)
+
+                    if layer_idxs and halo_agg:
+                        # Sort by layer index for plotting
+                        order = np.argsort(np.asarray(layer_idxs))
+                        layer_idxs_sorted = [layer_idxs[i] for i in order]
+                        ratios_sorted = [ratios[i] for i in order]
+                        plot_supernode_halo_summary(
+                            layer_indices=layer_idxs_sorted,
+                            top_mass_ratios=ratios_sorted,
+                            halo_aggregate=halo_agg,
+                            rho=rho,
+                            save_path=paper_dir / "fig_supernode_analysis.png",
+                            dpi=getattr(self.config, "plot_dpi", 300),
+                        )
+                except Exception as _summary_err:
+                    logger.debug(f"Paper summary plot skipped: {_summary_err}")
+
+            except Exception as e:
+                logger.warning(f"Failed to generate paper mechanism figures: {e}")
 
         return results
     

@@ -15,7 +15,7 @@ Configurations for generating results in the SCAR LLM pruning paper.
 
 Run all experiments:
 ```bash
-bash slurm_jobs/prune_llm/run_all_paper.sh
+bash drafts/LLM_prune/paper/slurm/run_all_paper.sh
 ```
 
 Run single model:

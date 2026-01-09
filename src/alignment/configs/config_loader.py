@@ -4,6 +4,7 @@ Configuration loading and saving utilities.
 Supports both original format and unified format configs.
 """
 
+import ast
 import json
 import logging
 import os
@@ -1214,7 +1215,8 @@ def load_config_with_overrides(
                     elif low in {"none", "null"}:
                         value = None
                     else:
-                    value = eval(value)
+                        # Parse Python-literal values (lists, dicts, numbers, quoted strings) safely.
+                        value = ast.literal_eval(value)
                 except Exception:
                     pass  # Keep as string
 
