@@ -177,6 +177,10 @@ Thumbs.db
 *.swo
 *~
 
+# SLURM default output files (created when submitting scripts without explicit --output)
+slurm-*.out
+slurm-*.err
+
 # OS
 .DS_Store
 .DS_Store?
