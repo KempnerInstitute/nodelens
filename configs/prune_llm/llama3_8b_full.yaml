@@ -299,6 +299,8 @@ pruning:
     
     # Magnitude baseline
     - "activation_l2_norm"
+    # Weight-only magnitude baseline (channel-group)
+    - "weight_magnitude"
     
     # SOTA baselines
     - "wanda"
@@ -310,6 +312,7 @@ pruning:
   scoring_methods:
     - "random"
     - "activation_l2_norm"
+    - "weight_magnitude"
     - "rayleigh_quotient"
     - "gaussian_mi_analytic"
     - "average_redundancy"
@@ -440,6 +443,7 @@ visualization:
       - "wanda"
       - "sparsegpt"
       - "activation_l2_norm"
+      - "weight_magnitude"
       - "random"
   
   # Supernode robustness plots

@@ -237,6 +237,7 @@ pruning:
     - "supernode_connectivity_score"
     - "generalized_importance"
     - "activation_l2_norm"
+    - "weight_magnitude"
     - "wanda"
     - "sparsegpt"
     - "cross_layer_importance"
@@ -244,6 +245,7 @@ pruning:
   scoring_methods:
     - "random"
     - "activation_l2_norm"
+    - "weight_magnitude"
     - "rayleigh_quotient"
     - "gaussian_mi_analytic"
     - "average_redundancy"
@@ -365,6 +367,7 @@ visualization:
       - "wanda"
       - "sparsegpt"
       - "activation_l2_norm"
+      - "weight_magnitude"
       - "random"
   
   supernode_robustness:

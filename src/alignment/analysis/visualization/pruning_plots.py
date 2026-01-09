@@ -745,6 +745,10 @@ PRUNING_METHOD_COLORS = {
     "chip": "#16a085",
     # Activation-based metrics
     "activation_l2_norm": "#e74c3c",  # Same as magnitude (they're aliases)
+    # Weight-only magnitude (channel-group)
+    "weight_magnitude": "#e74c3c",
+    "weight_magnitude_low": "#e74c3c",
+    "weight_magnitude_high": "#c0392b",
     "activation_mean": "#c0392b",
     "activation_variance": "#a93226",
     # Generalized importance (no outlier assumption)
@@ -769,6 +773,7 @@ PRUNING_METHOD_COLORS = {
 PRUNING_METHOD_MARKERS = {
     "random": "o",
     "magnitude": "s",
+    "weight_magnitude": "s",
     "taylor": "^",
     "gradient": "d",
     "composite": "p",

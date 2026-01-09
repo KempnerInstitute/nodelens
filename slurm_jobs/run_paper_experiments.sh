@@ -51,8 +51,8 @@ echo "=============================================="
 echo "Experiment 1: LLaMA-3.1-8B (Main Results)"
 echo "=============================================="
 
-python -m alignment.experiments.llm_alignment \
-    --config configs/paper/llama3_8b_full.yaml \
+python scripts/run_experiment.py \
+    --config configs/prune_llm/llama3_8b_full.yaml \
     2>&1 | tee logs/llama3_8b_paper.log
 
 echo "LLaMA-3.1-8B completed at $(date)"
@@ -65,8 +65,8 @@ echo "=============================================="
 echo "Experiment 2: Mistral-7B (Generalization)"
 echo "=============================================="
 
-python -m alignment.experiments.llm_alignment \
-    --config configs/paper/mistral_7b_full.yaml \
+python scripts/run_experiment.py \
+    --config configs/prune_llm/mistral_7b_full.yaml \
     2>&1 | tee logs/mistral_7b_paper.log
 
 echo "Mistral-7B completed at $(date)"
@@ -79,8 +79,8 @@ echo "=============================================="
 echo "Experiment 3: LLaMA-2-7B (Generalization)"
 echo "=============================================="
 
-python -m alignment.experiments.llm_alignment \
-    --config configs/paper/llama2_7b_full.yaml \
+python scripts/run_experiment.py \
+    --config configs/prune_llm/llama2_7b_full.yaml \
     2>&1 | tee logs/llama2_7b_paper.log
 
 echo "LLaMA-2-7B completed at $(date)"
@@ -93,8 +93,8 @@ echo "=============================================="
 echo "Experiment 4: Qwen2-7B (Generalization)"
 echo "=============================================="
 
-python -m alignment.experiments.llm_alignment \
-    --config configs/paper/qwen2_7b_full.yaml \
+python scripts/run_experiment.py \
+    --config configs/prune_llm/qwen2_7b_full.yaml \
     2>&1 | tee logs/qwen2_7b_paper.log
 
 echo "Qwen2-7B completed at $(date)"
