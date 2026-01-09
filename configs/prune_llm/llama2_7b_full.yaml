@@ -138,6 +138,11 @@ supernode:
   follower_fraction: 0.10
   halo_fraction: 0.10
   protect_core: true
+  protect_core_metrics:
+    - "scar_loss_proxy"                 # SCAR-LP
+    - "supernode_protection_score"      # SCAR-Prot
+    - "supernode_connectivity_score"    # SCAR-Conn
+  positive_redundancy: false
   cross_layer_analysis: true
   compare_by_connection: true
   

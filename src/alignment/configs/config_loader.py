@@ -1206,6 +1206,14 @@ def load_config_with_overrides(
                 key, value = arg.split("=", 1)
                 # Convert value to appropriate type
                 try:
+                    # Common CLI convenience: YAML-style booleans/nulls
+                    raw = value.strip()
+                    low = raw.lower()
+                    if low in {"true", "false"}:
+                        value = (low == "true")
+                    elif low in {"none", "null"}:
+                        value = None
+                    else:
                     value = eval(value)
                 except Exception:
                     pass  # Keep as string

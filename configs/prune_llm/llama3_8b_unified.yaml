@@ -114,6 +114,8 @@ supernode:
   halo_fraction: 0.10
   follower_fraction: 0.10
   protect_core: true
+  # If true, treat anti-correlated q-signals as NON-redundant (recommended ablation)
+  positive_redundancy: false
   cross_layer_analysis: true
   compare_by_connection: true
   compute_metrics:
@@ -183,6 +185,8 @@ pruning:
     
     # Magnitude baseline
     - "magnitude"               # maps to activation_l2_norm
+    # Weight-only magnitude baseline (channel-group)
+    - "weight_magnitude"
     
     # SOTA baselines
     - "wanda"
@@ -191,6 +195,7 @@ pruning:
   scoring_methods:
     - "random"
     - "magnitude"               # activation_l2_norm
+    - "weight_magnitude"
     - "rayleigh_quotient"
     - "redundancy"              # gaussian_mi_analytic
     - "average_redundancy"

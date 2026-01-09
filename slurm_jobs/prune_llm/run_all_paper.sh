@@ -19,7 +19,7 @@
 #   bash slurm_jobs/prune_llm/run_all_paper.sh
 # ============================================================================
 
-OUTPUT_BASE="/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM}"
 
 echo "=============================================="
 echo "Submitting SCAR Paper Experiments"
@@ -32,19 +32,19 @@ cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
 
 # Submit all jobs
 echo "Submitting LLaMA-3.1-8B (main results)..."
-JOB1=$(sbatch slurm_jobs/prune_llm/run_llama3_8b.sh | awk '{print $4}')
+JOB1=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/prune_llm/run_llama3_8b.sh | awk '{print $4}')
 echo "  Job ID: $JOB1"
 
 echo "Submitting Mistral-7B (generalization)..."
-JOB2=$(sbatch slurm_jobs/prune_llm/run_mistral_7b.sh | awk '{print $4}')
+JOB2=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/prune_llm/run_mistral_7b.sh | awk '{print $4}')
 echo "  Job ID: $JOB2"
 
 echo "Submitting LLaMA-2-7B (generalization)..."
-JOB3=$(sbatch slurm_jobs/prune_llm/run_llama2_7b.sh | awk '{print $4}')
+JOB3=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/prune_llm/run_llama2_7b.sh | awk '{print $4}')
 echo "  Job ID: $JOB3"
 
 echo "Submitting Qwen2-7B (generalization)..."
-JOB4=$(sbatch slurm_jobs/prune_llm/run_qwen2_7b.sh | awk '{print $4}')
+JOB4=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/prune_llm/run_qwen2_7b.sh | awk '{print $4}')
 echo "  Job ID: $JOB4"
 
 echo ""

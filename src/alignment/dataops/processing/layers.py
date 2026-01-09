@@ -115,18 +115,51 @@ class CNNPreprocessor(LayerPreprocessor):
         Returns:
             Tensor of shape [batch_size * num_patches, features]
         """
-        b, c, h, w = activation.shape
+        if isinstance(layer, nn.Conv2d):
+            if activation.ndim != 4:
+                raise ValueError(f"Expected 4D tensor for Conv2d, got {activation.ndim}D")
 
-        if is_input and isinstance(layer, nn.Conv2d):
-            # For inputs, unfold based on the layer's kernel parameters
-            unfold_params = self._get_unfold_params(layer)
-            unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
-            # [b, features*kernel_size, num_patches] -> [b*num_patches, features]
-            unfolded = unfolded.transpose(1, 2).contiguous()
-            return unfolded.view(-1, unfolded.size(2))
-        else:
-            # For outputs or non-conv layers, just flatten spatial dims
-            return activation.reshape(b, c, -1).permute(0, 2, 1).reshape(-1, c)
+            b, c, h, w = activation.shape
+
+            if is_input:
+                # Unfold based on the layer's kernel parameters so feature dimension matches weight flattening
+                unfold_params = self._get_unfold_params(layer)
+                unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
+                # [b, features, num_patches] -> [b*num_patches, features]
+                unfolded = unfolded.transpose(1, 2).contiguous()
+                return unfolded.view(-1, unfolded.size(2))
+
+            # Output: treat each spatial location as a sample (node = output channel)
+            # [b, c, h, w] -> [b*h*w, c]
+            return activation.permute(0, 2, 3, 1).reshape(-1, c)
+
+        if isinstance(layer, nn.Conv1d):
+            if activation.ndim != 3:
+                raise ValueError(f"Expected 3D tensor for Conv1d, got {activation.ndim}D")
+
+            b, c, l = activation.shape
+
+            if is_input:
+                # Use 2D unfold trick on [b, c, 1, l] to respect stride/padding/dilation
+                x4 = activation.unsqueeze(2)  # [b, c, 1, l]
+                k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
+                s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
+                p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
+                d = layer.dilation[0] if isinstance(layer.dilation, tuple) else layer.dilation
+                unfolded = torch.nn.functional.unfold(
+                    x4,
+                    kernel_size=(1, k),
+                    dilation=(1, d),
+                    padding=(0, p),
+                    stride=(1, s),
+                )  # [b, c*k, num_patches]
+                unfolded = unfolded.transpose(1, 2).contiguous()
+                return unfolded.view(-1, unfolded.size(2))  # [b*num_patches, c*k]
+
+            # Output: [b, c, l] -> [b*l, c]
+            return activation.permute(0, 2, 1).reshape(-1, c)
+
+        raise ValueError(f"Expected Conv layer, got {type(layer)}")
 
     def _patchwise_mode(self, activation: torch.Tensor, layer: nn.Module, is_input: bool) -> torch.Tensor:
         """
@@ -135,16 +168,47 @@ class CNNPreprocessor(LayerPreprocessor):
         Returns:
             Tensor of shape [batch_size, features, num_patches]
         """
-        b, c, h, w = activation.shape
+        if isinstance(layer, nn.Conv2d):
+            if activation.ndim != 4:
+                raise ValueError(f"Expected 4D tensor for Conv2d, got {activation.ndim}D")
 
-        if is_input and isinstance(layer, nn.Conv2d):
-            # Unfold to get patches
-            unfold_params = self._get_unfold_params(layer)
-            unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
-            return unfolded  # [b, features, patches]
-        else:
-            # For outputs, reshape spatial dims to patches
-            return activation.reshape(b, c, h * w)
+            b, c, h, w = activation.shape
+
+            if is_input:
+                # Unfold to get kernel patches
+                unfold_params = self._get_unfold_params(layer)
+                unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
+                return unfolded  # [b, features, patches]
+
+            # Output: reshape spatial dims to patches (node = output channel)
+            return activation.reshape(b, c, h * w)  # [b, c, patches]
+
+        if isinstance(layer, nn.Conv1d):
+            if activation.ndim != 3:
+                raise ValueError(f"Expected 3D tensor for Conv1d, got {activation.ndim}D")
+
+            b, c, l = activation.shape
+
+            if is_input:
+                # Unfold 1D input into kernel patches: [b, c*k, patches]
+                x4 = activation.unsqueeze(2)  # [b, c, 1, l]
+                k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
+                s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
+                p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
+                d = layer.dilation[0] if isinstance(layer.dilation, tuple) else layer.dilation
+                unfolded = torch.nn.functional.unfold(
+                    x4,
+                    kernel_size=(1, k),
+                    dilation=(1, d),
+                    padding=(0, p),
+                    stride=(1, s),
+                )
+                return unfolded  # [b, c*k, patches]
+
+            # Output: already [b, c, l] = [b, c, patches]
+            return activation
+
+        raise ValueError(f"Expected Conv layer, got {type(layer)}")
 
     def _batch_patch_combined_mode(self, activation: torch.Tensor, layer: nn.Module, is_input: bool) -> torch.Tensor:
         """
@@ -166,30 +230,48 @@ class CNNPreprocessor(LayerPreprocessor):
 
     def get_output_shape(self, input_shape: Tuple[int, ...], layer: nn.Module) -> Tuple[int, ...]:
         """Get expected output shape after preprocessing."""
-        if len(input_shape) != 4:
-            raise ValueError(f"Expected 4D input shape, got {len(input_shape)}D")
+        if isinstance(layer, nn.Conv2d):
+            if len(input_shape) != 4:
+                raise ValueError(f"Expected 4D input shape for Conv2d, got {len(input_shape)}D")
+            b, c, h, w = input_shape
 
-        b, c, h, w = input_shape
+            # Output spatial size (PyTorch conv2d formula; floor division)
+            k_h, k_w = layer.kernel_size
+            s_h, s_w = layer.stride
+            p_h, p_w = layer.padding
+            d_h, d_w = layer.dilation
+            out_h = (h + 2 * p_h - d_h * (k_h - 1) - 1) // s_h + 1
+            out_w = (w + 2 * p_w - d_w * (k_w - 1) - 1) // s_w + 1
+            num_patches = max(0, out_h) * max(0, out_w)
+            features = c * k_h * k_w
 
-        if self.mode == "unfold" or self.mode == "batch_patch_combined":
-            if isinstance(layer, nn.Conv2d):
-                # Calculate number of patches
-                out_h = (h + 2 * layer.padding[0] - layer.kernel_size[0]) // layer.stride[0] + 1
-                out_w = (w + 2 * layer.padding[1] - layer.kernel_size[1]) // layer.stride[1] + 1
-                num_patches = out_h * out_w
-                features = c * layer.kernel_size[0] * layer.kernel_size[1]
+            if self.mode in {"unfold", "batch_patch_combined"}:
                 return (b * num_patches, features)
-            else:
-                return (b * h * w, c)
-        elif self.mode == "patchwise":
-            if isinstance(layer, nn.Conv2d):
-                out_h = (h + 2 * layer.padding[0] - layer.kernel_size[0]) // layer.stride[0] + 1
-                out_w = (w + 2 * layer.padding[1] - layer.kernel_size[1]) // layer.stride[1] + 1
-                num_patches = out_h * out_w
-                features = c * layer.kernel_size[0] * layer.kernel_size[1]
+            if self.mode == "patchwise":
                 return (b, features, num_patches)
-            else:
-                return (b, c, h * w)
+
+            raise ValueError(f"Unknown mode: {self.mode}")
+
+        if isinstance(layer, nn.Conv1d):
+            if len(input_shape) != 3:
+                raise ValueError(f"Expected 3D input shape for Conv1d, got {len(input_shape)}D")
+            b, c, l = input_shape
+            k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
+            s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
+            p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
+            d = layer.dilation[0] if isinstance(layer.dilation, tuple) else layer.dilation
+            out_l = (l + 2 * p - d * (k - 1) - 1) // s + 1
+            num_patches = max(0, out_l)
+            features = c * k
+
+            if self.mode in {"unfold", "batch_patch_combined"}:
+                return (b * num_patches, features)
+            if self.mode == "patchwise":
+                return (b, features, num_patches)
+
+            raise ValueError(f"Unknown mode: {self.mode}")
+
+        raise ValueError(f"Expected Conv layer, got {type(layer)}")
 
 
 class AttentionPreprocessor(LayerPreprocessor):

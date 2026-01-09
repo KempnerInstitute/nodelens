@@ -98,6 +98,7 @@ supernode:
   halo_fraction: 0.10
   follower_fraction: 0.10
   protect_core: true
+  positive_redundancy: false
   cross_layer_analysis: true
   compare_by_connection: true
   compute_metrics:
@@ -160,6 +161,7 @@ pruning:
     - "cross_layer_importance"
     # Magnitude baseline
     - "magnitude"
+    - "weight_magnitude"
     # SOTA baselines
     - "wanda"
     - "sparsegpt"
@@ -167,6 +169,7 @@ pruning:
   scoring_methods:
     - "random"
     - "magnitude"
+    - "weight_magnitude"
     - "rayleigh_quotient"
     - "redundancy"
     - "average_redundancy"

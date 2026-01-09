@@ -104,7 +104,22 @@ class SynergyContinuousTarget(BaseMetric):
         if outputs.ndim > 2:
             # Conv layer: [B, C, H, W] -> [B, C] via GAP
             outputs = outputs.mean(dim=(2, 3)) if outputs.ndim == 4 else outputs.reshape(outputs.shape[0], -1)
-        
+
+        # Handle batch mismatch (common when upstream preprocessing unfolds CNN outputs)
+        # If outputs has more samples than logits/labels, aggregate back to per-example activations.
+        # This makes synergy w.r.t. per-example target T well-defined.
+        if outputs.shape[0] != logits.shape[0]:
+            if outputs.shape[0] % logits.shape[0] == 0:
+                num_patches = outputs.shape[0] // logits.shape[0]
+                n_neurons = outputs.shape[1]
+                outputs = outputs.view(logits.shape[0], num_patches, n_neurons).mean(dim=1)
+            else:
+                logger.warning(
+                    f"SynergyContinuousTarget: Batch mismatch outputs={outputs.shape[0]} vs logits={logits.shape[0]}; "
+                    "cannot safely aggregate. Returning zeros."
+                )
+                return torch.zeros(outputs.shape[-1], device=device, dtype=dtype)
+
         batch_size, n_neurons = outputs.shape
         
         # Compute continuous target T

@@ -41,7 +41,8 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $(hostname)"
 echo "Start time: $(date)"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-echo "Output Base: /n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM}"
+echo "Output Base: $OUTPUT_BASE"
 echo ""
 
 # Environment setup
@@ -65,16 +66,15 @@ echo ""
 echo "Running LLaMA-3.1-8B full paper analysis..."
 echo ""
 
-# The config has base_dir set, so outputs go to:
-# /n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/{name}_{timestamp}_{job_id}/
 python scripts/run_experiment.py \
-    --config configs/prune_llm/llama3_8b_unified.yaml \
-    --device cuda
+    --config configs/prune_llm/llama3_8b_full.yaml \
+    --device cuda \
+    --base-output-dir "$OUTPUT_BASE"
 
 echo ""
 echo "============================================================================"
 echo "LLaMA-3.1-8B completed at $(date)"
 echo "============================================================================"
 echo ""
-echo "Results saved to: /n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/"
+echo "Results saved to: $OUTPUT_BASE/"
 echo "Look for directory: llama3_8b_paper_results_*_$SLURM_JOB_ID"

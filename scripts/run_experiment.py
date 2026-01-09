@@ -644,14 +644,12 @@ def main():
     if args.seed:
         overrides["seed"] = args.seed
 
-    # Load config
-    from alignment.configs.config_loader import load_config as proper_load_config
-    config = proper_load_config(args.config)
-
-    # Apply overrides
-    for key, value in overrides.items():
-        if hasattr(config, key):
-            setattr(config, key, value)
+    # Load config (support key=value overrides passed after args)
+    # Example:
+    #   python scripts/run_experiment.py --config ... name="llama3_8b_paper_main" supernode.protect_core=false
+    from alignment.configs.config_loader import load_config_with_overrides as proper_load_config
+    cli_overrides = [x for x in (unknown or []) if isinstance(x, str) and "=" in x]
+    config = proper_load_config(args.config, overrides=overrides or None, cli_args=cli_overrides or None)
     
     # Override base_output_dir if provided via CLI
     if args.base_output_dir:

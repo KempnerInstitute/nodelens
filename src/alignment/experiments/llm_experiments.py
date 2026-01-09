@@ -2038,16 +2038,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Gradient w.r.t. module input (u)
                     if not grad_input or grad_input[0] is None:
                         return
-                    if not grad_output or grad_output[0] is None:
-                        return
 
                     g_u = grad_input[0]
-                    g_y = grad_output[0]
-
-                    if not hasattr(mod, "weight"):
-                        return
-
-                    weight = mod.weight  # [hidden_dim, m]
 
                     # Retrieve stored u from forward hook (if available)
                     if not hasattr(mod, "_scar_last_u"):
@@ -2068,11 +2060,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                     else:
                         g_u_flat = g_u.reshape(-1, g_u.shape[-1])
 
-                    if g_y.ndim > 2:
-                        g_y_flat = g_y.reshape(-1, g_y.shape[-1])
-                    else:
-                        g_y_flat = g_y.reshape(-1, g_y.shape[-1])
-
                     # Ensure shapes are consistent
                     if u_flat.shape != g_u_flat.shape:
                         logger.warning(
@@ -2080,13 +2067,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                         )
                         return
 
-                    # Curvature: R_i = E[ (v_i^T g_y)^2 ]
-                    # s = g_y * W_down  => [N_tokens, m]
-                    try:
-                        s_flat = torch.matmul(g_y_flat.float(), weight.float())  # [N_tokens, m]
-                    except Exception as e:
-                        logger.error(f"SCAR metrics: failed to compute W_down^T g_y for layer {name}: {e}")
-                        return
+                    # NOTE: In backprop through y=W_down u, PyTorch already computes:
+                    #   g_u = dL/du = W_down^T * dL/dy
+                    # So s_i := (v_i^T g_y) is exactly g_u_i. No extra GEMM needed.
+                    s_flat = g_u_flat.float()
 
                     s2 = (s_flat * s_flat).sum(dim=0)
                     state["R_sum"] += s2
@@ -2183,6 +2167,24 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Now that scar_loss_proxy exists, we can compute the configured supernode mask on this layer.
             # This ensures 'protect_core' works during pruning even when score_metric='scar_loss_proxy'.
             self._apply_supernode_selection(layer_scores, composite=None)
+            # Propagate the supernode mask to sibling MLP projections so that channel-level protection
+            # works regardless of which projection holds the pruning scores (e.g., Wanda stores channel
+            # scores on gate/up/down; alignment metrics often live on gate/up).
+            try:
+                mask = layer_scores.get("supernode_mask")
+                if mask is not None and isinstance(layer_name, str) and "down_proj" in layer_name:
+                    for sibling_proj in ("gate_proj", "up_proj"):
+                        sibling_name = layer_name.replace("down_proj", sibling_proj)
+                        if sibling_name in self.importance_scores:
+                            sib_scores = self.importance_scores.get(sibling_name, {})
+                            sib_scores["supernode_mask"] = mask
+                            if "supernode_core_size" in layer_scores:
+                                sib_scores["supernode_core_size"] = layer_scores["supernode_core_size"]
+                            if "supernode_threshold" in layer_scores:
+                                sib_scores["supernode_threshold"] = layer_scores["supernode_threshold"]
+                            self.importance_scores[sibling_name] = sib_scores
+            except Exception as _prop_err:
+                logger.debug(f"Failed to propagate supernode mask for {layer_name}: {_prop_err}")
             self.importance_scores[layer_name] = layer_scores
 
         logger.info(f"SCAR metrics: computed metrics for {len(scar_scores)} FFN layers.")
@@ -2586,6 +2588,41 @@ class LLMAlignmentExperiment(BaseExperiment):
         layer_scores["supernode_mask"] = mask
         layer_scores["supernode_core_size"] = num_core
         layer_scores["supernode_threshold"] = sorted_scores[min(num_core - 1, sorted_scores.shape[0] - 1)].item()
+
+    def _should_protect_supernodes_for_metric(self, metric: str) -> bool:
+        """
+        Decide whether supernode protection (i.e., forcing core channels to be kept) should be applied
+        for a given pruning metric.
+
+        Backward-compatible behavior:
+        - If `supernode.protect_core_metrics` is NOT set, protection applies to *all* metrics
+          (matching the legacy behavior when `protect_core: true`).
+        """
+        cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+        if not cfg.get("enabled", False):
+            return False
+        if not cfg.get("protect_core", True):
+            return False
+
+        protect_metrics = cfg.get("protect_core_metrics", None)
+        if protect_metrics is None:
+            return True
+
+        # Accept a few convenient string shorthands.
+        if isinstance(protect_metrics, str):
+            token = protect_metrics.strip().lower()
+            if token in {"all", "true", "yes", "1"}:
+                return True
+            if token in {"none", "false", "no", "0", ""}:
+                return False
+            # comma-separated list
+            protect_metrics = [m.strip() for m in protect_metrics.split(",") if m.strip()]
+
+        try:
+            return metric in set(protect_metrics)
+        except TypeError:
+            # If the config value is malformed, fall back to "protect everything" (safer).
+            return True
 
     def analyze_supernode_connections(
         self,
@@ -4567,6 +4604,10 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         eps = 1e-8
         results: Dict[str, Dict[str, Any]] = {}
+        supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+        positive_redundancy = bool(supernode_cfg.get("positive_redundancy", False))
+        if positive_redundancy:
+            logger.info("  Redundancy: using positive-only correlation (anti-correlation does NOT count as redundancy)")
 
         # Underlying HF model for module lookup / hook registration
         hf_model = self.model
@@ -4673,9 +4714,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 st = plan.get(name)
                 if st is None:
                     return
-                if not grad_output or grad_output[0] is None:
-                    return
-                if not hasattr(mod, "weight"):
+                if not grad_input or grad_input[0] is None:
                     return
                 if not hasattr(mod, "_scar_conn_last_u"):
                     return
@@ -4683,18 +4722,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                 u = mod._scar_conn_last_u
                 delattr(mod, "_scar_conn_last_u")
 
-                g_y = grad_output[0]
-                weight = mod.weight
+                g_u = grad_input[0]
 
                 # Flatten to [N_tokens, dim]
                 if u.ndim > 2:
                     u_flat = u.reshape(-1, u.shape[-1])
                 else:
                     u_flat = u.reshape(-1, u.shape[-1])
-                if g_y.ndim > 2:
-                    g_y_flat = g_y.reshape(-1, g_y.shape[-1])
+                if g_u.ndim > 2:
+                    g_u_flat = g_u.reshape(-1, g_u.shape[-1])
                 else:
-                    g_y_flat = g_y.reshape(-1, g_y.shape[-1])
+                    g_u_flat = g_u.reshape(-1, g_u.shape[-1])
 
                 if u_flat.numel() == 0:
                     return
@@ -4708,13 +4746,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                 super_idx_dev = st["super_idx"]
                 halo_idx_dev = st["halo_idx"]
 
-                # Compute q = u * (W_down^T g_y) ONLY for channels we need (supernodes + halo).
-                # This avoids a full [N, m] GEMM per layer.
+                # Compute q = u * s where s := dL/du is already computed by backprop.
+                # We only materialize the supernode+halo indices.
                 idx_union = torch.cat([super_idx_dev, halo_idx_dev], dim=0)  # [|M|+|H|]
                 try:
-                    W_sel = weight.index_select(1, idx_union).float()  # [hidden_dim, |M|+|H|]
-                    s_sel = torch.matmul(g_y_flat.float(), W_sel)  # [N, |M|+|H|]
                     u_sel = u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
+                    s_sel = g_u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
                 except Exception:
                     return
 
@@ -4723,7 +4760,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 q_super = q_sel[:, :n_super]  # [N, |M|]
                 q_halo = q_sel[:, n_super:]   # [N, |H|]
 
-                N = q_flat.shape[0]
+                N = q_sel.shape[0]
 
                 # Initialize streaming sums on first batch
                 if st["sum_q_super"] is None:
@@ -4816,7 +4853,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             corr = torch.where(denom > 0, cov / denom, torch.zeros_like(cov))
             corr = corr.clamp(-0.9999, 0.9999)
 
-            rho_sq = (corr * corr).clamp(0.0, 0.9999)
+            corr_eff = torch.clamp(corr, min=0.0) if positive_redundancy else corr
+            rho_sq = (corr_eff * corr_eff).clamp(0.0, 0.9999)
             mi = -0.5 * torch.log(1 - rho_sq)
 
             redundancy_to_core = mi.max(dim=1).values  # [|H|]
@@ -4885,230 +4923,470 @@ class LLMAlignmentExperiment(BaseExperiment):
         sample_pairs: int = 2000,
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Analyze redundancy patterns between halo and non-halo neurons.
-        
-        Computes pairwise |correlation| for three groups:
-        1. Halo-Halo: Both neurons in halo (high connectivity to supernodes)
-        2. Non-halo-Non-halo: Both neurons NOT in halo (low connectivity)
-        3. Cross-group: One in halo, one not
-        
-        This helps validate whether halo membership correlates with redundancy.
-        
-        Args:
-            scar_scores: SCAR metrics from compute_scar_metrics
-            supernode_fraction: Fraction of neurons to consider as supernodes
-            halo_fraction: Fraction of non-supernodes to consider as halo
-            num_samples: Number of calibration samples
-            max_length: Max sequence length
-            sample_pairs: Number of pairs to sample per group (for efficiency)
-            
+        Paper-aligned halo redundancy analysis using the loss-relevant contribution signal.
+
+        We compare redundancy between three groups (per layer), then aggregate across layers:
+          1) **Halo-Halo**: both channels in the halo (high Conn to supernode write pattern)
+          2) **Non-halo**: both channels outside halo and outside supernodes
+          3) **Cross**: one halo channel and one non-halo channel
+
+        Signal:
+          \(q_i = u_i s_i\) where \(u\) is the FFN post-gate activation (down_proj input) and
+          \(s=\nabla_u \mathcal{L}\) (down_proj grad_input[0]).
+
+        Redundancy proxy:
+          - \(\rho_{ij}=\mathrm{corr}(q_i,q_j)\) over calibration tokens
+          - Optional **positive-only** redundancy: \(\rho^+_{ij}=\max(0,\rho_{ij})\)
+          - \(\mathrm{Red}(i,j) = -\tfrac12 \log(1-(\rho_{ij})^2)\)
+
+        Notes:
+        - Supernodes are identified by `scar_loss_proxy` when available (paper definition).
+        - Halo membership is identified by Conn overlap with the aggregated supernode write pattern
+          (same as `compute_supernode_connectivity_pruning_score`).
+
         Returns:
-            Dictionary with per-layer and aggregate redundancy statistics
+          Dict with:
+            - per_layer: per-layer group stats
+            - aggregate: aggregated stats across layers
         """
-        logger.info("="*60)
-        logger.info("ANALYZING HALO vs NON-HALO REDUNDANCY")
-        logger.info("="*60)
-        
-        # Get HF model
-        hf_model = self.wrapped_model._model if hasattr(self.wrapped_model, '_model') else self.model
-        
-        # Calibration texts
-        calibration_texts = [
-            "The quick brown fox jumps over the lazy dog.",
-            "Machine learning models require careful tuning.",
-            "In the beginning, there was darkness, then light.",
-            "The stock market experienced significant volatility.",
-            "Scientists discovered a new species of deep-sea fish.",
-            "The conference will be held in San Francisco next month.",
-            "Programming languages continue to evolve.",
-            "Climate change poses challenges for future generations.",
-        ][:num_samples]
-        
-        results = {}
-        aggregate = {"halo_halo": [], "non_halo": [], "cross": []}
-        
-        for layer_name, layer_metrics in scar_scores.items():
-            if "scar_activation_power" not in layer_metrics:
+        logger.info("=" * 60)
+        logger.info("ANALYZING HALO vs NON-HALO REDUNDANCY (q-signal, paper-aligned)")
+        logger.info("=" * 60)
+
+        eps = 1e-8
+        halo_cfg = getattr(self.config, "halo_analysis", {}) or {}
+        if hasattr(halo_cfg, "__dict__"):
+            halo_cfg = vars(halo_cfg)
+
+        # Use positive-only redundancy when configured (matches SCAR ablation)
+        supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+        positive_redundancy = bool(supernode_cfg.get("positive_redundancy", False))
+        if positive_redundancy:
+            logger.info("  Redundancy: using positive-only correlation (anti-correlation does NOT count as redundancy)")
+
+        # Respect optional config bounds
+        max_pairs_per_group = int(halo_cfg.get("max_pairs_per_group", sample_pairs))
+        pairs_per_group = max(1, min(int(sample_pairs), max_pairs_per_group))
+        max_group_channels = int(halo_cfg.get("max_group_channels", 512))
+
+        # Prefer the same calibration texts used in SCAR / importance computation
+        calibration_texts: List[str] = []
+        if getattr(self.config, "importance_computation_texts", None):
+            calibration_texts = list(self.config.importance_computation_texts)
+        elif getattr(self, "dataset", None) is not None and hasattr(self.dataset, "texts"):
+            calibration_texts = list(self.dataset.texts)
+        if not calibration_texts:
+            # Last-resort fallback (keeps the analysis runnable in isolation)
+            calibration_texts = [
+                "The quick brown fox jumps over the lazy dog.",
+                "Machine learning models require careful tuning.",
+                "In the beginning, there was darkness, then light.",
+                "The stock market experienced significant volatility.",
+                "Scientists discovered a new species of deep-sea fish.",
+                "The conference will be held in San Francisco next month.",
+                "Programming languages continue to evolve.",
+                "Climate change poses challenges for future generations.",
+            ]
+
+        if not calibration_texts:
+            logger.warning("No calibration texts available for halo redundancy analysis")
+            return {}
+
+        num_samples = max(1, int(num_samples))
+        calibration_texts = calibration_texts[: min(num_samples, len(calibration_texts))]
+
+        # Underlying HF model for module lookup / hook registration
+        hf_model: nn.Module = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = getattr(hf_model, "model")
+        module_dict = dict(hf_model.named_modules())
+
+        # Only analyze FFN down_proj layers (intermediate channels)
+        layer_names = [ln for ln in scar_scores.keys() if "mlp.down_proj" in ln]
+        if not layer_names:
+            logger.warning("No down_proj layers found in scar_scores for halo redundancy analysis")
+            return {}
+
+        # Helper: sample pair positions (indices into a group of size n)
+        def sample_pairs_pos(n: int, p: int) -> Tuple[torch.Tensor, torch.Tensor]:
+            if n < 2 or p <= 0:
+                return torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)
+            i = torch.randint(low=0, high=n, size=(p,), dtype=torch.long)
+            j = torch.randint(low=0, high=n, size=(p,), dtype=torch.long)
+            # ensure i != j (resample j where equal)
+            same = i == j
+            tries = 0
+            while same.any() and tries < 10:
+                j[same] = torch.randint(low=0, high=n, size=(int(same.sum().item()),), dtype=torch.long)
+                same = i == j
+                tries += 1
+            # if still equal, shift deterministically
+            if same.any():
+                j[same] = (j[same] + 1) % n
+            return i, j
+
+        # ------------------------------------------------------------------
+        # Phase 1: Per-layer supernodes + connectivity halo (weights-only) and pair plans
+        # ------------------------------------------------------------------
+        plan: Dict[str, Dict[str, Any]] = {}
+        for layer_name in layer_names:
+            layer_metrics = scar_scores.get(layer_name, {}) or {}
+            lp = layer_metrics.get("scar_loss_proxy")
+            if lp is None:
+                lp = layer_metrics.get("scar_activation_power")
+            if lp is None:
                 continue
-            
-            # Get down_proj weights
-            down_proj_weight = None
-            for name, module in hf_model.named_modules():
-                if name == layer_name and hasattr(module, 'weight'):
-                    down_proj_weight = module.weight.data.float().cpu()
-                    break
-            
-            if down_proj_weight is None:
+
+            lp_cpu = lp.detach().float().cpu()
+            m = int(lp_cpu.numel())
+            if m <= 0:
                 continue
-            
-            hidden_dim, intermediate_dim = down_proj_weight.shape
-            
-            # Step 1: Identify supernodes
-            supernode_metric = layer_metrics["scar_activation_power"].float().cpu()
-            num_supernodes = max(1, int(supernode_fraction * intermediate_dim))
-            _, supernode_indices = torch.topk(supernode_metric, num_supernodes)
-            supernode_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
-            supernode_mask[supernode_indices] = True
-            
-            # Step 2: Compute connection strength to supernodes
-            connection_strength = down_proj_weight.abs().sum(dim=0)
-            
-            # Step 3: Define halo (excluding supernodes)
-            non_supernode_mask = ~supernode_mask
-            non_supernode_indices = non_supernode_mask.nonzero(as_tuple=True)[0]
-            non_supernode_connection = connection_strength[non_supernode_indices]
-            
-            num_halo = max(1, int(halo_fraction * len(non_supernode_indices)))
-            _, halo_relative_indices = torch.topk(non_supernode_connection, num_halo)
-            halo_indices = non_supernode_indices[halo_relative_indices]
-            
-            halo_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
-            halo_mask[halo_indices] = True
-            
-            # Non-halo = not supernode and not halo
-            non_halo_mask = non_supernode_mask & ~halo_mask
-            non_halo_indices = non_halo_mask.nonzero(as_tuple=True)[0]
-            
-            logger.info(f"  {layer_name}: {num_supernodes} supernodes, {len(halo_indices)} halo, {len(non_halo_indices)} non-halo")
-            
-            # Step 4: Capture activations
-            activations: List[torch.Tensor] = []
-            
-            def capture_hook(module, inputs, outputs):
-                if inputs and inputs[0] is not None:
-                    inp = inputs[0].detach().float()
-                    if inp.ndim == 3:
-                        inp = inp.reshape(-1, inp.shape[-1])
-                    activations.append(inp.cpu())
-            
-            hook_handle = None
-            for name, module in hf_model.named_modules():
-                if name == layer_name:
-                    hook_handle = module.register_forward_hook(capture_hook)
-                    break
-            
-            if hook_handle is None:
+
+            module = module_dict.get(layer_name)
+            if module is None or not hasattr(module, "weight"):
+                logger.warning(f"Halo redundancy: could not resolve module/weight for {layer_name}")
                 continue
-            
-            hf_model.eval()
-            with torch.no_grad():
-                for text in calibration_texts:
-                    inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
-                    inputs = {k: v.to(self.config.device) for k, v in inputs.items()}
-                    try:
-                        hf_model(**inputs)
-                    except Exception:
-                        pass
-            
-            hook_handle.remove()
-            
-            if not activations:
+
+            # Identify supernodes by LP (paper definition)
+            num_supernodes = max(1, int(supernode_fraction * m))
+            _, super_idx = torch.topk(lp_cpu, k=num_supernodes, largest=True)
+            super_idx = super_idx.long()
+            super_mask = torch.zeros(m, dtype=torch.bool)
+            super_mask[super_idx] = True
+
+            # Compute Conn_i from down_proj weights (write-pattern overlap)
+            W = module.weight.detach().float().cpu()  # [hidden_dim, m]
+            abs_W = W.abs()
+            a = abs_W[:, super_idx].sum(dim=1)  # [hidden_dim]
+            a_norm = a.sum() + eps
+            v_norm = abs_W.sum(dim=0) + eps  # [m]
+            conn_num = (abs_W * a.unsqueeze(1)).sum(dim=0)  # [m]
+            conn = (conn_num / (v_norm * a_norm + eps)).clamp(0.0, 1.0)
+
+            non_super_idx = (~super_mask).nonzero(as_tuple=True)[0]
+            if non_super_idx.numel() < 2:
                 continue
-            
-            all_acts = torch.cat(activations, dim=0)
-            
-            # Step 5: Compute correlation matrix
-            centered = all_acts - all_acts.mean(dim=0, keepdim=True)
-            std = centered.std(dim=0, keepdim=True)
-            std = torch.where(std > 1e-8, std, torch.ones_like(std))
-            normalized = centered / std
-            corr = (normalized.T @ normalized) / (all_acts.shape[0] - 1)
-            corr = torch.clamp(corr, -1, 1)
-            abs_corr = torch.abs(corr)
-            abs_corr.fill_diagonal_(0)
-            
-            # Step 6: Sample correlations for each group
-            halo_idx = halo_indices.numpy()
-            non_halo_idx = non_halo_indices.numpy()
-            
-            # Halo-Halo
-            if len(halo_idx) > 1:
-                hh_corr = abs_corr[np.ix_(halo_idx, halo_idx)]
-                hh_vals = hh_corr[torch.triu(torch.ones_like(hh_corr), diagonal=1).bool()].numpy()
-                if len(hh_vals) > sample_pairs:
-                    hh_vals = np.random.choice(hh_vals, sample_pairs, replace=False)
-            else:
-                hh_vals = np.array([])
-            
-            # Non-halo - Non-halo
-            if len(non_halo_idx) > 1:
-                nh_corr = abs_corr[np.ix_(non_halo_idx, non_halo_idx)]
-                nh_vals = nh_corr[torch.triu(torch.ones_like(nh_corr), diagonal=1).bool()].numpy()
-                if len(nh_vals) > sample_pairs:
-                    nh_vals = np.random.choice(nh_vals, sample_pairs, replace=False)
-            else:
-                nh_vals = np.array([])
-            
-            # Cross-group
-            if len(halo_idx) > 0 and len(non_halo_idx) > 0:
-                cross_corr = abs_corr[np.ix_(halo_idx, non_halo_idx)]
-                cross_vals = cross_corr.flatten().numpy()
-                if len(cross_vals) > sample_pairs:
-                    cross_vals = np.random.choice(cross_vals, sample_pairs, replace=False)
-            else:
-                cross_vals = np.array([])
-            
-            # Store results
-            results[layer_name] = {
-                "num_supernodes": num_supernodes,
-                "num_halo": len(halo_idx),
-                "num_non_halo": len(non_halo_idx),
-                "halo_halo": {
-                    "mean": float(np.mean(hh_vals)) if len(hh_vals) > 0 else 0,
-                    "std": float(np.std(hh_vals)) if len(hh_vals) > 0 else 0,
-                    "median": float(np.median(hh_vals)) if len(hh_vals) > 0 else 0,
-                },
-                "non_halo": {
-                    "mean": float(np.mean(nh_vals)) if len(nh_vals) > 0 else 0,
-                    "std": float(np.std(nh_vals)) if len(nh_vals) > 0 else 0,
-                    "median": float(np.median(nh_vals)) if len(nh_vals) > 0 else 0,
-                },
-                "cross": {
-                    "mean": float(np.mean(cross_vals)) if len(cross_vals) > 0 else 0,
-                    "std": float(np.std(cross_vals)) if len(cross_vals) > 0 else 0,
-                    "median": float(np.median(cross_vals)) if len(cross_vals) > 0 else 0,
-                },
+            num_halo = max(1, int(halo_fraction * non_super_idx.numel()))
+            _, halo_rel = torch.topk(conn[non_super_idx], k=num_halo, largest=True)
+            halo_idx = non_super_idx[halo_rel].long()
+
+            halo_mask = torch.zeros(m, dtype=torch.bool)
+            halo_mask[halo_idx] = True
+            non_halo_idx = ((~super_mask) & (~halo_mask)).nonzero(as_tuple=True)[0].long()
+            if halo_idx.numel() < 2 or non_halo_idx.numel() < 2:
+                continue
+
+            # Subsample channels to keep the analysis lightweight and comparable across layers.
+            halo_sel = halo_idx
+            if halo_sel.numel() > max_group_channels:
+                perm = torch.randperm(halo_sel.numel())
+                halo_sel = halo_sel[perm[:max_group_channels]]
+
+            non_halo_target = min(int(halo_sel.numel()), int(non_halo_idx.numel()), max_group_channels)
+            if non_halo_target < 2:
+                continue
+            perm = torch.randperm(non_halo_idx.numel())
+            non_halo_sel = non_halo_idx[perm[:non_halo_target]]
+
+            # If the halo selection was larger, trim to match (keeps pair sampling symmetric).
+            if halo_sel.numel() > non_halo_sel.numel():
+                halo_sel = halo_sel[: non_halo_sel.numel()]
+
+            H = int(halo_sel.numel())
+            NH = int(non_halo_sel.numel())
+            if H < 2 or NH < 2:
+                continue
+
+            P = int(min(pairs_per_group, H * (H - 1) // 2, NH * (NH - 1) // 2))
+            if P <= 0:
+                continue
+
+            hh_i_cpu, hh_j_cpu = sample_pairs_pos(H, P)
+            nn_i_cpu, nn_j_cpu = sample_pairs_pos(NH, P)
+            cross_h_cpu = torch.randint(low=0, high=H, size=(P,), dtype=torch.long)
+            cross_n_cpu = torch.randint(low=0, high=NH, size=(P,), dtype=torch.long)
+
+            plan[layer_name] = {
+                "num_supernodes": int(num_supernodes),
+                "m": int(m),
+                "halo_idx_cpu": halo_sel,
+                "nonhalo_idx_cpu": non_halo_sel,
+                "hh_i_cpu": hh_i_cpu,
+                "hh_j_cpu": hh_j_cpu,
+                "nn_i_cpu": nn_i_cpu,
+                "nn_j_cpu": nn_j_cpu,
+                "cross_h_cpu": cross_h_cpu,
+                "cross_n_cpu": cross_n_cpu,
+                # device-side cached tensors
+                "halo_idx": None,
+                "nonhalo_idx": None,
+                "hh_i": None,
+                "hh_j": None,
+                "nn_i": None,
+                "nn_j": None,
+                "cross_h": None,
+                "cross_n": None,
+                # streaming sums
+                "sum_q_halo": None,
+                "sum_q2_halo": None,
+                "sum_q_nonhalo": None,
+                "sum_q2_nonhalo": None,
+                "sum_qij_hh": None,
+                "sum_qij_nn": None,
+                "sum_qij_cross": None,
+                "count": 0,
             }
-            
-            # Aggregate
-            aggregate["halo_halo"].extend(hh_vals.tolist())
-            aggregate["non_halo"].extend(nh_vals.tolist())
-            aggregate["cross"].extend(cross_vals.tolist())
-        
-        # Compute aggregate statistics
-        aggregate_stats = {}
-        for group in ["halo_halo", "non_halo", "cross"]:
-            vals = aggregate[group]
+
+        if not plan:
+            logger.warning("Halo redundancy: no eligible layers after filtering; skipping")
+            return {}
+
+        # ------------------------------------------------------------------
+        # Phase 2: Calibration passes (forward+backward) to accumulate q correlations
+        # ------------------------------------------------------------------
+        hooks: List[Any] = []
+
+        def make_hooks(name: str):
+            def fwd_hook(mod: nn.Module, inputs: Tuple[torch.Tensor, ...], output: torch.Tensor):
+                if not inputs or inputs[0] is None:
+                    return
+                mod._halo_last_u = inputs[0].detach()
+
+            def bwd_hook(mod: nn.Module, grad_input: Tuple[torch.Tensor, ...], grad_output: Tuple[torch.Tensor, ...]):
+                st = plan.get(name)
+                if st is None:
+                    return
+                if not grad_input or grad_input[0] is None:
+                    return
+                if not hasattr(mod, "_halo_last_u"):
+                    return
+
+                u = mod._halo_last_u
+                delattr(mod, "_halo_last_u")
+                g_u = grad_input[0]
+
+                # Flatten to [N_tokens, dim]
+                u_flat = u.reshape(-1, u.shape[-1]) if u.ndim > 2 else u.reshape(-1, u.shape[-1])
+                g_u_flat = g_u.reshape(-1, g_u.shape[-1]) if g_u.ndim > 2 else g_u.reshape(-1, g_u.shape[-1])
+                if u_flat.shape != g_u_flat.shape or u_flat.numel() == 0:
+                    return
+
+                # Move cached indices/pairs to the correct device once
+                dev = u_flat.device
+                if st["halo_idx"] is None or st["halo_idx"].device != dev:
+                    st["halo_idx"] = st["halo_idx_cpu"].to(device=dev)
+                if st["nonhalo_idx"] is None or st["nonhalo_idx"].device != dev:
+                    st["nonhalo_idx"] = st["nonhalo_idx_cpu"].to(device=dev)
+                if st["hh_i"] is None or st["hh_i"].device != dev:
+                    st["hh_i"] = st["hh_i_cpu"].to(device=dev)
+                    st["hh_j"] = st["hh_j_cpu"].to(device=dev)
+                    st["nn_i"] = st["nn_i_cpu"].to(device=dev)
+                    st["nn_j"] = st["nn_j_cpu"].to(device=dev)
+                    st["cross_h"] = st["cross_h_cpu"].to(device=dev)
+                    st["cross_n"] = st["cross_n_cpu"].to(device=dev)
+
+                halo_idx = st["halo_idx"]
+                nonhalo_idx = st["nonhalo_idx"]
+                idx_union = torch.cat([halo_idx, nonhalo_idx], dim=0)  # [H + NH]
+
+                try:
+                    u_sel = u_flat.index_select(1, idx_union).float()
+                    s_sel = g_u_flat.index_select(1, idx_union).float()
+                except Exception:
+                    return
+
+                q_sel = u_sel * s_sel
+                H = int(halo_idx.numel())
+                q_h = q_sel[:, :H]
+                q_n = q_sel[:, H:]
+                N = int(q_sel.shape[0])
+                if N <= 0:
+                    return
+
+                # Initialize sums on first batch
+                if st["sum_q_halo"] is None:
+                    st["sum_q_halo"] = torch.zeros(H, device=dev, dtype=torch.float32)
+                    st["sum_q2_halo"] = torch.zeros_like(st["sum_q_halo"])
+                    st["sum_q_nonhalo"] = torch.zeros(q_n.shape[1], device=dev, dtype=torch.float32)
+                    st["sum_q2_nonhalo"] = torch.zeros_like(st["sum_q_nonhalo"])
+                    P = int(st["hh_i"].numel())
+                    st["sum_qij_hh"] = torch.zeros(P, device=dev, dtype=torch.float32)
+                    st["sum_qij_nn"] = torch.zeros(P, device=dev, dtype=torch.float32)
+                    st["sum_qij_cross"] = torch.zeros(P, device=dev, dtype=torch.float32)
+
+                st["sum_q_halo"] += q_h.sum(dim=0)
+                st["sum_q2_halo"] += (q_h * q_h).sum(dim=0)
+                st["sum_q_nonhalo"] += q_n.sum(dim=0)
+                st["sum_q2_nonhalo"] += (q_n * q_n).sum(dim=0)
+
+                # Pair cross-products (vectorized)
+                hh_i = st["hh_i"]
+                hh_j = st["hh_j"]
+                nn_i = st["nn_i"]
+                nn_j = st["nn_j"]
+                ch = st["cross_h"]
+                cn = st["cross_n"]
+
+                if hh_i.numel() > 0:
+                    qi = q_h.index_select(1, hh_i)
+                    qj = q_h.index_select(1, hh_j)
+                    st["sum_qij_hh"] += (qi * qj).sum(dim=0)
+
+                    qi = q_n.index_select(1, nn_i)
+                    qj = q_n.index_select(1, nn_j)
+                    st["sum_qij_nn"] += (qi * qj).sum(dim=0)
+
+                    qi = q_h.index_select(1, ch)
+                    qj = q_n.index_select(1, cn)
+                    st["sum_qij_cross"] += (qi * qj).sum(dim=0)
+
+                st["count"] += N
+
+            return fwd_hook, bwd_hook
+
+        for layer_name, module in module_dict.items():
+            if layer_name not in plan:
+                continue
+            fwd, bwd = make_hooks(layer_name)
+            hooks.append(module.register_forward_hook(fwd))
+            hooks.append(module.register_full_backward_hook(bwd))
+
+        self.model.eval()
+        device = torch.device(self.config.device)
+
+        try:
+            for idx, text in enumerate(calibration_texts):
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=int(max_length),
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+
+                labels = inputs["input_ids"].clone()
+                pad_token_id = getattr(self.tokenizer, "pad_token_id", None) or getattr(self.tokenizer, "eos_token_id", None)
+                labels[labels == pad_token_id] = -100
+                inputs["labels"] = labels
+
+                self.model.zero_grad(set_to_none=True)
+                out = self.model(**inputs)
+                loss = out.loss
+                loss.backward()
+
+                if (idx + 1) % 1 == 0:
+                    logger.info(f"  Halo q-stats: processed {idx+1}/{len(calibration_texts)} samples, loss={loss.item():.4f}")
+        finally:
+            for h in hooks:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+
+        # ------------------------------------------------------------------
+        # Phase 3: Compute redundancy distributions and aggregate across layers
+        # ------------------------------------------------------------------
+        per_layer: Dict[str, Dict[str, Any]] = {}
+        agg_vals: Dict[str, List[float]] = {"halo_halo": [], "non_halo": [], "cross": []}
+
+        def corr_to_red(corr: torch.Tensor) -> torch.Tensor:
+            corr = corr.clamp(-0.9999, 0.9999)
+            if positive_redundancy:
+                corr = torch.clamp(corr, min=0.0)
+            rho_sq = (corr * corr).clamp(0.0, 0.9999)
+            return (-0.5 * torch.log(1.0 - rho_sq + eps)).float()
+
+        for layer_name, st in plan.items():
+            N = int(st.get("count", 0))
+            if N <= 1 or st["sum_qij_hh"] is None:
+                continue
+
+            sum_q_h = st["sum_q_halo"].detach().cpu()
+            sum_q2_h = st["sum_q2_halo"].detach().cpu()
+            sum_q_n = st["sum_q_nonhalo"].detach().cpu()
+            sum_q2_n = st["sum_q2_nonhalo"].detach().cpu()
+
+            mean_h = sum_q_h / float(N)
+            mean_n = sum_q_n / float(N)
+            var_h = (sum_q2_h / float(N)) - (mean_h * mean_h)
+            var_n = (sum_q2_n / float(N)) - (mean_n * mean_n)
+            std_h = torch.sqrt(torch.clamp(var_h, min=eps))
+            std_n = torch.sqrt(torch.clamp(var_n, min=eps))
+
+            hh_i = st["hh_i_cpu"]
+            hh_j = st["hh_j_cpu"]
+            nn_i = st["nn_i_cpu"]
+            nn_j = st["nn_j_cpu"]
+            ch = st["cross_h_cpu"]
+            cn = st["cross_n_cpu"]
+
+            # E[q_i q_j]
+            e_hh = st["sum_qij_hh"].detach().cpu() / float(N)
+            e_nn = st["sum_qij_nn"].detach().cpu() / float(N)
+            e_cn = st["sum_qij_cross"].detach().cpu() / float(N)
+
+            # corr (halo-halo)
+            cov = e_hh - (mean_h[hh_i] * mean_h[hh_j])
+            corr_hh = cov / (std_h[hh_i] * std_h[hh_j] + eps)
+            red_hh = corr_to_red(corr_hh)
+
+            # corr (non-halo, non-halo)
+            cov = e_nn - (mean_n[nn_i] * mean_n[nn_j])
+            corr_nn = cov / (std_n[nn_i] * std_n[nn_j] + eps)
+            red_nn = corr_to_red(corr_nn)
+
+            # corr (cross)
+            cov = e_cn - (mean_h[ch] * mean_n[cn])
+            corr_cn = cov / (std_h[ch] * std_n[cn] + eps)
+            red_cn = corr_to_red(corr_cn)
+
+            def stats(x: torch.Tensor) -> Dict[str, float]:
+                if x.numel() == 0:
+                    return {"mean": 0.0, "std": 0.0, "median": 0.0, "count": 0}
+                return {
+                    "mean": float(x.mean().item()),
+                    "std": float(x.std(unbiased=False).item()),
+                    "median": float(x.median().item()),
+                    "count": int(x.numel()),
+                }
+
+            per_layer[layer_name] = {
+                "num_supernodes": int(st.get("num_supernodes", 0)),
+                "num_halo": int(st["halo_idx_cpu"].numel()),
+                "num_non_halo": int(st["nonhalo_idx_cpu"].numel()),
+                "halo_halo": stats(red_hh),
+                "non_halo": stats(red_nn),
+                "cross": stats(red_cn),
+            }
+
+            agg_vals["halo_halo"].extend(red_hh.tolist())
+            agg_vals["non_halo"].extend(red_nn.tolist())
+            agg_vals["cross"].extend(red_cn.tolist())
+
+        aggregate_stats: Dict[str, Dict[str, Any]] = {}
+        for group, vals in agg_vals.items():
+            if not vals:
+                aggregate_stats[group] = {"mean": 0.0, "std": 0.0, "median": 0.0, "count": 0}
+                continue
+            arr = np.asarray(vals, dtype=np.float64)
             aggregate_stats[group] = {
-                "mean": float(np.mean(vals)) if vals else 0,
-                "std": float(np.std(vals)) if vals else 0,
-                "median": float(np.median(vals)) if vals else 0,
-                "count": len(vals),
+                "mean": float(arr.mean()),
+                "std": float(arr.std()),
+                "median": float(np.median(arr)),
+                "count": int(arr.size),
             }
-        
-        # Log summary
-        logger.info("\nHALO vs NON-HALO REDUNDANCY SUMMARY:")
+
+        logger.info("\nHALO vs NON-HALO REDUNDANCY SUMMARY (q-signal):")
         logger.info(f"  Halo-Halo:     mean={aggregate_stats['halo_halo']['mean']:.4f}")
         logger.info(f"  Non-halo:      mean={aggregate_stats['non_halo']['mean']:.4f}")
         logger.info(f"  Cross-group:   mean={aggregate_stats['cross']['mean']:.4f}")
-        
-        # Interpretation
-        hh_mean = aggregate_stats['halo_halo']['mean']
-        nh_mean = aggregate_stats['non_halo']['mean']
-        cross_mean = aggregate_stats['cross']['mean']
-        
-        if hh_mean > nh_mean * 1.2:
-            logger.info("  → Halo neurons MORE redundant than non-halo ✓")
-        elif nh_mean > hh_mean * 1.2:
-            logger.info("  → Non-halo neurons MORE redundant (consider revising halo definition)")
-        else:
-            logger.info("  → Similar redundancy in both groups")
-        
-        if cross_mean < min(hh_mean, nh_mean) * 0.8:
-            logger.info("  → Cross-group correlation LOW (groups carry different info) ✓")
-        
+
         return {
-            "per_layer": results,
+            "signal": "q",
+            "positive_redundancy": positive_redundancy,
+            "pairs_per_group": pairs_per_group,
+            "max_group_channels": max_group_channels,
+            "per_layer": per_layer,
             "aggregate": aggregate_stats,
         }
     
@@ -5220,17 +5498,24 @@ class LLMAlignmentExperiment(BaseExperiment):
             if mi.sum() == 0:
                 mi = taylor  # Taylor score relates to information content
             
-            # Identify supernodes (top by activation power)
+            # Identify supernodes (paper-aligned: top by loss proxy when available)
+            supernode_metric = loss_proxy if loss_proxy is not None and loss_proxy.numel() == intermediate_dim else activation_power
             num_supernodes = max(1, int(supernode_fraction * intermediate_dim))
-            _, supernode_indices = torch.topk(activation_power, num_supernodes)
+            _, supernode_indices = torch.topk(supernode_metric, num_supernodes)
             supernode_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
             supernode_mask[supernode_indices] = True
             
             # Identify halo (high connectivity to supernodes among non-supernodes)
             non_supernode_mask = ~supernode_mask
             non_supernode_indices = non_supernode_mask.nonzero(as_tuple=True)[0]
-            connection_strength = down_proj_weight.abs().sum(dim=0)
-            non_supernode_connection = connection_strength[non_supernode_indices]
+            # Paper-aligned Conn using overlap with aggregated supernode write pattern
+            abs_W = down_proj_weight.abs()
+            a = abs_W[:, supernode_indices].sum(dim=1)
+            a_norm = a.sum() + 1e-8
+            v_norm = abs_W.sum(dim=0) + 1e-8
+            conn_num = (abs_W * a.unsqueeze(1)).sum(dim=0)
+            conn = (conn_num / (v_norm * a_norm + 1e-8)).clamp(0.0, 1.0)
+            non_supernode_connection = conn[non_supernode_indices]
             
             num_halo = max(1, int(halo_fraction * len(non_supernode_indices)))
             _, halo_relative_indices = torch.topk(non_supernode_connection, num_halo)
@@ -5836,6 +6121,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             "scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature",
             # Supernode/connectivity metrics
             "directed_redundancy", "supernode_protection_score", "supernode_connectivity_score",
+            # Random baseline (scores are generated and stored in importance_scores)
+            "random",
             # Weight-only structured baseline (channel-group weight magnitude)
             "weight_magnitude",
             # Generalized importance (no outlier assumption)
@@ -5871,9 +6158,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Get importance scores
             scores = self.importance_scores[layer_name][metric].clone()
 
-            supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
             core_mask = self.importance_scores[layer_name].get("supernode_mask")
-            if supernode_cfg.get("enabled") and supernode_cfg.get("protect_core", True) and core_mask is not None:
+            if core_mask is not None and self._should_protect_supernodes_for_metric(metric):
                 margin = torch.abs(scores).max().detach().item() + 1.0
                 if mode == "low":
                     scores[core_mask] = scores.max() + margin
@@ -6007,6 +6293,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 mode=mode,
                 sparsity=sparsity,
                 layer_key=ref_layer,
+                metric=metric,
             )
             if neuron_mask is None:
                 continue
@@ -6062,6 +6349,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         mode: str,
         sparsity: float,
         layer_key: str,
+        metric: str,
     ) -> Tuple[Optional[torch.Tensor], Optional[int], Optional[int]]:
         """
         Convert per-neuron attention scores into a shared mask aligned with heads.
@@ -6070,9 +6358,9 @@ class LLMAlignmentExperiment(BaseExperiment):
         scores = scores.flatten()
         device = scores.device
 
-        supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
         core_mask = self.importance_scores.get(layer_key, {}).get("supernode_mask")
-        if supernode_cfg.get("enabled") and supernode_cfg.get("protect_core", True) and core_mask is not None:
+        do_protect = core_mask is not None and self._should_protect_supernodes_for_metric(metric)
+        if do_protect:
             margin = torch.abs(scores).max().detach().item() + 1.0
             if mode == "low":
                 scores[core_mask] = scores.max() + margin
@@ -6110,7 +6398,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         head_keep = MaskOperations.create_structured_mask(head_scores, amount=sparsity, mode=mode)
 
         # Ensure that any head containing a protected core neuron is always kept.
-        if core_mask is not None and core_mask.numel() == scores.numel():
+        if do_protect and core_mask is not None and core_mask.numel() == scores.numel():
             core_heads = core_mask.view(num_heads, head_dim).any(dim=1)
             if core_heads.any():
                 head_keep = head_keep | core_heads.to(head_keep.device)

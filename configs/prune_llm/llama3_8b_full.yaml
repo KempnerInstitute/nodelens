@@ -175,6 +175,14 @@ supernode:
   follower_fraction: 0.10
   halo_fraction: 0.10
   protect_core: true
+  # Apply hard supernode protection only for the listed pruning metrics.
+  # If omitted, legacy behavior is to protect for *all* pruning metrics.
+  protect_core_metrics:
+    - "scar_loss_proxy"                 # SCAR-LP
+    - "supernode_protection_score"      # SCAR-Prot
+    - "supernode_connectivity_score"    # SCAR-Conn
+  # If true, treat anti-correlated q-signals as NON-redundant (recommended ablation)
+  positive_redundancy: false
   
   cross_layer_analysis: true
   compare_by_connection: true

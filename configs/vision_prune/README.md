@@ -111,5 +111,5 @@ The 4-cluster structure identifies:
 
 ## Related Papers
 
-- Vision paper: `drafts/alignment_notes/vision_synergy_icml_v3.tex`
+- Vision paper: `drafts/alignment_notes/alignment_red.tex`
 - LLM paper: `drafts/LLM_prune/scar_paper_icml_v4.tex`

@@ -2,7 +2,7 @@
 Metrics for measuring neural network alignment, redundancy, and synergy.
 
 =============================================================================
-METRIC TAXONOMY (from alignment_notes/main.tex and new.tex)
+METRIC TAXONOMY (from drafts/alignment_notes/alignment_red.tex)
 =============================================================================
 
 1. ALIGNMENT METRICS (Rayleigh Quotient based)

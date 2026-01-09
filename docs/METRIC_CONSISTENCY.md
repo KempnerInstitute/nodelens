@@ -1,7 +1,7 @@
 # Metric Consistency with Theoretical Definitions
 
 This document verifies that the implemented metrics are consistent with the theoretical
-definitions in `drafts/alignment_notes/main.tex` and `drafts/alignment_notes/new.tex`.
+definitions in `drafts/alignment_notes/alignment_red.tex`.
 
 ## Summary
 
