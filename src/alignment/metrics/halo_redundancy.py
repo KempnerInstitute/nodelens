@@ -147,7 +147,7 @@ def correlation_to_redundancy(corr: torch.Tensor) -> torch.Tensor:
     """
     Convert correlation to redundancy using Gaussian MI formula.
     
-    Theory (from alignment_notes/new.tex, Eq. 5.1):
+    Theory (from drafts/alignment_notes/alignment_red.tex):
         I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
     
     This is the mutual information between jointly Gaussian variables.

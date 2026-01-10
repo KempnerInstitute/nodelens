@@ -22,6 +22,12 @@ from .visualization.unified_visualizer import UnifiedVisualizer, plot_quick_summ
 # Unified Analysis Runner
 from .analysis_runner import AnalysisRunner, AnalysisConfig, run_analysis_from_config
 
+# Clustering Analysis
+from .clustering import MetricSpaceClustering, ClusterResult, CrossLayerHaloAnalysis, HaloResult
+
+# Cascade Analysis
+from .cascade_analysis import CascadeAnalysis, DamagePrediction, CascadeResult, DamageResult
+
 __all__ = [
     # Aggregation
     "ResultAggregator",
@@ -37,4 +43,14 @@ __all__ = [
     "AnalysisRunner",
     "AnalysisConfig",
     "run_analysis_from_config",
+    # Clustering
+    "MetricSpaceClustering",
+    "ClusterResult",
+    "CrossLayerHaloAnalysis",
+    "HaloResult",
+    # Cascade Analysis
+    "CascadeAnalysis",
+    "DamagePrediction",
+    "CascadeResult",
+    "DamageResult",
 ]

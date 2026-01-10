@@ -1,7 +1,7 @@
 # Vision Pruning Test (AlexNet on ImageNet)
 # Comprehensive metrics with pruning strategies
 #
-# Based on alignment_notes/main.tex and vision_synergy_icml.tex:
+# Based on drafts/alignment_notes/alignment_red.tex:
 # - RQ measures alignment with input covariance
 # - Gaussian MI is directly related to RQ for linear-Gaussian models
 # - Redundancy I(Y_i; Y_j) = -0.5 * log(1 - ρ²) measures overlap between neurons

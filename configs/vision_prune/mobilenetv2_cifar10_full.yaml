@@ -1,0 +1,88 @@
+# MobileNetV2 on CIFAR-10 - Full Cluster Analysis
+
+experiment_name: mobilenetv2_cifar10_cluster_analysis
+experiment_type: cluster_analysis
+
+model:
+  name: mobilenet_v2
+  pretrained: true
+  num_classes: 10
+  
+dataset:
+  name: cifar10
+  root: ./data
+  train_batch_size: 128
+  test_batch_size: 256
+
+metrics:
+  n_calibration_samples: 5000
+  compute_rq: true
+  compute_redundancy: true
+  compute_synergy: true
+  synergy_target: logit_margin
+  synergy_num_pairs: 10
+
+clustering:
+  enabled: true
+  n_clusters: 4
+  compute_stability: true
+  n_bootstrap: 50
+
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+
+cascade_analysis:
+  enabled: true
+  n_remove_per_cluster: 5
+
+# Pruning experiments - Comprehensive metric testing
+# MobileNetV2 uses inverted residuals with depthwise separable convs
+# More sensitive to pruning - interesting to see which metrics matter
+pruning:
+  enabled: true
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5]  # More conservative for MobileNet
+  
+  # Comprehensive algorithm list
+  algorithms:
+    # Baselines
+    - random
+    - magnitude
+    - taylor
+    
+    # Single metrics - prune LOW
+    - rq_low              # Prune low Rayleigh Quotient
+    - redundancy_low      # Prune low redundancy (MI)
+    - synergy_low         # Prune low synergy
+    
+    # Single metrics - prune HIGH
+    - rq_high             # Prune high RQ
+    - redundancy_high     # Prune high redundancy
+    - synergy_high        # Prune high synergy
+    - magnitude_high      # Prune high magnitude
+    
+    # Composite combinations
+    - composite           # score = RQ + syn - red (original)
+    - composite_pos_red   # score = RQ + syn + red (flipped)
+    - rq_minus_red        # score = RQ - redundancy
+    - rq_plus_red         # score = RQ + redundancy
+    - magnitude_plus_rq   # score = magnitude + RQ
+    - magnitude_minus_red # score = magnitude - redundancy
+    - magnitude_plus_red  # score = magnitude + redundancy
+    
+    # Cluster-aware
+    - cluster_aware
+    - cluster_aware_protect_redundant
+  
+  fine_tuning:
+    epochs: 10
+    lr: 0.0001
+
+visualization:
+  enabled: true
+
+output:
+  dir: results/vision/mobilenetv2_cifar10
+
+device: cuda
+seed: 42

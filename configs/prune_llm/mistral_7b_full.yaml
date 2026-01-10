@@ -1,0 +1,389 @@
+# ============================================================================
+# MISTRAL-7B COMPREHENSIVE PAPER CONFIGURATION
+# ============================================================================
+# Same structure as LLaMA-3.1-8B for cross-model generalization results
+# Estimated runtime: ~4-6 hours on 1x A100
+# ============================================================================
+
+experiment:
+  name: "mistral_7b_paper_results"
+  type: "llm_alignment"
+  output_dir: "./results/paper/mistral_7b"
+  seed: 42
+  device: "cuda"
+  save_activations: true
+  num_networks: 1
+
+# ============================================================================
+# MODEL
+# ============================================================================
+model:
+  name: "hf_causal_lm"
+  model_id: "mistralai/Mistral-7B-v0.1"
+  dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+  
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+# ============================================================================
+# DATASET / CALIBRATION
+# ============================================================================
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+calibration:
+  dataset: "wikitext"
+  subset: "wikitext-2-raw-v1"
+  split: "train"
+  num_samples: 128
+  max_length: 2048
+  batch_size: 4
+
+# ============================================================================
+# METRICS CONFIGURATION
+# ============================================================================
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+    - "gaussian_mi_analytic"
+    - "average_redundancy"
+    - "activation_l2_norm"
+  
+  num_samples: 64
+  
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+# ============================================================================
+# LLM-SPECIFIC SETTINGS
+# ============================================================================
+# Top-level SCAR flags (for compatibility)
+do_scar_metrics: true
+scar_num_samples: 64
+scar_max_length: 512
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 64
+  scar_max_length: 512
+  
+  evaluate_perplexity: true
+  evaluation_num_samples: 100
+  
+  evaluation_metrics:
+    - "perplexity"
+    - "loss"
+    - "bits_per_byte"
+    - "accuracy_mmlu"
+    - "accuracy_hellaswag"
+    - "accuracy_arc_easy"
+    - "accuracy_arc_challenge"
+    - "accuracy_winogrande"
+    - "accuracy_piqa"
+    - "accuracy_boolq"
+
+# ============================================================================
+# ANALYSIS CONFIGURATION
+# ============================================================================
+analysis:
+  # Mistral has 32 layers
+  layer_indices: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 31]
+  save_scores: true
+  generate_plots: true
+  
+  metrics:
+    - "activation_l2_norm"
+    - "rayleigh_quotient"
+    - "gaussian_mi_analytic"
+    - "average_redundancy"
+    - "scar_activation_power"
+    - "scar_curvature"
+    - "scar_loss_proxy"
+    - "scar_taylor"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+    - "halo_redundancy"
+    - "cross_layer_importance"
+    - "within_layer_importance"
+  
+  plots:
+    histograms: true
+    scatter_plots: true
+    pruning_curves: true
+    redundancy_heatmaps: true
+  
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
+    - ["scar_activation_power", "scar_loss_proxy"]
+    - ["rayleigh_quotient", "scar_loss_proxy"]
+    - ["average_redundancy", "rayleigh_quotient"]
+    - ["scar_loss_proxy", "supernode_connectivity_score"]
+    - ["cross_layer_importance", "activation_l2_norm"]
+
+# ============================================================================
+# SUPERNODE CONFIGURATION
+# ============================================================================
+supernode:
+  enabled: true
+  score_metric: "scar_loss_proxy"
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  halo_fraction: 0.10
+  protect_core: true
+  protect_core_metrics:
+    - "scar_loss_proxy"                 # SCAR-LP
+    - "supernode_protection_score"      # SCAR-Prot
+    - "supernode_connectivity_score"    # SCAR-Conn
+  positive_redundancy: false
+  cross_layer_analysis: true
+  compare_by_connection: true
+  
+  compute_metrics:
+    - "activation"
+    - "rayleigh_quotient"
+    - "mutual_information"
+    - "redundancy"
+
+# ============================================================================
+# SUPERNODE ROBUSTNESS ANALYSIS
+# ============================================================================
+supernode_robustness:
+  enabled: true
+  supernode_fraction: 0.01
+  num_bootstrap_samples: 10
+  batch_size: 32
+  max_samples: 256
+  
+  metrics:
+    - "scar_activation_power"
+    - "scar_loss_proxy"
+    - "scar_taylor"
+    - "rayleigh_quotient"
+    - "gaussian_mi_analytic"
+    - "activation_l2_norm"
+
+# ============================================================================
+# SUPERNODE SUMMARY ANALYSIS
+# ============================================================================
+supernode_summary:
+  enabled: true
+  outlier_analysis: true
+
+# ============================================================================
+# HALO REDUNDANCY ANALYSIS
+# ============================================================================
+halo_analysis:
+  enabled: true
+  supernode_fraction: 0.01
+  halo_fraction: 0.10
+  num_samples: 8
+  max_length: 256
+  sample_pairs: 2000
+  max_samples: 2000
+  max_pairs_per_group: 1000
+  
+  plots:
+    depth_comparison: true
+    histograms: true
+    heatmaps: true
+    comprehensive: true
+
+# ============================================================================
+# CROSS-LAYER IMPORTANCE (SCAR-aligned)
+# ============================================================================
+cross_layer:
+  enabled: true
+  max_refs: 512
+  rq_weight: 0.25
+  downstream_weight: 0.35
+  within_redundancy_weight: 0.25
+  activation_weight: 0.15
+  normalize: true
+
+# ============================================================================
+# GENERALIZED IMPORTANCE
+# ============================================================================
+generalized_importance:
+  enabled: true
+  neighborhood_fraction: 0.10
+  propagation_weight: 0.3
+  redundancy_penalty: 0.5
+  num_samples: 8
+  max_length: 256
+
+# ============================================================================
+# PRUNING CONFIGURATION
+# ============================================================================
+pruning:
+  enabled: true
+  target: "ffn"
+  distribution: "uniform"
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  structured: true
+  dependency_aware: true
+  
+  sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  selection_modes: ["low", "high"]
+  
+  algorithms:
+    - "rayleigh_quotient"
+    - "gaussian_mi_analytic"
+    - "average_redundancy"
+    - "scar_loss_proxy"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+    - "generalized_importance"
+    - "activation_l2_norm"
+    - "weight_magnitude"
+    - "wanda"
+    - "sparsegpt"
+    - "cross_layer_importance"
+  
+  scoring_methods:
+    - "random"
+    - "activation_l2_norm"
+    - "weight_magnitude"
+    - "rayleigh_quotient"
+    - "gaussian_mi_analytic"
+    - "average_redundancy"
+    - "scar_loss_proxy"
+    - "scar_taylor"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+    - "generalized_importance"
+    - "cross_layer_importance"
+    - "within_layer_importance"
+    - "wanda"
+    - "sparsegpt"
+  
+  single_strategy: null
+  
+  fine_tune:
+    enabled: false
+    epochs: 1
+    learning_rate: 1.0e-5
+
+# ============================================================================
+# ADVANCED ANALYSIS FLAGS
+# ============================================================================
+do_directed_redundancy: true
+do_connectivity_pruning: true
+do_halo_analysis: true
+do_generalized_importance: true
+
+# ============================================================================
+# EVALUATION
+# ============================================================================
+evaluation:
+  enabled: true
+  
+  perplexity:
+    enabled: true
+    datasets:
+      - name: "wikitext"
+        subset: "wikitext-2-raw-v1"
+        split: "test"
+      - name: "c4"
+        split: "validation"
+        max_samples: 1000
+  
+  benchmarks:
+    - name: "hellaswag"
+      num_fewshot: 0
+    - name: "piqa"
+      num_fewshot: 0
+    - name: "boolq"
+      num_fewshot: 0
+    - name: "winogrande"
+      num_fewshot: 0
+    - name: "arc_easy"
+      num_fewshot: 0
+    - name: "arc_challenge"
+      num_fewshot: 0
+    - name: "openbookqa"
+      num_fewshot: 0
+    - name: "hellaswag"
+      num_fewshot: 5
+    - name: "piqa"
+      num_fewshot: 5
+    - name: "arc_challenge"
+      num_fewshot: 5
+    - name: "mmlu"
+      num_fewshot: 5
+      limit: null
+  
+  batch_size: 8
+  max_eval_batches: null
+
+# ============================================================================
+# PERFORMANCE SETTINGS
+# ============================================================================
+performance:
+  eval_batches: null
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+visualization:
+  save_plots: true
+  format: "pdf"
+  dpi: 300
+  style: "seaborn-v0_8-paper"
+  
+  histograms: true
+  scatter_plots: true
+  heatmaps: true
+  
+  supernode_distribution:
+    enabled: true
+    plot_loss_proxy_histogram: true
+    plot_concentration_by_layer: true
+    highlight_top_percent: [1, 5, 10]
+  
+  halo_structure:
+    enabled: true
+    plot_redundancy_by_depth: true
+    plot_protection_vs_connection: true
+    plot_within_vs_cross_group: true
+  
+  cross_layer:
+    enabled: true
+    plot_downstream_importance_by_layer: true
+    plot_importance_vs_redundancy: true
+    plot_efficiency_heatmap: true
+  
+  pruning_curves:
+    enabled: true
+    plot_sparsity_vs_perplexity: true
+    plot_sparsity_vs_accuracy: true
+    metrics_to_compare:
+      - "supernode_connectivity_score"
+      - "cross_layer_importance"
+      - "generalized_importance"
+      - "scar_loss_proxy"
+      - "wanda"
+      - "sparsegpt"
+      - "activation_l2_norm"
+      - "weight_magnitude"
+      - "random"
+  
+  supernode_robustness:
+    enabled: true
+    jaccard_heatmap: true
+    spearman_heatmap: true
+    bootstrap_stability: true
+    consistency_bars: true
+  
+  scatter_pairs:
+    - ["activation_l2_norm", "scar_loss_proxy"]
+    - ["scar_loss_proxy", "supernode_connectivity_score"]
+    - ["cross_layer_importance", "activation_l2_norm"]
+    - ["generalized_importance", "scar_loss_proxy"]

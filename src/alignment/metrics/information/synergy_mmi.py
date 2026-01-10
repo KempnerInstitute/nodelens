@@ -40,18 +40,29 @@ class SynergyGaussianMMI(BaseMetric):
         >>> print(synergy.shape)  # [num_neurons]
     """
 
-    def __init__(self, num_pairs: int = 10, sampling_strategy: str = "random", **config: Any):
+    def __init__(
+        self,
+        num_pairs: int = 10,
+        sampling_strategy: str = "random",
+        regularization: float = 1e-6,
+        min_samples: int = 2,
+        **config: Any,
+    ):
         """
         Initialize synergy metric.
 
         Args:
             num_pairs: Number of partner neurons to sample per neuron
             sampling_strategy: How to sample pairs ('random', 'nearest', 'all')
+            regularization: Regularization for numerical stability
+            min_samples: Minimum samples per class for reliable estimates
             **config: Additional configuration
         """
         super().__init__(**config)
         self.num_pairs = num_pairs
         self.sampling_strategy = sampling_strategy
+        self.regularization = regularization
+        self.min_samples = min_samples
 
     @property
     def requires_inputs(self) -> bool:

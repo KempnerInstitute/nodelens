@@ -111,7 +111,8 @@ class PruningDistributionManager:
 
     def _uniform_distribution(self, layer_names: List[str]) -> Dict[str, float]:
         """Same amount for all layers."""
-        return {name: self.target_sparsity for name in layer_names}
+        amount = max(self.min_amount, min(self.max_amount, self.target_sparsity))
+        return {name: amount for name in layer_names}
 
     def _global_threshold_distribution(self, layer_scores: Dict[str, torch.Tensor], model: nn.Module) -> Dict[str, float]:
         """

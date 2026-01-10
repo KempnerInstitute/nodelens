@@ -5,18 +5,47 @@
 - [Usage Guide](usage.md) - Running experiments and configuration
 - [API Reference](api_reference.md) - Core classes and functions
 - [LLM Guide](llm_guide.md) - LLM-specific analysis and pruning
+- [Metric Consistency](METRIC_CONSISTENCY.md) - Theory-code verification
 
 ## Configuration
 
 - [Template](../configs/template.yaml) - Complete parameter reference
+- [Cluster Analysis](../configs/cluster_analysis/) - Cluster-based analysis configs
+- [Paper Configs](../configs/paper/) - LLM paper experiment configs
 - [Examples](../configs/examples/) - Example configurations
 
-## Quick Start
+## Quick Reference
+
+### Experiment Types
+
+| Type | Description |
+|------|-------------|
+| `alignment_analysis` | General alignment metrics for vision models |
+| `llm_alignment` | LLM supernode and SCAR analysis |
+| `cluster_analysis` | Metric-space clustering with halo analysis |
+
+### Key Classes
+
+| Class | Module | Purpose |
+|-------|--------|---------|
+| `MetricSpaceClustering` | `analysis.clustering` | Cluster channels by functional type |
+| `CrossLayerHaloAnalysis` | `analysis.clustering` | Track downstream dependencies |
+| `CascadeAnalysis` | `analysis` | Validate importance via ablation |
+| `LLMAlignmentExperiment` | `experiments` | LLM analysis runner |
+| `ClusterAnalysisExperiment` | `experiments` | Cluster analysis runner |
+
+### Running Experiments
 
 ```bash
-# Run experiment
+# Vision/general analysis
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
-# Generate analysis
-python scripts/run_analysis.py --results-dir ./results --output-dir ./plots --quick
+# LLM analysis
+python scripts/run_experiment.py --config configs/paper/llama3_8b_full.yaml
+
+# Cluster-based analysis
+python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
+
+# Post-hoc analysis
+python scripts/run_analysis.py --results-dir ./results --output-dir ./plots
 ```

@@ -116,7 +116,21 @@ class C4Dataset(IterableDataset):
     """
 
     def __init__(self, tokenizer: Any, split: str = "validation", max_length: int = 512, max_samples: Optional[int] = None):
-        self.tokenizer = tokenizer
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+        # Accept either a tokenizer object or a model ID string
+        if isinstance(tokenizer, PreTrainedTokenizerBase):
+            hf_tokenizer = tokenizer
+        elif isinstance(tokenizer, str):
+            hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        else:
+            raise TypeError(f"tokenizer must be a string or PreTrainedTokenizerBase, got {type(tokenizer)}")
+
+        # If no pad token exists, set it to the eos token (common for causal LM)
+        if hf_tokenizer.pad_token is None:
+            hf_tokenizer.pad_token = hf_tokenizer.eos_token
+
+        self.tokenizer = hf_tokenizer
         self.max_length = max_length
         self.max_samples = max_samples
 
@@ -125,14 +139,33 @@ class C4Dataset(IterableDataset):
         logger.info(f"Loading C4 dataset ({split}, streaming)")
         self.dataset = load_dataset("allenai/c4", "en", split=split, streaming=True)
 
+        # For LLM calibration/analysis we often need raw texts (e.g., to build a reusable
+        # calibration set). If max_samples is specified, materialize that many texts so
+        # downstream code can rely on a `.texts` attribute (like WikiText).
+        self.texts: Optional[List[str]] = None
+        if self.max_samples is not None:
+            texts: List[str] = []
+            for item in self.dataset:
+                text = item.get("text")
+                if not text or len(text.strip()) == 0:
+                    continue
+                texts.append(text)
+                if len(texts) >= self.max_samples:
+                    break
+            self.texts = texts
+            logger.info(f"Materialized {len(self.texts)} C4 texts for split='{split}'")
+
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
         count = 0
 
-        for item in self.dataset:
+        # If we materialized texts, iterate over them for deterministic reuse.
+        iterable = self.texts if self.texts is not None else self.dataset
+
+        for item in iterable:
             if self.max_samples and count >= self.max_samples:
                 break
 
-            text = item["text"]
+            text = item if isinstance(item, str) else item.get("text")
             if not text or len(text.strip()) == 0:
                 continue
 
@@ -170,6 +203,51 @@ def load_text_dataset(
     elif dataset_name == "c4":
         return C4Dataset(tokenizer, split, max_length, max_samples)
 
+    elif dataset_name in {"mixed_wikitext_c4", "mixed_wiki_c4", "mixed"}:
+        # Lightweight "mixed" calibration set: combine WikiText + C4 raw texts.
+        # This is useful for robustness/sensitivity experiments.
+        #
+        # Supported kwargs:
+        # - wikitext_name: which WikiText subset to use (default: wikitext-2-raw-v1)
+        # - wikitext_fraction: fraction of samples drawn from WikiText when max_samples is set (default: 0.5)
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+        if isinstance(tokenizer, PreTrainedTokenizerBase):
+            hf_tokenizer = tokenizer
+        elif isinstance(tokenizer, str):
+            hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        else:
+            raise TypeError(f"tokenizer must be a string or PreTrainedTokenizerBase, got {type(tokenizer)}")
+
+        if hf_tokenizer.pad_token is None:
+            hf_tokenizer.pad_token = hf_tokenizer.eos_token
+
+        wikitext_name = kwargs.get("wikitext_name", "wikitext-2-raw-v1")
+        wikitext_fraction = float(kwargs.get("wikitext_fraction", 0.5))
+
+        if max_samples is None:
+            # Default to a small mixed set if caller didn't specify a budget.
+            max_samples = 512
+
+        n_wiki = int(round(max_samples * wikitext_fraction))
+        n_c4 = max_samples - n_wiki
+
+        wiki_ds = WikiTextDataset(hf_tokenizer, split=split, max_length=max_length, dataset_name=wikitext_name)
+        wiki_texts = list(getattr(wiki_ds, "texts", []))[:n_wiki]
+
+        c4_ds = C4Dataset(hf_tokenizer, split=split, max_length=max_length, max_samples=n_c4)
+        c4_texts = list(getattr(c4_ds, "texts", []))[:n_c4]
+
+        # Interleave for better mixing.
+        mixed_texts: List[str] = []
+        for i in range(max(len(wiki_texts), len(c4_texts))):
+            if i < len(wiki_texts):
+                mixed_texts.append(wiki_texts[i])
+            if i < len(c4_texts):
+                mixed_texts.append(c4_texts[i])
+
+        return TextDataset(mixed_texts, hf_tokenizer, max_length=max_length)
+
     elif dataset_name == "ptb":
         from datasets import load_dataset
 
@@ -181,7 +259,9 @@ def load_text_dataset(
         return TextDataset(texts, tokenizer, max_length)
 
     else:
-        raise ValueError(f"Unknown dataset: {dataset_name}. " f"Supported: wikitext, c4, ptb")
+        raise ValueError(
+            f"Unknown dataset: {dataset_name}. Supported: wikitext, c4, ptb, mixed_wikitext_c4"
+        )
 
 
 # Register datasets in alignment registry if needed

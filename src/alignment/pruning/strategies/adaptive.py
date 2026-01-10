@@ -54,13 +54,25 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         >>> # Overall: 70% average
     """
 
+    # Available sensitivity methods
+    SENSITIVITY_METHODS = [
+        "perturbation",      # Add Gaussian noise, measure accuracy drop (slow but accurate)
+        "masking",           # Random mask 30% weights, measure accuracy drop (slow)
+        "activation_variance",  # Use activation variance as proxy (fast, single forward pass)
+        "gradient",          # Use gradient magnitude (fast, single backward pass)
+        "fisher",            # Fisher information approximation (moderate speed)
+        "weight_magnitude",  # Use weight magnitude as proxy (fastest, no forward pass)
+    ]
+
     def __init__(
         self,
         target_sparsity: float = 0.5,
         metric: str = "rayleigh_quotient",
-        sensitivity_method: str = "perturbation",  # 'perturbation', 'gradient', 'hessian'
+        sensitivity_method: str = "perturbation",
         min_amount: float = 0.1,
         max_amount: float = 0.9,
+        perturbation_scale: float = 0.1,
+        num_trials: int = 3,
         config: Optional[PruningConfig] = None,
         **metric_kwargs,
     ):
@@ -69,10 +81,18 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
         Args:
             target_sparsity: Target overall sparsity (0-1)
-            metric: Metric to use for importance scores
-            sensitivity_method: How to measure sensitivity
-            min_amount: Minimum pruning per layer
-            max_amount: Maximum pruning per layer
+            metric: Metric to use for importance scores within each layer
+            sensitivity_method: How to measure layer sensitivity. Options:
+                - 'perturbation': Add Gaussian noise, measure accuracy drop (slow but accurate)
+                - 'masking': Random mask weights, measure accuracy drop (slow)
+                - 'activation_variance': Use activation variance (fast, single forward pass)
+                - 'gradient': Use gradient magnitude (fast, single backward pass)
+                - 'fisher': Fisher information approximation (moderate speed)
+                - 'weight_magnitude': Use weight magnitude as proxy (fastest)
+            min_amount: Minimum pruning per layer (0-1)
+            max_amount: Maximum pruning per layer (0-1)
+            perturbation_scale: Scale of perturbation for 'perturbation' method
+            num_trials: Number of trials for perturbation/masking methods
             config: Pruning configuration
             **metric_kwargs: Arguments for metric initialization
         """
@@ -83,6 +103,14 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         self.sensitivity_method = sensitivity_method
         self.min_amount = min_amount
         self.max_amount = max_amount
+        self.perturbation_scale = perturbation_scale
+        self.num_trials = num_trials
+
+        if sensitivity_method not in self.SENSITIVITY_METHODS:
+            raise ValueError(
+                f"Unknown sensitivity_method: {sensitivity_method}. "
+                f"Available: {self.SENSITIVITY_METHODS}"
+            )
 
         # Will be populated during sensitivity analysis
         self.layer_sensitivities: Dict[str, LayerSensitivity] = {}
@@ -115,7 +143,12 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         return scores
 
     def measure_layer_sensitivity(
-        self, model: nn.Module, layer_name: str, eval_fn: Callable, perturbation_scale: float = 0.1, num_trials: int = 3
+        self,
+        model: nn.Module,
+        layer_name: str,
+        eval_fn: Optional[Callable] = None,
+        data_loader=None,
+        cached_activations: Optional[Dict[str, torch.Tensor]] = None,
     ) -> float:
         """
         Measure sensitivity of a single layer.
@@ -124,31 +157,66 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
             model: Full model
             layer_name: Name of layer to test
             eval_fn: Function that evaluates model and returns accuracy
-            perturbation_scale: Scale of perturbation
-            num_trials: Number of trials to average
+                     (required for perturbation/masking methods)
+            data_loader: Data loader for gradient/fisher methods
+            cached_activations: Pre-captured activations for activation_variance method
 
         Returns:
-            Sensitivity (accuracy drop when layer perturbed)
+            Sensitivity score (higher = more sensitive = prune less)
         """
-        # Get baseline accuracy
-        baseline_acc = eval_fn(model)
-
-        # Get layer
         layer = dict(model.named_modules())[layer_name]
 
         if not hasattr(layer, "weight"):
             return 0.0
 
+        # Fast methods that don't require eval_fn
+        if self.sensitivity_method == "weight_magnitude":
+            # Use average weight magnitude as sensitivity proxy
+            # Higher magnitude = more important = more sensitive
+            return layer.weight.data.abs().mean().item()
+
+        elif self.sensitivity_method == "activation_variance":
+            # Use activation variance as sensitivity proxy
+            # Higher variance = more information = more sensitive
+            if cached_activations is not None and layer_name in cached_activations:
+                activations = cached_activations[layer_name]
+                # Variance across batch dimension
+                return activations.var(dim=0).mean().item()
+            else:
+                logger.warning(f"No cached activations for {layer_name}, using weight magnitude")
+                return layer.weight.data.abs().mean().item()
+
+        elif self.sensitivity_method == "gradient":
+            # Use gradient magnitude as sensitivity proxy
+            # Requires a backward pass with data
+            if data_loader is None:
+                logger.warning("gradient method requires data_loader, using weight magnitude")
+                return layer.weight.data.abs().mean().item()
+            return self._compute_gradient_sensitivity(model, layer_name, data_loader)
+
+        elif self.sensitivity_method == "fisher":
+            # Fisher information approximation
+            if data_loader is None:
+                logger.warning("fisher method requires data_loader, using weight magnitude")
+                return layer.weight.data.abs().mean().item()
+            return self._compute_fisher_sensitivity(model, layer_name, data_loader)
+
+        # Slow methods that require eval_fn
+        if eval_fn is None:
+            raise ValueError(f"sensitivity_method '{self.sensitivity_method}' requires eval_fn")
+
+        # Get baseline accuracy
+        baseline_acc = eval_fn(model)
+
         # Store original weight
         original_weight = layer.weight.data.clone()
 
-        # Measure sensitivity via perturbation
+        # Measure sensitivity via perturbation/masking
         sensitivities = []
 
-        for _ in range(num_trials):
-            # Perturb layer
+        for _ in range(self.num_trials):
             if self.sensitivity_method == "perturbation":
-                perturbation = perturbation_scale * torch.randn_like(layer.weight)
+                perturbation = self.perturbation_scale * torch.randn_like(layer.weight)
                 layer.weight.data = original_weight + perturbation
 
             elif self.sensitivity_method == "masking":
@@ -166,26 +234,129 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
             # Restore
             layer.weight.data = original_weight
 
-        # Average sensitivity
         avg_sensitivity = sum(sensitivities) / len(sensitivities)
-
         logger.debug(f"{layer_name}: sensitivity = {avg_sensitivity:.4f}")
 
         return avg_sensitivity
 
-    def compute_all_sensitivities(self, model: nn.Module, layer_names: List[str], eval_fn: Callable) -> Dict[str, LayerSensitivity]:
+    def _compute_gradient_sensitivity(
+        self, model: nn.Module, layer_name: str, data_loader
+    ) -> float:
+        """Compute sensitivity using gradient magnitude."""
+        layer = dict(model.named_modules())[layer_name]
+        
+        model.train()
+        total_grad = None
+        num_batches = 0
+        
+        # Get a few batches
+        for i, (inputs, targets) in enumerate(data_loader):
+            if i >= 3:  # Only use 3 batches for speed
+                break
+                
+            if torch.cuda.is_available():
+                inputs = inputs.cuda()
+                targets = targets.cuda()
+            
+            model.zero_grad()
+            outputs = model(inputs)
+            loss = torch.nn.functional.cross_entropy(outputs, targets)
+            loss.backward()
+            
+            if layer.weight.grad is not None:
+                grad = layer.weight.grad.abs()
+                if total_grad is None:
+                    total_grad = grad.clone()
+                else:
+                    total_grad += grad
+                num_batches += 1
+        
+        model.eval()
+        
+        if total_grad is None or num_batches == 0:
+            return 0.0
+        
+        # Average gradient magnitude = sensitivity
+        return (total_grad / num_batches).mean().item()
+
+    def _compute_fisher_sensitivity(
+        self, model: nn.Module, layer_name: str, data_loader
+    ) -> float:
+        """Compute sensitivity using Fisher information approximation."""
+        layer = dict(model.named_modules())[layer_name]
+        
+        model.train()
+        fisher_diag = None
+        num_batches = 0
+        
+        for i, (inputs, targets) in enumerate(data_loader):
+            if i >= 3:  # Only use 3 batches for speed
+                break
+                
+            if torch.cuda.is_available():
+                inputs = inputs.cuda()
+                targets = targets.cuda()
+            
+            model.zero_grad()
+            outputs = model(inputs)
+            
+            # For Fisher, we use log-likelihood gradient squared
+            log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
+            # Sample from predicted distribution
+            with torch.no_grad():
+                sampled_labels = torch.multinomial(torch.exp(log_probs), 1).squeeze()
+            
+            loss = torch.nn.functional.nll_loss(log_probs, sampled_labels)
+            loss.backward()
+            
+            if layer.weight.grad is not None:
+                grad_sq = layer.weight.grad ** 2
+                if fisher_diag is None:
+                    fisher_diag = grad_sq.clone()
+                else:
+                    fisher_diag += grad_sq
+                num_batches += 1
+        
+        model.eval()
+        
+        if fisher_diag is None or num_batches == 0:
+            return 0.0
+        
+        # Fisher information = sensitivity
+        return (fisher_diag / num_batches).mean().item()
+
+    def compute_all_sensitivities(
+        self,
+        model: nn.Module,
+        layer_names: List[str],
+        eval_fn: Optional[Callable] = None,
+        data_loader=None,
+        cached_activations: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Dict[str, LayerSensitivity]:
         """
         Compute sensitivities for all specified layers.
 
         Args:
             model: Model to analyze
             layer_names: Layers to analyze
-            eval_fn: Evaluation function
+            eval_fn: Evaluation function (required for perturbation/masking methods)
+            data_loader: Data loader (required for gradient/fisher methods)
+            cached_activations: Pre-captured activations (for activation_variance method)
 
         Returns:
             Dict mapping layer names to LayerSensitivity objects
         """
-        logger.info(f"Computing sensitivities for {len(layer_names)} layers...")
+        logger.info(f"Computing sensitivities for {len(layer_names)} layers using '{self.sensitivity_method}' method...")
+
+        # Validate requirements
+        if self.sensitivity_method in ["perturbation", "masking"] and eval_fn is None:
+            raise ValueError(f"sensitivity_method '{self.sensitivity_method}' requires eval_fn")
+        if self.sensitivity_method in ["gradient", "fisher"] and data_loader is None:
+            raise ValueError(f"sensitivity_method '{self.sensitivity_method}' requires data_loader")
+
+        # For activation_variance, capture activations if not provided
+        if self.sensitivity_method == "activation_variance" and cached_activations is None and data_loader is not None:
+            cached_activations = self._capture_activations(model, layer_names, data_loader)
 
         sensitivities = {}
 
@@ -193,7 +364,13 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
             layer = dict(model.named_modules())[layer_name]
 
             # Measure sensitivity
-            sens = self.measure_layer_sensitivity(model, layer_name, eval_fn)
+            sens = self.measure_layer_sensitivity(
+                model,
+                layer_name,
+                eval_fn=eval_fn,
+                data_loader=data_loader,
+                cached_activations=cached_activations,
+            )
 
             # Get layer size
             size = layer.weight.numel()
@@ -209,6 +386,39 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         self.layer_sensitivities = sensitivities
 
         return sensitivities
+
+    def _capture_activations(
+        self, model: nn.Module, layer_names: List[str], data_loader
+    ) -> Dict[str, torch.Tensor]:
+        """Capture activations for all layers in a single forward pass."""
+        activations = {}
+        hooks = []
+
+        def make_hook(name):
+            def hook(module, input, output):
+                if isinstance(output, tuple):
+                    output = output[0]
+                activations[name] = output.detach()
+            return hook
+
+        # Register hooks
+        for name, module in model.named_modules():
+            if name in layer_names:
+                hooks.append(module.register_forward_hook(make_hook(name)))
+
+        # Forward pass with one batch
+        model.eval()
+        with torch.no_grad():
+            inputs, _ = next(iter(data_loader))
+            if torch.cuda.is_available():
+                inputs = inputs.cuda()
+            model(inputs)
+
+        # Remove hooks
+        for hook in hooks:
+            hook.remove()
+
+        return activations
 
     def _compute_adaptive_amounts(self, sensitivities: Dict[str, LayerSensitivity]) -> Dict[str, LayerSensitivity]:
         """

@@ -1,0 +1,390 @@
+# =============================================================================
+# UNIFIED ALIGNMENT FRAMEWORK - CONFIG TEMPLATE
+# =============================================================================
+# Works for both Vision (ResNet, VGG) and LLM (Llama, Qwen) experiments
+# Usage: python scripts/run_experiment.py --config configs/unified_template.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXPERIMENT (unified structure)
+# -----------------------------------------------------------------------------
+experiment:
+  name: "my_experiment"
+  # Types: "alignment_analysis" (general), "cluster_analysis" (vision clustering),
+  #        "llm_alignment" (LLM pruning)
+  type: "alignment_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results"
+
+# -----------------------------------------------------------------------------
+# MODEL (unified for vision and LLM)
+# -----------------------------------------------------------------------------
+model:
+  # Vision: "resnet18", "resnet50", "vgg16", "mobilenet_v2"
+  # LLM: "hf_causal_lm" (requires model_id)
+  name: "resnet18"
+  pretrained: true
+  num_classes: 10               # Vision only
+  
+  # HuggingFace (LLM only)
+  model_id: null                # e.g., "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  
+  # Layers to track (null = auto-detect)
+  tracked_layers: null
+
+# -----------------------------------------------------------------------------
+# DATASET (unified)
+# -----------------------------------------------------------------------------
+dataset:
+  name: "cifar10"               # Vision: cifar10, cifar100, imagenet
+                                # LLM: wikitext, c4
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+# -----------------------------------------------------------------------------
+# CALIBRATION (samples for metric computation)
+# -----------------------------------------------------------------------------
+calibration:
+  num_samples: 5000             # Vision: typically 5000
+                                # LLM: typically 64-128
+  max_length: 2048              # LLM only: sequence length
+
+# -----------------------------------------------------------------------------
+# METRICS (unified naming with aliases)
+# -----------------------------------------------------------------------------
+metrics:
+  # -----------------------------------------------------------------------------
+  # OPTIMIZATION OPTIONS
+  # -----------------------------------------------------------------------------
+  # Enable optimized implementations for faster metric computation.
+  #
+  # use_jit: Use JIT-compiled functions (20-50% faster)
+  #   - Available for: rayleigh_quotient, mutual_information, node_correlation,
+  #                    cosine_similarity, spectral_norm, eigenvalue_entropy
+  #
+  # use_gpu_acceleration: Use GPU-accelerated functions
+  #   - Available for: histogram (1D/2D), mutual_information, entropy,
+  #                    covariance, correlation
+  #   - Best for: Large batch sizes, histogram-based metrics
+  #
+  optimization:
+    use_jit: false                 # Enable JIT-compiled metric computations
+    use_gpu_acceleration: false    # Enable GPU-accelerated functions
+    force_cpu_for_large_ops: true  # Move large ops to CPU to prevent OOM
+    cpu_threshold: 100000000       # 1e8 elements threshold for CPU fallback
+
+  # -----------------------------------------------------------------------------
+  # CNN preprocessing mode (for convolutional layers only)
+  # -----------------------------------------------------------------------------
+  # How to handle spatial dimensions in CNNs when computing metrics like RQ:
+  #   - "unfold": Unfold patches, exact RQ (slow, high memory for large spatial dims)
+  #   - "patchwise": Same as unfold but keeps patches separate (slow)
+  #   - "gap": Global Average Pooling (FAST, approximate, loses spatial info)
+  #   - "spatial": Treat spatial locations as samples (FAST, preserves variance)
+  # Recommendation:
+  #   - Use "unfold" for research/accuracy (default)
+  #   - Use "gap" or "spatial" for speed during development/large images
+  cnn_mode: "unfold"
+  max_patches: 64               # Subsample patches if more than this (speed optimization)
+  
+  # Core metrics (available for both vision and LLM)
+  # -----------------------------------------------------------------------------
+  # Rayleigh Quotient variants:
+  #   - "rayleigh_quotient" (default): Standard RQ, uses unfold for CNNs
+  #   - "rq_fast" / "rq_gap": Uses GAP for CNNs (10-100x faster)
+  #   - "rq_spatial": Treats spatial locations as samples
+  #   - "rq_patchwise": Explicit patchwise computation
+  # -----------------------------------------------------------------------------
+  rayleigh_quotient:
+    enabled: true
+    relative: true
+    regularization: 1.0e-6
+  
+  redundancy:                   # Gaussian pairwise MI
+    enabled: true
+    sampling: "all"             # all, random, top_k
+    num_pairs: 10               # For pairwise computation
+    mode: "output_based"        # output_based (FAST) or covariance_based (SLOW)
+  
+  synergy:                      # PID-based synergy with target
+    enabled: true
+    target: "logit_margin"      # Vision: logit_margin, correct_logit
+                                # LLM: loss_proxy, perplexity_delta
+    num_pairs: 10
+  
+  magnitude:
+    enabled: true
+    type: "l2_norm"             # l2_norm, l1_norm, max
+  
+  # LLM-specific metrics (ignored for vision)
+  scar:
+    enabled: false              # Enable for LLM
+    activation_power: true
+    curvature: true
+    loss_proxy: true
+    taylor: true
+
+# -----------------------------------------------------------------------------
+# CLUSTERING (unified for both)
+# -----------------------------------------------------------------------------
+clustering:
+  enabled: true
+  n_clusters: 4
+  # Cluster type names (semantic mapping)
+  type_names: ["critical", "redundant", "synergistic", "background"]
+  normalize_features: true
+  
+  # Features to cluster on
+  features:
+    - "rayleigh_quotient"
+    - "redundancy" 
+    - "synergy"
+  
+  # Stability analysis
+  stability:
+    enabled: true
+    n_bootstrap: 50
+
+# -----------------------------------------------------------------------------
+# SUPERNODE DETECTION (alternative to clustering)
+# -----------------------------------------------------------------------------
+supernode:
+  enabled: false                # Enable for outlier-based analysis
+  score_metric: "synergy"       # Or: rayleigh_quotient, scar_loss_proxy
+  core_fraction: 0.01           # Top 1% as supernodes
+  halo_fraction: 0.10           # 10% as halo neurons
+  protect_core: true
+
+# -----------------------------------------------------------------------------
+# HALO / CROSS-LAYER ANALYSIS (unified)
+# -----------------------------------------------------------------------------
+halo_analysis:
+  enabled: true
+  percentile: 90.0              # Top X% by influence
+  use_activation_weight: true   # Weight by activation magnitude
+  
+  # Compute influence/dependency matrices
+  compute_influence_matrix: true
+  
+  # For LLM: analyze downstream impact
+  cross_layer:
+    enabled: true
+    max_refs: 512
+
+# -----------------------------------------------------------------------------
+# CASCADE / DAMAGE ANALYSIS
+# -----------------------------------------------------------------------------
+cascade_analysis:
+  enabled: true
+  n_remove_per_group: 5         # Neurons to remove per cluster/supernode
+  damage_sample_fraction: 0.2   # Fraction of data to evaluate damage
+
+# -----------------------------------------------------------------------------
+# PRUNING (unified interface)
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  
+  # Distribution strategy: how to allocate pruning across layers
+  # Options:
+  #   - "uniform": Same percentage per layer (default)
+  #   - "global_threshold": Global score threshold across all layers
+  #   - "adaptive_sensitivity": More pruning on robust layers, less on sensitive (RECOMMENDED)
+  #   - "importance_weighted": Based on average importance scores
+  distribution: "uniform"
+  
+  # Per-layer constraints
+  min_per_layer: 0.0             # Minimum per-layer pruning fraction (0-1)
+  max_per_layer: 0.95            # Maximum per-layer pruning fraction (0-1)
+  
+  # Dependency-aware pruning (recommended for CNNs with BatchNorm, ResNets, etc.)
+  dependency_aware: false
+  
+  # -----------------------------------------------------------------------------
+  # Sensitivity-based adaptive pruning (used when distribution="adaptive_sensitivity")
+  # -----------------------------------------------------------------------------
+  sensitivity:
+    # Method to measure layer sensitivity. Options:
+    #   - "perturbation": Add Gaussian noise, measure accuracy drop (slow, most accurate)
+    #   - "masking": Random mask 30% weights, measure accuracy drop (slow)
+    #   - "activation_variance": Use activation variance (FAST, single forward pass)
+    #   - "gradient": Use gradient magnitude (FAST, single backward pass)
+    #   - "fisher": Fisher information approximation (moderate speed)
+    #   - "weight_magnitude": Use weight magnitude (FASTEST, no forward pass)
+    method: "activation_variance"
+    perturbation_scale: 0.1      # For "perturbation" method
+    num_trials: 3                # For "perturbation" and "masking" methods
+  
+  # Sparsity levels to evaluate
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  
+  # -----------------------------------------------------------------------------
+  # Pruning methods/strategies to compare
+  # -----------------------------------------------------------------------------
+  # Available strategies:
+  #   BASELINES:
+  #     - "random": Random pruning (baseline)
+  #     - "magnitude": Weight magnitude pruning
+  #   ALIGNMENT-BASED:
+  #     - "rayleigh_quotient": RQ alignment score
+  #     - "alignment": Generic alignment pruning (specify metric)
+  #     - "hybrid": Combine magnitude + alignment
+  #     - "global_alignment": Global alignment-based
+  #     - "cascading_alignment": Sequential layer pruning with score recomputation
+  #   EIGENVECTOR/PCA:
+  #     - "eigenvector": PCA-based pruning (prune low-variance neurons)
+  #   MOVEMENT (Sanh et al. NeurIPS 2020):
+  #     - "movement": Prune weights moving toward zero during training
+  #     - "adaptive_movement": Auto-tuned movement pruning
+  #   GRADIENT-BASED:
+  #     - "gradient": Gradient magnitude pruning
+  #     - "fisher": Fisher information pruning
+  #     - "momentum": Momentum-based pruning
+  #   CLUSTER-AWARE:
+  #     - "cluster_aware": Respects cluster boundaries
+  #   LLM-SPECIFIC:
+  #     - "wanda": Sun et al. 2023
+  #     - "sparsegpt": Frantar & Alistarh 2023
+  methods:
+    # Baselines
+    - name: "random"
+    - name: "magnitude"
+    
+    # Alignment-based
+    - name: "rayleigh_quotient"
+      selection: "low"          # Prune low-RQ neurons
+    - name: "redundancy"
+      selection: "high"         # Prune high-redundancy neurons
+    - name: "synergy"
+      selection: "low"          # Prune low-synergy neurons
+    
+    # Composite methods
+    - name: "composite"
+      weights:
+        rayleigh_quotient: 0.33
+        redundancy: -0.33       # Negative = penalize redundancy
+        synergy: 0.33
+    
+    # Structure-aware
+    - name: "cluster_aware"     # Respects cluster boundaries
+    - name: "supernode_aware"   # Protects supernodes
+    
+    # Advanced (uncomment to enable)
+    # - name: "eigenvector"     # PCA-based pruning
+    # - name: "movement"        # Training-aware (requires training history)
+    # - name: "cascading_alignment"  # Progressive with score recomputation
+    
+    # LLM-specific (ignored for vision)
+    - name: "wanda"
+    - name: "sparsegpt"
+    - name: "scar_loss_proxy"
+  
+  # Selection modes: which neurons to prune based on scores
+  # Options: "low" (prune low scores), "high" (prune high scores), "random"
+  selection_modes: ["low", "high"]
+  
+  # Fine-tuning after pruning
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0001
+
+# -----------------------------------------------------------------------------
+# EVALUATION
+# -----------------------------------------------------------------------------
+evaluation:
+  # Vision
+  accuracy: true
+  loss: true
+  
+  # LLM
+  perplexity:
+    enabled: false              # Enable for LLM
+    datasets: ["wikitext"]
+  
+  benchmarks:                   # LLM benchmarks
+    enabled: false
+    tasks: ["hellaswag", "piqa", "arc_easy"]
+    num_fewshot: 0
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION (unified)
+# -----------------------------------------------------------------------------
+visualization:
+  enabled: true
+  format: "png"                 # png, pdf, svg
+  dpi: 300
+  
+  # Plots to generate (works for both)
+  plots:
+    # Metric distributions
+    histograms: true
+    violin_plots: true
+    correlation_heatmap: true
+    
+    # Clustering/Supernode
+    cluster_scatter: true       # 2D/3D metric space scatter
+    cluster_evolution: true     # Type composition across depth
+    
+    # Cross-layer
+    influence_matrix: true
+    halo_properties: true
+    
+    # Pruning
+    pruning_comparison: true
+    pruning_recovery: true
+    
+    # Cascade
+    cascade_test: true
+  
+  # Scatter plot pairs
+  scatter_pairs:
+    - ["rayleigh_quotient", "redundancy"]
+    - ["rayleigh_quotient", "synergy"]
+    - ["redundancy", "synergy"]
+
+# -----------------------------------------------------------------------------
+# OUTPUT
+# -----------------------------------------------------------------------------
+# Output directory structure:
+#   - If base_dir is set: Creates job-specific directories with structure:
+#       {base_dir}/{experiment_name}_{timestamp}_{job_id}/
+#           results/, logs/, checkpoints/, figures/, analysis/
+#   - If only dir is set: Uses that as the output directory (old behavior)
+#
+# For SLURM jobs, the job_id is automatically taken from SLURM_JOB_ID
+# For local runs, a unique 8-character ID is generated
+output:
+  # Base directory for job-specific outputs (recommended for cluster runs)
+  # Each experiment creates a unique subdirectory with timestamp and job ID
+  base_dir: null  # e.g., "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+  
+  # Direct output directory (legacy, used if base_dir is null)
+  dir: "./results"
+  
+  save_metrics: true
+  save_clusters: true
+  save_figures: true
+  save_checkpoints: false
+
+# =============================================================================
+# PRESETS (inherit and override)
+# =============================================================================
+# You can create preset files and inherit from them:
+#
+# # In configs/presets/vision_base.yaml:
+# _preset: vision_base
+# experiment:
+#   type: cluster_analysis
+# model:
+#   name: resnet18
+#
+# # In your config:
+# _inherit: presets/vision_base
+# model:
+#   name: resnet50  # Override
+# =============================================================================

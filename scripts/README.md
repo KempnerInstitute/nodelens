@@ -7,18 +7,23 @@ Entry points for experiments and analysis.
 Run experiments from YAML configuration:
 
 ```bash
+# Vision analysis
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
-python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
-python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
+
+# LLM analysis  
+python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_full.yaml
+
+# Cluster-based analysis
+python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
 ```
 
 Options:
 - `--config PATH` - Configuration file (required)
-- `--device STRING` - Override device
+- `--device STRING` - Override device (e.g., cuda:0)
 - `--seed INT` - Override random seed
 - `--output-dir PATH` - Override output directory
 - `--analysis-only` - Regenerate plots from existing results
-- `--experiment-dir PATH` - Existing experiment directory
+- `--experiment-dir PATH` - Existing experiment directory (with --analysis-only)
 
 ## run_analysis.py
 
@@ -35,3 +40,8 @@ Options:
 - `--output-dir PATH` - Output directory
 - `--analyses LIST` - Specific analyses to run
 - `--quick` - Run all analyses with defaults
+
+## Paper-specific helpers
+
+The SCAR/LLM-pruning paper batch scripts and artifact collectors live under:
+- `drafts/LLM_prune/paper/`

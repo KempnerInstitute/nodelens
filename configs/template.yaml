@@ -50,10 +50,47 @@ dataset:
 # -----------------------------------------------------------------------------
 # METRICS
 # -----------------------------------------------------------------------------
-# Metrics to compute for alignment analysis
-# Available: rayleigh_quotient, activation_l2_norm, activation_outlier_index,
-#            pairwise_redundancy_gaussian, synergy_gaussian_mmi,
-#            mutual_information_gaussian, weight_cosine_similarity
+# Metrics to compute for alignment analysis and pruning.
+# 
+# AVAILABLE METRICS (by category):
+#
+# ALIGNMENT (Rayleigh Quotient based):
+#   rayleigh_quotient (rq)       - Alignment with input covariance
+#   rq_fast (rq_gap)             - Fast RQ using GAP (10-100x faster for CNNs)
+#   rq_spatial                   - Spatial RQ treating locations as samples
+#   conditional_rayleigh_quotient - Class-conditioned RQ
+#   delta_rq                     - RQ_uncond - RQ_cond (class sensitivity)
+#
+# MUTUAL INFORMATION:
+#   gaussian_mi_analytic         - Gaussian MI with Edgeworth corrections
+#   mi_about_class               - MI between activations and class labels
+#   conditional_mi               - Class-conditioned MI
+#
+# REDUNDANCY:
+#   pairwise_redundancy_gaussian - Pairwise Gaussian redundancy
+#   average_redundancy           - Average redundancy per neuron
+#   halo_redundancy              - Halo vs non-halo redundancy analysis
+#   cross_layer_redundancy       - Downstream importance from next layer
+#
+# SYNERGY:
+#   synergy_gaussian_mmi         - MMI-based synergy
+#   gaussian_pid_synergy_mmi     - PID synergy
+#
+# ACTIVATION:
+#   activation_l2_norm           - L2 norm of activations (NeMo/TensorRT style)
+#   activation_mean              - Mean absolute activation
+#   activation_variance          - Variance of activations
+#   activation_outlier_index     - Outlier/supernode detection
+#
+# COMPOSITE:
+#   composite_importance         - Weighted combination of metrics
+#   alignment_minus_redundancy   - RQ - α*Redundancy
+#   cross_layer_importance       - RQ + Downstream - Redundancy (SCAR-aligned)
+#
+# SPECTRAL:
+#   spectral_gap                 - Spectral gap of weight matrix
+#   eigenvalue_alignment         - Wasserstein distance of eigenvalues
+#
 metrics:
   enabled:
     - "rayleigh_quotient"
@@ -63,25 +100,130 @@ metrics:
   # Number of data samples for metric computation
   num_samples: 128
   
-  # Metric-specific settings
+  # =========================================================================
+  # OPTIMIZATION OPTIONS
+  # =========================================================================
+  # These options enable optimized implementations for faster computation.
+  # 
+  # use_jit: Use JIT-compiled functions (20-50% faster)
+  #   - Available for: rayleigh_quotient, mutual_information, node_correlation,
+  #                    cosine_similarity, spectral_norm, eigenvalue_entropy
+  #   - Requires: PyTorch JIT compilation support
+  #
+  # use_gpu_acceleration: Use GPU-accelerated functions  
+  #   - Available for: histogram (1D/2D), mutual_information, entropy,
+  #                    covariance, correlation
+  #   - Requires: CUDA-enabled GPU
+  #   - Best for: Large batch sizes, histogram-based metrics
+  #
+  # force_cpu_for_large_ops: Move large tensor ops to CPU (default: true)
+  #   - Prevents OOM for covariance matrices of high-dim layers
+  #   - cpu_threshold: Element count threshold (default: 1e8 = 100M)
+  #
+  optimization:
+    use_jit: false                 # Enable JIT-compiled metric computations
+    use_gpu_acceleration: false    # Enable GPU-accelerated functions
+    force_cpu_for_large_ops: true  # Move large ops to CPU to prevent OOM
+    cpu_threshold: 100000000       # 1e8 elements threshold for CPU fallback
+  
+  # =========================================================================
+  # ALIGNMENT METRICS
+  # =========================================================================
   rayleigh_quotient:
+    relative: true               # Normalize by trace(Σ) for relative alignment
+    min_samples: 2               # Minimum samples for covariance estimation
+    scale_by_norm: false         # Scale covariance by Frobenius norm
+    regularization: 1.0e-6       # Diagonal regularization for stability
+  
+  # Fast RQ for CNNs using Global Average Pooling
+  # 10-100x faster, good approximation for early conv layers
+  rq_fast:
     relative: true
     regularization: 1.0e-6
   
+  # Conditional RQ (class-conditioned)
+  conditional_rayleigh_quotient:
+    relative: true
+    min_samples: 2               # Minimum samples per class
+    regularization: 1.0e-6
+    return_delta: false          # If true, return ΔRQ = RQ_uncond - RQ_cond
+  
+  # =========================================================================
+  # MUTUAL INFORMATION METRICS
+  # =========================================================================
+  gaussian_mi_analytic:
+    expansion_order: 2           # Edgeworth order (0=Gaussian, 1-3 for corrections)
+    noise_std: 0.1               # Assumed noise standard deviation
+    regularization: 1.0e-6       # Covariance regularization
+    per_neuron: true             # Per-neuron MI (true) or joint MI (false)
+  
+  mi_about_class:
+    method: "gaussian"           # "gaussian" (fast) or "binning" (discrete)
+    bins: 10                     # Number of bins for binning method
+    min_samples_per_class: 5     # Minimum samples per class
+  
+  # =========================================================================
+  # REDUNDANCY METRICS
+  # =========================================================================
   pairwise_redundancy_gaussian:
-    mode: "output_based"          # "output_based" (fast) or "covariance_based"
-    num_pairs: 10
+    mode: "output_based"         # "output_based" (fast) or "covariance_based"
+    num_pairs: 10                # Partners to sample per neuron
+    sampling_strategy: "random"  # "random", "nearest", or "all"
+    regularization: 1.0e-6       # For covariance_based mode
   
+  average_redundancy:
+    min_samples: 2               # Minimum samples for computation
+    use_correlation: true        # Use correlation (true) or covariance (false)
+  
+  halo_redundancy:
+    supernode_fraction: 0.01     # Top fraction as supernodes
+    halo_fraction: 0.10          # Fraction of non-supernodes as halo
+    max_samples: 1000            # Max activation samples
+    max_pairs_per_group: 500     # Max pairs per group
+  
+  cross_layer_redundancy:
+    max_refs: 512                # Max reference neurons for efficiency
+    compute_within: true         # Also compute within-layer redundancy
+  
+  # =========================================================================
+  # SYNERGY METRICS
+  # =========================================================================
   synergy_gaussian_mmi:
-    num_pairs: 10
+    num_pairs: 10                # Pairs to sample for synergy
+    regularization: 1.0e-6
   
-  # Composite score weights (for combining metrics into single importance score)
-  # Used when pruning.scoring: "composite" or supernode.score_metric: "composite"
+  # =========================================================================
+  # ACTIVATION METRICS
+  # =========================================================================
+  activation_l2_norm:
+    aggregate_method: "l2"       # "l2", "mean", "max"
+    use_absolute: true           # Take absolute value before aggregation
+  
+  activation_outlier_index:
+    quantile: 0.999              # High percentile for outlier detection
+    eps: 1.0e-6                  # Numerical stability
+  
+  # =========================================================================
+  # COMPOSITE METRICS
+  # =========================================================================
+  # Weights for combining metrics (negative = penalty)
   composite_weights:
     activation_l2_norm: 0.2
     rayleigh_quotient: 0.3
     pairwise_redundancy_gaussian: -0.2   # Negative = penalize redundancy
     synergy_gaussian_mmi: 0.2
+  
+  composite_importance:
+    normalize_components: true   # Normalize each component to [0, 1]
+    log_transform_rq: true       # Apply log transform to RQ
+  
+  cross_layer_importance:
+    rq_weight: 0.25              # Weight for RQ (α)
+    downstream_weight: 0.35      # Weight for downstream importance (β)
+    within_redundancy_weight: 0.25   # Penalty for redundancy (γ)
+    activation_weight: 0.15      # Weight for activation magnitude
+    normalize: true              # Normalize components
+    max_refs: 512                # Max reference neurons
 
 # -----------------------------------------------------------------------------
 # TRAINING (optional)
@@ -131,6 +273,49 @@ pruning:
   #   "cascading"            - sequential layer-by-layer pruning
   distribution: "uniform"
   
+  # Per-layer sparsity constraints
+  min_per_layer: 0.0                # Minimum sparsity per layer
+  max_per_layer: 0.95               # Maximum sparsity per layer (avoid removing everything)
+  
+  # Sensitivity configuration (used when distribution="adaptive_sensitivity")
+  # Measures how important each layer is to determine per-layer pruning amounts
+  sensitivity:
+    # Method options:
+    #   "perturbation"        - Add Gaussian noise, measure accuracy drop (slow, most accurate)
+    #   "masking"             - Random mask 30% weights, measure accuracy drop (slow)
+    #   "activation_variance" - Use activation variance (FAST, single forward pass) [RECOMMENDED]
+    #   "gradient"            - Use gradient magnitude (FAST, single backward pass)
+    #   "fisher"              - Fisher information approximation (moderate speed)
+    #   "weight_magnitude"    - Use weight magnitude (FASTEST, no forward pass)
+    method: "activation_variance"
+    perturbation_scale: 0.1         # For "perturbation" method
+    num_trials: 3                   # For "perturbation" and "masking" methods
+  
+  # Pruning strategies available via get_pruning_strategy():
+  # BASELINES:
+  #   "random"              - Random pruning baseline
+  #   "magnitude"           - Weight magnitude pruning
+  # ALIGNMENT-BASED:
+  #   "alignment"           - Generic alignment (specify metric)
+  #   "rayleigh_quotient"   - RQ alignment score
+  #   "hybrid"              - Combine magnitude + alignment
+  #   "global_alignment"    - Global alignment-based
+  #   "cascading_alignment" - Sequential layer pruning with score recomputation
+  # EIGENVECTOR/PCA:
+  #   "eigenvector"         - PCA-based pruning (prune low-variance neurons)
+  # MOVEMENT (Sanh et al. NeurIPS 2020):
+  #   "movement"            - Prune weights moving toward zero during training
+  #   "adaptive_movement"   - Auto-tuned movement pruning
+  # SENSITIVITY-ADAPTIVE:
+  #   "adaptive_sensitivity" - Per-layer adaptive amounts based on sensitivity
+  # GRADIENT-BASED:
+  #   "gradient"            - Gradient magnitude pruning
+  #   "fisher"              - Fisher information pruning
+  #   "momentum"            - Momentum-based pruning
+  # LLM-SPECIFIC:
+  #   "wanda"               - Sun et al. 2023
+  #   "sparsegpt"           - Frantar & Alistarh 2023
+  
   # Structured pruning: remove entire neurons/channels (vs individual weights)
   # - true  = prune whole neurons (hardware efficient, required for alignment metrics)
   # - false = prune individual weights (sparse matrices, less practical)
@@ -164,14 +349,46 @@ llm:
 # -----------------------------------------------------------------------------
 # How to preprocess convolutional layer activations for metric computation.
 # This affects how spatial dimensions (H, W) are handled when computing RQ, MI, etc.
+#
+# IMPORTANT: The choice of mode affects accuracy vs speed tradeoff significantly!
+#
+# COMPARISON TABLE:
+# ┌─────────────────┬────────────┬─────────────────┬──────────────────────────────┐
+# │ Mode            │ Speed      │ Memory          │ Best For                     │
+# ├─────────────────┼────────────┼─────────────────┼──────────────────────────────┤
+# │ unfold          │ Slow       │ O(B·P·C·K²)     │ Accurate RQ/MI, later layers │
+# │ patchwise       │ Moderate   │ O(B·C·K²·P)     │ Patch-level analysis         │
+# │ spatial         │ Fast       │ O(B·H·W·C)      │ Covariance metrics           │
+# │ gap             │ Fastest    │ O(B·C)          │ Quick experiments, early CNN │
+# │ channel_variance│ Fast       │ O(C)            │ Activation magnitude only    │
+# └─────────────────┴────────────┴─────────────────┴──────────────────────────────┘
+#
+# Where: B=batch, C=channels, H/W=spatial dims, K=kernel size, P=num patches
+#
 cnn:
   # Preprocessing mode for CNN activations:
   #   "unfold" (recommended): Unfolds spatial dims using kernel params, creates
   #                           [batch*patches, C*K*K] tensor. Best for RQ/covariance.
+  #                           Most accurate but slowest and highest memory.
+  #
   #   "patchwise": Keeps patches separate [batch, features, patches]. Good for
-  #                patch-level analysis.
-  #   "channel_variance": Uses channel-wise variance summary. Faster but less accurate.
+  #                patch-level analysis with weighted averaging.
+  #
+  #   "spatial": Reshapes [B, C, H, W] -> [B*H*W, C]. Treats each spatial location
+  #              as a sample. Fast and preserves spatial variance. RECOMMENDED for
+  #              large feature maps where unfold is too slow.
+  #
+  #   "gap": Global Average Pooling [B, C, H, W] -> [B, C]. Fastest but loses
+  #          spatial information. Use for quick experiments or early layers.
+  #          Alternatively, use rq_fast metric which internally does this.
+  #
+  #   "channel_variance": Uses per-channel variance summary. For activation-based
+  #                       metrics only (not covariance-based like RQ).
   mode: "unfold"
+  
+  # Additional CNN options:
+  max_patches: 64                # Max patches to use (subsample if more)
+  weight_by_variance: true       # Weight patches by their variance (for patchwise)
 
 # -----------------------------------------------------------------------------
 # PERFORMANCE
@@ -208,5 +425,18 @@ visualization:
 # -----------------------------------------------------------------------------
 # OUTPUT PATHS
 # -----------------------------------------------------------------------------
+# Output directory structure:
+#   - If base_output_dir is set: Creates job-specific directories with structure:
+#       {base_output_dir}/{experiment_name}_{timestamp}_{job_id}/
+#           results/, logs/, checkpoints/, figures/, analysis/
+#   - If not set: Uses log_dir/checkpoint_dir directly (old behavior)
+#
+# For SLURM jobs, the job_id is automatically taken from SLURM_JOB_ID
+# For local runs, a unique 8-character ID is generated
+#
+# Recommended for cluster runs:
+# base_output_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+base_output_dir: null
+
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"

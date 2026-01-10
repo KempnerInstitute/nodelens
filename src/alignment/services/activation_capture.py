@@ -80,39 +80,98 @@ class ActivationCaptureService:
 
         # Capture activations using model wrapper
         try:
+            # Prefer capturing RAW activations (we do preprocessing here for consistency)
             # Prefer passing explicit layers where supported
-            output, activations = self.model_wrapper.forward_with_activations(input_batch, layers=layers)
+            output, activations = self.model_wrapper.forward_with_activations(
+                input_batch, layers=layers, preprocess=False
+            )
         except TypeError as e:
-            # Backwards compatibility: some wrappers don't accept 'layers' kwarg
-            if "unexpected keyword argument 'layers'" in str(e):
-                logger.warning(
-                    "Model wrapper.forward_with_activations does not accept 'layers'; "
-                    "capturing activations for all tracked layers instead."
-                )
-                output, activations = self.model_wrapper.forward_with_activations(input_batch)
-            else:
+            # Backwards compatibility: wrappers may not accept 'layers' and/or 'preprocess'
+            msg = str(e)
+            try:
+                if "unexpected keyword argument 'preprocess'" in msg:
+                    # Retry without preprocess kwarg
+                    output, activations = self.model_wrapper.forward_with_activations(input_batch, layers=layers)
+                elif "unexpected keyword argument 'layers'" in msg:
+                    logger.warning(
+                        "Model wrapper.forward_with_activations does not accept 'layers'; "
+                        "capturing activations for all tracked layers instead."
+                    )
+                    # Retry without layers (and without preprocess, which may also be unsupported)
+                    try:
+                        output, activations = self.model_wrapper.forward_with_activations(input_batch, preprocess=False)
+                    except TypeError:
+                        output, activations = self.model_wrapper.forward_with_activations(input_batch)
+                else:
+                    raise
+            except Exception:
                 logger.error(f"Failed to capture activations: {e}")
                 raise
         except Exception as e:
             logger.error(f"Failed to capture activations: {e}")
             raise
 
-        # Separate inputs and outputs
-        inputs = {}
-        outputs = {}
+        # Preprocess if requested (unified, layer-aware preprocessing)
+        processed_activations = activations
+        if preprocess and mode not in {"none", "preserve_spatial"}:
+            if mode in {"unfold", "patchwise", "batch_patch_combined"}:
+                try:
+                    # Use the canonical preprocessing utilities that distinguish _input vs _output
+                    from alignment.dataops.processing import preprocess_layer_activations
+
+                    model = getattr(self.model_wrapper, "model", None) or getattr(self.model_wrapper, "_model", None)
+                    if model is None:
+                        raise AttributeError("Model wrapper has no .model or ._model attribute")
+
+                    layer_modules = dict(model.named_modules())
+
+                    # Only preprocess the activations we will actually consume
+                    to_process = {}
+                    for layer in layers:
+                        in_key = f"{layer}_input"
+                        out_key = f"{layer}_output"
+                        if in_key in activations:
+                            to_process[in_key] = activations[in_key]
+                        if out_key in activations:
+                            to_process[out_key] = activations[out_key]
+                        # Legacy compatibility: some wrappers store outputs under the bare layer name
+                        if out_key not in activations and layer in activations:
+                            to_process[layer] = activations[layer]
+
+                    processed_activations = preprocess_layer_activations(to_process, layer_modules, mode=mode)
+                except Exception as e:
+                    logger.warning(f"Layer-aware preprocessing failed ({e}); falling back to simple flatten")
+                    processed_activations = activations
+            elif mode == "flatten":
+                # Simple flattening: [B, ...] -> [B, -1]
+                processed_activations = {}
+                for name, tensor in activations.items():
+                    if isinstance(tensor, torch.Tensor) and tensor.ndim > 2:
+                        processed_activations[name] = tensor.reshape(tensor.shape[0], -1)
+                    else:
+                        processed_activations[name] = tensor
+            else:
+                logger.warning(f"Unknown preprocessing mode '{mode}', using 'flatten'")
+                processed_activations = {}
+                for name, tensor in activations.items():
+                    if isinstance(tensor, torch.Tensor) and tensor.ndim > 2:
+                        processed_activations[name] = tensor.reshape(tensor.shape[0], -1)
+                    else:
+                        processed_activations[name] = tensor
+
+        # Separate inputs and outputs (keys normalized to layer names)
+        inputs: Dict[str, torch.Tensor] = {}
+        outputs: Dict[str, torch.Tensor] = {}
         for layer in layers:
             input_key = f"{layer}_input"
             output_key = f"{layer}_output"
 
-            if input_key in activations:
-                inputs[layer] = activations[input_key]
-            if output_key in activations:
-                outputs[layer] = activations[output_key]
-
-        # Preprocess if requested
-        if preprocess:
-            inputs = self._preprocess_activations(inputs, mode)
-            outputs = self._preprocess_activations(outputs, mode)
+            if input_key in processed_activations:
+                inputs[layer] = processed_activations[input_key]
+            if output_key in processed_activations:
+                outputs[layer] = processed_activations[output_key]
+            elif layer in processed_activations:
+                outputs[layer] = processed_activations[layer]
 
         # Capture weights if requested
         weights = {}
