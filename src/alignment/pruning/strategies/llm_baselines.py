@@ -244,6 +244,91 @@ class WandaPruning(BasePruningStrategy):
             # Sum over output dimension -> score per input feature
             return importance.sum(dim=0)
 
+    def prune_unstructured_inplace(
+        self,
+        module: nn.Module,
+        sparsity: float,
+        *,
+        layer_name: Optional[str] = None,
+        mode: str = "low",
+        per_row: bool = True,
+    ) -> torch.Tensor:
+        """
+        Apply Wanda-style *unstructured* pruning to a Linear module (in-place).
+
+        This corresponds to the original Wanda setting: prune individual weights using
+        the Wanda score |W| * ||X||_2 computed from calibration activations.
+
+        Notes:
+        - Many Wanda implementations prune *per output row* (per-neuron) to enforce uniform
+          sparsity across rows. We expose this via `per_row` (default True).
+
+        Args:
+            module: nn.Linear-like module with `.weight`.
+            sparsity: Fraction of weights to prune in this module (0..1).
+            layer_name: Optional name used to look up calibrated activation norms.
+            mode: 'low' prunes low Wanda-scores (standard); 'high' prunes high scores (stress test);
+                  'random' prunes random weights.
+            per_row: If True, prune the same fraction within each output row.
+
+        Returns:
+            Mask tensor with same shape as module.weight (1 = keep, 0 = prune).
+        """
+        if not hasattr(module, "weight"):
+            raise ValueError(f"Module {module} does not have weights")
+        if sparsity <= 0:
+            return torch.ones_like(module.weight.data, dtype=torch.float32)
+
+        scores = self.compute_importance_scores(module, layer_name=layer_name)
+        scores = scores.detach()
+
+        W = module.weight.data
+        device = W.device
+        scores = scores.to(device)
+
+        rows, cols = scores.shape
+        mask = torch.ones((rows, cols), dtype=torch.bool, device=device)
+
+        if per_row:
+            k = int(sparsity * cols)
+            if k <= 0:
+                return mask.float()
+
+            if mode == "random":
+                # Random selection per row
+                rand = torch.rand((rows, cols), device=device)
+                _, idx = torch.topk(rand, k, largest=False, dim=1)
+            elif mode == "low":
+                # Prune lowest Wanda scores
+                _, idx = torch.topk(scores, k, largest=False, dim=1)
+            else:  # mode == "high"
+                # Prune highest Wanda scores
+                _, idx = torch.topk(scores, k, largest=True, dim=1)
+
+            row_idx = torch.arange(rows, device=device).unsqueeze(1).expand_as(idx)
+            mask[row_idx, idx] = False
+        else:
+            # Global unstructured selection within the matrix
+            flat = scores.flatten()
+            k = int(sparsity * flat.numel())
+            if k <= 0:
+                return mask.float()
+            if mode == "random":
+                idx = torch.randperm(flat.numel(), device=device)[:k]
+            elif mode == "low":
+                _, idx = torch.topk(flat, k, largest=False)
+            else:
+                _, idx = torch.topk(flat, k, largest=True)
+            mask_flat = mask.flatten()
+            mask_flat[idx] = False
+            mask = mask_flat.view_as(mask)
+
+        # Apply in-place
+        with torch.no_grad():
+            module.weight.data.mul_(mask.float())
+
+        return mask.float()
+
 
 class SparseGPTPruning(BasePruningStrategy):
     """
@@ -523,33 +608,37 @@ class SparseGPTPruning(BasePruningStrategy):
         inputs: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Prune weights and reconstruct remaining weights to minimize error.
-        
-        This is the full SparseGPT algorithm with OBS-style reconstruction.
-        
-        Args:
-            module: Linear module to prune
-            sparsity: Target sparsity (fraction to prune)
-            layer_name: Layer name for Hessian lookup
-            inputs: Optional inputs for online computation
-            
-        Returns:
-            Tuple of (pruning_mask, reconstructed_weight)
+        Prune weights and reconstruct remaining weights (SparseGPT-style).
+
+        This implements the key SparseGPT mechanism: prune low-saliency weights and
+        propagate the induced error using a second-order (Hessian/covariance) approximation.
+
+        Important:
+        - This operates in the *unstructured* setting (weight-level pruning).
+        - In our paper, we also provide a separate *channel-adapted* SparseGPT baseline which
+          uses the diagonal saliency as a scoring signal for structured channel pruning. This
+          method is the paper-faithful unstructured variant.
         """
         if not hasattr(module, "weight"):
             raise ValueError("Module does not have weights")
         
+        if sparsity <= 0:
+            W0 = module.weight.data.clone()
+            return torch.ones_like(W0, dtype=torch.float32), W0
+
         W = module.weight.data.clone().float()
+        orig_dtype = module.weight.data.dtype
         rows, cols = W.shape
+        device = W.device
         
         # Get Hessian
         H = None
         if layer_name and layer_name in self.hessians:
-            H = self.hessians[layer_name].to(W.device)
+            H = self.hessians[layer_name]
         elif inputs is not None:
             if inputs.dim() == 3:
                 inputs = inputs.view(-1, inputs.size(-1))
-            inputs = inputs.float().to(W.device)
+            inputs = inputs.float().to(device)
             nsamples = inputs.shape[0]
             H = (inputs.T @ inputs) / nsamples
             damp = self.percdamp * torch.diag(H).mean()
@@ -565,49 +654,104 @@ class SparseGPTPruning(BasePruningStrategy):
             mask[indices_to_prune] = False
             mask = mask.view(W.shape).float()
             return mask, W * mask
-        
-        # Compute H^{-1} using Cholesky
+
+        # Resolve H from stored dict via fuzzy match if needed
+        if H is None and self._calibrated and layer_name is not None:
+            for name in self.hessians:
+                if name.endswith(layer_name) or layer_name in name:
+                    H = self.hessians[name]
+                    break
+
+        if H is None:
+            logger.warning("SparseGPT: Hessian not available; falling back to magnitude pruning")
+            scores = W.abs()
+            k = int(sparsity * W.numel())
+            flat_scores = scores.flatten()
+            _, indices_to_prune = torch.topk(flat_scores, k, largest=False)
+            keep = torch.ones(flat_scores.numel(), dtype=torch.bool, device=device)
+            keep[indices_to_prune] = False
+            keep = keep.view_as(W)
+            W_new = (W * keep.float()).to(orig_dtype)
+            return keep.float(), W_new
+
+        # Move Hessian to device for reconstruction
+        H = H.float().to(device)
+
+        # Handle dead inputs (zero diagonal) like official implementations
+        diagH = torch.diag(H)
+        dead = diagH == 0
+        if dead.any():
+            H[dead, dead] = 1.0
+            W[:, dead] = 0.0
+
+        # Dampening for numerical stability (SparseGPT/GPTQ style)
+        diagH = torch.diag(H)
+        damp = self.percdamp * diagH.mean()
+        idx = torch.arange(H.shape[0], device=device)
+        H[idx, idx] += damp
+
+        # Compute Cholesky + inverse + (upper) Cholesky factor of inverse Hessian
         try:
             L = torch.linalg.cholesky(H)
             H_inv = torch.cholesky_inverse(L)
-        except RuntimeError:
-            logger.warning("Cholesky failed, using direct inverse")
-            H_inv = torch.linalg.inv(H)
-        
-        # Number of weights to prune
+            Hinv_factor = torch.linalg.cholesky(H_inv, upper=True)
+        except RuntimeError as e:
+            logger.warning(f"SparseGPT: Cholesky failed ({e}); adding extra dampening and retrying")
+            H[idx, idx] += (10.0 * damp)
+            L = torch.linalg.cholesky(H)
+            H_inv = torch.cholesky_inverse(L)
+            Hinv_factor = torch.linalg.cholesky(H_inv, upper=True)
+
+        d = torch.diag(Hinv_factor)
+        denom = (d.unsqueeze(0) ** 2) + 1e-10
+
+        # Global unstructured prune mask from SparseGPT/GPTQ-style saliency
+        saliency = (W ** 2) / denom
         num_prune = int(sparsity * W.numel())
-        
-        # Create mask (1 = keep, 0 = prune)
-        mask = torch.ones_like(W)
-        
-        # Prune in blocks for efficiency (simplified version)
-        # Full SparseGPT uses column-wise processing; this is a simplified version
-        
-        # Compute saliency for all weights
-        H_inv_diag = torch.diag(H_inv)
-        saliency = (W ** 2) / (H_inv_diag.unsqueeze(0) + 1e-10)
-        
-        # Find weights with lowest saliency to prune
-        flat_saliency = saliency.flatten()
-        prune_indices = torch.topk(flat_saliency, num_prune, largest=False).indices
-        
-        # Create mask
-        mask_flat = mask.flatten()
-        mask_flat[prune_indices] = 0
-        mask = mask_flat.view(rows, cols)
-        
-        # Reconstruct remaining weights (simplified - full algo does column-by-column)
-        # For each pruned weight, update connected weights
-        # This is a simplified version; full SparseGPT is more sophisticated
-        W_new = W.clone()
-        
-        # Zero out pruned weights
-        W_new = W_new * mask
-        
-        # Convert back to original dtype
-        W_new = W_new.to(module.weight.dtype)
-        
-        return mask, W_new
+        if num_prune <= 0:
+            W_new = W.to(orig_dtype)
+            return torch.ones_like(W, dtype=torch.float32), W_new
+
+        flat = saliency.flatten()
+        prune_idx = torch.topk(flat, num_prune, largest=False).indices
+        prune_mask_flat = torch.zeros_like(flat, dtype=torch.bool)
+        prune_mask_flat[prune_idx] = True
+        prune_mask = prune_mask_flat.view_as(W)  # True = prune
+
+        # Reconstruction / error propagation (blockwise, GPTQ-style)
+        bs = int(self.block_size) if self.block_size else 128
+        W_work = W.clone()
+
+        for i1 in range(0, cols, bs):
+            i2 = min(i1 + bs, cols)
+            count = i2 - i1
+            W1 = W_work[:, i1:i2].clone()
+            Hinv1 = Hinv_factor[i1:i2, i1:i2]
+            Err1 = torch.zeros((rows, count), device=device, dtype=W_work.dtype)
+
+            for j in range(count):
+                w = W1[:, j]
+                to_prune = prune_mask[:, i1 + j]
+                q = w.clone()
+                q[to_prune] = 0.0
+
+                dj = Hinv1[j, j]
+                err = (w - q) / (dj + 1e-10)
+
+                # Update remaining columns in this block
+                W1[:, j:] -= err.unsqueeze(1) * Hinv1[j, j:].unsqueeze(0)
+                Err1[:, j] = err
+
+                # Enforce pruning at this column
+                W1[:, j] = q
+
+            W_work[:, i1:i2] = W1
+            if i2 < cols:
+                W_work[:, i2:] -= Err1 @ Hinv_factor[i1:i2, i2:]
+
+        W_new = W_work.to(orig_dtype)
+        keep_mask = (~prune_mask).float()
+        return keep_mask, W_new
 
 
 # Convenience functions for integration with the pruning framework

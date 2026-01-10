@@ -284,7 +284,8 @@ def plot_scar_schematic(
 
     # Middle: compute steps
     box(0.28, 0.70, 0.20, 0.20, "Calibration\nforward+backward", fc="#fdf2e9", ec="#d35400")
-    box(0.52, 0.70, 0.22, 0.20, r"Loss proxy\n$\mathrm{LP}_i=\frac12\mathbb{E}[(u_i s_i)^2]$", fc="#fdf2e9", ec="#d35400")
+    # NOTE: Use \frac{1}{2} (not \frac12) for broad compatibility with matplotlib mathtext.
+    box(0.52, 0.70, 0.22, 0.20, r"Loss proxy\n$\mathrm{LP}_i=\frac{1}{2}\mathbb{E}[(u_i s_i)^2]$", fc="#fdf2e9", ec="#d35400")
     box(0.78, 0.70, 0.20, 0.20, r"Supernodes\n(top-$\rho$ by LP)\nprotect core", fc="#fdebd0", ec="#c0392b")
 
     arrow(0.20, 0.80, 0.28, 0.80)
