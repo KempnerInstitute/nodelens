@@ -742,6 +742,8 @@ PRUNING_METHOD_COLORS = {
     "scar_high": "#0097a7",
     # Network slimming
     "network_slimming": "#8e44ad",
+    "geometric_median": "#16a085",
+    "hrank": "#7f8c8d",
     "chip": "#16a085",
     # Activation-based metrics
     "activation_l2_norm": "#e74c3c",  # Same as magnitude (they're aliases)

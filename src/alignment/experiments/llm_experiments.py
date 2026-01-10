@@ -2299,6 +2299,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             try:
                 wanda = WandaPruning(num_calibration_samples=num_calibration_samples)
                 wanda.calibrate(model, calib_dataloader, device=str(device))
+                # Keep the calibrated object for optional unstructured reproduction baselines.
+                self._wanda_baseline = wanda
                 
                 for layer_idx in sorted(layer_indices):
                     mlp_path = _resolve_mlp_path(layer_idx)
@@ -2359,6 +2361,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             try:
                 sparsegpt = SparseGPTPruning(num_calibration_samples=num_calibration_samples)
                 sparsegpt.calibrate(model, calib_dataloader, device=str(device))
+                # Keep the calibrated object for optional unstructured reproduction baselines.
+                self._sparsegpt_baseline = sparsegpt
                 
                 for layer_idx in sorted(layer_indices):
                     mlp_path = _resolve_mlp_path(layer_idx)
@@ -6084,6 +6088,116 @@ class LLMAlignmentExperiment(BaseExperiment):
         logger.info(f"New metric 'generalized_importance' available for pruning")
         
         return results
+
+    def apply_unstructured_baseline_pruning(
+        self,
+        *,
+        sparsity: float,
+        metric: str,
+        mode: str = "low",
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Apply *unstructured* baseline pruning for paper-faithful reproductions.
+
+        Supported metrics:
+        - 'wanda_unstructured': Wanda score-based unstructured pruning.
+        - 'sparsegpt_unstructured': SparseGPT-style unstructured pruning with reconstruction.
+
+        By default this prunes FFN/MLP Linear projections (gate/up/down) only, since our
+        paper focuses on FFN pruning. (We can generalize scope later if needed.)
+        """
+        if metric not in {"wanda_unstructured", "sparsegpt_unstructured"}:
+            raise ValueError(f"Unknown unstructured baseline metric: {metric}")
+
+        # Ensure baseline calibrations exist
+        num_calib = getattr(self.config, "scar_num_samples", 128)
+        if metric == "wanda_unstructured":
+            wanda = getattr(self, "_wanda_baseline", None)
+            if wanda is None:
+                self.compute_baseline_pruning_scores(strategies=["wanda"], num_calibration_samples=num_calib)
+                wanda = getattr(self, "_wanda_baseline", None)
+            if wanda is None:
+                raise RuntimeError("wanda_unstructured requested but Wanda baseline is not calibrated")
+        else:
+            sparsegpt = getattr(self, "_sparsegpt_baseline", None)
+            if sparsegpt is None:
+                self.compute_baseline_pruning_scores(strategies=["sparsegpt"], num_calibration_samples=num_calib)
+                sparsegpt = getattr(self, "_sparsegpt_baseline", None)
+            if sparsegpt is None:
+                raise RuntimeError("sparsegpt_unstructured requested but SparseGPT baseline is not calibrated")
+
+        import re
+        layer_indices = set()
+        for k in self.importance_scores.keys():
+            m = re.search(r"layers\.(\d+)\.mlp", k)
+            if m:
+                layer_indices.add(int(m.group(1)))
+        if not layer_indices:
+            logger.warning("Unstructured baseline pruning: no MLP layers found in importance_scores; skipping")
+            return {}
+
+        underlying_model = self._get_underlying_model()
+        module_dict = dict(underlying_model.named_modules())
+
+        def _resolve_mlp_path(layer_idx: int) -> Optional[str]:
+            candidates = [
+                f"model.model.layers.{layer_idx}.mlp",
+                f"model.layers.{layer_idx}.mlp",
+                f"layers.{layer_idx}.mlp",
+            ]
+            for p in candidates:
+                if p in module_dict:
+                    return p
+            return None
+
+        masks: Dict[str, torch.Tensor] = {}
+
+        for layer_idx in sorted(layer_indices):
+            mlp_path = _resolve_mlp_path(layer_idx)
+            if mlp_path is None:
+                logger.warning(f"Unstructured baseline pruning: could not resolve MLP path for layer {layer_idx}")
+                continue
+
+            gate_name = f"{mlp_path}.gate_proj"
+            up_name = f"{mlp_path}.up_proj"
+            down_name = f"{mlp_path}.down_proj"
+
+            if gate_name not in module_dict or up_name not in module_dict or down_name not in module_dict:
+                logger.warning(f"Unstructured baseline pruning: missing projections for {mlp_path}")
+                continue
+
+            gate = module_dict[gate_name]
+            up = module_dict[up_name]
+            down = module_dict[down_name]
+
+            if metric == "wanda_unstructured":
+                for proj_name, proj in ((gate_name, gate), (up_name, up), (down_name, down)):
+                    try:
+                        mask = wanda.prune_unstructured_inplace(
+                            proj,
+                            sparsity,
+                            layer_name=proj_name,
+                            mode=mode,
+                            per_row=True,
+                        )
+                        masks[proj_name] = mask
+                    except Exception as e:
+                        logger.warning(f"Wanda unstructured pruning failed for {proj_name}: {e}")
+            else:
+                for proj_name, proj in ((gate_name, gate), (up_name, up), (down_name, down)):
+                    try:
+                        keep_mask, W_new = sparsegpt.prune_and_reconstruct(
+                            proj,
+                            sparsity,
+                            layer_name=proj_name,
+                        )
+                        with torch.no_grad():
+                            proj.weight.data.copy_(W_new)
+                        masks[proj_name] = keep_mask
+                    except Exception as e:
+                        logger.warning(f"SparseGPT unstructured pruning failed for {proj_name}: {e}")
+
+        return masks
     
     def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
         """
@@ -6102,6 +6216,10 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         if not self.importance_scores:
             raise ValueError("Must compute importance scores before pruning")
+
+        # Paper-faithful *unstructured* reproductions for Wanda/SparseGPT (kept separate from channel-adapted baselines).
+        if metric in {"wanda_unstructured", "sparsegpt_unstructured"}:
+            return self.apply_unstructured_baseline_pruning(sparsity=sparsity, metric=metric, mode=mode)
 
         # Get pruning pipeline options from config
         pruning_distribution = getattr(self.config, "pruning_distribution", "uniform")
@@ -6883,7 +7001,16 @@ class LLMAlignmentExperiment(BaseExperiment):
         # This runs OUTSIDE the SCAR metrics block so it can work independently
         baseline_scores: Dict[str, Any] = {}
         pruning_strategies = getattr(self.config, "pruning_strategies", None) or []
-        baseline_strategies = [s for s in pruning_strategies if s in ["wanda", "sparsegpt"]]
+        # Baseline calibration is needed both for:
+        # - channel-adapted baselines: "wanda", "sparsegpt"
+        # - paper-faithful unstructured reproductions: "wanda_unstructured", "sparsegpt_unstructured"
+        wanda_needed = any(s in pruning_strategies for s in ["wanda", "wanda_unstructured"])
+        sparsegpt_needed = any(s in pruning_strategies for s in ["sparsegpt", "sparsegpt_unstructured"])
+        baseline_strategies = []
+        if wanda_needed:
+            baseline_strategies.append("wanda")
+        if sparsegpt_needed:
+            baseline_strategies.append("sparsegpt")
         logger.info(f"Checking baseline strategies: pruning_strategies={pruning_strategies}, baseline_strategies={baseline_strategies}")
         if baseline_strategies:
             try:
@@ -7045,9 +7172,11 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Iterate over all strategy/mode combinations
             for metric in pruning_strategies:
                 # Check if we have importance scores for this metric
-                has_metric_scores = any(
-                    metric in layer_scores 
-                    for layer_scores in self.importance_scores.values()
+                # Some strategies (paper-faithful unstructured reproductions) do not rely on
+                # precomputed per-channel importance tensors in self.importance_scores.
+                unstructured_baselines = {"wanda_unstructured", "sparsegpt_unstructured"}
+                has_metric_scores = metric in unstructured_baselines or any(
+                    metric in layer_scores for layer_scores in self.importance_scores.values()
                 )
                 if not has_metric_scores:
                     logger.warning(f"No importance scores computed for metric '{metric}', skipping pruning")

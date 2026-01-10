@@ -146,6 +146,9 @@ pruning:
     - "random"              # Random baseline
     - "magnitude"           # Standard magnitude pruning (prune low)
     - "taylor"              # Gradient-based importance
+    - "network_slimming"    # Network Slimming (BN gamma) baseline
+    - "geometric_median"    # FPGM-style geometric median baseline
+    - "hrank"               # HRank feature-rank baseline
     
     # =========================================================================
     # SINGLE METRICS - Prune LOW (assumes low = unimportant)
@@ -182,6 +185,9 @@ pruning:
   scoring_methods:
     - "random"
     - "magnitude"
+    - "network_slimming"
+    - "geometric_median"
+    - "hrank"
     - "rq_low"
     - "rq_high"
     - "redundancy_low"

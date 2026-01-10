@@ -8,21 +8,23 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
 #SBATCH --mem=320GB
-#SBATCH --partition=kempner_eng
-#SBATCH --account=kempner_dev
 
 # ============================================================================
 # SINGLE MODEL PRUNING (Specify config via argument)
 # ============================================================================
-# Usage: sbatch run_single_model.sh <config_name>
+# NOTE: Cluster-specific SBATCH settings like --partition/--account are intentionally omitted.
+# Submit with your local settings, e.g.:
+#   sbatch --partition=<PARTITION> --account=<ACCOUNT> slurm_jobs/run_single_model.sh <config_name>
+#
+# Usage: sbatch slurm_jobs/run_single_model.sh <config_name>
 # 
 # Examples:
-#   sbatch run_single_model.sh mistral7b_pruning
-#   sbatch run_single_model.sh llama2_7b_pruning
-#   sbatch run_single_model.sh gemma2b_pruning
-#   sbatch run_single_model.sh phi3_mini_pruning
-#   sbatch run_single_model.sh qwen2_7b_pruning
-#   sbatch run_single_model.sh gpt2_fast_test
+#   sbatch slurm_jobs/run_single_model.sh mistral7b_pruning
+#   sbatch slurm_jobs/run_single_model.sh llama2_7b_pruning
+#   sbatch slurm_jobs/run_single_model.sh gemma2b_pruning
+#   sbatch slurm_jobs/run_single_model.sh phi3_mini_pruning
+#   sbatch slurm_jobs/run_single_model.sh qwen2_7b_pruning
+#   sbatch slurm_jobs/run_single_model.sh gpt2_fast_test
 #
 # Available configs:
 #   - mistral7b_pruning     (Mistral-7B)
@@ -38,10 +40,15 @@
 CONFIG_NAME=${1:-"llama3_minitron_comparison"}
 CONFIG="configs/examples/${CONFIG_NAME}.yaml"
 
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "============================================================================"
 echo "SINGLE MODEL PRUNING: ${CONFIG_NAME}"
 echo "============================================================================"
-echo "Job ID: $SLURM_JOB_ID"
+echo "Job ID: ${SLURM_JOB_ID:-N/A}"
 echo "Node: $(hostname)"
 echo "Config: $CONFIG"
 echo "Start time: $(date)"
@@ -57,21 +64,26 @@ if [ ! -f "$CONFIG" ]; then
     exit 1
 fi
 
-# Environment setup
-module purge
-module load cuda/12.2.0-fasrc01
-eval "$(conda shell.bash hook)"
-conda activate networkAlignmentAnalysis
-
-cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
-
 mkdir -p logs
 
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+    conda activate "${CONDA_ENV:-networkAlignmentAnalysis}"
+else
+    echo "WARN: conda not found; assuming environment already activated." >&2
+fi
+
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export HF_HOME=/n/home13/hsafaai/.cache/huggingface
-export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
+export HF_HOME="${HF_HOME:-${HOME}/.cache/huggingface}"
+HF_TOKEN_FILE="${HF_HOME}/token"
+if [[ -f "$HF_TOKEN_FILE" ]]; then
+    export HF_TOKEN="$(cat "$HF_TOKEN_FILE")"
+    export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
+else
+    echo "WARN: HF token file not found at $HF_TOKEN_FILE (set HF_TOKEN env var if needed)" >&2
+fi
 
 echo "============================================================================"
 echo "Running experiment..."
