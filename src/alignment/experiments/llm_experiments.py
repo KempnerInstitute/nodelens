@@ -7301,8 +7301,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                         super_all.append(super_mask.detach().cpu())
 
                     if conn_all:
-                        import torch
-
                         conn_cat = torch.cat(conn_all, dim=0)
                         prot_cat = torch.cat(prot_all, dim=0)
                         red_cat = torch.cat(red_all, dim=0)
