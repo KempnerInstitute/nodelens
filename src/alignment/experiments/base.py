@@ -469,7 +469,12 @@ class BaseExperiment(CoreBaseExperiment):
         )
 
         logger.info(f"Initialized dataset: {self.config.dataset_name}")
-        logger.info(f"Dataset size: {len(self.dataset)}")
+        # Some datasets (e.g., streaming/IterableDataset) do not implement __len__.
+        # Avoid crashing LLM runs that use streaming C4.
+        try:
+            logger.info(f"Dataset size: {len(self.dataset)}")
+        except (TypeError, NotImplementedError):
+            logger.info("Dataset size: unknown (no __len__)")
 
     def _initialize_metrics(self):
         """Initialize metrics."""
