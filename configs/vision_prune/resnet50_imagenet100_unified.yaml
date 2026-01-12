@@ -46,6 +46,17 @@ dataset:
   normalize: true
 
 # -----------------------------------------------------------------------------
+# TRAINING (required: classifier head is replaced for ImageNet-100)
+# -----------------------------------------------------------------------------
+training:
+  enabled: true
+  epochs: 30
+  learning_rate: 0.001
+  optimizer: "adam"
+  scheduler: "cosine"
+  weight_decay: 0.0001
+
+# -----------------------------------------------------------------------------
 # CALIBRATION
 # -----------------------------------------------------------------------------
 calibration:
@@ -158,14 +169,6 @@ pruning:
     - "synergy_low"         # Prune low synergy
     
     # =========================================================================
-    # SINGLE METRICS - Prune HIGH (assumes high = unimportant)
-    # =========================================================================
-    - "rq_high"             # Prune high RQ (TEST: is high RQ bad?)
-    - "redundancy_high"     # Prune high redundancy (TEST: is high corr bad?)
-    - "synergy_high"        # Prune high synergy
-    - "magnitude_high"      # Prune high magnitude (inverse of standard)
-    
-    # =========================================================================
     # COMPOSITE COMBINATIONS
     # =========================================================================
     - "composite"           # Original: score = RQ + syn - red (prune low)
@@ -196,10 +199,12 @@ pruning:
     - "composite_pos_red"
 
   fine_tune:
-    enabled: false  # Disabled to see pure pruning impact without recovery
+    enabled: true  # Enable recovery fine-tuning after pruning (standard for reporting)
     epochs: 5  # Fewer epochs for ImageNet
     learning_rate: 0.00001
     weight_decay: 0.0001
+    # Critical for feasibility: fine-tuning every (method,ratio) on ImageNet-100 otherwise explodes runtime.
+    max_batches: 10
 
 # -----------------------------------------------------------------------------
 # EVALUATION (Enhanced for Vision)

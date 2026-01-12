@@ -90,6 +90,26 @@ class ExperimentConfig:
     # CNN-specific configuration
     cnn_mode: str = "unfold"  # Options: "unfold", "patchwise", "batch_patch_combined"
 
+    # ---------------------------------------------------------------------
+    # Vision / cluster-analysis extras (used by ClusterAnalysisExperiment)
+    # ---------------------------------------------------------------------
+    # How to form channel samples from Conv outputs Y[B,C,H,W]
+    # - "flatten_spatial": treat spatial positions as samples (subsample per image)
+    # - "gap": global-average-pool per image (one sample per image)
+    activation_samples: str = "flatten_spatial"
+    spatial_samples_per_image: int = 16  # used when activation_samples="flatten_spatial"
+    n_clusters: int = 4
+    synergy_target: str = "logit_margin"  # logit_margin, correct_logit, logit_pc1
+    synergy_candidate_pool: int = 50
+    synergy_pairs: int = 10
+
+    # Cluster-aware pruning score weights (paper sweeps)
+    cluster_aware_alpha: float = 1.0
+    cluster_aware_beta: float = 0.5
+    cluster_aware_gamma: float = 0.3
+    cluster_aware_lambda_halo: float = 0.5
+    cluster_aware_protect_critical_frac: float = 0.3
+
     # Analysis control flags
     do_dropout_analysis: bool = False
     do_eigenfeature_analysis: bool = False
@@ -119,6 +139,10 @@ class ExperimentConfig:
     pruning_min_per_layer: float = 0.0
     pruning_max_per_layer: float = 0.95
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
+    # Optional cap for post-pruning fine-tuning speed (useful for ImageNet-scale runs)
+    # None => use the full training loader each epoch.
+    fine_tune_max_batches: Optional[int] = None
+    fine_tune_weight_decay: float = 0.0
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
     dependency_aware_pruning: bool = False  # Propagate masks across dependent layers

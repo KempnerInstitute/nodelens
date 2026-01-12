@@ -139,6 +139,14 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original["dataset"]["split"] = dataset["split"]
         if "root" in dataset:
             original["dataset"]["data_path"] = dataset["root"]
+
+    # -------------------------------------------------------------------------
+    # TRAINING
+    # -------------------------------------------------------------------------
+    # Pass through unified `training:` block so downstream flattening can set
+    # ExperimentConfig.{do_train,training_epochs,learning_rate,optimizer,...}.
+    if "training" in unified and isinstance(unified["training"], dict):
+        original["training"] = unified["training"]
     
     # -------------------------------------------------------------------------
     # CALIBRATION
@@ -946,6 +954,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["fine_tune_epochs"] = fine_tune_block["epochs"]
         if "learning_rate" in fine_tune_block:
             flat_config["fine_tune_learning_rate"] = fine_tune_block["learning_rate"]
+        if "max_batches" in fine_tune_block:
+            flat_config["fine_tune_max_batches"] = fine_tune_block["max_batches"]
+        if "weight_decay" in fine_tune_block:
+            flat_config["fine_tune_weight_decay"] = fine_tune_block["weight_decay"]
 
     # Map top-level analysis flags
     flat_config["do_pruning_experiments"] = pruning_block.get("enabled", nested_config.get("do_pruning_experiments", False))
@@ -1202,9 +1214,41 @@ def load_config_with_overrides(
 
     # Apply CLI overrides
     if cli_args:
+        # Map "unified-style" dotted CLI keys used by paper SLURM scripts into the
+        # flat ExperimentConfig namespace produced by load_config().
+        #
+        # Without this mapping, overrides like `metrics.activation_samples=gap` would
+        # try to index into `config_dict["metrics"]` (a list) and crash, and overrides
+        # like `pruning.cluster_aware.gamma=...` would create a new top-level `pruning`
+        # dict (which ExperimentConfig cannot accept).
+        dotted_key_map = {
+            # Activation sampling / CNN handling for cluster experiments
+            "metrics.activation_samples": "activation_samples",
+            "metrics.spatial_samples_per_image": "spatial_samples_per_image",
+            "metrics.synergy_target": "synergy_target",
+            "metrics.synergy_candidate_pool": "synergy_candidate_pool",
+            "metrics.synergy_num_pairs": "synergy_pairs",
+            # Clustering
+            "clustering.n_clusters": "n_clusters",
+            # Cluster-aware pruning weight sweeps (paper)
+            "pruning.cluster_aware.alpha": "cluster_aware_alpha",
+            "pruning.cluster_aware.beta": "cluster_aware_beta",
+            "pruning.cluster_aware.gamma": "cluster_aware_gamma",
+            "pruning.cluster_aware.lambda_halo": "cluster_aware_lambda_halo",
+            "pruning.cluster_aware.protect_critical_frac": "cluster_aware_protect_critical_frac",
+            # Fine-tuning after pruning
+            "pruning.fine_tune.enabled": "fine_tune_after_pruning",
+            "pruning.fine_tune.epochs": "fine_tune_epochs",
+            "pruning.fine_tune.learning_rate": "fine_tune_learning_rate",
+            "pruning.fine_tune.max_batches": "fine_tune_max_batches",
+            "pruning.fine_tune.weight_decay": "fine_tune_weight_decay",
+        }
+
         for arg in cli_args:
             if "=" in arg:
                 key, value = arg.split("=", 1)
+                key = key.strip()
+                key = dotted_key_map.get(key, key)
                 # Convert value to appropriate type
                 try:
                     # Common CLI convenience: YAML-style booleans/nulls
@@ -1221,12 +1265,23 @@ def load_config_with_overrides(
                     pass  # Keep as string
 
                 # Handle nested keys (e.g., "model.hidden_dims=[300,200]")
-                keys = key.split(".")
-                target = config_dict
-                for k in keys[:-1]:
-                    if k not in target:
-                        target[k] = {}
-                    target = target[k]
-                target[keys[-1]] = value
+                if "." not in key:
+                    config_dict[key] = value
+                else:
+                    keys = key.split(".")
+                    target = config_dict
+                    for k in keys[:-1]:
+                        if not isinstance(target, dict):
+                            raise ValueError(f"Cannot apply override '{key}': encountered non-dict target ({type(target)})")
+                        if k not in target or target[k] is None:
+                            target[k] = {}
+                        elif not isinstance(target[k], dict):
+                            raise ValueError(
+                                f"Cannot apply override '{key}': '{k}' is not a dict (got {type(target[k])}). "
+                                f"Use a flat override (e.g., '{dotted_key_map.get(arg.split('=',1)[0].strip(), key)}=...') "
+                                "or override an actual dict field like 'model_config.*' / 'dataset_config.*'."
+                            )
+                        target = target[k]
+                    target[keys[-1]] = value
 
     return ExperimentConfig.from_dict(config_dict)
