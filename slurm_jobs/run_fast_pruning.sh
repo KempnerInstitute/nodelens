@@ -8,8 +8,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --time=02:00:00
 #SBATCH --mem=80GB
-#SBATCH --partition=kempner_eng
-#SBATCH --account=kempner_dev
+#SBATCH --partition=kempner_h100
+#SBATCH --account=kempner_undergrads
 
 # ============================================================================
 # FAST LLM PRUNING COMPARISON
@@ -38,17 +38,17 @@ echo ""
 module purge
 module load cuda/12.2.0-fasrc01
 eval "$(conda shell.bash hook)"
-conda activate networkAlignmentAnalysis
+conda activate alignenv2
 
-cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
+cd /n/holylfs06/LABS/kempner_undergrads/Lab/acherilyn/alignment
 
 mkdir -p logs
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export HF_HOME=/n/home13/hsafaai/.cache/huggingface
-export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
+# export HF_HOME=/n/home13/hsafaai/.cache/huggingface
+# export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
 
 echo "============================================================================"
 echo "FAST MODE CONFIGURATION:"

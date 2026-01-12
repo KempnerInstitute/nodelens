@@ -45,14 +45,14 @@ dataset:
 # ============================================================================
 metrics:
   enabled:
-    # - "rayleigh_quotient"       # Core alignment metric
+    - "rayleigh_quotient"       # Core alignment metric
     - "activation_l2_norm"      # Baseline for comparison
   
   num_samples: 32  # Reduced from 64 for faster calibration
   
-  # rayleigh_quotient:
-  #   relative: true
-  #   regularization: 1.0e-6
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
 
 # ============================================================================
 # LLM-SPECIFIC SETTINGS - Optimized for speed
@@ -72,19 +72,19 @@ llm:
     # Language modeling (core metrics) - FAST
     - "perplexity"            # ~2 sec
     - "loss"                  # ~1 sec
-    # - "bits_per_byte"         # ~1 sec
+    - "bits_per_byte"         # ~1 sec
     
-    # # Knowledge & Reasoning - FAST
-    # - "accuracy_mmlu"         # ~15 sec with 50 samples
-    # - "accuracy_hellaswag"    # ~5 sec
-    # - "accuracy_arc_easy"     # ~5 sec
-    # - "accuracy_arc_challenge" # ~5 sec
+    # Knowledge & Reasoning - FAST
+    - "accuracy_mmlu"         # ~15 sec with 50 samples
+    - "accuracy_hellaswag"    # ~5 sec
+    - "accuracy_arc_easy"     # ~5 sec
+    - "accuracy_arc_challenge" # ~5 sec
     
-    # # Common Sense - FAST
-    # - "accuracy_winogrande"   # ~3 sec
-    # - "accuracy_piqa"         # ~3 sec
-    # - "accuracy_boolq"        # ~3 sec
-    # - "accuracy_truthfulqa"   # ~5 sec
+    # Common Sense - FAST
+    - "accuracy_winogrande"   # ~3 sec
+    - "accuracy_piqa"         # ~3 sec
+    - "accuracy_boolq"        # ~3 sec
+    - "accuracy_truthfulqa"   # ~5 sec
     
     # REMOVED SLOW BENCHMARKS:
     # - "accuracy_gsm8k"      # SLOW: ~3+ min (requires generation)
@@ -107,7 +107,7 @@ supernode:
   
   compute_metrics:
     - "activation"
-    # - "rayleigh_quotient"
+    - "rayleigh_quotient"
 
 # ============================================================================
 # SUPERNODE ROBUSTNESS ANALYSIS - DISABLED for speed
@@ -122,7 +122,7 @@ pruning:
   enabled: true
   
   # KEY sparsity levels only (3 instead of 9)
-  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
+  sparsity_levels: [0.3, 0.5, 0.7]
   
   # Single selection mode (saves 2x time)
   selection_modes: ["low"]
@@ -137,13 +137,13 @@ pruning:
   # =========================================================================
   algorithms:
     # Our main method
-    # - "rayleigh_quotient"
+    - "rayleigh_quotient"
     
     # SCAR-based (gradient-informed)
-    # - "scar_loss_proxy"
+    - "scar_loss_proxy"
     
     # Baseline
-    # - "activation_l2_norm"
+    - "activation_l2_norm"
     
     # REMOVED FOR SPEED:
     # - "gaussian_mi_analytic"       # Similar to RQ
@@ -151,7 +151,7 @@ pruning:
     # - "supernode_protection_score" # Can add later
     # - "supernode_connectivity_score"
     # NOTE: wanda/sparsegpt require special calibration that's not fully integrated
-    - "wanda"                      # Needs calibration (not yet fully integrated)
+    # - "wanda"                      # Needs calibration (not yet fully integrated)
     # - "sparsegpt"                  # SLOW: second-order optimization
   
   single_strategy: null
@@ -179,31 +179,17 @@ analysis:
   generate_plots: true
   
   plots:
-    histograms: false  # Disabled for speed
+    histograms: true
     scatter_plots: false        # Disabled for speed
     pruning_curves: true
     redundancy_heatmaps: false  # Disabled for speed
   
-  # scatter_pairs:
-  #   - ["activation_l2_norm", "rayleigh_quotient"]
+  scatter_pairs:
+    - ["activation_l2_norm", "rayleigh_quotient"]
 
 visualization:
   format: "png"
   dpi: 150  # Reduced for faster plot generation
-
-  pruning_curves:
-    enabled: true
-    plot_sparsity_vs_perplexity: true
-    plot_sparsity_vs_accuracy: true
-    metrics_to_compare:
-      # - "rayleigh_quotient"
-      - "scar_loss_proxy"
-      # - "supernode_connectivity_score"
-      # - "supernode_protection_score"
-      - "wanda"
-      # - "sparsegpt"
-      - "activation_l2_norm"
-      
 
 # ============================================================================
 # EXPECTED CONFIGURATIONS TO RUN

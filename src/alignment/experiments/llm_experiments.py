@@ -6417,12 +6417,20 @@ class LLMAlignmentExperiment(BaseExperiment):
             
             # Iterate over all strategy/mode combinations
             for metric in pruning_strategies:
+                # Special case: Wanda
+                if metric.lower() == "wanda":
+                    try:
+                        from alignment.pruning.strategies.external.wanda.prune import prune_wanda  # Import Wanda pruning function
+                    except ImportError:
+                        logger.error("Could not import Wanda pruning. Make sure external/wanda is in PYTHONPATH.")
+                        continue
+
                 # Check if we have importance scores for this metric
                 has_metric_scores = any(
                     metric in layer_scores 
                     for layer_scores in self.importance_scores.values()
                 )
-                if not has_metric_scores:
+                if not has_metric_scores and metric.lower() != "wanda":
                     logger.warning(f"No importance scores computed for metric '{metric}', skipping pruning")
                     continue
                 
@@ -6443,7 +6451,24 @@ class LLMAlignmentExperiment(BaseExperiment):
                         restore_weights()
                         
                         logger.info(f"  Applying pruning: sparsity={sparsity}, metric={metric}, mode={mode}")
-                        masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
+
+                        if metric.lower() == "wanda":
+                            # Create args object for Wanda pruning
+                            class Args:
+                                def __init__(self, nsamples, seed):
+                                    self.nsamples = nsamples
+                                    self.seed = seed
+                            
+                            # Get parameters from config
+                            nsamples = getattr(self.config, "alignment_data_num_samples", 32) # Default to 32
+                            seed = getattr(self.config, "seed", 42)  # Default to 42
+                            
+                            args = Args(nsamples=nsamples, seed=seed)
+                            
+                            # Call Wanda pruning function with current sparsity
+                            prune_wanda(args, self.model, self.tokenizer, self.config.device, prune_n=0, prune_m=0, sparsity_ratio=sparsity)
+                        else:
+                            masks = self.apply_pruning(sparsity=sparsity, mode=mode, metric=metric)
 
                         pruning_data["sparsities"].append(sparsity)
 

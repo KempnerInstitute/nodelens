@@ -293,64 +293,64 @@ def apply_structured_pruning(
     return new_module
 
 
-def compare_pruning_methods(
-    model: nn.Module,
-    calibration_data: torch.Tensor,
-    sparsity_levels: List[float] = [0.3, 0.5, 0.7],
-    methods: List[str] = ["magnitude", "wanda", "sparsegpt"],
-) -> Dict[str, Dict[float, Dict[str, Any]]]:
-    """
-    Compare different pruning methods on a model.
+# def compare_pruning_methods(
+#     model: nn.Module,
+#     calibration_data: torch.Tensor,
+#     sparsity_levels: List[float] = [0.3, 0.5, 0.7],
+#     methods: List[str] = ["magnitude", "wanda", "sparsegpt"],
+# ) -> Dict[str, Dict[float, Dict[str, Any]]]:
+#     """
+#     Compare different pruning methods on a model.
     
-    Args:
-        model: Model to prune
-        calibration_data: Data for computing activation statistics
-        sparsity_levels: List of sparsity levels to test
-        methods: List of pruning methods to compare
+#     Args:
+#         model: Model to prune
+#         calibration_data: Data for computing activation statistics
+#         sparsity_levels: List of sparsity levels to test
+#         methods: List of pruning methods to compare
         
-    Returns:
-        Dictionary with results per method and sparsity level
-    """
-    results = {method: {} for method in methods}
+#     Returns:
+#         Dictionary with results per method and sparsity level
+#     """
+#     results = {method: {} for method in methods}
     
-    # Initialize pruning methods
-    pruners = {
-        "magnitude": MagnitudePruning(structured=True),
-        "wanda": WandaPruning(structured=True),
-        "sparsegpt": SparseGPTStylePruning(structured=True),
-    }
+#     # Initialize pruning methods
+#     pruners = {
+#         "magnitude": MagnitudePruning(structured=True),
+#         "wanda": WandaPruning(structured=True),
+#         "sparsegpt": SparseGPTStylePruning(structured=True),
+#     }
     
-    for method in methods:
-        if method not in pruners:
-            logger.warning(f"Unknown pruning method: {method}")
-            continue
+#     for method in methods:
+#         if method not in pruners:
+#             logger.warning(f"Unknown pruning method: {method}")
+#             continue
             
-        pruner = pruners[method]
+#         pruner = pruners[method]
         
-        for sparsity in sparsity_levels:
-            pruner.sparsity = sparsity
+#         for sparsity in sparsity_levels:
+#             pruner.sparsity = sparsity
             
-            # Collect scores for all layers
-            layer_scores = {}
-            for name, module in model.named_modules():
-                if isinstance(module, nn.Linear):
-                    # Get activations for this layer (would need hooks in practice)
-                    # This is a simplified version
-                    scores = pruner.compute_scores(
-                        module.weight.data,
-                        calibration_data,
-                    )
-                    layer_scores[name] = {
-                        "scores": scores,
-                        "mask": pruner.get_pruning_mask(scores, sparsity),
-                    }
+#             # Collect scores for all layers
+#             layer_scores = {}
+#             for name, module in model.named_modules():
+#                 if isinstance(module, nn.Linear):
+#                     # Get activations for this layer (would need hooks in practice)
+#                     # This is a simplified version
+#                     scores = pruner.compute_scores(
+#                         module.weight.data,
+#                         calibration_data,
+#                     )
+#                     layer_scores[name] = {
+#                         "scores": scores,
+#                         "mask": pruner.get_pruning_mask(scores, sparsity),
+#                     }
             
-            results[method][sparsity] = {
-                "layer_scores": layer_scores,
-                "sparsity": sparsity,
-            }
+#             results[method][sparsity] = {
+#                 "layer_scores": layer_scores,
+#                 "sparsity": sparsity,
+#             }
     
-    return results
+#     return results
 
 
 # Registry for easy access

@@ -9,7 +9,7 @@
 #SBATCH --time=8:00:00
 #SBATCH --mem=320GB
 #SBATCH --partition=kempner_h100
-#SBATCH --account=kempner_dev
+#SBATCH --account=kempner_undergrads
 
 echo "=========================================="
 echo "LLaMA-3 SCAR-Based Pruning with Supernode Protection"
@@ -24,9 +24,9 @@ echo ""
 module purge
 module load cuda/12.2.0-fasrc01
 eval "$(conda shell.bash hook)"
-conda activate networkAlignmentAnalysis
+conda activate alignenv2
 
-cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
+cd /n/holylfs06/LABS/kempner_undergrads/Lab/acherilyn/alignment
 
 # Make logs directory if it doesn't exist
 mkdir -p logs
@@ -34,8 +34,8 @@ mkdir -p logs
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export HF_HOME=/n/home13/hsafaai/.cache/huggingface
-export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
+# export HF_HOME=/n/home13/hsafaai/.cache/huggingface
+# export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
 
 echo "Running SCAR-based pruning experiment..."
 echo "Pruning metrics: L2 norm, SCAR loss proxy"
