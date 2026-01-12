@@ -104,7 +104,7 @@ class SynergyContinuousTarget(BaseMetric):
         if outputs.ndim > 2:
             # Conv layer: [B, C, H, W] -> [B, C] via GAP
             outputs = outputs.mean(dim=(2, 3)) if outputs.ndim == 4 else outputs.reshape(outputs.shape[0], -1)
-
+        
         # Handle batch mismatch (common when upstream preprocessing unfolds CNN outputs)
         # If outputs has more samples than logits/labels, aggregate back to per-example activations.
         # This makes synergy w.r.t. per-example target T well-defined.

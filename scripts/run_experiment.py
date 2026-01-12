@@ -29,6 +29,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import torch
 import yaml
@@ -126,6 +127,18 @@ def _create_cluster_experiment(config):
                               fine_tune_cfg.get("epochs", 10) if isinstance(fine_tune_cfg, dict) else 10)
     fine_tune_lr = getattr(config, "fine_tune_learning_rate",
                           fine_tune_cfg.get("learning_rate", 0.0001) if isinstance(fine_tune_cfg, dict) else 0.0001)
+    fine_tune_max_batches = getattr(
+        config,
+        "fine_tune_max_batches",
+        fine_tune_cfg.get("max_batches", None) if isinstance(fine_tune_cfg, dict) else None,
+    )
+    fine_tune_weight_decay = float(
+        getattr(
+            config,
+            "fine_tune_weight_decay",
+            fine_tune_cfg.get("weight_decay", 0.0) if isinstance(fine_tune_cfg, dict) else 0.0,
+        ) or 0.0
+    )
     
     # Get pruning algorithms/methods
     pruning_methods = getattr(config, "pruning_strategies", None) or \
@@ -165,10 +178,40 @@ def _create_cluster_experiment(config):
         fine_tune_after_pruning=fine_tune_enabled,
         fine_tune_epochs=fine_tune_epochs,
         fine_tune_lr=fine_tune_lr,
+        fine_tune_max_batches=fine_tune_max_batches,
+        fine_tune_weight_decay=fine_tune_weight_decay,
         output_dir=getattr(config, "experiment_dir", "results/cluster_analysis"),
         device=getattr(config, "device", "cuda"),
         seed=getattr(config, "seed", 42),
     )
+
+    # Optional: allow sweeping cluster-aware score weights via nested pruning config:
+    #   pruning.cluster_aware.{alpha,beta,gamma,lambda_halo,protect_critical_frac}
+    if isinstance(pruning_cfg, dict):
+        ca = pruning_cfg.get("cluster_aware", {})
+        if isinstance(ca, dict):
+            if "alpha" in ca:
+                setattr(cluster_config, "cluster_aware_alpha", float(ca["alpha"]))
+            if "beta" in ca:
+                setattr(cluster_config, "cluster_aware_beta", float(ca["beta"]))
+            if "gamma" in ca:
+                setattr(cluster_config, "cluster_aware_gamma", float(ca["gamma"]))
+            if "lambda_halo" in ca:
+                setattr(cluster_config, "cluster_aware_lambda_halo", float(ca["lambda_halo"]))
+            if "protect_critical_frac" in ca:
+                setattr(cluster_config, "cluster_aware_protect_critical_frac", float(ca["protect_critical_frac"]))
+
+    # Also support the flat ExperimentConfig fields used by our config loader
+    # (and mapped from unified-style dotted CLI overrides).
+    for attr in (
+        "cluster_aware_alpha",
+        "cluster_aware_beta",
+        "cluster_aware_gamma",
+        "cluster_aware_lambda_halo",
+        "cluster_aware_protect_critical_frac",
+    ):
+        if hasattr(config, attr):
+            setattr(cluster_config, attr, float(getattr(config, attr)))
     
     # Load model
     model_name = cluster_config.model_name.lower()
@@ -217,21 +260,44 @@ def _create_cluster_experiment(config):
     
     # Load dataset
     if "cifar10" in dataset_name:
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-        ])
-        root = dataset_cfg.get("root", "./data") if isinstance(dataset_cfg, dict) else "./data"
-        train_dataset = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=transform)
-        test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=transform)
+        mean = (0.4914, 0.4822, 0.4465)
+        std = (0.2470, 0.2435, 0.2616)
+        root = (
+            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
+            or getattr(config, "data_path", None)
+            or "./data"
+        )
+        # Use standard CIFAR augmentation when training so baseline accuracies match common reporting.
+        train_transform = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]
+        )
+        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
+        train_dataset = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=train_transform)
+        test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=test_transform)
     elif "cifar100" in dataset_name:
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
-        ])
-        root = dataset_cfg.get("root", "./data") if isinstance(dataset_cfg, dict) else "./data"
-        train_dataset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=transform)
-        test_dataset = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=transform)
+        mean = (0.5071, 0.4867, 0.4408)
+        std = (0.2675, 0.2565, 0.2761)
+        root = (
+            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
+            or getattr(config, "data_path", None)
+            or "./data"
+        )
+        train_transform = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]
+        )
+        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
+        train_dataset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=train_transform)
+        test_dataset = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=test_transform)
     elif "imagenet100" in dataset_name:
         # Expected folder structure: {root}/train/* and {root}/val/* (ImageFolder)
         root = dataset_cfg.get("root", "./data/imagenet100") if isinstance(dataset_cfg, dict) else "./data/imagenet100"
@@ -262,36 +328,48 @@ def _create_cluster_experiment(config):
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
-    batch_size = int(dataset_cfg.get("batch_size", getattr(config, "batch_size", 128))) if isinstance(dataset_cfg, dict) else int(getattr(config, "batch_size", 128))
-    num_workers = int(dataset_cfg.get("num_workers", 4)) if isinstance(dataset_cfg, dict) else 4
+    batch_size = int(getattr(config, "batch_size", 128))
+    num_workers = int(getattr(config, "num_workers", 4))
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=num_workers)
     
-    # Fine-tune the model on target dataset before experiments
-    # This is necessary because we replaced the classifier head with random weights
-    # Get training settings from config (check multiple locations)
-    training_cfg = _get_nested(config, "training", {})
-    extra_cfg = _get_nested(config, "extra", {})
-    
-    # Check in order: training.epochs, extra.pretrain_epochs, config.pretrain_epochs
-    pretrain_epochs = (
-        training_cfg.get("epochs") if isinstance(training_cfg, dict) else None
-    ) or (
-        extra_cfg.get("pretrain_epochs") if isinstance(extra_cfg, dict) else None
-    ) or getattr(config, "pretrain_epochs", 30)
-    
-    pretrain_lr = (
-        training_cfg.get("learning_rate") if isinstance(training_cfg, dict) else None
-    ) or (
-        extra_cfg.get("pretrain_lr") if isinstance(extra_cfg, dict) else None
-    ) or getattr(config, "pretrain_lr", 0.001)
-    
-    if needs_training:
+    # CIFAR-specific stem tweak: using the ImageNet stem (7x7,stride2 + maxpool)
+    # degrades CIFAR accuracy. Use the standard CIFAR stem and (when pretrained)
+    # seed weights by center-cropping the 7x7 conv filter.
+    if ("cifar" in dataset_name) and ("resnet" in model_name):
+        if hasattr(model, "conv1") and hasattr(model, "maxpool"):
+            old_conv = model.conv1
+            new_conv = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            try:
+                if pretrained and hasattr(old_conv, "weight") and old_conv.weight.shape[-1] == 7:
+                    with torch.no_grad():
+                        new_conv.weight.copy_(old_conv.weight[:, :, 2:5, 2:5])
+            except Exception:
+                pass
+            model.conv1 = new_conv
+            model.maxpool = torch.nn.Identity()
+
+    # Train/fine-tune the model on target dataset before experiments.
+    # If you want a pure "no-training" analysis, provide an explicit checkpoint and set do_train=false.
+    do_train = bool(getattr(config, "do_train", True))
+    if needs_training and not do_train:
+        raise RuntimeError(
+            f"Model checkpoint not found and training is disabled (do_train=false). "
+            f"Provide model.checkpoint/model_checkpoint or enable training in the config."
+        )
+    if needs_training and do_train:
         model = _finetune_model_for_dataset(
-            model, train_loader, test_loader, 
+            model,
+            train_loader,
+            test_loader,
             device=cluster_config.device,
-            epochs=pretrain_epochs,
-            lr=pretrain_lr,
+            epochs=int(getattr(config, "training_epochs", 30)),
+            lr=float(getattr(config, "learning_rate", 1e-3)),
+            optimizer_name=str(getattr(config, "optimizer", "adam")),
+            weight_decay=float(getattr(config, "weight_decay", 0.0) or 0.0),
+            momentum=float(getattr(config, "momentum", 0.9) or 0.9),
+            scheduler=getattr(config, "scheduler", None),
+            scheduler_config=getattr(config, "scheduler_config", {}) or {},
         )
     
     # Save the trained model checkpoint
@@ -317,6 +395,12 @@ def _finetune_model_for_dataset(
     device: str = "cuda",
     epochs: int = 20,
     lr: float = 0.001,
+    optimizer_name: str = "adam",
+    weight_decay: float = 1e-4,
+    momentum: float = 0.9,
+    scheduler: Optional[str] = "cosine",
+    scheduler_config: Optional[dict] = None,
+    max_batches: Optional[int] = None,
 ) -> torch.nn.Module:
     """
     Fine-tune a pretrained model on the target dataset.
@@ -350,8 +434,8 @@ def _finetune_model_for_dataset(
             total += y.size(0)
     initial_acc = correct / total
     
-    # If already well-trained (>85% accuracy on CIFAR-10), skip fine-tuning
-    if initial_acc > 0.85:
+    # If already well-trained, skip fine-tuning (useful when an explicit checkpoint is provided).
+    if initial_acc > 0.90:
         logger.info(f"Model already well-trained (accuracy: {initial_acc:.2%}), skipping fine-tuning")
         return model
     
@@ -368,12 +452,46 @@ def _finetune_model_for_dataset(
         else:
             pretrained_params.append(param)
     
-    optimizer = optim.Adam([
-        {'params': pretrained_params, 'lr': lr * 0.1},  # Lower LR for pretrained
-        {'params': new_params, 'lr': lr},  # Higher LR for new classifier
-    ], weight_decay=1e-4)
-    
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    opt_name = (optimizer_name or "adam").lower()
+    if opt_name in {"sgd", "momentum", "sgd_momentum"}:
+        optimizer = optim.SGD(
+            [
+                {"params": pretrained_params, "lr": lr * 0.1},
+                {"params": new_params, "lr": lr},
+            ],
+            momentum=float(momentum),
+            weight_decay=float(weight_decay),
+            nesterov=True,
+        )
+    elif opt_name in {"adamw"}:
+        optimizer = optim.AdamW(
+            [
+                {"params": pretrained_params, "lr": lr * 0.1},
+                {"params": new_params, "lr": lr},
+            ],
+            weight_decay=float(weight_decay),
+        )
+    else:
+        optimizer = optim.Adam(
+            [
+                {"params": pretrained_params, "lr": lr * 0.1},
+                {"params": new_params, "lr": lr},
+            ],
+            weight_decay=float(weight_decay),
+        )
+
+    # Scheduler (optional)
+    sch_name = (str(scheduler).lower() if scheduler is not None else "none")
+    scheduler_config = scheduler_config or {}
+    if sch_name in {"none", "null", ""}:
+        lr_scheduler = None
+    elif sch_name in {"step", "steplr"}:
+        step_size = int(scheduler_config.get("step_size", max(1, epochs // 3)))
+        gamma = float(scheduler_config.get("gamma", 0.1))
+        lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    else:
+        # Default: cosine
+        lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = torch.nn.CrossEntropyLoss()
     
     best_acc = 0
@@ -383,7 +501,9 @@ def _finetune_model_for_dataset(
         # Train
         model.train()
         train_loss = 0
-        for x, y in train_loader:
+        for bi, (x, y) in enumerate(train_loader):
+            if max_batches is not None and bi >= int(max_batches):
+                break
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
             out = model(x)
@@ -391,8 +511,9 @@ def _finetune_model_for_dataset(
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
-        
-        scheduler.step()
+
+        if lr_scheduler is not None:
+            lr_scheduler.step()
         
         # Evaluate
         model.eval()

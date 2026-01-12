@@ -44,6 +44,18 @@ dataset:
   num_workers: 4
 
 # -----------------------------------------------------------------------------
+# TRAINING (paper-quality CIFAR baselines)
+# -----------------------------------------------------------------------------
+training:
+  enabled: true
+  epochs: 50
+  learning_rate: 0.05
+  optimizer: "sgd"
+  scheduler: "cosine"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+# -----------------------------------------------------------------------------
 # CALIBRATION
 # -----------------------------------------------------------------------------
 calibration:
@@ -157,14 +169,6 @@ pruning:
     - "synergy_low"         # Prune low synergy
     
     # =========================================================================
-    # SINGLE METRICS - Prune HIGH (assumes high = unimportant)
-    # =========================================================================
-    - "rq_high"             # Prune high RQ (TEST: is high RQ bad?)
-    - "redundancy_high"     # Prune high redundancy (TEST: is high corr bad?)
-    - "synergy_high"        # Prune high synergy
-    - "magnitude_high"      # Prune high magnitude (inverse of standard)
-    
-    # =========================================================================
     # COMPOSITE COMBINATIONS
     # =========================================================================
     - "composite"           # Original: score = RQ + syn - red (prune low)
@@ -195,10 +199,11 @@ pruning:
     - "composite_pos_red"
 
   fine_tune:
-    enabled: false  # Disabled to see pure pruning impact without recovery
-    epochs: 15  # MobileNet may need more fine-tuning
+    enabled: true  # Enable recovery fine-tuning after pruning (standard for reporting)
+    epochs: 5
     learning_rate: 0.0001
     weight_decay: 0.00001
+    max_batches: 100
 
 # -----------------------------------------------------------------------------
 # EVALUATION (Enhanced for Vision)
