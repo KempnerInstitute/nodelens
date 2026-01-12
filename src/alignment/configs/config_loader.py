@@ -283,14 +283,24 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         if "algorithms" in pruning:
             converted_algorithms = []
             for alg in pruning["algorithms"]:
-                converted_algorithms.append(METRIC_UNIFIED_TO_ORIGINAL.get(alg, alg))
+                # Important: pruning algorithm names are *not* the same as metric names.
+                # In particular, unified configs often use "magnitude" to mean the
+                # standard *weight* magnitude pruning baseline (filter/channel L2),
+                # not the activation metric `activation_l2_norm`.
+                if alg == "magnitude":
+                    converted_algorithms.append("magnitude")
+                else:
+                    converted_algorithms.append(METRIC_UNIFIED_TO_ORIGINAL.get(alg, alg))
             original_pruning["algorithms"] = converted_algorithms
         
         # Convert scoring methods
         if "scoring_methods" in pruning:
             converted_scoring = []
             for method in pruning["scoring_methods"]:
-                converted_scoring.append(METRIC_UNIFIED_TO_ORIGINAL.get(method, method))
+                if method == "magnitude":
+                    converted_scoring.append("magnitude")
+                else:
+                    converted_scoring.append(METRIC_UNIFIED_TO_ORIGINAL.get(method, method))
             original_pruning["scoring_methods"] = converted_scoring
         
         # Other pruning fields

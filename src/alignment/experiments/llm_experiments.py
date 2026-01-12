@@ -25,6 +25,9 @@ class LLMAlignmentExperiment(BaseExperiment):
     def __init__(self, config):
         super().__init__(config)
         self.importance_scores: Dict[str, Dict[str, torch.Tensor]] = {}
+        # Cache for expensive perplexity tokenization (e.g., full WikiText-2 test set).
+        # Keyed by (dataset, subset, split, seqlen, add_bos_token flag).
+        self._ppl_token_cache: Dict[Tuple[str, str, str, int, bool], torch.Tensor] = {}
 
     def setup(self):
         """Setup LLM alignment experiment components."""
@@ -126,28 +129,107 @@ class LLMAlignmentExperiment(BaseExperiment):
         import torch
         from torch import autocast
 
-        logger.info(f"Evaluating perplexity on {dataset} ({split})...")
+        llm_cfg = getattr(self.config, "llm", {}) or {}
+        protocol = str(llm_cfg.get("perplexity_protocol", "legacy")).lower()
 
-        # Load dataset
-        from alignment.dataops.datasets.text_datasets import load_text_dataset
-        dataset_obj = load_text_dataset(dataset, self.config.model_config.get("model_id"), split=split, max_samples=num_samples)
+        logger.info(f"Evaluating perplexity on {dataset} ({split}) [protocol={protocol}]...")
 
         self.model.eval()
-        nlls = []
-        total_length = 0
-
         device = torch.device(self.config.device)
         model_dtype = getattr(torch, self.config.model_config.get("torch_dtype", "float32"))
+
+        # ------------------------------------------------------------------
+        # OATS/SparseGPT-style WikiText-2 perplexity:
+        # - concatenate full test set
+        # - evaluate in contiguous blocks (default: 2048 tokens)
+        #
+        # This matches the common protocol used in pruning papers (and OATS Table 19),
+        # and avoids padding artifacts from per-line evaluation.
+        # ------------------------------------------------------------------
+        if protocol in {"oats", "sparsegpt", "block"} and str(dataset).lower() in {"wikitext", "wikitext2", "wikitext-2"}:
+            try:
+                from datasets import load_dataset
+            except Exception as e:
+                logger.error(f"datasets library not available; cannot run OATS-style perplexity: {e}")
+                return float("inf")
+
+            subset = str(llm_cfg.get("wikitext_subset", "wikitext-2-raw-v1"))
+            seqlen = int(llm_cfg.get("perplexity_seq_len", 2048))
+            # HuggingFace tokenizers may or may not add a BOS token by default; we store the flag for caching.
+            add_bos = bool(getattr(self.tokenizer, "add_bos_token", False))
+
+            cache_key = (str(dataset).lower(), subset, str(split), seqlen, add_bos)
+            input_ids = self._ppl_token_cache.get(cache_key)
+            if input_ids is None:
+                logger.info(f"Tokenizing WikiText for OATS-style PPL: subset={subset}, split={split}, seqlen={seqlen}")
+                ds = load_dataset("wikitext", subset, split=split)
+                texts = [t for t in ds["text"] if isinstance(t, str) and t.strip()]
+                joined = "\n\n".join(texts)
+                enc = self.tokenizer(joined, return_tensors="pt")
+                input_ids = enc["input_ids"].to(dtype=torch.long, device="cpu")
+                self._ppl_token_cache[cache_key] = input_ids
+
+            nlls: List[torch.Tensor] = []
+            total_tokens = 0
+
+            with torch.no_grad():
+                # Iterate blocks without overlap (standard pruning-paper protocol).
+                # If the last block is too short to have any targets, skip it.
+                for bi, start in enumerate(range(0, int(input_ids.size(1)), seqlen)):
+                    end = min(start + seqlen, int(input_ids.size(1)))
+                    if end - start < 2:
+                        continue
+                    block = input_ids[:, start:end].to(device=device, dtype=torch.long)
+                    labels = block.clone()
+                    # Ensure token counting matches HF causal LM loss normalization (shifted by 1).
+                    labels[:, 0] = -100
+                    num_valid_tokens = int((labels != -100).sum().item())
+                    if num_valid_tokens <= 0:
+                        continue
+
+                    with autocast(device_type=self.config.device, dtype=model_dtype):
+                        outputs = self.model(block, labels=labels)
+                        loss = outputs.loss
+                    nlls.append(loss * num_valid_tokens)
+                    total_tokens += num_valid_tokens
+
+                    # Optional: allow partial evaluation for debugging
+                    max_blocks = llm_cfg.get("perplexity_max_blocks")
+                    if max_blocks is not None and bi + 1 >= int(max_blocks):
+                        break
+
+            if total_tokens <= 0 or not nlls:
+                logger.error("No valid tokens processed for OATS-style perplexity!")
+                return float("inf")
+
+            ppl = torch.exp(torch.stack(nlls).sum() / total_tokens)
+            perplexity = float(ppl.item())
+            logger.info(f"OATS-style WikiText PPL: {perplexity:.4f}")
+            return perplexity
+
+        # ------------------------------------------------------------------
+        # Legacy per-sample perplexity (kept for backwards compatibility).
+        # WARNING: this is sensitive to padding/truncation and is not paper-standard.
+        # ------------------------------------------------------------------
+        from alignment.dataops.datasets.text_datasets import load_text_dataset
+
+        dataset_obj = load_text_dataset(
+            dataset,
+            self.config.model_config.get("model_id"),
+            split=split,
+            max_samples=num_samples,
+        )
+
+        nlls = []
+        total_length = 0
 
         with torch.no_grad():
             for i, batch in enumerate(dataset_obj):
                 if i >= num_samples:
                     break
 
-                # Move input_ids to device (long, never bfloat16)
                 input_ids = batch["input_ids"].unsqueeze(0).to(device, dtype=torch.long)
 
-                # Prepare labels
                 labels = input_ids.clone()
                 pad_token_id = getattr(self.tokenizer, "pad_token_id", None) or getattr(self.tokenizer, "eos_token_id", None)
                 labels[labels == pad_token_id] = -100
@@ -155,7 +237,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                     labels[0, 0] = -100
 
                 try:
-                    # Use autocast for bfloat16-safe forward
                     with autocast(device_type=self.config.device, dtype=model_dtype):
                         outputs = self.model(input_ids, labels=labels)
                         loss = outputs.loss
@@ -164,7 +245,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                     if num_valid_tokens > 0:
                         nlls.append(loss * num_valid_tokens)
                         total_length += num_valid_tokens
-                        logger.info(f"Sample {i}: loss={loss.item():.4f}, valid_tokens={num_valid_tokens}")
                     else:
                         logger.warning(f"Sample {i}: No valid tokens!")
                 except Exception as e:
@@ -263,31 +343,32 @@ class LLMAlignmentExperiment(BaseExperiment):
             use_chain_of_thought = True  # GSM8k uses CoT in Minitron
             logger.info("Using NVIDIA Minitron few-shot settings")
         
-        results = {}
-        
+        results: Dict[str, Any] = {}
+
+        # Avoid recomputing perplexity multiple times (loss/bpb derive from it).
+        need_ppl = any(m in metrics for m in ["perplexity", "loss", "bits_per_byte", "normalized_perplexity"])
+        ppl_cached: Optional[float] = None
+        if need_ppl:
+            try:
+                ppl_cached = self.evaluate_perplexity(
+                    dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
+                    num_samples=num_samples,
+                )
+            except Exception as e:
+                logger.error(f"Failed to evaluate perplexity (shared): {e}")
+                ppl_cached = None
+
         for metric in metrics:
             num_fewshot = fewshot_settings.get(metric, 0)
             try:
                 if metric == "perplexity":
-                    results["perplexity"] = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
+                    results["perplexity"] = ppl_cached
                 elif metric == "loss":
-                    # Cross-entropy loss = ln(perplexity)
-                    ppl = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
-                    results["loss"] = np.log(ppl)
+                    results["loss"] = None if ppl_cached is None else float(np.log(ppl_cached))
                 elif metric == "bits_per_byte":
                     # Bits per byte = log2(perplexity) / avg_chars_per_token
-                    ppl = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
                     # Approximate: assume ~4 characters per token on average
-                    results["bits_per_byte"] = np.log2(ppl) / 4.0
+                    results["bits_per_byte"] = None if ppl_cached is None else float(np.log2(ppl_cached) / 4.0)
                 elif metric == "accuracy_hellaswag":
                     results["accuracy_hellaswag"] = self._evaluate_hellaswag(
                         num_samples=num_samples, num_fewshot=num_fewshot
@@ -332,12 +413,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     results["accuracy_humaneval"] = self._evaluate_humaneval(num_samples=num_samples)
                 elif metric == "normalized_perplexity":
                     # Normalized to 0-100 scale (100 = best = PPL of 1)
-                    ppl = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
-                    # Use exponential decay: score = 100 * exp(-0.01 * (ppl - 1))
-                    results["normalized_perplexity"] = 100 * np.exp(-0.01 * (ppl - 1))
+                    results["normalized_perplexity"] = None if ppl_cached is None else float(100 * np.exp(-0.01 * (ppl_cached - 1)))
                 else:
                     logger.warning(f"Unknown evaluation metric: {metric}")
             except Exception as e:

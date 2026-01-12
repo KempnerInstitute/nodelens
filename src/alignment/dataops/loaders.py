@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Union
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
+from torch.utils.data import IterableDataset
 
 logger = logging.getLogger(__name__)
 
@@ -78,14 +79,33 @@ def create_data_loader(dataset: Any, config: Optional[DataLoaderConfig] = None, 
 
     # Create sampler if needed
     if config.distributed:
-        sampler = DistributedSampler(dataset, num_replicas=config.world_size, rank=config.rank, shuffle=config.shuffle, drop_last=config.drop_last)
-        loader_kwargs["sampler"] = sampler
-        loader_kwargs["shuffle"] = False  # Sampler handles shuffling
-        loader_kwargs.pop("drop_last", None)  # Sampler handles this
+        if isinstance(dataset, IterableDataset):
+            # IterableDatasets do not support samplers/shuffling in DataLoader.
+            # (DistributedSampler also requires __len__.)
+            if loader_kwargs.get("shuffle", False):
+                logger.warning("IterableDataset does not support shuffle=True; forcing shuffle=False.")
+            loader_kwargs["shuffle"] = False
+            loader_kwargs.pop("sampler", None)
+        else:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=config.world_size,
+                rank=config.rank,
+                shuffle=config.shuffle,
+                drop_last=config.drop_last,
+            )
+            loader_kwargs["sampler"] = sampler
+            loader_kwargs["shuffle"] = False  # Sampler handles shuffling
+            loader_kwargs.pop("drop_last", None)  # Sampler handles this
     elif not loader_kwargs.get("shuffle", True):
         # Use sequential sampler for deterministic ordering
         loader_kwargs["sampler"] = SequentialSampler(dataset)
         loader_kwargs["shuffle"] = False
+    elif isinstance(dataset, IterableDataset):
+        # PyTorch DataLoader forbids shuffle=True for IterableDataset (common for streaming datasets like C4).
+        logger.info("IterableDataset detected; forcing shuffle=False for DataLoader.")
+        loader_kwargs["shuffle"] = False
+        loader_kwargs.pop("sampler", None)
 
     return DataLoader(dataset, **loader_kwargs)
 
