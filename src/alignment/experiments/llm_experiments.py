@@ -430,6 +430,67 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         return results
 
+    def _score_continuations_conditional_logprob(
+        self,
+        prompt: str,
+        continuations: List[str],
+        *,
+        max_length: int = 2048,
+    ) -> List[float]:
+        """
+        Score each continuation by its conditional log-probability given the prompt.
+
+        Implementation detail:
+        We compute the model loss on *only the continuation tokens* (masking prompt tokens
+        with -100) and return the mean log-prob per continuation token (higher is better).
+        """
+        # Defensive: handle empty candidate lists
+        if not continuations:
+            return []
+
+        device = torch.device(self.config.device)
+        model = self.model
+        tok = self.tokenizer
+
+        # Encode prompt once (no special tokens), then add BOS if the tokenizer defines one.
+        prompt_ids = tok(prompt, add_special_tokens=False).input_ids
+        bos_id = getattr(tok, "bos_token_id", None)
+        prefix_ids = ([bos_id] if bos_id is not None else []) + prompt_ids
+        prefix_len_full = len(prefix_ids)
+
+        scores: List[float] = []
+        model.eval()
+        with torch.no_grad():
+            for cont in continuations:
+                cont_ids = tok(cont, add_special_tokens=False).input_ids
+                input_ids = prefix_ids + cont_ids
+
+                # Truncate from the left if needed (keep most recent context).
+                prefix_len = prefix_len_full
+                if len(input_ids) > max_length:
+                    drop = len(input_ids) - max_length
+                    input_ids = input_ids[drop:]
+                    prefix_len = max(0, prefix_len_full - drop)
+                    # If we truncated away the entire prompt context, the score becomes meaningless.
+                    if prefix_len <= 0:
+                        scores.append(float("-inf"))
+                        continue
+
+                input_ids_t = torch.tensor(input_ids, dtype=torch.long, device=device).unsqueeze(0)
+                attn = torch.ones_like(input_ids_t, dtype=torch.long, device=device)
+
+                labels = input_ids_t.clone()
+                labels[:, :prefix_len] = -100  # only score continuation tokens
+
+                out = model(input_ids=input_ids_t, attention_mask=attn, labels=labels)
+                loss = getattr(out, "loss", None)
+                if loss is None:
+                    scores.append(float("-inf"))
+                else:
+                    scores.append(float(-loss.item()))
+
+        return scores
+
     def _evaluate_mmlu(self, num_samples: int = 100, subjects: List[str] = None, num_fewshot: int = 0) -> float:
         """
         Few-shot evaluation on MMLU (Massive Multitask Language Understanding).
@@ -559,26 +620,14 @@ class LLMAlignmentExperiment(BaseExperiment):
                         choices = example["choices"]
                         answer_idx = example["answer"]  # 0-indexed
                         
-                        # Score each choice
-                        scores = []
-                        for j, choice in enumerate(choices):
-                            # Format: Question: ... Answer: A) choice
-                            if num_fewshot > 0:
-                                choices_str = "\n".join([f"{choice_labels[k]}) {c}" for k, c in enumerate(choices)])
-                                text = f"{fewshot_prompt}Question: {question}\n{choices_str}\nAnswer: {choice_labels[j]}"
-                            else:
-                                text = f"Question: {question}\nAnswer: {choice_labels[j]}) {choice}"
-                            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                            inputs = {k: v.to(device) for k, v in inputs.items()}
-                            
-                            outputs = self.model(**inputs)
-                            logits = outputs.logits
-                            shift_logits = logits[..., :-1, :].contiguous()
-                            shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                            
-                            loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                            scores.append(-loss.item())
+                        # Score each answer label by conditional log-probability (standard MCQ protocol):
+                        # prompt includes all choices; continuation is just the option label.
+                        choices_str = "\n".join([f"{choice_labels[k]}) {c}" for k, c in enumerate(choices)])
+                        prompt = f"{fewshot_prompt}Question: {question}\n{choices_str}\nAnswer:" if num_fewshot > 0 else (
+                            f"Question: {question}\n{choices_str}\nAnswer:"
+                        )
+                        continuations = [f" {choice_labels[j]}" for j in range(len(choices))]
+                        scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                         
                         predicted = np.argmax(scores)
                         if predicted == answer_idx:
@@ -658,24 +707,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     endings = example["endings"]
                     label = int(example["label"])
                     
-                    # Score each ending
-                    scores = []
-                    for ending in endings:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Context: {ctx}\nEnding: {ending}"
-                        else:
-                            text = f"{ctx} {ending}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score endings by conditional log-probability (context is prompt, ending is continuation).
+                    prompt = (
+                        f"{fewshot_prompt}Context: {ctx}\nEnding:" if num_fewshot > 0 else f"Context: {ctx}\nEnding:"
+                    )
+                    continuations = [f" {ending}" for ending in endings]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == label:
@@ -751,24 +788,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     choice_labels = choices["label"]
                     answer_idx = choice_labels.index(answer_key)
                     
-                    # Score each choice
-                    scores = []
-                    for choice_text in choice_texts:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Question: {question}\nAnswer: {choice_text}"
-                        else:
-                            text = f"Question: {question}\nAnswer: {choice_text}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score candidate answers by conditional log-probability (prompt excludes answer tokens).
+                    prompt = (
+                        f"{fewshot_prompt}Question: {question}\nAnswer:" if num_fewshot > 0 else f"Question: {question}\nAnswer:"
+                    )
+                    continuations = [f" {ct}" for ct in choice_texts]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == answer_idx:
@@ -838,24 +863,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                     sol2 = example["sol2"]
                     label = example["label"]  # 0 or 1
                     
-                    # Score each solution
-                    scores = []
-                    for sol in [sol1, sol2]:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Goal: {goal}\nSolution: {sol}"
-                        else:
-                            text = f"Goal: {goal}\nSolution: {sol}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score solutions by conditional log-probability (goal is prompt, solution is continuation).
+                    prompt = f"{fewshot_prompt}Goal: {goal}\nSolution:" if num_fewshot > 0 else f"Goal: {goal}\nSolution:"
+                    continuations = [f" {sol1}", f" {sol2}"]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == label:
@@ -922,24 +933,13 @@ class LLMAlignmentExperiment(BaseExperiment):
                     passage = example["passage"]
                     answer = example["answer"]  # True or False
                     
-                    # Score "Yes" vs "No" completions
-                    scores = []
-                    for response in ["Yes", "No"]:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
-                        else:
-                            text = f"Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score "Yes" vs "No" by conditional log-probability of the answer token(s).
+                    prompt = (
+                        f"{fewshot_prompt}Passage: {passage}\nQuestion: {question}\nAnswer:"
+                        if num_fewshot > 0
+                        else f"Passage: {passage}\nQuestion: {question}\nAnswer:"
+                    )
+                    scores = self._score_continuations_conditional_logprob(prompt, [" Yes", " No"], max_length=2048)
                     
                     # 0 = Yes (True), 1 = No (False)
                     predicted = np.argmax(scores) == 0  # True if "Yes" has higher score
@@ -1016,25 +1016,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                     option2 = example["option2"]
                     answer = int(example["answer"]) - 1  # Convert 1/2 to 0/1
                     
-                    # Replace _ with each option and score
-                    scores = []
-                    for option in [option1, option2]:
-                        completed = sentence.replace("_", option)
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Sentence: {completed}"
-                        else:
-                            text = completed
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())  # Higher = better
+                    # Score each option by conditional log-probability of the completion.
+                    # We split at the blank so only the option + suffix is scored (prefix is prompt).
+                    if "_" in sentence:
+                        prefix, suffix = sentence.split("_", 1)
+                    else:
+                        prefix, suffix = sentence, ""
+                    prompt = (
+                        f"{fewshot_prompt}Sentence: {prefix}" if num_fewshot > 0 else f"Sentence: {prefix}"
+                    )
+                    continuations = [f"{option1}{suffix}", f"{option2}{suffix}"]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == answer:
@@ -1116,24 +1108,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     choice_labels = choices["label"]
                     answer_idx = choice_labels.index(answer_key)
                     
-                    # Score each choice
-                    scores = []
-                    for choice_text in choice_texts:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Question: {question}\nAnswer: {choice_text}"
-                        else:
-                            text = f"Question: {question}\nAnswer: {choice_text}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score candidate answers by conditional log-probability (prompt excludes answer tokens).
+                    prompt = (
+                        f"{fewshot_prompt}Question: {question}\nAnswer:" if num_fewshot > 0 else f"Question: {question}\nAnswer:"
+                    )
+                    continuations = [f" {ct}" for ct in choice_texts]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == answer_idx:
