@@ -6368,7 +6368,27 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Get importance scores
             scores = self.importance_scores[layer_name][metric].clone()
 
-            core_mask = self.importance_scores[layer_name].get("supernode_mask")
+            # Supernode masks may be stored under different module-name prefixes
+            # (e.g., `model.layers.*` vs `model.model.layers.*`) depending on whether they were
+            # produced via SCAR hooks (HF model) or via tracked-layer activation capture (wrapper).
+            #
+            # For protection to be applied consistently, prefer the *down_proj* key for this layer
+            # (the canonical FFN-channel space), falling back to the current layer_name.
+            core_mask = None
+            try:
+                key_candidates = [
+                    f"model.layers.{layer_idx}.mlp.down_proj",
+                    f"model.model.layers.{layer_idx}.mlp.down_proj",
+                    layer_name,
+                    layer_name.replace("model.model.", "model."),
+                    layer_name.replace("model.", "model.model.", 1),
+                ]
+                for kcand in key_candidates:
+                    core_mask = (self.importance_scores.get(kcand) or {}).get("supernode_mask")
+                    if core_mask is not None:
+                        break
+            except Exception:
+                core_mask = self.importance_scores[layer_name].get("supernode_mask")
             if core_mask is not None and self._should_protect_supernodes_for_metric(metric):
                 margin = torch.abs(scores).max().detach().item() + 1.0
                 if mode == "low":
