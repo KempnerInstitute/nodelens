@@ -428,6 +428,54 @@ def plot_sparsity_perplexity_curves(
     return fig
 
 
+def plot_sparsity_accuracy_curves(
+    sparsities: Sequence[float],
+    acc_by_method: Dict[str, Sequence[Optional[float]]],
+    baseline_acc: Optional[float] = None,
+    *,
+    ylabel: str = "Accuracy (%)",
+    title: str = "Accuracy vs sparsity (low-mode)",
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """
+    Paper-facing plot: downstream accuracy vs structured sparsity for multiple methods.
+
+    Notes:
+    - Accuracies are expected to already be in percent units (e.g., 58.0 for 58%).
+    - Inputs should be filtered to the intended pruning direction (typically low-mode).
+    """
+    xs = np.asarray(list(sparsities), dtype=np.float64)
+    fig, ax = plt.subplots(figsize=(7.0, 4.2))
+
+    for label in sorted(acc_by_method.keys()):
+        ys_raw = acc_by_method[label]
+        ys = np.asarray([np.nan if v is None else float(v) for v in ys_raw], dtype=np.float64)
+        finite = np.isfinite(ys)
+        if not np.any(finite):
+            continue
+        ax.plot(xs[finite], ys[finite], "o-", linewidth=2.0, markersize=5, label=label, alpha=0.9)
+
+    if baseline_acc is not None:
+        try:
+            b = float(baseline_acc)
+            if np.isfinite(b):
+                ax.axhline(b, color="#2c3e50", linestyle=":", linewidth=2.0, label=f"Unpruned ({b:.1f}%)")
+        except Exception:
+            pass
+
+    ax.set_xlabel("Structured FFN channel sparsity", fontsize=11)
+    ax.set_ylabel(ylabel, fontsize=11)
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="lower left", fontsize=9, frameon=True)
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+
+
 def plot_scar_schematic(
     save_path: Optional[Union[str, Path]] = None,
     dpi: int = 300,
