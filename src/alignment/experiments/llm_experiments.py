@@ -4972,13 +4972,60 @@ class LLMAlignmentExperiment(BaseExperiment):
             mi = -0.5 * torch.log(1 - rho_sq)
 
             redundancy_to_core = mi.max(dim=1).values  # [|H|]
-            red_min = redundancy_to_core.min()
-            red_max = redundancy_to_core.max()
-            if red_max > red_min:
-                red_norm = (redundancy_to_core - red_min) / (red_max - red_min + eps)
+
+            # Convert redundancy-to-core into a [0, 1] protection score.
+            #
+            # Empirically, redundancy magnitudes can be extremely small; min-max normalization
+            # then collapses most halo channels near Protect≈1. But a fully linear rank/CDF
+            # can be too aggressive when redundancy estimates are noisy. We therefore default
+            # to a *soft* rank-power mapping that mainly penalizes only the most redundant tail.
+            norm_mode = str(supernode_cfg.get("protection_normalization", "rank_power")).lower()
+            if norm_mode == "minmax":
+                red_min = redundancy_to_core.min()
+                red_max = redundancy_to_core.max()
+                if red_max > red_min:
+                    red_norm = (redundancy_to_core - red_min) / (red_max - red_min + eps)
+                else:
+                    red_norm = torch.zeros_like(redundancy_to_core)
+                protect_halo = (1.0 - red_norm).clamp(0.0, 1.0)
+            elif norm_mode in {"rank", "cdf"}:
+                if redundancy_to_core.numel() <= 1:
+                    protect_halo = torch.ones_like(redundancy_to_core)
+                else:
+                    # Ascending ranks: lowest redundancy -> highest protection.
+                    _, order = torch.sort(redundancy_to_core, stable=True)
+                    ranks = torch.empty_like(order, dtype=torch.float32)
+                    ranks[order] = torch.arange(order.numel(), dtype=torch.float32)
+                    red_rank = ranks / float(max(1, order.numel() - 1))
+                    protect_halo = (1.0 - red_rank).clamp(0.0, 1.0)
             else:
-                red_norm = torch.zeros_like(redundancy_to_core)
-            protect_halo = (1.0 - red_norm).clamp(0.0, 1.0)
+                # rank_power (default): Protect = floor + (1-floor)*(1 - rank^gamma)
+                if redundancy_to_core.numel() <= 1:
+                    protect_halo = torch.ones_like(redundancy_to_core)
+                else:
+                    _, order = torch.sort(redundancy_to_core, stable=True)
+                    ranks = torch.empty_like(order, dtype=torch.float32)
+                    ranks[order] = torch.arange(order.numel(), dtype=torch.float32)
+                    red_rank = ranks / float(max(1, order.numel() - 1))
+                    red_rank = red_rank.clamp(0.0, 1.0)
+
+                    gamma = supernode_cfg.get("protection_rank_power", 8.0)
+                    try:
+                        gamma_f = float(gamma)
+                    except Exception:
+                        gamma_f = 8.0
+                    if not (gamma_f > 0):
+                        gamma_f = 8.0
+
+                    floor = supernode_cfg.get("protection_floor", 0.2)
+                    try:
+                        floor_f = float(floor)
+                    except Exception:
+                        floor_f = 0.2
+                    floor_f = float(min(1.0, max(0.0, floor_f)))
+
+                    protect_halo = floor_f + (1.0 - floor_f) * (1.0 - red_rank.pow(gamma_f))
+                    protect_halo = protect_halo.clamp(0.0, 1.0)
 
             m = st["m"]
             lp = st["lp_cpu"].float()
