@@ -75,9 +75,17 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                 logger.info(f"Tracked layers expanded to {len(expanded)} layers")
 
-        # Ensure we have a text dataset for importance computation in LLM experiments.
-        # BaseExperiment may skip dataset initialization for LLM experiment types.
-        if getattr(self, "dataset", None) is None:
+        # Ensure we have a *text* dataset for importance computation in LLM experiments.
+        # BaseExperiment may skip dataset initialization for LLM experiment types, but even when it
+        # does initialize a dataset (e.g., `c4` via registry), it may be a streaming dataset without
+        # a materialized `.texts` list. For SCAR calibration we require raw strings, so we rebuild
+        # the dataset when `.texts` is missing or None.
+        needs_text_dataset = (
+            getattr(self, "dataset", None) is None
+            or not hasattr(self.dataset, "texts")
+            or getattr(self.dataset, "texts", None) is None
+        )
+        if needs_text_dataset:
             try:
                 from alignment.dataops.datasets.text_datasets import load_text_dataset
             except ImportError as e:
@@ -1739,7 +1747,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # otherwise, fall back to iterating the dataset or raise if no dataset is available.
         calibration_texts: List[str] = []
         if getattr(self, "dataset", None) is not None:
-            if hasattr(self.dataset, "texts"):
+            if hasattr(self.dataset, "texts") and getattr(self.dataset, "texts", None) is not None:
                 calibration_texts = list(self.dataset.texts)
             else:
                 logger.warning(
@@ -7174,6 +7182,41 @@ class LLMAlignmentExperiment(BaseExperiment):
                     results["evaluation"]["baseline_perplexity"] = baseline_eval.get("perplexity")
         except Exception as e:
             logger.warning(f"Failed baseline full-metric evaluation: {e}")
+
+        # Some SCAR pruning scores (e.g., `supernode_connectivity_score`) were historically computed
+        # inside the `generate_plots` block. For fast paper sweeps we often run with
+        # `generate_plots=false`, but we still need these scores for pruning to run.
+        if scar_scores and not getattr(self.config, "generate_plots", True):
+            supernode_config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+
+            if getattr(self.config, "do_directed_redundancy", True):
+                try:
+                    directed_redundancy_results = self.compute_directed_redundancy(
+                        scar_scores=scar_scores,
+                        supernode_fraction=supernode_config.get("core_fraction", 0.01),
+                    )
+                    results["directed_redundancy"] = directed_redundancy_results
+                    logger.info("Directed redundancy computation complete")
+                except Exception as dr_err:
+                    logger.error(f"Failed directed redundancy computation: {dr_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
+            if getattr(self.config, "do_connectivity_pruning", True):
+                try:
+                    connectivity_results = self.compute_supernode_connectivity_pruning_score(
+                        scar_scores=scar_scores,
+                        supernode_fraction=supernode_config.get("core_fraction", 0.01),
+                        high_connectivity_fraction=supernode_config.get("follower_fraction", 0.10),
+                        redundancy_weight=supernode_config.get("redundancy_weight", 0.5),
+                        plots_dir=None,
+                    )
+                    results["supernode_connectivity"] = connectivity_results
+                    logger.info("Supernode-connectivity pruning score computation complete")
+                except Exception as conn_err:
+                    logger.error(f"Failed supernode-connectivity computation: {conn_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
 
 
         if self.config.do_pruning_experiments:
