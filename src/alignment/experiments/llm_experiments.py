@@ -4748,14 +4748,40 @@ class LLMAlignmentExperiment(BaseExperiment):
             super_mask = torch.zeros(m, dtype=torch.bool)
             super_mask[super_idx] = True
             
-            # Compute Conn_i from down_proj weights (write-pattern overlap)
+            # Compute Conn_i from down_proj weights.
+            #
+            # IMPORTANT: the classic "probability overlap" Conn
+            #   <|v_i|, a> / (||v_i||_1 ||a||_1)
+            # tends to collapse to ~1/hidden_dim for dense matrices (≈ 2.4e-4 for d=4096),
+            # which makes SCAR-Conn numerically ineffective. Instead, we measure the fraction
+            # of each channel's write mass that falls on the *core write support*:
+            # the top-K hidden dimensions by aggregated supernode write mass a.
+            #
+            # Conn_i := sum_{h in TopK(a)} |v_i[h]| / ||v_i||_1  in [0, 1]
             W = module.weight.detach().float().cpu()  # [hidden_dim, m]
             abs_W = W.abs()
             a = abs_W[:, super_idx].sum(dim=1)  # [hidden_dim]
-            a_norm = a.sum() + eps
             v_norm = abs_W.sum(dim=0) + eps  # [m]
-            conn_num = (abs_W * a.unsqueeze(1)).sum(dim=0)  # [m]
-            conn = (conn_num / (v_norm * a_norm + eps)).clamp(0.0, 1.0)
+
+            hidden_dim = int(abs_W.shape[0])
+            k = int(supernode_cfg.get("connectivity_topk", 256))
+            mass_frac = supernode_cfg.get("connectivity_mass_fraction", None)
+            a_sorted, a_order = torch.sort(a, descending=True)
+            if mass_frac is not None:
+                try:
+                    mf = float(mass_frac)
+                except Exception:
+                    mf = None
+                if mf is not None and 0.0 < mf < 1.0 and a_sorted.numel() > 0:
+                    cdf = torch.cumsum(a_sorted, dim=0)
+                    total = float(cdf[-1].item())
+                    if total > 0:
+                        target = mf * total
+                        k = int(torch.searchsorted(cdf, torch.tensor(target)).item()) + 1
+            k = max(1, min(int(k), hidden_dim))
+            core_idx = a_order[:k]
+            conn = abs_W.index_select(0, core_idx).sum(dim=0) / v_norm
+            conn = conn.clamp(0.0, 1.0)
 
             # Halo: top eta among non-supernodes by Conn
             non_super_idx = (~super_mask).nonzero(as_tuple=True)[0]
@@ -5150,14 +5176,32 @@ class LLMAlignmentExperiment(BaseExperiment):
             super_mask = torch.zeros(m, dtype=torch.bool)
             super_mask[super_idx] = True
             
-            # Compute Conn_i from down_proj weights (write-pattern overlap)
+            # Compute Conn_i from down_proj weights (same definition as SCAR-Conn):
+            # Conn_i := sum_{h in TopK(a)} |v_i[h]| / ||v_i||_1  (fraction of write mass on core support)
             W = module.weight.detach().float().cpu()  # [hidden_dim, m]
             abs_W = W.abs()
             a = abs_W[:, super_idx].sum(dim=1)  # [hidden_dim]
-            a_norm = a.sum() + eps
             v_norm = abs_W.sum(dim=0) + eps  # [m]
-            conn_num = (abs_W * a.unsqueeze(1)).sum(dim=0)  # [m]
-            conn = (conn_num / (v_norm * a_norm + eps)).clamp(0.0, 1.0)
+
+            hidden_dim = int(abs_W.shape[0])
+            k = int(supernode_cfg.get("connectivity_topk", 256))
+            mass_frac = supernode_cfg.get("connectivity_mass_fraction", None)
+            a_sorted, a_order = torch.sort(a, descending=True)
+            if mass_frac is not None:
+                try:
+                    mf = float(mass_frac)
+                except Exception:
+                    mf = None
+                if mf is not None and 0.0 < mf < 1.0 and a_sorted.numel() > 0:
+                    cdf = torch.cumsum(a_sorted, dim=0)
+                    total = float(cdf[-1].item())
+                    if total > 0:
+                        target = mf * total
+                        k = int(torch.searchsorted(cdf, torch.tensor(target)).item()) + 1
+            k = max(1, min(int(k), hidden_dim))
+            core_idx = a_order[:k]
+            conn = abs_W.index_select(0, core_idx).sum(dim=0) / v_norm
+            conn = conn.clamp(0.0, 1.0)
 
             non_super_idx = (~super_mask).nonzero(as_tuple=True)[0]
             if non_super_idx.numel() < 2:
