@@ -10,7 +10,7 @@ This allows for:
 3. Measuring redundancy within and between supernode clusters
 4. More nuanced pruning based on cluster structure
 
-Theory (extending alignment_notes):
+Theory (multi-supernode extension):
 - Instead of treating top k% as a single supernode group, we cluster them
 - Each cluster represents a different "functional group" of important neurons
 - Halo is defined relative to each cluster

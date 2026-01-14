@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
 
@@ -41,7 +41,7 @@ def _to_numpy(x: Any) -> np.ndarray:
 def _save(fig: plt.Figure, save_path: Union[str, Path], dpi: int = 300) -> None:
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight", pad_inches=0.02, facecolor="white")
     logger.info(f"[Saved] {save_path}")
 
 
@@ -53,15 +53,15 @@ def plot_loss_proxy_concentration(
     dpi: int = 300,
 ) -> plt.Figure:
     """
-    Two-panel plot:
-      (Left) sorted LP values (heavy tail)
-      (Right) cumulative proxy mass vs fraction of channels kept
+    Two-panel plot (ICML figure* friendly):
+      (a) sorted LP values (heavy tail)
+      (b) cumulative proxy mass vs fraction of channels kept
     """
     lp = _to_numpy(loss_proxy).astype(np.float64).reshape(-1)
     lp = lp[np.isfinite(lp)]
     lp = np.maximum(lp, 0.0)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.0))
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
     if lp.size == 0:
         for ax in axes:
             ax.axis("off")
@@ -73,7 +73,6 @@ def plot_loss_proxy_concentration(
     lp_sorted = np.sort(lp)[::-1]
     n = lp_sorted.size
     k = max(1, int(round(rho * n)))
-    threshold = lp_sorted[k - 1]
 
     total = float(lp_sorted.sum()) if float(lp_sorted.sum()) > 0 else 1.0
     cum_mass = np.cumsum(lp_sorted) / total
@@ -82,6 +81,7 @@ def plot_loss_proxy_concentration(
 
     # Panel A: sorted values
     ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
     ax.plot(frac, lp_sorted, color="#2c3e50", linewidth=1.5)
     ax.axvline(x=rho, color="#c0392b", linestyle="--", linewidth=2, label=f"Top {rho*100:.1f}%")
     ax.set_yscale("log")
@@ -90,23 +90,23 @@ def plot_loss_proxy_concentration(
     title = "Loss-proxy heavy tail"
     if layer_label:
         title += f"\n{layer_label}"
-    ax.set_title(title)
+    ax.set_title(title, fontsize=10.5)
     ax.grid(True, alpha=0.25)
-    ax.legend(loc="upper right")
+    ax.legend(loc="upper right", fontsize=8, frameon=True)
 
     # Panel B: cumulative mass
     ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
     ax.plot(frac, cum_mass, color="#2980b9", linewidth=2.0)
     ax.axvline(x=rho, color="#c0392b", linestyle="--", linewidth=2)
     ax.scatter([rho], [top_mass], color="#c0392b", zorder=5)
     ax.set_xlabel("Fraction of channels kept (top by LP)")
     ax.set_ylabel("Cumulative LP mass")
     ax.set_ylim(0, 1.02)
-    ax.set_title(f"Top {rho*100:.1f}% mass = {top_mass*100:.1f}%")
+    ax.set_title(f"Top {rho*100:.1f}% mass = {top_mass*100:.1f}%", fontsize=10.5)
     ax.grid(True, alpha=0.25)
 
     plt.tight_layout()
-
     if save_path is not None:
         _save(fig, save_path, dpi=dpi)
     return fig
@@ -124,10 +124,10 @@ def plot_halo_structure(
     max_points: int = 60000,
 ) -> plt.Figure:
     """
-    Three-panel plot:
-      (Left) Conn vs redundancy-to-core (halo channels)
-      (Middle) Redundancy-to-core distribution: halo vs non-halo (sample where defined)
-      (Right) Protect vs Conn (all channels; halo emphasized)
+    Three-panel plot (ICML figure* friendly):
+      (a) Conn vs redundancy-to-core (halo channels)
+      (b) Redundancy-to-core distribution: halo vs non-halo (sample where defined)
+      (c) Protect vs Conn (all channels; halo emphasized)
     """
     conn_np = _to_numpy(conn).astype(np.float64).reshape(-1)
     red_np = _to_numpy(redundancy_to_core).astype(np.float64).reshape(-1)
@@ -136,8 +136,10 @@ def plot_halo_structure(
     halo_np = _to_numpy(halo_mask).astype(bool).reshape(-1)
 
     n = int(conn_np.size)
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.6))
     if n == 0:
-        fig, _ = plt.subplots(figsize=(10, 4))
+        for ax in axes:
+            ax.axis("off")
         return fig
 
     # Downsample for plotting stability
@@ -150,42 +152,41 @@ def plot_halo_structure(
     idx_non = idx_all[(~halo_np[idx_all]) & (~super_np[idx_all])]
     idx_sup = idx_all[super_np[idx_all]]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
-
-    # Panel A: Conn vs redundancy-to-core (halo only, since redundancy is defined there)
+    # (a) Conn vs redundancy-to-core (halo only)
     ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
     x = conn_np[idx_halo]
     y = red_np[idx_halo]
     finite = np.isfinite(x) & np.isfinite(y)
     x = x[finite]
     y = y[finite]
-    ax.scatter(x, y, s=10, alpha=0.35, color="#1f77b4", edgecolors="none")
+    ax.scatter(x, y, s=8, alpha=0.35, color="#1f77b4", edgecolors="none")
     ax.set_xlabel(r"Connectivity $\mathrm{Conn}$")
-    ax.set_ylabel(r"Redundancy to core $\mathrm{Red}^{\rightarrow \mathcal{M}}$")
+    ax.set_ylabel(r"Red.\ to core $\mathrm{Red}^{\rightarrow \mathcal{M}}$")
     title = "Halo redundancy structure"
     if layer_label:
         title += f"\n{layer_label}"
-    ax.set_title(title)
+    ax.set_title(title, fontsize=10.5)
     ax.grid(True, alpha=0.25)
     if y.size > 0 and np.nanmin(y) > 0:
         ax.set_yscale("log")
 
-    # Panel B: Redundancy-to-core distribution comparison (halo vs non-halo sample)
+    # (b) Halo vs non-halo redundancy-to-core distribution
     ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
     y_h = red_np[idx_halo]
     y_n = red_np[idx_non]
     y_h = y_h[np.isfinite(y_h)]
     y_n = y_n[np.isfinite(y_n)]
-
     if y_h.size == 0 or y_n.size == 0:
         ax.text(
             0.5,
             0.5,
-            "Redundancy-to-core\n(non-halo sample unavailable)",
+            "Red-to-core\n(non-halo sample unavailable)",
             ha="center",
             va="center",
             transform=ax.transAxes,
-            fontsize=10,
+            fontsize=9.5,
             color="#2c3e50",
         )
         ax.set_axis_off()
@@ -204,29 +205,28 @@ def plot_halo_structure(
         for patch, c in zip(bp.get("boxes", []), colors):
             patch.set_facecolor(c)
             patch.set_alpha(0.75)
-
-        ax.set_xticklabels([f"Halo\n(n={y_h.size})", f"Non-halo\n(sample, n={y_n.size})"])
-        ax.set_ylabel(r"Redundancy to core $\mathrm{Red}^{\rightarrow \mathcal{M}}$")
-        ax.set_title("Halo vs non-halo\nredundancy-to-core")
+        ax.set_xticklabels([f"Halo\n(n={y_h.size})", f"Non-halo\n(sample, n={y_n.size})"], fontsize=8.5)
+        ax.set_ylabel(r"Red.\ to core $\mathrm{Red}^{\rightarrow \mathcal{M}}$")
+        ax.set_title("Halo vs non-halo", fontsize=10.5)
         ax.grid(True, alpha=0.25)
-        if y_h.size > 0 and y_n.size > 0 and np.nanmin(np.concatenate([y_h, y_n])) > 0:
+        if np.nanmin(np.concatenate([y_h, y_n])) > 0:
             ax.set_yscale("log")
 
-    # Panel C: Protect vs Conn (all channels)
+    # (c) Protect vs Conn
     ax = axes[2]
-    ax.scatter(conn_np[idx_non], prot_np[idx_non], s=6, alpha=0.15, color="#7f8c8d", label="Non-halo", edgecolors="none")
-    ax.scatter(conn_np[idx_halo], prot_np[idx_halo], s=10, alpha=0.35, color="#1f77b4", label="Halo", edgecolors="none")
+    ax.text(0.02, 0.98, "(c)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.scatter(conn_np[idx_non], prot_np[idx_non], s=5, alpha=0.15, color="#7f8c8d", label="Non-halo", edgecolors="none")
+    ax.scatter(conn_np[idx_halo], prot_np[idx_halo], s=7, alpha=0.35, color="#1f77b4", label="Halo", edgecolors="none")
     if idx_sup.size > 0:
-        ax.scatter(conn_np[idx_sup], prot_np[idx_sup], s=14, alpha=0.7, color="#c0392b", label="Supernodes", edgecolors="none")
+        ax.scatter(conn_np[idx_sup], prot_np[idx_sup], s=10, alpha=0.7, color="#c0392b", label="Supernodes", edgecolors="none")
     ax.set_xlabel(r"Connectivity $\mathrm{Conn}$")
     ax.set_ylabel(r"Protection $\mathrm{Protect}$")
-    ax.set_title("Protection vs connectivity")
+    ax.set_title("Protection vs Conn", fontsize=10.5)
     ax.set_ylim(-0.02, 1.02)
     ax.grid(True, alpha=0.25)
-    ax.legend(loc="lower left", frameon=True)
+    ax.legend(loc="lower left", fontsize=8, frameon=True)
 
     plt.tight_layout()
-
     if save_path is not None:
         _save(fig, save_path, dpi=dpi)
     return fig
@@ -243,26 +243,33 @@ def plot_supernode_halo_summary(
 ) -> plt.Figure:
     """
     Two-panel plot:
-      (Left) top-rho LP mass ratio across layers
-      (Right) halo/non-halo redundancy summary bars (from halo_analysis.aggregate)
+      (a) top-rho LP mass ratio across layers
+      (b) halo/non-halo redundancy summary (from halo_analysis.per_layer if available)
     """
     layers = np.asarray(list(layer_indices), dtype=int)
     ratios = np.asarray(list(top_mass_ratios), dtype=np.float64)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.0))
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
 
     ax = axes[0]
-    ax.plot(layers, ratios, "o-", color="#2c3e50", linewidth=2)
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(layers, ratios, "o-", color="#2c3e50", linewidth=2, markersize=3.5)
     ax.set_xlabel("Layer index")
     ax.set_ylabel(f"Top-{rho*100:.1f}% LP mass ratio")
     ax.set_ylim(0, 1.02)
-    ax.set_title("Supernode concentration across layers")
+    ax.set_title("Supernode concentration", fontsize=10.5)
     ax.grid(True, alpha=0.25)
 
     ax = axes[1]
-    groups = [("Within-Halo", "halo_halo", "#1f77b4"), ("Within-Non-Halo", "non_halo", "#7f8c8d"), ("Cross", "cross", "#2ecc71")]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
 
-    # Prefer per-layer distributions (much clearer than mean±std when the MI distribution is heavy-tailed).
+    groups = [
+        ("Within-Halo", "halo_halo", "#1f77b4"),
+        ("Within-Non-Halo", "non_halo", "#7f8c8d"),
+        ("Cross", "cross", "#2ecc71"),
+    ]
+
+    # Prefer per-layer medians (more robust for heavy tails).
     if isinstance(halo_per_layer, dict) and halo_per_layer:
         data = []
         for _, key, _ in groups:
@@ -292,35 +299,17 @@ def plot_supernode_halo_summary(
             whiskerprops=dict(linewidth=1.2, color="#2c3e50"),
             capprops=dict(linewidth=1.2, color="#2c3e50"),
         )
-        # Color the boxes
         for patch, (_, _, color) in zip(bp.get("boxes", []), groups):
             patch.set_facecolor(color)
             patch.set_alpha(0.75)
 
-        # Overlay jittered per-layer medians for transparency
-        rng = np.random.default_rng(0)
-        for i, vals in enumerate(data, start=1):
-            if vals.size == 0:
-                continue
-            jitter = rng.normal(loc=0.0, scale=0.05, size=vals.size)
-            ax.scatter(
-                np.full(vals.shape, i, dtype=float) + jitter,
-                vals,
-                s=14,
-                alpha=0.35,
-                color="#2c3e50",
-                edgecolors="none",
-            )
-
         ax.set_xticks(np.arange(1, len(groups) + 1))
-        ax.set_xticklabels([g[0] for g in groups], rotation=15, ha="right")
+        ax.set_xticklabels([g[0] for g in groups], rotation=15, ha="right", fontsize=8.5)
         ax.set_ylabel("Redundancy (Gaussian MI, nats)\n(per-layer median)")
-        ax.set_title("Halo redundancy across layers")
+        ax.set_title("Halo redundancy", fontsize=10.5)
         ax.grid(True, alpha=0.25, axis="y")
-        # MI is positive and often heavy-tailed; log helps readability.
         ax.set_yscale("log")
     else:
-        # Fallback: show mean ± 95% CI of the mean (std can be huge for heavy tails).
         halo_aggregate = halo_aggregate or {}
         means = []
         cis = []
@@ -332,13 +321,12 @@ def plot_supernode_halo_summary(
             sem = sd / np.sqrt(n) if n > 1 else 0.0
             means.append(mu)
             cis.append(1.96 * sem)
-
         x = np.arange(len(groups))
-        ax.bar(x, means, yerr=cis, capsize=4, color=[g[2] for g in groups], alpha=0.85, edgecolor="none")
+        ax.bar(x, means, yerr=cis, capsize=3, color=[g[2] for g in groups], alpha=0.85, edgecolor="none")
         ax.set_xticks(x)
-        ax.set_xticklabels([g[0] for g in groups], rotation=15, ha="right")
+        ax.set_xticklabels([g[0] for g in groups], rotation=15, ha="right", fontsize=8.5)
         ax.set_ylabel("Redundancy (Gaussian MI, nats)\n(mean ± 95% CI)")
-        ax.set_title("Halo redundancy (aggregate)")
+        ax.set_title("Halo redundancy", fontsize=10.5)
         ax.grid(True, alpha=0.25, axis="y")
 
     plt.tight_layout()
@@ -358,10 +346,9 @@ def plot_supernode_outlier_profile(
     dpi: int = 300,
 ) -> plt.Figure:
     """
-    Two-panel plot for supernode outlier strength across depth.
-
-    - Left: activation outlier ratio (supernode mean / population mean), log scale.
-    - Right: z-scores across layers (activation and loss-proxy); plus max-neuron activation z on a secondary axis.
+    Two-panel plot:
+      (a) activation outlier ratio (supernode mean / population mean), log scale.
+      (b) z-scores across layers (activation and loss-proxy), plus max-neuron z.
     """
     layers = np.asarray(list(layer_indices), dtype=int)
     ratios = np.asarray(list(outlier_ratios), dtype=np.float64)
@@ -369,39 +356,38 @@ def plot_supernode_outlier_profile(
     z_lp = np.asarray(list(z_scores_loss_proxy), dtype=np.float64)
     z_max = np.asarray(list(z_scores_max_activation), dtype=np.float64)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.0))
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
 
-    # Panel A: outlier ratio (log)
     ax = axes[0]
-    ax.plot(layers, ratios, "o-", color="#8e44ad", linewidth=2.0, markersize=4, label="Supernode mean / population mean")
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(layers, ratios, "o-", color="#8e44ad", linewidth=2.0, markersize=3.5)
     ax.set_yscale("log")
-    ax.axhline(10.0, color="#f39c12", linestyle="--", linewidth=1.8, label="10×")
-    ax.axhline(100.0, color="#c0392b", linestyle="--", linewidth=1.8, label="100×")
+    ax.axhline(10.0, color="#f39c12", linestyle="--", linewidth=1.4, label="10×")
+    ax.axhline(100.0, color="#c0392b", linestyle="--", linewidth=1.4, label="100×")
     ax.set_xlabel("Layer index")
-    ax.set_ylabel("Activation outlier ratio (log scale)")
-    ax.set_title(f"Supernode outlier ratio (top {rho*100:.0f}% by LP)")
+    ax.set_ylabel("Activation outlier ratio")
+    ax.set_title(f"Outlier ratio (top {rho*100:.0f}% by LP)", fontsize=10.5)
     ax.grid(True, alpha=0.25, axis="y")
-    ax.legend(loc="upper right", frameon=True)
+    ax.legend(loc="upper right", fontsize=8, frameon=True)
 
-    # Panel B: z-scores (dual axis)
     ax = axes[1]
-    ax.plot(layers, z_act, "o-", color="#e67e22", linewidth=2.0, markersize=4, label="Activation z (supernode mean)")
-    ax.plot(layers, z_lp, "o-", color="#2980b9", linewidth=2.0, markersize=4, label="Loss-proxy z (supernode mean)")
-    ax.axhline(2.0, color="#7f8c8d", linestyle="--", linewidth=1.5, alpha=0.8)
-    ax.axhline(3.0, color="#7f8c8d", linestyle="--", linewidth=1.5, alpha=0.8)
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(layers, z_act, "o-", color="#e67e22", linewidth=2.0, markersize=3.5, label="Activation z (supernode mean)")
+    ax.plot(layers, z_lp, "o-", color="#2980b9", linewidth=2.0, markersize=3.5, label="LP z (supernode mean)")
+    ax.axhline(2.0, color="#7f8c8d", linestyle="--", linewidth=1.2, alpha=0.8)
+    ax.axhline(3.0, color="#7f8c8d", linestyle="--", linewidth=1.2, alpha=0.8)
     ax.set_xlabel("Layer index")
     ax.set_ylabel("Z-score (supernode mean)")
-    ax.set_title("Outlier z-scores across layers")
+    ax.set_title("Outlier z-scores", fontsize=10.5)
     ax.grid(True, alpha=0.25, axis="y")
 
     ax2 = ax.twinx()
-    ax2.plot(layers, z_max, "^-", color="#2c3e50", linewidth=1.8, markersize=5, label="Activation z (max neuron)")
-    ax2.set_ylabel("Z-score (max neuron, activation)")
+    ax2.plot(layers, z_max, "^-", color="#2c3e50", linewidth=1.6, markersize=4, label="Activation z (max neuron)")
+    ax2.set_ylabel("Z-score (max neuron)")
 
-    # Combined legend
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
-    ax.legend(h1 + h2, l1 + l2, loc="upper right", frameon=True)
+    ax.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=8, frameon=True)
 
     plt.tight_layout()
     if save_path is not None:
@@ -416,22 +402,16 @@ def plot_sparsity_perplexity_curves(
     save_path: Optional[Union[str, Path]] = None,
     dpi: int = 300,
 ) -> plt.Figure:
-    """
-    Paper-facing plot: perplexity vs structured sparsity for multiple methods.
-
-    Inputs are already "paper-ready" (i.e., only the intended pruning direction, typically low-mode).
-    """
     xs = np.asarray(list(sparsities), dtype=np.float64)
-    fig, ax = plt.subplots(figsize=(7.0, 4.2))
+    fig, ax = plt.subplots(figsize=(3.45, 2.6))
 
-    # Stable ordering for legend
     for label in sorted(ppl_by_method.keys()):
         ys_raw = ppl_by_method[label]
         ys = np.asarray([np.nan if v is None else float(v) for v in ys_raw], dtype=np.float64)
         finite = np.isfinite(ys)
         if not np.any(finite):
             continue
-        ax.plot(xs[finite], ys[finite], "o-", linewidth=2.0, markersize=5, label=label, alpha=0.9)
+        ax.plot(xs[finite], ys[finite], "o-", linewidth=2.0, markersize=4, label=label, alpha=0.9)
 
     if baseline_ppl is not None:
         try:
@@ -441,14 +421,14 @@ def plot_sparsity_perplexity_curves(
         except Exception:
             pass
 
-    ax.set_xlabel("Structured FFN channel sparsity", fontsize=11)
-    ax.set_ylabel("Perplexity (WikiText-2)", fontsize=11)
-    ax.set_title("Perplexity vs sparsity (low-mode)", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Structured FFN channel sparsity", fontsize=10)
+    ax.set_ylabel("Perplexity (WikiText-2)", fontsize=10)
+    ax.set_title("Perplexity vs sparsity", fontsize=11, fontweight="bold")
     ax.grid(True, alpha=0.25)
-    ax.legend(loc="upper left", fontsize=9, frameon=True)
+    ax.legend(loc="upper left", fontsize=7.5, frameon=True)
 
     # Use log if the dynamic range is large.
-    all_vals = []
+    all_vals: List[float] = []
     for vs in ppl_by_method.values():
         for v in vs:
             if v is None:
@@ -477,19 +457,12 @@ def plot_sparsity_accuracy_curves(
     baseline_acc: Optional[float] = None,
     *,
     ylabel: str = "Accuracy (%)",
-    title: str = "Accuracy vs sparsity (low-mode)",
+    title: str = "Accuracy vs sparsity",
     save_path: Optional[Union[str, Path]] = None,
     dpi: int = 300,
 ) -> plt.Figure:
-    """
-    Paper-facing plot: downstream accuracy vs structured sparsity for multiple methods.
-
-    Notes:
-    - Accuracies are expected to already be in percent units (e.g., 58.0 for 58%).
-    - Inputs should be filtered to the intended pruning direction (typically low-mode).
-    """
     xs = np.asarray(list(sparsities), dtype=np.float64)
-    fig, ax = plt.subplots(figsize=(7.0, 4.2))
+    fig, ax = plt.subplots(figsize=(3.45, 2.6))
 
     for label in sorted(acc_by_method.keys()):
         ys_raw = acc_by_method[label]
@@ -497,7 +470,7 @@ def plot_sparsity_accuracy_curves(
         finite = np.isfinite(ys)
         if not np.any(finite):
             continue
-        ax.plot(xs[finite], ys[finite], "o-", linewidth=2.0, markersize=5, label=label, alpha=0.9)
+        ax.plot(xs[finite], ys[finite], "o-", linewidth=2.0, markersize=4, label=label, alpha=0.9)
 
     if baseline_acc is not None:
         try:
@@ -507,11 +480,11 @@ def plot_sparsity_accuracy_curves(
         except Exception:
             pass
 
-    ax.set_xlabel("Structured FFN channel sparsity", fontsize=11)
-    ax.set_ylabel(ylabel, fontsize=11)
-    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.set_xlabel("Structured FFN channel sparsity", fontsize=10)
+    ax.set_ylabel(ylabel, fontsize=10)
+    ax.set_title(title, fontsize=11, fontweight="bold")
     ax.grid(True, alpha=0.25)
-    ax.legend(loc="lower left", fontsize=9, frameon=True)
+    ax.legend(loc="lower left", fontsize=7.5, frameon=True)
 
     plt.tight_layout()
     if save_path is not None:
@@ -527,7 +500,6 @@ def plot_scar_schematic(
     Generate a schematic of SCAR (supernodes + halos) as a flowchart.
     This is model-agnostic and can be generated during artifact collection.
     """
-    # Keep this figure intentionally clean + legible in a 1-column ICML layout.
     fig = plt.figure(figsize=(12, 3.8))
     ax = fig.add_subplot(111)
     ax.set_axis_off()
@@ -551,9 +523,6 @@ def plot_scar_schematic(
         a = FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="->", linewidth=1.6, color=color, mutation_scale=12)
         ax.add_patch(a)
 
-    # ------------------------------------------------------------------
-    # Column layout
-    # ------------------------------------------------------------------
     x0 = 0.03
     col_w = 0.22
     gap = 0.035
@@ -562,87 +531,47 @@ def plot_scar_schematic(
     y_bot = 0.15
     h_bot = 0.30
 
-    # Colors (match paper narrative)
-    C_SUP = "#c0392b"   # supernodes
-    C_HALO = "#1f77b4"  # halo
-    C_STEP = "#2c3e50"  # neutral
-    C_CAL = "#d35400"   # calibration/loss-proxy compute
+    C_SUP = "#c0392b"
+    C_STEP = "#2c3e50"
+    C_CAL = "#d35400"
 
-    # --- Col 1: Calibration + proxy ---
+    # Col 1
     box(x0, y_top, col_w, h_top, "Calibration\n(tokens)", fc="#fdf2e9", ec=C_CAL)
     box(
         x0,
         y_bot,
         col_w,
         h_bot,
-        # NOTE: Use \frac{1}{2} (not \frac12) for broad compatibility with matplotlib mathtext.
         r"Loss proxy\n$\mathrm{LP}_i=\frac{1}{2}\,\mathbb{E}[(u_i s_i)^2]$",
         fc="#fdf2e9",
         ec=C_CAL,
     )
-
-    # Tiny icon: forward/backward arrows
     ax.text(x0 + col_w / 2, y_top + 0.07, "fwd + bwd", ha="center", va="center", fontsize=9.5, color=C_STEP)
 
-    # --- Col 2: Supernodes ---
+    # Col 2
     x1 = x0 + col_w + gap
     box(x1, y_top, col_w, h_top, r"Supernodes\n(top-$\rho$ by LP)\n\bf protect", fc="#fdebd0", ec=C_SUP)
     box(x1, y_bot, col_w, h_bot, "FFN channels\n(sorted by LP)", fc="#f8f9f9", ec=C_STEP)
 
-    # Draw a stylized heavy-tail: a few bars, with 2 red outliers
-    xs = np.linspace(x1 + 0.03, x1 + col_w - 0.03, 10)
-    heights = np.array([0.06, 0.05, 0.04, 0.035, 0.03, 0.028, 0.025, 0.022, 0.18, 0.24])
-    for i, (xx, hh) in enumerate(zip(xs, heights)):
-        c = C_SUP if i >= 8 else "#7f8c8d"
-        ax.plot([xx, xx], [y_bot + 0.06, y_bot + 0.06 + hh], color=c, linewidth=4, solid_capstyle="round")
-    ax.text(x1 + col_w / 2, y_bot + 0.03, "rare outliers", ha="center", va="center", fontsize=9.0, color=C_STEP)
-
-    # --- Col 3: Halo + redundancy ---
+    # Col 3
     x2 = x1 + col_w + gap
-    box(x2, y_top, col_w, h_top, r"Halo\n(high Conn to core)", fc="#e8f6ff", ec=C_HALO)
-    box(
-        x2,
-        y_bot,
-        col_w,
-        h_bot,
-        r"Redundancy to core\n$\mathrm{Red}^{\rightarrow\mathcal{M}}_j=\max_{m\in\mathcal{M}} I(q_j;q_m)$",
-        fc="#eafaf1",
-        ec="#27ae60",
-    )
-    ax.text(x2 + col_w / 2, y_bot + 0.03, r"$q=u\odot s$", ha="center", va="center", fontsize=9.0, color=C_STEP)
+    box(x2, y_top, col_w, h_top, r"Halo (Conn)\n(top-$\eta$)", fc="#eaf2f8", ec="#1f77b4")
+    box(x2, y_bot, col_w, h_bot, r"Red-to-core\n$\max_{s\in\mathcal{M}}\mathrm{Red}(j,s)$", fc="#eaf2f8", ec="#1f77b4")
 
-    # --- Col 4: Structured pruning ---
+    # Col 4
     x3 = x2 + col_w + gap
-    box(
-        x3,
-        y_top,
-        col_w,
-        h_top,
-        "Score + prune\n(non-core only)\nlayer caps",
-        fc="#f8f9f9",
-        ec=C_STEP,
-    )
-    box(x3, y_bot, col_w, h_bot, r"Result:\nstructured FFN\nchannel sparsity", fc="#f8f9f9", ec=C_STEP)
+    box(x3, y_top, col_w, h_top, r"Protect\n(rank-power)", fc="#f8f9f9", ec=C_STEP)
+    box(x3, y_bot, col_w, h_bot, r"Prune\n(redundant followers)", fc="#f8f9f9", ec=C_STEP)
 
-    # Arrows across columns (top row)
+    # Arrows
     arrow(x0 + col_w, y_top + h_top / 2, x1, y_top + h_top / 2, color=C_STEP)
+    arrow(x0 + col_w, y_bot + h_bot / 2, x1, y_bot + h_bot / 2, color=C_STEP)
     arrow(x1 + col_w, y_top + h_top / 2, x2, y_top + h_top / 2, color=C_STEP)
+    arrow(x1 + col_w, y_bot + h_bot / 2, x2, y_bot + h_bot / 2, color=C_STEP)
     arrow(x2 + col_w, y_top + h_top / 2, x3, y_top + h_top / 2, color=C_STEP)
+    arrow(x2 + col_w, y_bot + h_bot / 2, x3, y_bot + h_bot / 2, color=C_STEP)
 
-    # Vertical arrows within columns
-    arrow(x0 + col_w / 2, y_top, x0 + col_w / 2, y_bot + h_bot, color=C_STEP)
-    arrow(x2 + col_w / 2, y_top, x2 + col_w / 2, y_bot + h_bot, color=C_STEP)
-
-    ax.text(
-        0.02,
-        0.98,
-        "SCAR: supernodes + halos for structured FFN channel pruning",
-        fontsize=12.5,
-        fontweight="bold",
-        ha="left",
-        va="top",
-        color=C_STEP,
-    )
+    ax.text(0.5, 0.98, "SCAR pipeline overview", ha="center", va="top", fontsize=12, fontweight="bold", color=C_STEP)
 
     plt.tight_layout()
     if save_path is not None:

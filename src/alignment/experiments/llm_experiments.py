@@ -389,6 +389,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                     results["accuracy_arc_challenge"] = self._evaluate_arc_challenge(
                         num_samples=num_samples, num_fewshot=num_fewshot
                     )
+                elif metric == "accuracy_openbookqa":
+                    results["accuracy_openbookqa"] = self._evaluate_openbookqa(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
                 elif metric == "accuracy_piqa":
                     results["accuracy_piqa"] = self._evaluate_piqa(
                         num_samples=num_samples, num_fewshot=num_fewshot
@@ -511,7 +515,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             return 0.0
         
         shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
-        logger.info(f"Evaluating {shot_str} accuracy on MMLU ({num_samples} samples)...")
+        logger.info(f"Evaluating {shot_str} accuracy on MMLU (~{num_samples} samples total)...")
         
         # Default subjects for quick evaluation (covers different domains)
         if subjects is None:
@@ -580,11 +584,27 @@ class LLMAlignmentExperiment(BaseExperiment):
         device = torch.device(self.config.device)
         choice_labels = ["A", "B", "C", "D"]
         
-        # Calculate samples per subject
-        samples_per_subject = max(1, num_samples // len(subjects))
+        # Deterministic sampling (avoid label/order bias from always taking the first example).
+        # Interpret num_samples as a TOTAL budget across subjects.
+        import math
+        import zlib
+
+        subjects = list(subjects)
+        seed = int(getattr(self.config, "seed", 0) or 0)
+
+        # Shuffle subject order to avoid any systematic ordering artifacts.
+        rng_subj = np.random.default_rng(seed)
+        rng_subj.shuffle(subjects)
+
+        # Allocate an exact per-subject quota summing to num_samples.
+        base = int(num_samples) // max(1, len(subjects))
+        rem = int(num_samples) % max(1, len(subjects))
+        quotas = [base + (1 if i < rem else 0) for i in range(len(subjects))]
         
         with torch.no_grad():
-            for subject in subjects:
+            for subject, quota in zip(subjects, quotas):
+                if quota <= 0:
+                    continue
                 try:
                     dataset = load_dataset("cais/mmlu", subject, split="test", trust_remote_code=True)
                     # Load dev split for few-shot examples
@@ -597,9 +617,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                 # Build few-shot prompt for this subject
                 fewshot_prompt = ""
                 if num_fewshot > 0:
-                    for i, ex in enumerate(dev_dataset):
-                        if i >= num_fewshot:
-                            break
+                    # Sample few-shot examples from dev split.
+                    try:
+                        dev_n = len(dev_dataset)
+                        dev_seed = seed + int(zlib.adler32(f"{subject}:dev".encode()))
+                        rng_dev = np.random.default_rng(dev_seed)
+                        dev_idxs = rng_dev.choice(dev_n, size=min(int(num_fewshot), dev_n), replace=False).tolist()
+                    except Exception:
+                        dev_idxs = list(range(int(num_fewshot)))
+
+                    for ex_idx in dev_idxs:
+                        ex = dev_dataset[int(ex_idx)]
                         q = ex["question"]
                         choices = ex["choices"]
                         answer_idx = ex["answer"]
@@ -611,11 +639,21 @@ class LLMAlignmentExperiment(BaseExperiment):
                 subject_correct = 0
                 subject_total = 0
                 
-                for i, example in enumerate(dataset):
-                    if subject_total >= samples_per_subject:
+                # Sample test examples for this subject (without replacement).
+                try:
+                    n_test = len(dataset)
+                    test_seed = seed + int(zlib.adler32(f"{subject}:test".encode()))
+                    rng_test = np.random.default_rng(test_seed)
+                    test_idxs = rng_test.choice(n_test, size=min(int(quota), n_test), replace=False).tolist()
+                except Exception:
+                    test_idxs = list(range(int(quota)))
+
+                for ex_i, ex_idx in enumerate(test_idxs):
+                    if total >= num_samples:
                         break
                     
                     try:
+                        example = dataset[int(ex_idx)]
                         question = example["question"]
                         choices = example["choices"]
                         answer_idx = example["answer"]  # 0-indexed
@@ -637,7 +675,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         subject_total += 1
                         
                     except Exception as e:
-                        logger.warning(f"Error on MMLU {subject} sample {i}: {e}")
+                        logger.warning(f"Error on MMLU {subject} sample {ex_i}: {e}")
                         continue
                 
                 if subject_total > 0:
@@ -1129,6 +1167,105 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         accuracy = 100 * correct / total if total > 0 else 0.0
         logger.info(f"ARC-Challenge accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_openbookqa(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
+        """
+        Zero-/few-shot evaluation on OpenBookQA (4-way MCQ).
+
+        We score options using conditional log-probability of the *option label* continuation,
+        with the full question + choices included in the prompt (standard MCQ protocol).
+
+        Returns accuracy in percent (higher is better).
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate OpenBookQA")
+            return 0.0
+
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on OpenBookQA ({num_samples} samples)...")
+
+        # Dataset schema varies a bit across versions; handle both common shapes.
+        # HF dataset: openbookqa, config \"main\".
+        try:
+            dataset = load_dataset("openbookqa", "main", split="test", trust_remote_code=True)
+            if num_fewshot > 0:
+                train_dataset = load_dataset("openbookqa", "main", split="train", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load OpenBookQA dataset: {e}")
+            return 0.0
+
+        def _get_question(ex: Dict[str, Any]) -> str:
+            if isinstance(ex.get("question_stem"), str):
+                return ex["question_stem"]
+            q = ex.get("question")
+            if isinstance(q, dict) and isinstance(q.get("stem"), str):
+                return q["stem"]
+            return str(ex.get("question", ""))
+
+        def _get_choices(ex: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+            ch = ex.get("choices")
+            if isinstance(ch, dict):
+                texts = ch.get("text") or ch.get("texts") or []
+                labels = ch.get("label") or ch.get("labels") or []
+                return list(texts), list(labels)
+            # Some variants store as list of dicts
+            if isinstance(ch, list):
+                texts = [c.get("text", "") for c in ch if isinstance(c, dict)]
+                labels = [c.get("label", "") for c in ch if isinstance(c, dict)]
+                return texts, labels
+            return [], []
+
+        # Build few-shot prompt in the same MCQ format.
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                q = _get_question(ex)
+                choice_texts, choice_labels = _get_choices(ex)
+                answer_key = ex.get("answerKey")
+                if not choice_texts or not choice_labels or answer_key not in choice_labels:
+                    continue
+                choices_str = "\n".join([f"{choice_labels[j]}) {choice_texts[j]}" for j in range(len(choice_texts))])
+                fewshot_prompt += f"Question: {q}\n{choices_str}\nAnswer: {answer_key}\n\n"
+
+        self.model.eval()
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if total >= num_samples:
+                    break
+                try:
+                    question = _get_question(example)
+                    choice_texts, choice_labels = _get_choices(example)
+                    answer_key = example.get("answerKey")
+                    if not choice_texts or not choice_labels or answer_key not in choice_labels:
+                        continue
+
+                    # Prompt includes choices; continuation is the option label.
+                    choices_str = "\n".join([f"{choice_labels[j]}) {choice_texts[j]}" for j in range(len(choice_texts))])
+                    prompt = (
+                        f"{fewshot_prompt}Question: {question}\n{choices_str}\nAnswer:" if num_fewshot > 0 else
+                        f"Question: {question}\n{choices_str}\nAnswer:"
+                    )
+                    continuations = [f" {lab}" for lab in choice_labels]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
+
+                    predicted = int(np.argmax(scores))
+                    if choice_labels[predicted] == answer_key:
+                        correct += 1
+                    total += 1
+                except Exception as e:
+                    logger.warning(f"Error on OpenBookQA sample {i}: {e}")
+                    continue
+
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"OpenBookQA accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
     def _evaluate_truthfulqa(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
@@ -2595,6 +2732,95 @@ class LLMAlignmentExperiment(BaseExperiment):
                 results[store_name]["weight_magnitude"] = channel_scores
 
         logger.info(f"Computed weight_magnitude channel scores for {len(layer_indices)} MLP layers")
+        return results
+
+    def compute_random_channel_scores(
+        self,
+        *,
+        seed: Optional[int] = None,
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Structured *channel* random baseline.
+
+        We generate one random score per intermediate FFN channel (shared across gate/up/down
+        projections) and store it under metric name "random" in `self.importance_scores`.
+
+        Note: If pruning_mode == "random", the pruning mask creation ignores score values and
+        uses uniform random selection; we still store scores to provide consistent shapes and
+        to make this baseline explicit in saved artifacts.
+        """
+        import re
+
+        if seed is None:
+            seed = int(getattr(self.config, "seed", 0) or 0)
+
+        underlying_model = self._get_underlying_model()
+        module_dict = dict(underlying_model.named_modules())
+
+        # Identify MLP layer indices by scanning module names (robust even if no other
+        # importance scores were computed).
+        layer_indices = set()
+        for name in module_dict.keys():
+            m = re.search(r"layers\.(\d+)\.mlp\.gate_proj$", name)
+            if m:
+                layer_indices.add(int(m.group(1)))
+
+        if not layer_indices:
+            logger.warning("random: no MLP layers found; skipping random channel baseline")
+            return {}
+
+        # Use a dedicated generator for determinism.
+        gen = torch.Generator(device="cpu")
+        gen.manual_seed(seed)
+
+        def _resolve_mlp_path(layer_idx: int) -> Optional[str]:
+            candidates = [
+                f"model.model.layers.{layer_idx}.mlp",
+                f"model.layers.{layer_idx}.mlp",
+                f"layers.{layer_idx}.mlp",
+            ]
+            for c in candidates:
+                if c in module_dict:
+                    return c
+            return None
+
+        results: Dict[str, Dict[str, torch.Tensor]] = {}
+        for layer_idx in sorted(layer_indices):
+            mlp_path = _resolve_mlp_path(layer_idx)
+            if mlp_path is None:
+                logger.warning(f"random: could not resolve MLP path for layer {layer_idx}")
+                continue
+
+            gate_name = f"{mlp_path}.gate_proj"
+            up_name = f"{mlp_path}.up_proj"
+            down_name = f"{mlp_path}.down_proj"
+            if gate_name not in module_dict or up_name not in module_dict or down_name not in module_dict:
+                logger.warning(f"random: missing projections for {mlp_path}")
+                continue
+
+            gate = module_dict[gate_name]
+            up = module_dict[up_name]
+            down = module_dict[down_name]
+            if not all(isinstance(m, nn.Linear) for m in (gate, up, down)):
+                logger.warning(f"random: projections for {mlp_path} are not all nn.Linear; skipping")
+                continue
+
+            n = int(gate.out_features)
+            if n <= 0:
+                continue
+
+            # One score per intermediate channel.
+            scores = torch.rand((n,), generator=gen, dtype=torch.float32)
+
+            for store_name in (gate_name, up_name, down_name):
+                if store_name not in self.importance_scores:
+                    self.importance_scores[store_name] = {}
+                self.importance_scores[store_name]["random"] = scores
+                if store_name not in results:
+                    results[store_name] = {}
+                results[store_name]["random"] = scores
+
+        logger.info(f"Computed random channel scores for {len(layer_indices)} MLP layers (seed={seed})")
         return results
     
     @staticmethod
@@ -6545,6 +6771,12 @@ class LLMAlignmentExperiment(BaseExperiment):
         if not self.importance_scores:
             raise ValueError("Must compute importance scores before pruning")
 
+        # Per-call diagnostics that downstream artifact collection can use to explain
+        # catastrophic baseline failures (e.g., pruning supernodes).
+        #
+        # Stored as a side effect to avoid changing the public return type.
+        self._last_pruning_diagnostics = {}
+
         # Paper-faithful *unstructured* reproductions for Wanda/SparseGPT (kept separate from channel-adapted baselines).
         if metric in {"wanda_unstructured", "sparsegpt_unstructured"}:
             return self.apply_unstructured_baseline_pruning(sparsity=sparsity, metric=metric, mode=mode)
@@ -6592,6 +6824,12 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         masks = {}
         processed_mlps = set()  # Track which MLPs we've already processed
+
+        # Supernode "hit-rate" diagnostic: fraction of supernodes pruned by this method.
+        super_total = 0
+        super_pruned = 0
+        layers_with_super = 0
+        layers_with_super_pruned = 0
         
         for layer_name in self.importance_scores.keys():
             if metric not in self.importance_scores[layer_name]:
@@ -6642,6 +6880,26 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
+
+            # Diagnostic: how many supernodes did we prune in this layer?
+            if core_mask is not None:
+                try:
+                    cm = core_mask
+                    if not torch.is_tensor(cm):
+                        cm = torch.as_tensor(cm)
+                    cm = cm.to(device=mask.device, dtype=torch.bool)
+
+                    if cm.numel() == mask.numel():
+                        layers_with_super += 1
+                        super_total += int(cm.sum().item())
+                        pruned = (mask == 0)
+                        pruned_super = int((pruned & cm).sum().item())
+                        super_pruned += pruned_super
+                        if pruned_super > 0:
+                            layers_with_super_pruned += 1
+                except Exception:
+                    # Never fail pruning due to diagnostics.
+                    pass
             
             # Get the MLP module - use underlying model to handle HFCausalLM wrapper
             underlying_model = self._get_underlying_model()
@@ -6712,6 +6970,16 @@ class LLMAlignmentExperiment(BaseExperiment):
         masks.update(attention_masks)
 
         self.pruning_masks = masks
+        # Store diagnostics for the caller (run()) to attach into results JSON.
+        self._last_pruning_diagnostics = {
+            "supernode_pruning": {
+                "supernodes_total": int(super_total),
+                "supernodes_pruned": int(super_pruned),
+                "supernodes_pruned_frac": (float(super_pruned) / float(super_total)) if super_total > 0 else None,
+                "layers_with_supernodes": int(layers_with_super),
+                "layers_with_supernodes_pruned": int(layers_with_super_pruned),
+            }
+        }
         logger.info(f"Pruned {len(processed_mlps)} MLP layers with {sparsity:.1%} target sparsity")
         if num_attention_layers > 0:
             logger.info(f"Pruned {num_attention_layers} attention blocks with shared Q/K/V/O masks")
@@ -7381,6 +7649,16 @@ class LLMAlignmentExperiment(BaseExperiment):
                 import traceback
                 logger.error(traceback.format_exc())
 
+        # Structured random baseline (paper: "Random (channel)")
+        if "random" in pruning_strategies:
+            try:
+                # Deterministic by default (seeded by config.seed).
+                self.compute_random_channel_scores()
+            except Exception as rand_err:
+                logger.error(f"Failed random baseline score computation: {rand_err}")
+                import traceback
+                logger.error(traceback.format_exc())
+
         # Example: per-layer histogram with top-5 annotations
         # self.plot_layer_importance_histogram(
         #     layer_name="model.layers.1.mlp.up_proj",
@@ -7622,6 +7900,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                                 "num_pruned_layers": len(masks),
                                 "metric": metric,
                                 "mode": mode,
+                                # Extra diagnostics for paper analysis (e.g., explain why some baselines collapse)
+                                **(getattr(self, "_last_pruning_diagnostics", {}) or {}),
                             }
                         else:
                             pruning_data["perplexities"].append(None)

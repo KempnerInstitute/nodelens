@@ -3,7 +3,7 @@ Halo Redundancy Analysis Module.
 
 Computes and visualizes redundancy patterns within and between halo/non-halo groups.
 
-Theory (from alignment_notes):
+Theory (Gaussian mutual information):
 - Pairwise redundancy: I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
 - Per-neuron redundancy: R(Y_i) = mean over neighbors of I(Y_i; Y_j)
 - Halo = neurons with high connectivity to supernodes
@@ -147,7 +147,7 @@ def correlation_to_redundancy(corr: torch.Tensor) -> torch.Tensor:
     """
     Convert correlation to redundancy using Gaussian MI formula.
     
-    Theory (from drafts/alignment_notes/alignment_red.tex):
+    Theory (Gaussian mutual information):
         I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
     
     This is the mutual information between jointly Gaussian variables.
@@ -220,7 +220,7 @@ class HaloRedundancy(BaseMetric):
     This metric analyzes the information structure of halo vs non-halo neurons,
     helping to validate whether halo membership correlates with redundancy.
     
-    Theory (from alignment_notes):
+    Theory (Gaussian mutual information):
         Redundancy: I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
         
     If halo neurons are indeed "echo chambers" of supernodes, we expect:

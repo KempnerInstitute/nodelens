@@ -107,6 +107,7 @@ llm:
     - "accuracy_hellaswag"
     - "accuracy_arc_easy"
     - "accuracy_arc_challenge"
+    - "accuracy_openbookqa"
     
     # Common Sense
     - "accuracy_winogrande"
