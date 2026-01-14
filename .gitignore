@@ -160,7 +160,6 @@ dmypy.json
 /runs/
 /outputs/
 /results/
-/experiments/
 
 # Temporary files
 *.tmp

@@ -8029,7 +8029,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # ------------------------------------------------------------------
         if getattr(self.config, "generate_plots", True):
             try:
-                from alignment.analysis.visualization import (
+                from alignment.analysis.visualization.paper_plots import (
                     plot_halo_structure,
                     plot_loss_proxy_concentration,
                     plot_supernode_halo_summary,
