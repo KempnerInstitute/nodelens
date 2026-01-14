@@ -129,7 +129,9 @@ class DamagePrediction:
         test_idx = np.random.choice(n_ch, max(1, int(n_ch * frac)), replace=False)
         for i in test_idx:
             r = self.cascade.ablate(self.layer, [int(i)])
-            damages[i] = r.accuracy_drop
+            # Use loss increase as a smoother "damage" signal than accuracy drop,
+            # especially when evaluating on a small test subset.
+            damages[i] = r.loss_increase
         self._damages = damages
         return damages
 
@@ -143,12 +145,19 @@ class DamagePrediction:
         if mask.sum() < 5:
             return DamageResult(self.layer, method, 0., {})
         d, s = self._damages[mask], scores[mask]
+        # In the paper scripts we treat `scores` as a *prune score* where higher
+        # means "safer to remove". A good prune score should correlate with
+        # *lower* damage; we therefore correlate against -d so higher rho is better.
         rho, _ = stats.spearmanr(s, -d)
         recall = {}
-        by_d = np.argsort(-d)
-        by_s = np.argsort(s)
+        # Recall@k: how well the prune score identifies the least-damaging channels.
+        by_d = np.argsort(d)      # least damaging first
+        by_s = np.argsort(-s)     # highest prune score first
         for k in top_ks:
-            k = min(k, len(d))
-            overlap = len(set(by_d[:k]) & set(by_s[:k]))
-            recall[k] = overlap / k if k > 0 else 0.
+            # Keep the dictionary key as the *requested* k for stable downstream
+            # table formatting, but clamp the effective k to the number of
+            # evaluated channels.
+            k_eff = min(int(k), len(d))
+            overlap = len(set(by_d[:k_eff]) & set(by_s[:k_eff]))
+            recall[int(k)] = overlap / k_eff if k_eff > 0 else 0.0
         return DamageResult(self.layer, method, float(rho) if not np.isnan(rho) else 0., recall)

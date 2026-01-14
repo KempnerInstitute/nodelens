@@ -271,6 +271,24 @@ class MaskOperations:
             def threshold_fn(s):
                 return s <= threshold
 
+        elif mode == "random":
+            # Random global keep mask (ignores scores). Useful for a random baseline
+            # under global-threshold pruning.
+            perm = torch.randperm(num_total, device=all_scores_cat.device)
+            keep_idx = perm[:num_to_keep]
+            keep_mask_flat = torch.zeros(num_total, dtype=torch.bool, device=all_scores_cat.device)
+            keep_mask_flat[keep_idx] = True
+
+            masks = {}
+            offset = 0
+            for layer_name, shape, n in layer_info:
+                mask_flat = keep_mask_flat[offset : offset + n]
+                masks[layer_name] = mask_flat.view(shape)
+                offset += n
+
+            logger.info(f"Global random masking: {num_to_keep}/{num_total} elements kept")
+            return masks
+
         else:
             raise ValueError(f"Global thresholding not supported for mode: {mode}")
 

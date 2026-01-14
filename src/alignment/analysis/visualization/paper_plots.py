@@ -124,8 +124,9 @@ def plot_halo_structure(
     max_points: int = 60000,
 ) -> plt.Figure:
     """
-    Two-panel plot:
+    Three-panel plot:
       (Left) Conn vs redundancy-to-core (halo channels)
+      (Middle) Redundancy-to-core distribution: halo vs non-halo (sample where defined)
       (Right) Protect vs Conn (all channels; halo emphasized)
     """
     conn_np = _to_numpy(conn).astype(np.float64).reshape(-1)
@@ -149,7 +150,7 @@ def plot_halo_structure(
     idx_non = idx_all[(~halo_np[idx_all]) & (~super_np[idx_all])]
     idx_sup = idx_all[super_np[idx_all]]
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
 
     # Panel A: Conn vs redundancy-to-core (halo only, since redundancy is defined there)
     ax = axes[0]
@@ -169,8 +170,50 @@ def plot_halo_structure(
     if y.size > 0 and np.nanmin(y) > 0:
         ax.set_yscale("log")
 
-    # Panel B: Protect vs Conn (all channels)
+    # Panel B: Redundancy-to-core distribution comparison (halo vs non-halo sample)
     ax = axes[1]
+    y_h = red_np[idx_halo]
+    y_n = red_np[idx_non]
+    y_h = y_h[np.isfinite(y_h)]
+    y_n = y_n[np.isfinite(y_n)]
+
+    if y_h.size == 0 or y_n.size == 0:
+        ax.text(
+            0.5,
+            0.5,
+            "Redundancy-to-core\n(non-halo sample unavailable)",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            fontsize=10,
+            color="#2c3e50",
+        )
+        ax.set_axis_off()
+    else:
+        bp = ax.boxplot(
+            [y_h, y_n],
+            vert=True,
+            patch_artist=True,
+            showfliers=False,
+            medianprops=dict(color="#2c3e50", linewidth=2),
+            boxprops=dict(linewidth=1.2, color="#2c3e50"),
+            whiskerprops=dict(linewidth=1.2, color="#2c3e50"),
+            capprops=dict(linewidth=1.2, color="#2c3e50"),
+        )
+        colors = ["#1f77b4", "#7f8c8d"]
+        for patch, c in zip(bp.get("boxes", []), colors):
+            patch.set_facecolor(c)
+            patch.set_alpha(0.75)
+
+        ax.set_xticklabels([f"Halo\n(n={y_h.size})", f"Non-halo\n(sample, n={y_n.size})"])
+        ax.set_ylabel(r"Redundancy to core $\mathrm{Red}^{\rightarrow \mathcal{M}}$")
+        ax.set_title("Halo vs non-halo\nredundancy-to-core")
+        ax.grid(True, alpha=0.25)
+        if y_h.size > 0 and y_n.size > 0 and np.nanmin(np.concatenate([y_h, y_n])) > 0:
+            ax.set_yscale("log")
+
+    # Panel C: Protect vs Conn (all channels)
+    ax = axes[2]
     ax.scatter(conn_np[idx_non], prot_np[idx_non], s=6, alpha=0.15, color="#7f8c8d", label="Non-halo", edgecolors="none")
     ax.scatter(conn_np[idx_halo], prot_np[idx_halo], s=10, alpha=0.35, color="#1f77b4", label="Halo", edgecolors="none")
     if idx_sup.size > 0:

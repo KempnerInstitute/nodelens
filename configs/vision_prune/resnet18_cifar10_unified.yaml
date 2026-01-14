@@ -78,7 +78,7 @@ metrics:
   
   rayleigh_quotient:
     enabled: true
-    relative: true
+    relative: false  # Standard Rayleigh quotient (no trace-normalization)
     shrinkage: true
   
   redundancy:
@@ -152,12 +152,12 @@ cascade_analysis:
 # -----------------------------------------------------------------------------
 pruning:
   enabled: true
-  distribution: "uniform"            # uniform, global_threshold, size_proportional, importance_weighted
+  distribution: "global_threshold"   # uniform, global_threshold, size_proportional, importance_weighted
   dependency_aware: true             # Propagate masks through BN/skip connections
   min_per_layer: 0.0
   max_per_layer: 0.95
   # Include high sparsity (80%, 90%) to clearly see degradation
-  ratios: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
+  ratios: [0.1, 0.3, 0.4, 0.5, 0.7, 0.8, 0.9, 0.95]
   
   # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:
@@ -166,6 +166,7 @@ pruning:
     # =========================================================================
     - "random"              # Random baseline
     - "magnitude"           # Standard magnitude pruning (prune low)
+    - "activation_mean"     # Mean |activation| baseline
     - "taylor"              # Gradient-based importance
     - "network_slimming"    # Network Slimming (BN gamma) baseline
     - "geometric_median"    # FPGM-style geometric median baseline
@@ -177,6 +178,8 @@ pruning:
     - "rq_low"              # Prune low Rayleigh Quotient
     - "redundancy_low"      # Prune low redundancy (MI)
     - "synergy_low"         # Prune low synergy
+    - "redundancy_high"     # Control: prune high redundancy
+    - "synergy_high"        # Control: prune high synergy
     
     # =========================================================================
     # COMPOSITE COMBINATIONS
@@ -193,6 +196,7 @@ pruning:
     # CLUSTER-AWARE
     # =========================================================================
     - "cluster_aware"               # Original: protect critical, target redundant
+    - "cluster_aware_annealed"      # Annealed mixing / constraints schedule
     - "cluster_aware_protect_redundant"  # Inverted: protect redundant
   
   scoring_methods:
@@ -215,7 +219,7 @@ pruning:
     learning_rate: 0.0001
     weight_decay: 0.0001
     # Safety cap: limits fine-tune compute so the full method×ratio grid stays feasible on 1 GPU
-    max_batches: 100
+    max_batches: 200
 
 # -----------------------------------------------------------------------------
 # EVALUATION (Enhanced for Vision)

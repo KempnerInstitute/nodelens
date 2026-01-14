@@ -365,7 +365,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             except Exception as e:
                 logger.error(f"Failed to evaluate perplexity (shared): {e}")
                 ppl_cached = None
-
+        
         for metric in metrics:
             num_fewshot = fewshot_settings.get(metric, 0)
             try:
@@ -1558,11 +1558,27 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         logger.info(f"Loading tokenizer for existing HF causal LM '{model_id}'")
         tokenizer = AutoTokenizer.from_pretrained(model_id, **self.config.tokenizer_kwargs)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        # Ensure the tokenizer can pad batched inputs (needed by several analysis utilities).
+        # For causal LMs, padding with EOS is standard; fall back to BOS/UNK if EOS is unavailable.
+        added_special = 0
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            if getattr(tokenizer, "eos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif getattr(tokenizer, "bos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.bos_token
+            elif getattr(tokenizer, "unk_token", None) is not None:
+                tokenizer.pad_token = tokenizer.unk_token
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            # Last resort: add a PAD token (should almost never trigger for Llama-family tokenizers).
+            added_special = tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
         # Unwrap underlying HF model if we're holding a small wrapper (e.g., HFCausalLM)
         hf_model = getattr(self.model, "model", self.model)
+        if added_special > 0:
+            try:
+                hf_model.resize_token_embeddings(len(tokenizer))
+            except Exception:
+                pass
 
         # Wrap with TransformerWrapper (expects an nn.Module)
         wrapper_kwargs = {"tracked_layers": getattr(self.config, "tracked_layers", None)}
@@ -1588,8 +1604,19 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         logger.info(f"Loading tokenizer for {model_id}")
         tokenizer = AutoTokenizer.from_pretrained(model_id, **self.config.tokenizer_kwargs)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        # Ensure the tokenizer can pad batched inputs (needed by several analysis utilities).
+        # For causal LMs, padding with EOS is standard; fall back to BOS/UNK if EOS is unavailable.
+        added_special = 0
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            if getattr(tokenizer, "eos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif getattr(tokenizer, "bos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.bos_token
+            elif getattr(tokenizer, "unk_token", None) is not None:
+                tokenizer.pad_token = tokenizer.unk_token
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            # Last resort: add a PAD token (should almost never trigger for Llama-family tokenizers).
+            added_special = tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
         # load model config and model with dtype/device options
         model_kwargs = dict(self.config.model_kwargs or {})
@@ -1606,6 +1633,11 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         logger.info(f"Loading HF model {model_id} with dtype={torch_dtype} device_map={device_map}")
         hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, device_map=device_map, **model_kwargs)
+        if added_special > 0:
+            try:
+                hf_model.resize_token_embeddings(len(tokenizer))
+            except Exception:
+                pass
 
         # Move model to explicit device if device_map not used
         if device_map is None:
@@ -2412,6 +2444,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         )
                     except Exception as e:
                         logger.warning(f"Failed to compute Wanda channel scores for {mlp_path}: {e}")
+                        continue
                 
                 logger.info(f"Wanda: computed channel scores for {len(layer_indices)} MLP layers")
             except Exception as e:
@@ -2471,6 +2504,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         )
                     except Exception as e:
                         logger.warning(f"Failed to compute SparseGPT channel scores for {mlp_path}: {e}")
+                        continue
                 
                 logger.info(f"SparseGPT: computed channel scores for {len(layer_indices)} MLP layers")
             except Exception as e:
@@ -4763,6 +4797,31 @@ class LLMAlignmentExperiment(BaseExperiment):
             conn = abs_W.index_select(0, core_idx).sum(dim=0) / v_norm
             conn = conn.clamp(0.0, 1.0)
 
+            # Optional post-processing to give Conn more dynamic range when needed.
+            #
+            # - rank-normalize Conn among non-supernodes (maps to [0,1] by empirical CDF)
+            # - apply a power transform (power < 1 increases small Conn values; power > 1 shrinks them)
+            if bool(supernode_cfg.get("connectivity_rank_normalize", False)):
+                non_super_idx_for_rank = (~super_mask).nonzero(as_tuple=True)[0]
+                if non_super_idx_for_rank.numel() > 1:
+                    vals = conn[non_super_idx_for_rank]
+                    _, order = torch.sort(vals, stable=True)  # ascending
+                    ranks = torch.empty_like(order, dtype=torch.float32)
+                    ranks[order] = torch.arange(order.numel(), dtype=torch.float32)
+                    ranks = ranks / float(max(1, order.numel() - 1))
+                    conn_rank = conn.clone()
+                    conn_rank[non_super_idx_for_rank] = ranks
+                    conn_rank[super_idx] = 1.0
+                    conn = conn_rank
+
+            conn_power = supernode_cfg.get("connectivity_power", 1.0)
+            try:
+                conn_power_f = float(conn_power)
+            except Exception:
+                conn_power_f = 1.0
+            if conn_power_f != 1.0:
+                conn = conn.clamp(0.0, 1.0).pow(conn_power_f).clamp(0.0, 1.0)
+
             # Halo: top eta among non-supernodes by Conn
             non_super_idx = (~super_mask).nonzero(as_tuple=True)[0]
             if non_super_idx.numel() == 0:
@@ -4772,20 +4831,46 @@ class LLMAlignmentExperiment(BaseExperiment):
             _, halo_rel = torch.topk(halo_scores, k=num_halo, largest=True)
             halo_idx = non_super_idx[halo_rel].long()
 
+            # Optional: sample a subset of *non-halo* channels for redundancy-to-core analysis.
+            # This lets us explicitly compare halo-to-core redundancy vs non-halo-to-core redundancy
+            # without the prohibitive cost of computing redundancy for *all* non-halo channels.
+            non_halo_sample_size = int(supernode_cfg.get("non_halo_sample_size", 256) or 0)
+            non_halo_idx = torch.empty((0,), dtype=torch.long)
+            if non_halo_sample_size > 0:
+                halo_mask_tmp = torch.zeros(m, dtype=torch.bool)
+                halo_mask_tmp[halo_idx] = True
+                non_halo_all = (~super_mask & ~halo_mask_tmp).nonzero(as_tuple=True)[0]
+                if non_halo_all.numel() > 0:
+                    sample_n = min(non_halo_sample_size, int(non_halo_all.numel()))
+                    seed_base = int(supernode_cfg.get("non_halo_sample_seed", 0) or 0)
+                    try:
+                        layer_idx_int = int(layer_name.split("layers.")[-1].split(".")[0])
+                    except Exception:
+                        layer_idx_int = 0
+                    g = torch.Generator()
+                    g.manual_seed(seed_base + layer_idx_int)
+                    perm = torch.randperm(int(non_halo_all.numel()), generator=g)
+                    non_halo_idx = non_halo_all[perm[:sample_n]].long()
+
             plan[layer_name] = {
                 "lp_cpu": lp_cpu,
                 "conn_cpu": conn,
                 "super_idx_cpu": super_idx,
                 "halo_idx_cpu": halo_idx,
+                "non_halo_idx_cpu": non_halo_idx,
                 "m": m,
                 # device-side indices + streaming sums (initialized lazily in hooks)
                 "super_idx": None,
                 "halo_idx": None,
+                "non_halo_idx": None,
                 "sum_q_super": None,
                 "sum_q2_super": None,
                 "sum_q_halo": None,
                 "sum_q2_halo": None,
                 "sum_q_halo_super": None,
+                "sum_q_non_halo": None,
+                "sum_q2_non_halo": None,
+                "sum_q_non_halo_super": None,
                 "count": 0,
             }
 
@@ -4836,13 +4921,18 @@ class LLMAlignmentExperiment(BaseExperiment):
                     st["super_idx"] = st["super_idx_cpu"].to(device=u_flat.device)
                 if st["halo_idx"] is None or st["halo_idx"].device != u_flat.device:
                     st["halo_idx"] = st["halo_idx_cpu"].to(device=u_flat.device)
+                if st.get("non_halo_idx") is None or (st.get("non_halo_idx") is not None and st["non_halo_idx"].device != u_flat.device):
+                    st["non_halo_idx"] = st.get("non_halo_idx_cpu", torch.empty((0,), dtype=torch.long)).to(device=u_flat.device)
 
                 super_idx_dev = st["super_idx"]
                 halo_idx_dev = st["halo_idx"]
+                non_halo_idx_dev = st.get("non_halo_idx")
+                if non_halo_idx_dev is None:
+                    non_halo_idx_dev = torch.empty((0,), device=u_flat.device, dtype=torch.long)
 
                 # Compute q = u * s where s := dL/du is already computed by backprop.
                 # We only materialize the supernode+halo indices.
-                idx_union = torch.cat([super_idx_dev, halo_idx_dev], dim=0)  # [|M|+|H|]
+                idx_union = torch.cat([super_idx_dev, halo_idx_dev, non_halo_idx_dev], dim=0)  # [|M|+|H|+|N|]
                 try:
                     u_sel = u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
                     s_sel = g_u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
@@ -4851,8 +4941,10 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                 q_sel = u_sel * s_sel  # [N, |M|+|H|]
                 n_super = super_idx_dev.numel()
+                n_halo = halo_idx_dev.numel()
                 q_super = q_sel[:, :n_super]  # [N, |M|]
-                q_halo = q_sel[:, n_super:]   # [N, |H|]
+                q_halo = q_sel[:, n_super : n_super + n_halo]   # [N, |H|]
+                q_non_halo = q_sel[:, n_super + n_halo :]  # [N, |N|]
 
                 N = q_sel.shape[0]
                 
@@ -4865,12 +4957,21 @@ class LLMAlignmentExperiment(BaseExperiment):
                     st["sum_q_halo_super"] = torch.zeros(
                         (q_halo.shape[1], q_super.shape[1]), device=q_halo.device, dtype=torch.float32
                     )
+                    st["sum_q_non_halo"] = torch.zeros(q_non_halo.shape[1], device=q_non_halo.device, dtype=torch.float32)
+                    st["sum_q2_non_halo"] = torch.zeros_like(st["sum_q_non_halo"])
+                    st["sum_q_non_halo_super"] = torch.zeros(
+                        (q_non_halo.shape[1], q_super.shape[1]), device=q_non_halo.device, dtype=torch.float32
+                    )
 
                 st["sum_q_super"] += q_super.sum(dim=0)
                 st["sum_q2_super"] += (q_super * q_super).sum(dim=0)
                 st["sum_q_halo"] += q_halo.sum(dim=0)
                 st["sum_q2_halo"] += (q_halo * q_halo).sum(dim=0)
                 st["sum_q_halo_super"] += q_halo.transpose(0, 1) @ q_super  # [|H|,|M|]
+                if q_non_halo.numel() > 0:
+                    st["sum_q_non_halo"] += q_non_halo.sum(dim=0)
+                    st["sum_q2_non_halo"] += (q_non_halo * q_non_halo).sum(dim=0)
+                    st["sum_q_non_halo_super"] += q_non_halo.transpose(0, 1) @ q_super  # [|N|,|M|]
                 st["count"] += N
 
             return fwd_hook, bwd_hook
@@ -4924,6 +5025,8 @@ class LLMAlignmentExperiment(BaseExperiment):
         # ------------------------------------------------------------------
         # Phase 3: Compute Protect + final importance scores; store into importance_scores
         # ------------------------------------------------------------------
+        agg_red_halo: List[float] = []
+        agg_red_non_halo: List[float] = []
         for layer_name, st in plan.items():
             N = int(st.get("count", 0))
             if N <= 1 or st["sum_q_halo_super"] is None:
@@ -4952,6 +5055,31 @@ class LLMAlignmentExperiment(BaseExperiment):
             mi = -0.5 * torch.log(1 - rho_sq)
 
             redundancy_to_core = mi.max(dim=1).values  # [|H|]
+
+            # Optional: redundancy-to-core for a sampled set of non-halo channels (analysis only).
+            redundancy_to_core_non_halo = None
+            non_halo_idx_cpu = st.get("non_halo_idx_cpu", None)
+            if (
+                non_halo_idx_cpu is not None
+                and hasattr(non_halo_idx_cpu, "numel")
+                and int(non_halo_idx_cpu.numel()) > 0
+                and st.get("sum_q_non_halo_super") is not None
+            ):
+                sum_q_non = st["sum_q_non_halo"].detach().cpu()
+                sum_q2_non = st["sum_q2_non_halo"].detach().cpu()
+                sum_q_non_super = st["sum_q_non_halo_super"].detach().cpu()
+
+                mean_non = sum_q_non / float(N)
+                cov_non = (sum_q_non_super / float(N)) - (mean_non.unsqueeze(1) * mean_super.unsqueeze(0))
+                var_non = (sum_q2_non / float(N)) - (mean_non * mean_non)
+                denom_non = torch.sqrt(var_non.clamp_min(0).unsqueeze(1) * var_super.clamp_min(0).unsqueeze(0) + eps)
+                corr_non = torch.where(denom_non > 0, cov_non / denom_non, torch.zeros_like(cov_non))
+                corr_non = corr_non.clamp(-0.9999, 0.9999)
+
+                corr_eff_non = torch.clamp(corr_non, min=0.0) if positive_redundancy else corr_non
+                rho_sq_non = (corr_eff_non * corr_eff_non).clamp(0.0, 0.9999)
+                mi_non = -0.5 * torch.log(1 - rho_sq_non)
+                redundancy_to_core_non_halo = mi_non.max(dim=1).values  # [|N|]
 
             # Convert redundancy-to-core into a [0, 1] protection score.
             #
@@ -5023,6 +5151,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                 redundancy_full[halo_idx] = redundancy_to_core.float()
             except Exception:
                 pass
+            if redundancy_to_core_non_halo is not None and non_halo_idx_cpu is not None:
+                try:
+                    redundancy_full[non_halo_idx_cpu] = redundancy_to_core_non_halo.float()
+                except Exception:
+                    pass
 
             # SCAR-Prot and SCAR-Conn importance scores (high=keep)
             prot_score = (lp * protect_full).float()
@@ -5053,12 +5186,52 @@ class LLMAlignmentExperiment(BaseExperiment):
             results[layer_name] = {
                 "num_supernodes": int(super_idx.numel()),
                 "num_halo": int(halo_idx.numel()),
+                "num_non_halo_sample": int(non_halo_idx_cpu.numel()) if non_halo_idx_cpu is not None else 0,
                 "q_samples": N,
                 "conn_mean": float(conn.mean().item()),
                 "protect_halo_mean": float(protect_halo.mean().item()) if protect_halo.numel() else 0.0,
                 "redundancy_to_core_mean": float(redundancy_to_core.mean().item()) if redundancy_to_core.numel() else 0.0,
+                "non_halo_redundancy_to_core_mean": float(redundancy_to_core_non_halo.mean().item())
+                if redundancy_to_core_non_halo is not None and redundancy_to_core_non_halo.numel()
+                else 0.0,
             }
+
+            # Aggregate distributions (for tables / sanity checks)
+            try:
+                halo_vals = redundancy_to_core.detach().float()
+                halo_vals = halo_vals[torch.isfinite(halo_vals)]
+                agg_red_halo.extend([float(x) for x in halo_vals.tolist() if x == x])
+            except Exception:
+                pass
+            if redundancy_to_core_non_halo is not None:
+                try:
+                    non_vals = redundancy_to_core_non_halo.detach().float()
+                    non_vals = non_vals[torch.isfinite(non_vals)]
+                    agg_red_non_halo.extend([float(x) for x in non_vals.tolist() if x == x])
+                except Exception:
+                    pass
         
+        # Add aggregate stats for paper tables (useful even when per-layer values are noisy).
+        if agg_red_halo or agg_red_non_halo:
+            def _stats(vals: List[float]) -> Dict[str, Any]:
+                arr = np.asarray(vals, dtype=np.float64)
+                arr = arr[np.isfinite(arr)]
+                if arr.size == 0:
+                    return {"n": 0, "mean": None, "std": None, "median": None}
+                return {
+                    "n": int(arr.size),
+                    "mean": float(arr.mean()),
+                    "std": float(arr.std()),
+                    "median": float(np.median(arr)),
+                }
+
+            results["_aggregate"] = {
+                "redundancy_to_core": {
+                    "halo": _stats(agg_red_halo),
+                    "non_halo_sample": _stats(agg_red_non_halo),
+                }
+            }
+
         logger.info(f"Computed SCAR protection/connectivity scores for {len(results)} layers")
         return results
     
@@ -6459,7 +6632,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     if core_mask is not None:
                         break
             except Exception:
-                core_mask = self.importance_scores[layer_name].get("supernode_mask")
+                core_mask = (self.importance_scores.get(layer_name) or {}).get("supernode_mask")
             if core_mask is not None and self._should_protect_supernodes_for_metric(metric):
                 margin = torch.abs(scores).max().detach().item() + 1.0
                 if mode == "low":

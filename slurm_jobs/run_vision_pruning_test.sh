@@ -18,6 +18,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+export PYTHONPATH="${PWD}:${PWD}/src:${PYTHONPATH:-}"
+
 echo "=========================================="
 echo "Vision Pruning Test (AlexNet on ImageNet)"
 echo "=========================================="

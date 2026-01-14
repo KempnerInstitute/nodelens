@@ -291,26 +291,61 @@ class DependencyAwarePruning:
             # Conv2d: [out_channels, in_channels, k_h, k_w]
             expected_out = module.out_channels
             expected_in = module.in_channels
+            groups = int(getattr(module, "groups", 1))
+            # Weight shape is [out_channels, in_channels/groups, k_h, k_w]
+            in_per_group = int(module.weight.shape[1])
             
             # Handle dimension mismatch (e.g., from skip connections or downsample layers)
             if out_mask.shape[0] != expected_out:
                 out_mask = torch.ones(expected_out, dtype=torch.bool, device=device)
             if in_mask.shape[0] != expected_in:
                 in_mask = torch.ones(expected_in, dtype=torch.bool, device=device)
-                
-            weight_mask = (out_mask.view(-1, 1, 1, 1) & in_mask.view(1, -1, 1, 1)).expand_as(module.weight)
+
+            # Grouped/depthwise conv needs special handling: the weight's "in channel"
+            # dimension is in_channels/groups, and the input mask must be applied per-group.
+            if groups > 1:
+                out_per_group = expected_out // groups if groups > 0 else expected_out
+                # Build a per-output-channel view of the relevant slice of in_mask
+                in_mask_per_out = torch.empty((expected_out, in_per_group), dtype=torch.bool, device=device)
+                for g in range(groups):
+                    out_slice = slice(g * out_per_group, min((g + 1) * out_per_group, expected_out))
+                    in_slice = slice(g * in_per_group, min((g + 1) * in_per_group, expected_in))
+                    # Fallback to all-True if something is off (robustness)
+                    if (in_slice.stop - in_slice.start) != in_per_group:
+                        in_mask_per_out[out_slice] = torch.ones((out_slice.stop - out_slice.start, in_per_group), dtype=torch.bool, device=device)
+                    else:
+                        in_mask_per_out[out_slice] = in_mask[in_slice].view(1, -1).expand(out_slice.stop - out_slice.start, -1)
+
+                weight_mask = (out_mask.view(-1, 1, 1, 1) & in_mask_per_out.view(expected_out, in_per_group, 1, 1)).expand_as(module.weight)
+            else:
+                weight_mask = (out_mask.view(-1, 1, 1, 1) & in_mask.view(1, -1, 1, 1)).expand_as(module.weight)
 
         elif isinstance(module, nn.Conv1d):
             # Conv1d: [out_channels, in_channels, k]
             expected_out = module.out_channels
             expected_in = module.in_channels
+            groups = int(getattr(module, "groups", 1))
+            in_per_group = int(module.weight.shape[1])
             
             if out_mask.shape[0] != expected_out:
                 out_mask = torch.ones(expected_out, dtype=torch.bool, device=device)
             if in_mask.shape[0] != expected_in:
                 in_mask = torch.ones(expected_in, dtype=torch.bool, device=device)
-                
-            weight_mask = (out_mask.view(-1, 1, 1) & in_mask.view(1, -1, 1)).expand_as(module.weight)
+
+            if groups > 1:
+                out_per_group = expected_out // groups if groups > 0 else expected_out
+                in_mask_per_out = torch.empty((expected_out, in_per_group), dtype=torch.bool, device=device)
+                for g in range(groups):
+                    out_slice = slice(g * out_per_group, min((g + 1) * out_per_group, expected_out))
+                    in_slice = slice(g * in_per_group, min((g + 1) * in_per_group, expected_in))
+                    if (in_slice.stop - in_slice.start) != in_per_group:
+                        in_mask_per_out[out_slice] = torch.ones((out_slice.stop - out_slice.start, in_per_group), dtype=torch.bool, device=device)
+                    else:
+                        in_mask_per_out[out_slice] = in_mask[in_slice].view(1, -1).expand(out_slice.stop - out_slice.start, -1)
+
+                weight_mask = (out_mask.view(-1, 1, 1) & in_mask_per_out.view(expected_out, in_per_group, 1)).expand_as(module.weight)
+            else:
+                weight_mask = (out_mask.view(-1, 1, 1) & in_mask.view(1, -1, 1)).expand_as(module.weight)
 
         else:
             # Default: mask entire weight tensor
