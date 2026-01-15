@@ -9,7 +9,6 @@ logs/
 runs/
 outputs/
 results/
-experiments/
 
 
 # Backup files
@@ -161,7 +160,6 @@ dmypy.json
 /runs/
 /outputs/
 /results/
-/experiments/
 
 # Temporary files
 *.tmp

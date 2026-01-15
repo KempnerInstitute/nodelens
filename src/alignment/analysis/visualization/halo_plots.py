@@ -297,7 +297,7 @@ INTERPRETATION:
 
 {echo_interpret}
 
-THEORETICAL BASIS (alignment_notes):
+THEORETICAL BASIS (Gaussian mutual information):
 ─────────────────────────────────────────
 Redundancy: I(Yᵢ; Yⱼ) = -½ log(1 - ρ²)
 This is the Gaussian MI between neuron pairs.

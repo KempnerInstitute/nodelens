@@ -139,7 +139,7 @@ cascade_analysis:
 pruning:
   enabled: true
   ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-  selection_modes: ["low", "high"]
+  selection_modes: ["low"]
   distribution: "uniform"
   min_per_layer: 0.0
   max_per_layer: 0.95

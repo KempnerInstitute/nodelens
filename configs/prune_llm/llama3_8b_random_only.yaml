@@ -1,0 +1,87 @@
+# ============================================================================
+# LLAMA-3.1-8B RANDOM (CHANNEL) BASELINE
+# ============================================================================
+#
+# Purpose:
+# - Fill the missing "Random (channel)" baseline row in paper tables.
+# - Run ONLY one pruning strategy (random) at 50% sparsity.
+# - Keep evaluation protocol consistent with the main paper run (few-shot settings, ppl protocol).
+#
+# This is intentionally lightweight: we skip SCAR analyses/plots and only do:
+# - Baseline eval
+# - Random structured channel pruning @ 50%
+# - Post-prune eval
+# ============================================================================
+
+experiment:
+  name: "llama3_8b_paper_results_random"
+  type: "llm_alignment"
+  output_dir: "./results/paper/llama3_8b_random"
+  seed: 42
+  device: "cuda"
+  save_activations: false
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+llm:
+  evaluate_perplexity: true
+  evaluation_num_samples: 100
+  use_nvidia_fewshot: true
+  perplexity_protocol: "oats"
+  wikitext_subset: "wikitext-2-raw-v1"
+  perplexity_seq_len: 2048
+
+  evaluation_metrics:
+    - "perplexity"
+    - "accuracy_openbookqa"
+    - "accuracy_mmlu"
+    - "accuracy_hellaswag"
+    - "accuracy_piqa"
+    - "accuracy_boolq"
+    - "accuracy_winogrande"
+    - "accuracy_arc_easy"
+    - "accuracy_arc_challenge"
+
+# Disable heavy analyses for this baseline-only run
+analysis:
+  generate_plots: false
+  save_scores: false
+
+do_scar_metrics: false
+do_directed_redundancy: false
+do_connectivity_pruning: false
+do_halo_analysis: false
+do_generalized_importance: false
+
+pruning:
+  enabled: true
+  target: "ffn"
+  structured: true
+  dependency_aware: true
+  distribution: "uniform"
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+
+  # Single point needed for table_full_benchmarks_50
+  sparsity_levels: [0.5]
+
+  # Random structured pruning: selection done by mode="random"
+  selection_modes: ["random"]
+
+  # Only one strategy for this run; scores are generated in-code (deterministic).
+  algorithms:
+    - "random"
+
+  single_strategy: "random"
+

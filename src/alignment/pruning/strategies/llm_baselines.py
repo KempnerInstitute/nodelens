@@ -88,32 +88,62 @@ class WandaPruning(BasePruningStrategy):
             device: Device for computation
         """
         logger.info(f"Calibrating Wanda with {self.num_calibration_samples} samples...")
-        
-        # Dictionary to store activation norms per layer
-        layer_activations: Dict[str, List[torch.Tensor]] = {}
-        
-        # Hook to capture activations
+
+        # IMPORTANT (paper-faithful behavior + memory):
+        # Official Wanda implementations accumulate a running statistic (per layer) instead of
+        # storing all activations. The canonical update (see `external/wanda/layerwrapper.py`
+        # in origin/iss117_acllm_v3) is equivalent to maintaining:
+        #   scaler_row[j] = E_sample[ sum_t x_{t,j}^2 ]   (avg over samples; sum over tokens)
+        # and then using sqrt(scaler_row) as the per-input-feature activation scale.
+        #
+        # This differs from "concatenate all activations then take torch.norm" only by a
+        # layer-constant scaling (for fixed sequence length), but the running version is
+        # much more memory-efficient and matches reference code structure.
+        running: Dict[str, Tuple[torch.Tensor, int]] = {}  # name -> (scaler_row (CPU), nsamples)
+
         hooks = []
-        def make_hook(name):
+
+        def make_hook(name: str):
             def hook(module, input, output):
-                if name not in layer_activations:
-                    layer_activations[name] = []
                 # Store input activations (for weight × activation)
-                if isinstance(input, tuple):
-                    inp = input[0]
-                else:
-                    inp = input
-                # Flatten batch and sequence dimensions, keep feature dim
+                inp = input[0] if isinstance(input, tuple) else input
+
+                # Normalize shapes to match reference Wanda behavior:
+                # - If 2D, treat as a single sample (batch=1).
+                if inp.dim() == 2:
+                    inp = inp.unsqueeze(0)
+
+                tmp = int(inp.shape[0])  # batch size (number of samples in this hook call)
+                if tmp <= 0:
+                    return
+
+                # Flatten batch & sequence into tokens for the sum-of-squares statistic.
+                # Typical LLM MLP inputs are [B, S, F].
                 if inp.dim() == 3:
-                    # [batch, seq, hidden] -> [batch*seq, hidden]
-                    inp = inp.view(-1, inp.size(-1))
-                layer_activations[name].append(inp.detach().cpu())
+                    tokens = inp.reshape(-1, inp.shape[-1])  # [B*S, F]
+                else:
+                    # Fallback: treat last dim as features and everything else as "tokens".
+                    tokens = inp.reshape(-1, inp.shape[-1])
+
+                # sum_t x^2 for each input feature (over tokens and batch)
+                sumsq = tokens.detach().to(dtype=torch.float32).pow(2).sum(dim=0).cpu()  # [F]
+
+                if name not in running:
+                    running[name] = (sumsq / tmp, tmp)
+                else:
+                    scaler_row, nsamples = running[name]
+                    new_n = nsamples + tmp
+                    # Running mean update (matches reference logic)
+                    scaler_row = scaler_row * (nsamples / new_n) + (sumsq / new_n)
+                    running[name] = (scaler_row, new_n)
+
             return hook
-        
-        # Register hooks on Linear layers
+
+        # Register hooks (only for MLP/FFN projections by default to keep calibration lightweight).
         for name, module in model.named_modules():
             if isinstance(module, nn.Linear):
-                hooks.append(module.register_forward_hook(make_hook(name)))
+                if any(p in name for p in ["mlp", "up_proj", "gate_proj", "down_proj", "fc"]):
+                    hooks.append(module.register_forward_hook(make_hook(name)))
         
         # Run calibration
         model.eval()
@@ -146,14 +176,16 @@ class WandaPruning(BasePruningStrategy):
         for hook in hooks:
             hook.remove()
         
-        # Compute activation norms (L2 norm per feature dimension)
-        for name, acts in layer_activations.items():
-            if acts:
-                # Concatenate all activations
-                all_acts = torch.cat(acts, dim=0)  # [total_tokens, hidden]
-                # Compute L2 norm per input feature
-                self.activation_norms[name] = torch.norm(all_acts, p=2, dim=0)  # [hidden]
-                logger.debug(f"Layer {name}: activation norm shape {self.activation_norms[name].shape}")
+        # Finalize activation norms:
+        # activation_norm[j] = sqrt(scaler_row[j]) where scaler_row is the running avg of sumsq.
+        self.activation_norms = {}
+        for name, (scaler_row, nsamples) in running.items():
+            if nsamples <= 0:
+                continue
+            # Guard against tiny numerical negatives.
+            scaler_row = torch.clamp(scaler_row, min=0.0)
+            self.activation_norms[name] = torch.sqrt(scaler_row)
+            logger.debug(f"Layer {name}: activation norm shape {self.activation_norms[name].shape}")
         
         self._calibrated = True
         logger.info(f"Wanda calibration complete. Computed norms for {len(self.activation_norms)} layers.")
@@ -297,13 +329,16 @@ class WandaPruning(BasePruningStrategy):
             if mode == "random":
                 # Random selection per row
                 rand = torch.rand((rows, cols), device=device)
-                _, idx = torch.topk(rand, k, largest=False, dim=1)
+                sort_res = torch.sort(rand, dim=1, stable=True)
+                idx = sort_res[1][:, :k]
             elif mode == "low":
-                # Prune lowest Wanda scores
-                _, idx = torch.topk(scores, k, largest=False, dim=1)
+                # Paper-faithful: stable row-wise sort, then prune lowest fraction.
+                sort_res = torch.sort(scores, dim=1, stable=True)
+                idx = sort_res[1][:, :k]
             else:  # mode == "high"
-                # Prune highest Wanda scores
-                _, idx = torch.topk(scores, k, largest=True, dim=1)
+                # Stable row-wise sort, prune highest fraction.
+                sort_res = torch.sort(scores, dim=1, stable=True)
+                idx = sort_res[1][:, -k:]
 
             row_idx = torch.arange(rows, device=device).unsqueeze(1).expand_as(idx)
             mask[row_idx, idx] = False

@@ -75,7 +75,7 @@ metrics:
   
   rayleigh_quotient:
     enabled: true
-    relative: true
+    relative: false  # Standard Rayleigh quotient (no trace-normalization)
     shrinkage: true
   
   redundancy:
@@ -143,7 +143,7 @@ cascade_analysis:
 # ResNet-50 on ImageNet: larger model, more channels, tests scalability
 pruning:
   enabled: true
-  distribution: "uniform"            # uniform, global_threshold, adaptive_sensitivity
+  distribution: "global_threshold"   # uniform, global_threshold, adaptive_sensitivity
   dependency_aware: true             # ResNet has skip connections
   min_per_layer: 0.0
   max_per_layer: 0.95
@@ -156,6 +156,7 @@ pruning:
     # =========================================================================
     - "random"              # Random baseline
     - "magnitude"           # Standard magnitude pruning (prune low)
+    - "activation_mean"     # Mean |activation| baseline
     - "taylor"              # Gradient-based importance
     - "network_slimming"    # Network Slimming (BN gamma) baseline
     - "geometric_median"    # FPGM-style geometric median baseline
@@ -167,6 +168,8 @@ pruning:
     - "rq_low"              # Prune low Rayleigh Quotient
     - "redundancy_low"      # Prune low redundancy (MI)
     - "synergy_low"         # Prune low synergy
+    - "redundancy_high"     # Control: prune high redundancy
+    - "synergy_high"        # Control: prune high synergy
     
     # =========================================================================
     # COMPOSITE COMBINATIONS
@@ -183,6 +186,7 @@ pruning:
     # CLUSTER-AWARE
     # =========================================================================
     - "cluster_aware"               # Original: protect critical, target redundant
+    - "cluster_aware_annealed"      # Annealed mixing / constraints schedule
     - "cluster_aware_protect_redundant"  # Inverted: protect redundant
 
   scoring_methods:
@@ -200,11 +204,11 @@ pruning:
 
   fine_tune:
     enabled: true  # Enable recovery fine-tuning after pruning (standard for reporting)
-    epochs: 5  # Fewer epochs for ImageNet
+    epochs: 3  # Keep per-(method,ratio) fine-tune feasible on ImageNet-100
     learning_rate: 0.00001
     weight_decay: 0.0001
     # Critical for feasibility: fine-tuning every (method,ratio) on ImageNet-100 otherwise explodes runtime.
-    max_batches: 10
+    max_batches: 50
 
 # -----------------------------------------------------------------------------
 # EVALUATION (Enhanced for Vision)

@@ -77,14 +77,6 @@ from .halo_plots import (
     plot_halo_redundancy_heatmap,
 )
 
-# Paper-specific plots (SCAR draft)
-from .paper_plots import (
-    plot_loss_proxy_concentration,
-    plot_halo_structure,
-    plot_supernode_halo_summary,
-    plot_scar_schematic,
-)
-
 # Cluster visualization plots
 from .cluster_plots import (
     plot_metric_scatter,
@@ -136,11 +128,6 @@ __all__ = [
     "plot_halo_redundancy_by_depth",
     "plot_halo_redundancy_comprehensive",
     "plot_halo_redundancy_heatmap",
-    # Paper plots
-    "plot_loss_proxy_concentration",
-    "plot_halo_structure",
-    "plot_supernode_halo_summary",
-    "plot_scar_schematic",
     # Cluster plots
     "plot_metric_scatter",
     "plot_cluster_evolution",

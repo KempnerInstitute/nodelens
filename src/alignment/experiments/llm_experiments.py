@@ -25,6 +25,9 @@ class LLMAlignmentExperiment(BaseExperiment):
     def __init__(self, config):
         super().__init__(config)
         self.importance_scores: Dict[str, Dict[str, torch.Tensor]] = {}
+        # Cache for expensive perplexity tokenization (e.g., full WikiText-2 test set).
+        # Keyed by (dataset, subset, split, seqlen, add_bos_token flag).
+        self._ppl_token_cache: Dict[Tuple[str, str, str, int, bool], torch.Tensor] = {}
 
     def setup(self):
         """Setup LLM alignment experiment components."""
@@ -72,9 +75,17 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                 logger.info(f"Tracked layers expanded to {len(expanded)} layers")
 
-        # Ensure we have a text dataset for importance computation in LLM experiments.
-        # BaseExperiment may skip dataset initialization for LLM experiment types.
-        if getattr(self, "dataset", None) is None:
+        # Ensure we have a *text* dataset for importance computation in LLM experiments.
+        # BaseExperiment may skip dataset initialization for LLM experiment types, but even when it
+        # does initialize a dataset (e.g., `c4` via registry), it may be a streaming dataset without
+        # a materialized `.texts` list. For SCAR calibration we require raw strings, so we rebuild
+        # the dataset when `.texts` is missing or None.
+        needs_text_dataset = (
+            getattr(self, "dataset", None) is None
+            or not hasattr(self.dataset, "texts")
+            or getattr(self.dataset, "texts", None) is None
+        )
+        if needs_text_dataset:
             try:
                 from alignment.dataops.datasets.text_datasets import load_text_dataset
             except ImportError as e:
@@ -126,28 +137,107 @@ class LLMAlignmentExperiment(BaseExperiment):
         import torch
         from torch import autocast
 
-        logger.info(f"Evaluating perplexity on {dataset} ({split})...")
+        llm_cfg = getattr(self.config, "llm", {}) or {}
+        protocol = str(llm_cfg.get("perplexity_protocol", "legacy")).lower()
 
-        # Load dataset
-        from alignment.dataops.datasets.text_datasets import load_text_dataset
-        dataset_obj = load_text_dataset(dataset, self.config.model_config.get("model_id"), split=split, max_samples=num_samples)
+        logger.info(f"Evaluating perplexity on {dataset} ({split}) [protocol={protocol}]...")
 
         self.model.eval()
-        nlls = []
-        total_length = 0
-
         device = torch.device(self.config.device)
         model_dtype = getattr(torch, self.config.model_config.get("torch_dtype", "float32"))
+
+        # ------------------------------------------------------------------
+        # OATS/SparseGPT-style WikiText-2 perplexity:
+        # - concatenate full test set
+        # - evaluate in contiguous blocks (default: 2048 tokens)
+        #
+        # This matches the common protocol used in pruning papers (and OATS Table 19),
+        # and avoids padding artifacts from per-line evaluation.
+        # ------------------------------------------------------------------
+        if protocol in {"oats", "sparsegpt", "block"} and str(dataset).lower() in {"wikitext", "wikitext2", "wikitext-2"}:
+            try:
+                from datasets import load_dataset
+            except Exception as e:
+                logger.error(f"datasets library not available; cannot run OATS-style perplexity: {e}")
+                return float("inf")
+
+            subset = str(llm_cfg.get("wikitext_subset", "wikitext-2-raw-v1"))
+            seqlen = int(llm_cfg.get("perplexity_seq_len", 2048))
+            # HuggingFace tokenizers may or may not add a BOS token by default; we store the flag for caching.
+            add_bos = bool(getattr(self.tokenizer, "add_bos_token", False))
+
+            cache_key = (str(dataset).lower(), subset, str(split), seqlen, add_bos)
+            input_ids = self._ppl_token_cache.get(cache_key)
+            if input_ids is None:
+                logger.info(f"Tokenizing WikiText for OATS-style PPL: subset={subset}, split={split}, seqlen={seqlen}")
+                ds = load_dataset("wikitext", subset, split=split)
+                texts = [t for t in ds["text"] if isinstance(t, str) and t.strip()]
+                joined = "\n\n".join(texts)
+                enc = self.tokenizer(joined, return_tensors="pt")
+                input_ids = enc["input_ids"].to(dtype=torch.long, device="cpu")
+                self._ppl_token_cache[cache_key] = input_ids
+
+            nlls: List[torch.Tensor] = []
+            total_tokens = 0
+
+            with torch.no_grad():
+                # Iterate blocks without overlap (standard pruning-paper protocol).
+                # If the last block is too short to have any targets, skip it.
+                for bi, start in enumerate(range(0, int(input_ids.size(1)), seqlen)):
+                    end = min(start + seqlen, int(input_ids.size(1)))
+                    if end - start < 2:
+                        continue
+                    block = input_ids[:, start:end].to(device=device, dtype=torch.long)
+                    labels = block.clone()
+                    # Ensure token counting matches HF causal LM loss normalization (shifted by 1).
+                    labels[:, 0] = -100
+                    num_valid_tokens = int((labels != -100).sum().item())
+                    if num_valid_tokens <= 0:
+                        continue
+
+                    with autocast(device_type=self.config.device, dtype=model_dtype):
+                        outputs = self.model(block, labels=labels)
+                        loss = outputs.loss
+                    nlls.append(loss * num_valid_tokens)
+                    total_tokens += num_valid_tokens
+
+                    # Optional: allow partial evaluation for debugging
+                    max_blocks = llm_cfg.get("perplexity_max_blocks")
+                    if max_blocks is not None and bi + 1 >= int(max_blocks):
+                        break
+
+            if total_tokens <= 0 or not nlls:
+                logger.error("No valid tokens processed for OATS-style perplexity!")
+                return float("inf")
+
+            ppl = torch.exp(torch.stack(nlls).sum() / total_tokens)
+            perplexity = float(ppl.item())
+            logger.info(f"OATS-style WikiText PPL: {perplexity:.4f}")
+            return perplexity
+
+        # ------------------------------------------------------------------
+        # Legacy per-sample perplexity (kept for backwards compatibility).
+        # WARNING: this is sensitive to padding/truncation and is not paper-standard.
+        # ------------------------------------------------------------------
+        from alignment.dataops.datasets.text_datasets import load_text_dataset
+
+        dataset_obj = load_text_dataset(
+            dataset,
+            self.config.model_config.get("model_id"),
+            split=split,
+            max_samples=num_samples,
+        )
+
+        nlls = []
+        total_length = 0
 
         with torch.no_grad():
             for i, batch in enumerate(dataset_obj):
                 if i >= num_samples:
                     break
 
-                # Move input_ids to device (long, never bfloat16)
                 input_ids = batch["input_ids"].unsqueeze(0).to(device, dtype=torch.long)
 
-                # Prepare labels
                 labels = input_ids.clone()
                 pad_token_id = getattr(self.tokenizer, "pad_token_id", None) or getattr(self.tokenizer, "eos_token_id", None)
                 labels[labels == pad_token_id] = -100
@@ -155,7 +245,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                     labels[0, 0] = -100
 
                 try:
-                    # Use autocast for bfloat16-safe forward
                     with autocast(device_type=self.config.device, dtype=model_dtype):
                         outputs = self.model(input_ids, labels=labels)
                         loss = outputs.loss
@@ -164,7 +253,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                     if num_valid_tokens > 0:
                         nlls.append(loss * num_valid_tokens)
                         total_length += num_valid_tokens
-                        logger.info(f"Sample {i}: loss={loss.item():.4f}, valid_tokens={num_valid_tokens}")
                     else:
                         logger.warning(f"Sample {i}: No valid tokens!")
                 except Exception as e:
@@ -263,31 +351,32 @@ class LLMAlignmentExperiment(BaseExperiment):
             use_chain_of_thought = True  # GSM8k uses CoT in Minitron
             logger.info("Using NVIDIA Minitron few-shot settings")
         
-        results = {}
+        results: Dict[str, Any] = {}
+
+        # Avoid recomputing perplexity multiple times (loss/bpb derive from it).
+        need_ppl = any(m in metrics for m in ["perplexity", "loss", "bits_per_byte", "normalized_perplexity"])
+        ppl_cached: Optional[float] = None
+        if need_ppl:
+            try:
+                ppl_cached = self.evaluate_perplexity(
+                    dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
+                    num_samples=num_samples,
+                )
+            except Exception as e:
+                logger.error(f"Failed to evaluate perplexity (shared): {e}")
+                ppl_cached = None
         
         for metric in metrics:
             num_fewshot = fewshot_settings.get(metric, 0)
             try:
                 if metric == "perplexity":
-                    results["perplexity"] = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
+                    results["perplexity"] = ppl_cached
                 elif metric == "loss":
-                    # Cross-entropy loss = ln(perplexity)
-                    ppl = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
-                    results["loss"] = np.log(ppl)
+                    results["loss"] = None if ppl_cached is None else float(np.log(ppl_cached))
                 elif metric == "bits_per_byte":
                     # Bits per byte = log2(perplexity) / avg_chars_per_token
-                    ppl = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
                     # Approximate: assume ~4 characters per token on average
-                    results["bits_per_byte"] = np.log2(ppl) / 4.0
+                    results["bits_per_byte"] = None if ppl_cached is None else float(np.log2(ppl_cached) / 4.0)
                 elif metric == "accuracy_hellaswag":
                     results["accuracy_hellaswag"] = self._evaluate_hellaswag(
                         num_samples=num_samples, num_fewshot=num_fewshot
@@ -298,6 +387,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                     )
                 elif metric == "accuracy_arc_challenge":
                     results["accuracy_arc_challenge"] = self._evaluate_arc_challenge(
+                        num_samples=num_samples, num_fewshot=num_fewshot
+                    )
+                elif metric == "accuracy_openbookqa":
+                    results["accuracy_openbookqa"] = self._evaluate_openbookqa(
                         num_samples=num_samples, num_fewshot=num_fewshot
                     )
                 elif metric == "accuracy_piqa":
@@ -332,12 +425,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     results["accuracy_humaneval"] = self._evaluate_humaneval(num_samples=num_samples)
                 elif metric == "normalized_perplexity":
                     # Normalized to 0-100 scale (100 = best = PPL of 1)
-                    ppl = self.evaluate_perplexity(
-                        dataset=getattr(self.config, "evaluation_dataset", "wikitext"),
-                        num_samples=num_samples
-                    )
-                    # Use exponential decay: score = 100 * exp(-0.01 * (ppl - 1))
-                    results["normalized_perplexity"] = 100 * np.exp(-0.01 * (ppl - 1))
+                    results["normalized_perplexity"] = None if ppl_cached is None else float(100 * np.exp(-0.01 * (ppl_cached - 1)))
                 else:
                     logger.warning(f"Unknown evaluation metric: {metric}")
             except Exception as e:
@@ -345,6 +433,67 @@ class LLMAlignmentExperiment(BaseExperiment):
                 results[metric] = None
         
         return results
+
+    def _score_continuations_conditional_logprob(
+        self,
+        prompt: str,
+        continuations: List[str],
+        *,
+        max_length: int = 2048,
+    ) -> List[float]:
+        """
+        Score each continuation by its conditional log-probability given the prompt.
+
+        Implementation detail:
+        We compute the model loss on *only the continuation tokens* (masking prompt tokens
+        with -100) and return the mean log-prob per continuation token (higher is better).
+        """
+        # Defensive: handle empty candidate lists
+        if not continuations:
+            return []
+
+        device = torch.device(self.config.device)
+        model = self.model
+        tok = self.tokenizer
+
+        # Encode prompt once (no special tokens), then add BOS if the tokenizer defines one.
+        prompt_ids = tok(prompt, add_special_tokens=False).input_ids
+        bos_id = getattr(tok, "bos_token_id", None)
+        prefix_ids = ([bos_id] if bos_id is not None else []) + prompt_ids
+        prefix_len_full = len(prefix_ids)
+
+        scores: List[float] = []
+        model.eval()
+        with torch.no_grad():
+            for cont in continuations:
+                cont_ids = tok(cont, add_special_tokens=False).input_ids
+                input_ids = prefix_ids + cont_ids
+
+                # Truncate from the left if needed (keep most recent context).
+                prefix_len = prefix_len_full
+                if len(input_ids) > max_length:
+                    drop = len(input_ids) - max_length
+                    input_ids = input_ids[drop:]
+                    prefix_len = max(0, prefix_len_full - drop)
+                    # If we truncated away the entire prompt context, the score becomes meaningless.
+                    if prefix_len <= 0:
+                        scores.append(float("-inf"))
+                        continue
+
+                input_ids_t = torch.tensor(input_ids, dtype=torch.long, device=device).unsqueeze(0)
+                attn = torch.ones_like(input_ids_t, dtype=torch.long, device=device)
+
+                labels = input_ids_t.clone()
+                labels[:, :prefix_len] = -100  # only score continuation tokens
+
+                out = model(input_ids=input_ids_t, attention_mask=attn, labels=labels)
+                loss = getattr(out, "loss", None)
+                if loss is None:
+                    scores.append(float("-inf"))
+                else:
+                    scores.append(float(-loss.item()))
+
+        return scores
 
     def _evaluate_mmlu(self, num_samples: int = 100, subjects: List[str] = None, num_fewshot: int = 0) -> float:
         """
@@ -366,7 +515,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             return 0.0
         
         shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
-        logger.info(f"Evaluating {shot_str} accuracy on MMLU ({num_samples} samples)...")
+        logger.info(f"Evaluating {shot_str} accuracy on MMLU (~{num_samples} samples total)...")
         
         # Default subjects for quick evaluation (covers different domains)
         if subjects is None:
@@ -435,11 +584,27 @@ class LLMAlignmentExperiment(BaseExperiment):
         device = torch.device(self.config.device)
         choice_labels = ["A", "B", "C", "D"]
         
-        # Calculate samples per subject
-        samples_per_subject = max(1, num_samples // len(subjects))
+        # Deterministic sampling (avoid label/order bias from always taking the first example).
+        # Interpret num_samples as a TOTAL budget across subjects.
+        import math
+        import zlib
+
+        subjects = list(subjects)
+        seed = int(getattr(self.config, "seed", 0) or 0)
+
+        # Shuffle subject order to avoid any systematic ordering artifacts.
+        rng_subj = np.random.default_rng(seed)
+        rng_subj.shuffle(subjects)
+
+        # Allocate an exact per-subject quota summing to num_samples.
+        base = int(num_samples) // max(1, len(subjects))
+        rem = int(num_samples) % max(1, len(subjects))
+        quotas = [base + (1 if i < rem else 0) for i in range(len(subjects))]
         
         with torch.no_grad():
-            for subject in subjects:
+            for subject, quota in zip(subjects, quotas):
+                if quota <= 0:
+                    continue
                 try:
                     dataset = load_dataset("cais/mmlu", subject, split="test", trust_remote_code=True)
                     # Load dev split for few-shot examples
@@ -452,9 +617,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                 # Build few-shot prompt for this subject
                 fewshot_prompt = ""
                 if num_fewshot > 0:
-                    for i, ex in enumerate(dev_dataset):
-                        if i >= num_fewshot:
-                            break
+                    # Sample few-shot examples from dev split.
+                    try:
+                        dev_n = len(dev_dataset)
+                        dev_seed = seed + int(zlib.adler32(f"{subject}:dev".encode()))
+                        rng_dev = np.random.default_rng(dev_seed)
+                        dev_idxs = rng_dev.choice(dev_n, size=min(int(num_fewshot), dev_n), replace=False).tolist()
+                    except Exception:
+                        dev_idxs = list(range(int(num_fewshot)))
+
+                    for ex_idx in dev_idxs:
+                        ex = dev_dataset[int(ex_idx)]
                         q = ex["question"]
                         choices = ex["choices"]
                         answer_idx = ex["answer"]
@@ -466,35 +639,33 @@ class LLMAlignmentExperiment(BaseExperiment):
                 subject_correct = 0
                 subject_total = 0
                 
-                for i, example in enumerate(dataset):
-                    if subject_total >= samples_per_subject:
+                # Sample test examples for this subject (without replacement).
+                try:
+                    n_test = len(dataset)
+                    test_seed = seed + int(zlib.adler32(f"{subject}:test".encode()))
+                    rng_test = np.random.default_rng(test_seed)
+                    test_idxs = rng_test.choice(n_test, size=min(int(quota), n_test), replace=False).tolist()
+                except Exception:
+                    test_idxs = list(range(int(quota)))
+
+                for ex_i, ex_idx in enumerate(test_idxs):
+                    if total >= num_samples:
                         break
                     
                     try:
+                        example = dataset[int(ex_idx)]
                         question = example["question"]
                         choices = example["choices"]
                         answer_idx = example["answer"]  # 0-indexed
                         
-                        # Score each choice
-                        scores = []
-                        for j, choice in enumerate(choices):
-                            # Format: Question: ... Answer: A) choice
-                            if num_fewshot > 0:
-                                choices_str = "\n".join([f"{choice_labels[k]}) {c}" for k, c in enumerate(choices)])
-                                text = f"{fewshot_prompt}Question: {question}\n{choices_str}\nAnswer: {choice_labels[j]}"
-                            else:
-                                text = f"Question: {question}\nAnswer: {choice_labels[j]}) {choice}"
-                            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                            inputs = {k: v.to(device) for k, v in inputs.items()}
-                            
-                            outputs = self.model(**inputs)
-                            logits = outputs.logits
-                            shift_logits = logits[..., :-1, :].contiguous()
-                            shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                            
-                            loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                            scores.append(-loss.item())
+                        # Score each answer label by conditional log-probability (standard MCQ protocol):
+                        # prompt includes all choices; continuation is just the option label.
+                        choices_str = "\n".join([f"{choice_labels[k]}) {c}" for k, c in enumerate(choices)])
+                        prompt = f"{fewshot_prompt}Question: {question}\n{choices_str}\nAnswer:" if num_fewshot > 0 else (
+                            f"Question: {question}\n{choices_str}\nAnswer:"
+                        )
+                        continuations = [f" {choice_labels[j]}" for j in range(len(choices))]
+                        scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                         
                         predicted = np.argmax(scores)
                         if predicted == answer_idx:
@@ -504,7 +675,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         subject_total += 1
                         
                     except Exception as e:
-                        logger.warning(f"Error on MMLU {subject} sample {i}: {e}")
+                        logger.warning(f"Error on MMLU {subject} sample {ex_i}: {e}")
                         continue
                 
                 if subject_total > 0:
@@ -574,24 +745,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     endings = example["endings"]
                     label = int(example["label"])
                     
-                    # Score each ending
-                    scores = []
-                    for ending in endings:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Context: {ctx}\nEnding: {ending}"
-                        else:
-                            text = f"{ctx} {ending}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score endings by conditional log-probability (context is prompt, ending is continuation).
+                    prompt = (
+                        f"{fewshot_prompt}Context: {ctx}\nEnding:" if num_fewshot > 0 else f"Context: {ctx}\nEnding:"
+                    )
+                    continuations = [f" {ending}" for ending in endings]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == label:
@@ -667,24 +826,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     choice_labels = choices["label"]
                     answer_idx = choice_labels.index(answer_key)
                     
-                    # Score each choice
-                    scores = []
-                    for choice_text in choice_texts:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Question: {question}\nAnswer: {choice_text}"
-                        else:
-                            text = f"Question: {question}\nAnswer: {choice_text}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score candidate answers by conditional log-probability (prompt excludes answer tokens).
+                    prompt = (
+                        f"{fewshot_prompt}Question: {question}\nAnswer:" if num_fewshot > 0 else f"Question: {question}\nAnswer:"
+                    )
+                    continuations = [f" {ct}" for ct in choice_texts]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == answer_idx:
@@ -754,24 +901,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                     sol2 = example["sol2"]
                     label = example["label"]  # 0 or 1
                     
-                    # Score each solution
-                    scores = []
-                    for sol in [sol1, sol2]:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Goal: {goal}\nSolution: {sol}"
-                        else:
-                            text = f"Goal: {goal}\nSolution: {sol}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score solutions by conditional log-probability (goal is prompt, solution is continuation).
+                    prompt = f"{fewshot_prompt}Goal: {goal}\nSolution:" if num_fewshot > 0 else f"Goal: {goal}\nSolution:"
+                    continuations = [f" {sol1}", f" {sol2}"]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == label:
@@ -838,24 +971,13 @@ class LLMAlignmentExperiment(BaseExperiment):
                     passage = example["passage"]
                     answer = example["answer"]  # True or False
                     
-                    # Score "Yes" vs "No" completions
-                    scores = []
-                    for response in ["Yes", "No"]:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
-                        else:
-                            text = f"Passage: {passage}\nQuestion: {question}\nAnswer: {response}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score "Yes" vs "No" by conditional log-probability of the answer token(s).
+                    prompt = (
+                        f"{fewshot_prompt}Passage: {passage}\nQuestion: {question}\nAnswer:"
+                        if num_fewshot > 0
+                        else f"Passage: {passage}\nQuestion: {question}\nAnswer:"
+                    )
+                    scores = self._score_continuations_conditional_logprob(prompt, [" Yes", " No"], max_length=2048)
                     
                     # 0 = Yes (True), 1 = No (False)
                     predicted = np.argmax(scores) == 0  # True if "Yes" has higher score
@@ -932,25 +1054,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                     option2 = example["option2"]
                     answer = int(example["answer"]) - 1  # Convert 1/2 to 0/1
                     
-                    # Replace _ with each option and score
-                    scores = []
-                    for option in [option1, option2]:
-                        completed = sentence.replace("_", option)
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Sentence: {completed}"
-                        else:
-                            text = completed
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())  # Higher = better
+                    # Score each option by conditional log-probability of the completion.
+                    # We split at the blank so only the option + suffix is scored (prefix is prompt).
+                    if "_" in sentence:
+                        prefix, suffix = sentence.split("_", 1)
+                    else:
+                        prefix, suffix = sentence, ""
+                    prompt = (
+                        f"{fewshot_prompt}Sentence: {prefix}" if num_fewshot > 0 else f"Sentence: {prefix}"
+                    )
+                    continuations = [f"{option1}{suffix}", f"{option2}{suffix}"]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == answer:
@@ -1032,24 +1146,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     choice_labels = choices["label"]
                     answer_idx = choice_labels.index(answer_key)
                     
-                    # Score each choice
-                    scores = []
-                    for choice_text in choice_texts:
-                        if num_fewshot > 0:
-                            text = f"{fewshot_prompt}Question: {question}\nAnswer: {choice_text}"
-                        else:
-                            text = f"Question: {question}\nAnswer: {choice_text}"
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048)
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
-                        
-                        outputs = self.model(**inputs)
-                        logits = outputs.logits
-                        shift_logits = logits[..., :-1, :].contiguous()
-                        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-                        
-                        loss_fct = torch.nn.CrossEntropyLoss(reduction='mean')
-                        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                        scores.append(-loss.item())
+                    # Score candidate answers by conditional log-probability (prompt excludes answer tokens).
+                    prompt = (
+                        f"{fewshot_prompt}Question: {question}\nAnswer:" if num_fewshot > 0 else f"Question: {question}\nAnswer:"
+                    )
+                    continuations = [f" {ct}" for ct in choice_texts]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
                     
                     predicted = np.argmax(scores)
                     if predicted == answer_idx:
@@ -1065,6 +1167,105 @@ class LLMAlignmentExperiment(BaseExperiment):
         
         accuracy = 100 * correct / total if total > 0 else 0.0
         logger.info(f"ARC-Challenge accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
+        return accuracy
+
+    def _evaluate_openbookqa(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
+        """
+        Zero-/few-shot evaluation on OpenBookQA (4-way MCQ).
+
+        We score options using conditional log-probability of the *option label* continuation,
+        with the full question + choices included in the prompt (standard MCQ protocol).
+
+        Returns accuracy in percent (higher is better).
+        """
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            logger.error("datasets library not installed, cannot evaluate OpenBookQA")
+            return 0.0
+
+        shot_str = f"{num_fewshot}-shot" if num_fewshot > 0 else "zero-shot"
+        logger.info(f"Evaluating {shot_str} accuracy on OpenBookQA ({num_samples} samples)...")
+
+        # Dataset schema varies a bit across versions; handle both common shapes.
+        # HF dataset: openbookqa, config \"main\".
+        try:
+            dataset = load_dataset("openbookqa", "main", split="test", trust_remote_code=True)
+            if num_fewshot > 0:
+                train_dataset = load_dataset("openbookqa", "main", split="train", trust_remote_code=True)
+        except Exception as e:
+            logger.error(f"Failed to load OpenBookQA dataset: {e}")
+            return 0.0
+
+        def _get_question(ex: Dict[str, Any]) -> str:
+            if isinstance(ex.get("question_stem"), str):
+                return ex["question_stem"]
+            q = ex.get("question")
+            if isinstance(q, dict) and isinstance(q.get("stem"), str):
+                return q["stem"]
+            return str(ex.get("question", ""))
+
+        def _get_choices(ex: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+            ch = ex.get("choices")
+            if isinstance(ch, dict):
+                texts = ch.get("text") or ch.get("texts") or []
+                labels = ch.get("label") or ch.get("labels") or []
+                return list(texts), list(labels)
+            # Some variants store as list of dicts
+            if isinstance(ch, list):
+                texts = [c.get("text", "") for c in ch if isinstance(c, dict)]
+                labels = [c.get("label", "") for c in ch if isinstance(c, dict)]
+                return texts, labels
+            return [], []
+
+        # Build few-shot prompt in the same MCQ format.
+        fewshot_prompt = ""
+        if num_fewshot > 0:
+            for i, ex in enumerate(train_dataset):
+                if i >= num_fewshot:
+                    break
+                q = _get_question(ex)
+                choice_texts, choice_labels = _get_choices(ex)
+                answer_key = ex.get("answerKey")
+                if not choice_texts or not choice_labels or answer_key not in choice_labels:
+                    continue
+                choices_str = "\n".join([f"{choice_labels[j]}) {choice_texts[j]}" for j in range(len(choice_texts))])
+                fewshot_prompt += f"Question: {q}\n{choices_str}\nAnswer: {answer_key}\n\n"
+
+        self.model.eval()
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for i, example in enumerate(dataset):
+                if total >= num_samples:
+                    break
+                try:
+                    question = _get_question(example)
+                    choice_texts, choice_labels = _get_choices(example)
+                    answer_key = example.get("answerKey")
+                    if not choice_texts or not choice_labels or answer_key not in choice_labels:
+                        continue
+
+                    # Prompt includes choices; continuation is the option label.
+                    choices_str = "\n".join([f"{choice_labels[j]}) {choice_texts[j]}" for j in range(len(choice_texts))])
+                    prompt = (
+                        f"{fewshot_prompt}Question: {question}\n{choices_str}\nAnswer:" if num_fewshot > 0 else
+                        f"Question: {question}\n{choices_str}\nAnswer:"
+                    )
+                    continuations = [f" {lab}" for lab in choice_labels]
+                    scores = self._score_continuations_conditional_logprob(prompt, continuations, max_length=2048)
+
+                    predicted = int(np.argmax(scores))
+                    if choice_labels[predicted] == answer_key:
+                        correct += 1
+                    total += 1
+                except Exception as e:
+                    logger.warning(f"Error on OpenBookQA sample {i}: {e}")
+                    continue
+
+        accuracy = 100 * correct / total if total > 0 else 0.0
+        logger.info(f"OpenBookQA accuracy ({shot_str}): {accuracy:.2f}% ({correct}/{total})")
         return accuracy
 
     def _evaluate_truthfulqa(self, num_samples: int = 100, num_fewshot: int = 0) -> float:
@@ -1494,11 +1695,27 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         logger.info(f"Loading tokenizer for existing HF causal LM '{model_id}'")
         tokenizer = AutoTokenizer.from_pretrained(model_id, **self.config.tokenizer_kwargs)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        # Ensure the tokenizer can pad batched inputs (needed by several analysis utilities).
+        # For causal LMs, padding with EOS is standard; fall back to BOS/UNK if EOS is unavailable.
+        added_special = 0
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            if getattr(tokenizer, "eos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif getattr(tokenizer, "bos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.bos_token
+            elif getattr(tokenizer, "unk_token", None) is not None:
+                tokenizer.pad_token = tokenizer.unk_token
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            # Last resort: add a PAD token (should almost never trigger for Llama-family tokenizers).
+            added_special = tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
         # Unwrap underlying HF model if we're holding a small wrapper (e.g., HFCausalLM)
         hf_model = getattr(self.model, "model", self.model)
+        if added_special > 0:
+            try:
+                hf_model.resize_token_embeddings(len(tokenizer))
+            except Exception:
+                pass
 
         # Wrap with TransformerWrapper (expects an nn.Module)
         wrapper_kwargs = {"tracked_layers": getattr(self.config, "tracked_layers", None)}
@@ -1524,8 +1741,19 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         logger.info(f"Loading tokenizer for {model_id}")
         tokenizer = AutoTokenizer.from_pretrained(model_id, **self.config.tokenizer_kwargs)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        # Ensure the tokenizer can pad batched inputs (needed by several analysis utilities).
+        # For causal LMs, padding with EOS is standard; fall back to BOS/UNK if EOS is unavailable.
+        added_special = 0
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            if getattr(tokenizer, "eos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif getattr(tokenizer, "bos_token", None) is not None:
+                tokenizer.pad_token = tokenizer.bos_token
+            elif getattr(tokenizer, "unk_token", None) is not None:
+                tokenizer.pad_token = tokenizer.unk_token
+        if getattr(tokenizer, "pad_token", None) is None or getattr(tokenizer, "pad_token_id", None) is None:
+            # Last resort: add a PAD token (should almost never trigger for Llama-family tokenizers).
+            added_special = tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
         # load model config and model with dtype/device options
         model_kwargs = dict(self.config.model_kwargs or {})
@@ -1542,6 +1770,11 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         logger.info(f"Loading HF model {model_id} with dtype={torch_dtype} device_map={device_map}")
         hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, device_map=device_map, **model_kwargs)
+        if added_special > 0:
+            try:
+                hf_model.resize_token_embeddings(len(tokenizer))
+            except Exception:
+                pass
 
         # Move model to explicit device if device_map not used
         if device_map is None:
@@ -1663,7 +1896,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # otherwise, fall back to iterating the dataset or raise if no dataset is available.
         calibration_texts: List[str] = []
         if getattr(self, "dataset", None) is not None:
-            if hasattr(self.dataset, "texts"):
+            if hasattr(self.dataset, "texts") and getattr(self.dataset, "texts", None) is not None:
                 calibration_texts = list(self.dataset.texts)
             else:
                 logger.warning(
@@ -2348,6 +2581,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         )
                     except Exception as e:
                         logger.warning(f"Failed to compute Wanda channel scores for {mlp_path}: {e}")
+                        continue
                 
                 logger.info(f"Wanda: computed channel scores for {len(layer_indices)} MLP layers")
             except Exception as e:
@@ -2407,6 +2641,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         )
                     except Exception as e:
                         logger.warning(f"Failed to compute SparseGPT channel scores for {mlp_path}: {e}")
+                        continue
                 
                 logger.info(f"SparseGPT: computed channel scores for {len(layer_indices)} MLP layers")
             except Exception as e:
@@ -2497,6 +2732,95 @@ class LLMAlignmentExperiment(BaseExperiment):
                 results[store_name]["weight_magnitude"] = channel_scores
 
         logger.info(f"Computed weight_magnitude channel scores for {len(layer_indices)} MLP layers")
+        return results
+
+    def compute_random_channel_scores(
+        self,
+        *,
+        seed: Optional[int] = None,
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Structured *channel* random baseline.
+
+        We generate one random score per intermediate FFN channel (shared across gate/up/down
+        projections) and store it under metric name "random" in `self.importance_scores`.
+
+        Note: If pruning_mode == "random", the pruning mask creation ignores score values and
+        uses uniform random selection; we still store scores to provide consistent shapes and
+        to make this baseline explicit in saved artifacts.
+        """
+        import re
+
+        if seed is None:
+            seed = int(getattr(self.config, "seed", 0) or 0)
+
+        underlying_model = self._get_underlying_model()
+        module_dict = dict(underlying_model.named_modules())
+
+        # Identify MLP layer indices by scanning module names (robust even if no other
+        # importance scores were computed).
+        layer_indices = set()
+        for name in module_dict.keys():
+            m = re.search(r"layers\.(\d+)\.mlp\.gate_proj$", name)
+            if m:
+                layer_indices.add(int(m.group(1)))
+
+        if not layer_indices:
+            logger.warning("random: no MLP layers found; skipping random channel baseline")
+            return {}
+
+        # Use a dedicated generator for determinism.
+        gen = torch.Generator(device="cpu")
+        gen.manual_seed(seed)
+
+        def _resolve_mlp_path(layer_idx: int) -> Optional[str]:
+            candidates = [
+                f"model.model.layers.{layer_idx}.mlp",
+                f"model.layers.{layer_idx}.mlp",
+                f"layers.{layer_idx}.mlp",
+            ]
+            for c in candidates:
+                if c in module_dict:
+                    return c
+            return None
+
+        results: Dict[str, Dict[str, torch.Tensor]] = {}
+        for layer_idx in sorted(layer_indices):
+            mlp_path = _resolve_mlp_path(layer_idx)
+            if mlp_path is None:
+                logger.warning(f"random: could not resolve MLP path for layer {layer_idx}")
+                continue
+
+            gate_name = f"{mlp_path}.gate_proj"
+            up_name = f"{mlp_path}.up_proj"
+            down_name = f"{mlp_path}.down_proj"
+            if gate_name not in module_dict or up_name not in module_dict or down_name not in module_dict:
+                logger.warning(f"random: missing projections for {mlp_path}")
+                continue
+
+            gate = module_dict[gate_name]
+            up = module_dict[up_name]
+            down = module_dict[down_name]
+            if not all(isinstance(m, nn.Linear) for m in (gate, up, down)):
+                logger.warning(f"random: projections for {mlp_path} are not all nn.Linear; skipping")
+                continue
+
+            n = int(gate.out_features)
+            if n <= 0:
+                continue
+
+            # One score per intermediate channel.
+            scores = torch.rand((n,), generator=gen, dtype=torch.float32)
+
+            for store_name in (gate_name, up_name, down_name):
+                if store_name not in self.importance_scores:
+                    self.importance_scores[store_name] = {}
+                self.importance_scores[store_name]["random"] = scores
+                if store_name not in results:
+                    results[store_name] = {}
+                results[store_name]["random"] = scores
+
+        logger.info(f"Computed random channel scores for {len(layer_indices)} MLP layers (seed={seed})")
         return results
     
     @staticmethod
@@ -4664,14 +4988,65 @@ class LLMAlignmentExperiment(BaseExperiment):
             super_mask = torch.zeros(m, dtype=torch.bool)
             super_mask[super_idx] = True
             
-            # Compute Conn_i from down_proj weights (write-pattern overlap)
+            # Compute Conn_i from down_proj weights.
+            #
+            # IMPORTANT: the classic "probability overlap" Conn
+            #   <|v_i|, a> / (||v_i||_1 ||a||_1)
+            # tends to collapse to ~1/hidden_dim for dense matrices (≈ 2.4e-4 for d=4096),
+            # which makes SCAR-Conn numerically ineffective. Instead, we measure the fraction
+            # of each channel's write mass that falls on the *core write support*:
+            # the top-K hidden dimensions by aggregated supernode write mass a.
+            #
+            # Conn_i := sum_{h in TopK(a)} |v_i[h]| / ||v_i||_1  in [0, 1]
             W = module.weight.detach().float().cpu()  # [hidden_dim, m]
             abs_W = W.abs()
             a = abs_W[:, super_idx].sum(dim=1)  # [hidden_dim]
-            a_norm = a.sum() + eps
             v_norm = abs_W.sum(dim=0) + eps  # [m]
-            conn_num = (abs_W * a.unsqueeze(1)).sum(dim=0)  # [m]
-            conn = (conn_num / (v_norm * a_norm + eps)).clamp(0.0, 1.0)
+
+            hidden_dim = int(abs_W.shape[0])
+            k = int(supernode_cfg.get("connectivity_topk", 256))
+            mass_frac = supernode_cfg.get("connectivity_mass_fraction", None)
+            a_sorted, a_order = torch.sort(a, descending=True)
+            if mass_frac is not None:
+                try:
+                    mf = float(mass_frac)
+                except Exception:
+                    mf = None
+                if mf is not None and 0.0 < mf < 1.0 and a_sorted.numel() > 0:
+                    cdf = torch.cumsum(a_sorted, dim=0)
+                    total = float(cdf[-1].item())
+                    if total > 0:
+                        target = mf * total
+                        k = int(torch.searchsorted(cdf, torch.tensor(target)).item()) + 1
+            k = max(1, min(int(k), hidden_dim))
+            core_idx = a_order[:k]
+            conn = abs_W.index_select(0, core_idx).sum(dim=0) / v_norm
+            conn = conn.clamp(0.0, 1.0)
+
+            # Optional post-processing to give Conn more dynamic range when needed.
+            #
+            # - rank-normalize Conn among non-supernodes (maps to [0,1] by empirical CDF)
+            # - apply a power transform (power < 1 increases small Conn values; power > 1 shrinks them)
+            if bool(supernode_cfg.get("connectivity_rank_normalize", False)):
+                non_super_idx_for_rank = (~super_mask).nonzero(as_tuple=True)[0]
+                if non_super_idx_for_rank.numel() > 1:
+                    vals = conn[non_super_idx_for_rank]
+                    _, order = torch.sort(vals, stable=True)  # ascending
+                    ranks = torch.empty_like(order, dtype=torch.float32)
+                    ranks[order] = torch.arange(order.numel(), dtype=torch.float32)
+                    ranks = ranks / float(max(1, order.numel() - 1))
+                    conn_rank = conn.clone()
+                    conn_rank[non_super_idx_for_rank] = ranks
+                    conn_rank[super_idx] = 1.0
+                    conn = conn_rank
+
+            conn_power = supernode_cfg.get("connectivity_power", 1.0)
+            try:
+                conn_power_f = float(conn_power)
+            except Exception:
+                conn_power_f = 1.0
+            if conn_power_f != 1.0:
+                conn = conn.clamp(0.0, 1.0).pow(conn_power_f).clamp(0.0, 1.0)
 
             # Halo: top eta among non-supernodes by Conn
             non_super_idx = (~super_mask).nonzero(as_tuple=True)[0]
@@ -4682,20 +5057,46 @@ class LLMAlignmentExperiment(BaseExperiment):
             _, halo_rel = torch.topk(halo_scores, k=num_halo, largest=True)
             halo_idx = non_super_idx[halo_rel].long()
 
+            # Optional: sample a subset of *non-halo* channels for redundancy-to-core analysis.
+            # This lets us explicitly compare halo-to-core redundancy vs non-halo-to-core redundancy
+            # without the prohibitive cost of computing redundancy for *all* non-halo channels.
+            non_halo_sample_size = int(supernode_cfg.get("non_halo_sample_size", 256) or 0)
+            non_halo_idx = torch.empty((0,), dtype=torch.long)
+            if non_halo_sample_size > 0:
+                halo_mask_tmp = torch.zeros(m, dtype=torch.bool)
+                halo_mask_tmp[halo_idx] = True
+                non_halo_all = (~super_mask & ~halo_mask_tmp).nonzero(as_tuple=True)[0]
+                if non_halo_all.numel() > 0:
+                    sample_n = min(non_halo_sample_size, int(non_halo_all.numel()))
+                    seed_base = int(supernode_cfg.get("non_halo_sample_seed", 0) or 0)
+                    try:
+                        layer_idx_int = int(layer_name.split("layers.")[-1].split(".")[0])
+                    except Exception:
+                        layer_idx_int = 0
+                    g = torch.Generator()
+                    g.manual_seed(seed_base + layer_idx_int)
+                    perm = torch.randperm(int(non_halo_all.numel()), generator=g)
+                    non_halo_idx = non_halo_all[perm[:sample_n]].long()
+
             plan[layer_name] = {
                 "lp_cpu": lp_cpu,
                 "conn_cpu": conn,
                 "super_idx_cpu": super_idx,
                 "halo_idx_cpu": halo_idx,
+                "non_halo_idx_cpu": non_halo_idx,
                 "m": m,
                 # device-side indices + streaming sums (initialized lazily in hooks)
                 "super_idx": None,
                 "halo_idx": None,
+                "non_halo_idx": None,
                 "sum_q_super": None,
                 "sum_q2_super": None,
                 "sum_q_halo": None,
                 "sum_q2_halo": None,
                 "sum_q_halo_super": None,
+                "sum_q_non_halo": None,
+                "sum_q2_non_halo": None,
+                "sum_q_non_halo_super": None,
                 "count": 0,
             }
 
@@ -4746,13 +5147,18 @@ class LLMAlignmentExperiment(BaseExperiment):
                     st["super_idx"] = st["super_idx_cpu"].to(device=u_flat.device)
                 if st["halo_idx"] is None or st["halo_idx"].device != u_flat.device:
                     st["halo_idx"] = st["halo_idx_cpu"].to(device=u_flat.device)
+                if st.get("non_halo_idx") is None or (st.get("non_halo_idx") is not None and st["non_halo_idx"].device != u_flat.device):
+                    st["non_halo_idx"] = st.get("non_halo_idx_cpu", torch.empty((0,), dtype=torch.long)).to(device=u_flat.device)
 
                 super_idx_dev = st["super_idx"]
                 halo_idx_dev = st["halo_idx"]
+                non_halo_idx_dev = st.get("non_halo_idx")
+                if non_halo_idx_dev is None:
+                    non_halo_idx_dev = torch.empty((0,), device=u_flat.device, dtype=torch.long)
 
                 # Compute q = u * s where s := dL/du is already computed by backprop.
                 # We only materialize the supernode+halo indices.
-                idx_union = torch.cat([super_idx_dev, halo_idx_dev], dim=0)  # [|M|+|H|]
+                idx_union = torch.cat([super_idx_dev, halo_idx_dev, non_halo_idx_dev], dim=0)  # [|M|+|H|+|N|]
                 try:
                     u_sel = u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
                     s_sel = g_u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
@@ -4761,8 +5167,10 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                 q_sel = u_sel * s_sel  # [N, |M|+|H|]
                 n_super = super_idx_dev.numel()
+                n_halo = halo_idx_dev.numel()
                 q_super = q_sel[:, :n_super]  # [N, |M|]
-                q_halo = q_sel[:, n_super:]   # [N, |H|]
+                q_halo = q_sel[:, n_super : n_super + n_halo]   # [N, |H|]
+                q_non_halo = q_sel[:, n_super + n_halo :]  # [N, |N|]
 
                 N = q_sel.shape[0]
                 
@@ -4775,12 +5183,21 @@ class LLMAlignmentExperiment(BaseExperiment):
                     st["sum_q_halo_super"] = torch.zeros(
                         (q_halo.shape[1], q_super.shape[1]), device=q_halo.device, dtype=torch.float32
                     )
+                    st["sum_q_non_halo"] = torch.zeros(q_non_halo.shape[1], device=q_non_halo.device, dtype=torch.float32)
+                    st["sum_q2_non_halo"] = torch.zeros_like(st["sum_q_non_halo"])
+                    st["sum_q_non_halo_super"] = torch.zeros(
+                        (q_non_halo.shape[1], q_super.shape[1]), device=q_non_halo.device, dtype=torch.float32
+                    )
 
                 st["sum_q_super"] += q_super.sum(dim=0)
                 st["sum_q2_super"] += (q_super * q_super).sum(dim=0)
                 st["sum_q_halo"] += q_halo.sum(dim=0)
                 st["sum_q2_halo"] += (q_halo * q_halo).sum(dim=0)
                 st["sum_q_halo_super"] += q_halo.transpose(0, 1) @ q_super  # [|H|,|M|]
+                if q_non_halo.numel() > 0:
+                    st["sum_q_non_halo"] += q_non_halo.sum(dim=0)
+                    st["sum_q2_non_halo"] += (q_non_halo * q_non_halo).sum(dim=0)
+                    st["sum_q_non_halo_super"] += q_non_halo.transpose(0, 1) @ q_super  # [|N|,|M|]
                 st["count"] += N
 
             return fwd_hook, bwd_hook
@@ -4834,6 +5251,8 @@ class LLMAlignmentExperiment(BaseExperiment):
         # ------------------------------------------------------------------
         # Phase 3: Compute Protect + final importance scores; store into importance_scores
         # ------------------------------------------------------------------
+        agg_red_halo: List[float] = []
+        agg_red_non_halo: List[float] = []
         for layer_name, st in plan.items():
             N = int(st.get("count", 0))
             if N <= 1 or st["sum_q_halo_super"] is None:
@@ -4862,13 +5281,85 @@ class LLMAlignmentExperiment(BaseExperiment):
             mi = -0.5 * torch.log(1 - rho_sq)
 
             redundancy_to_core = mi.max(dim=1).values  # [|H|]
-            red_min = redundancy_to_core.min()
-            red_max = redundancy_to_core.max()
-            if red_max > red_min:
-                red_norm = (redundancy_to_core - red_min) / (red_max - red_min + eps)
+
+            # Optional: redundancy-to-core for a sampled set of non-halo channels (analysis only).
+            redundancy_to_core_non_halo = None
+            non_halo_idx_cpu = st.get("non_halo_idx_cpu", None)
+            if (
+                non_halo_idx_cpu is not None
+                and hasattr(non_halo_idx_cpu, "numel")
+                and int(non_halo_idx_cpu.numel()) > 0
+                and st.get("sum_q_non_halo_super") is not None
+            ):
+                sum_q_non = st["sum_q_non_halo"].detach().cpu()
+                sum_q2_non = st["sum_q2_non_halo"].detach().cpu()
+                sum_q_non_super = st["sum_q_non_halo_super"].detach().cpu()
+
+                mean_non = sum_q_non / float(N)
+                cov_non = (sum_q_non_super / float(N)) - (mean_non.unsqueeze(1) * mean_super.unsqueeze(0))
+                var_non = (sum_q2_non / float(N)) - (mean_non * mean_non)
+                denom_non = torch.sqrt(var_non.clamp_min(0).unsqueeze(1) * var_super.clamp_min(0).unsqueeze(0) + eps)
+                corr_non = torch.where(denom_non > 0, cov_non / denom_non, torch.zeros_like(cov_non))
+                corr_non = corr_non.clamp(-0.9999, 0.9999)
+
+                corr_eff_non = torch.clamp(corr_non, min=0.0) if positive_redundancy else corr_non
+                rho_sq_non = (corr_eff_non * corr_eff_non).clamp(0.0, 0.9999)
+                mi_non = -0.5 * torch.log(1 - rho_sq_non)
+                redundancy_to_core_non_halo = mi_non.max(dim=1).values  # [|N|]
+
+            # Convert redundancy-to-core into a [0, 1] protection score.
+            #
+            # Empirically, redundancy magnitudes can be extremely small; min-max normalization
+            # then collapses most halo channels near Protect≈1. But a fully linear rank/CDF
+            # can be too aggressive when redundancy estimates are noisy. We therefore default
+            # to a *soft* rank-power mapping that mainly penalizes only the most redundant tail.
+            norm_mode = str(supernode_cfg.get("protection_normalization", "rank_power")).lower()
+            if norm_mode == "minmax":
+                red_min = redundancy_to_core.min()
+                red_max = redundancy_to_core.max()
+                if red_max > red_min:
+                    red_norm = (redundancy_to_core - red_min) / (red_max - red_min + eps)
+                else:
+                    red_norm = torch.zeros_like(redundancy_to_core)
+                protect_halo = (1.0 - red_norm).clamp(0.0, 1.0)
+            elif norm_mode in {"rank", "cdf"}:
+                if redundancy_to_core.numel() <= 1:
+                    protect_halo = torch.ones_like(redundancy_to_core)
+                else:
+                    # Ascending ranks: lowest redundancy -> highest protection.
+                    _, order = torch.sort(redundancy_to_core, stable=True)
+                    ranks = torch.empty_like(order, dtype=torch.float32)
+                    ranks[order] = torch.arange(order.numel(), dtype=torch.float32)
+                    red_rank = ranks / float(max(1, order.numel() - 1))
+                    protect_halo = (1.0 - red_rank).clamp(0.0, 1.0)
             else:
-                red_norm = torch.zeros_like(redundancy_to_core)
-            protect_halo = (1.0 - red_norm).clamp(0.0, 1.0)
+                # rank_power (default): Protect = floor + (1-floor)*(1 - rank^gamma)
+                if redundancy_to_core.numel() <= 1:
+                    protect_halo = torch.ones_like(redundancy_to_core)
+                else:
+                    _, order = torch.sort(redundancy_to_core, stable=True)
+                    ranks = torch.empty_like(order, dtype=torch.float32)
+                    ranks[order] = torch.arange(order.numel(), dtype=torch.float32)
+                    red_rank = ranks / float(max(1, order.numel() - 1))
+                    red_rank = red_rank.clamp(0.0, 1.0)
+
+                    gamma = supernode_cfg.get("protection_rank_power", 8.0)
+                    try:
+                        gamma_f = float(gamma)
+                    except Exception:
+                        gamma_f = 8.0
+                    if not (gamma_f > 0):
+                        gamma_f = 8.0
+
+                    floor = supernode_cfg.get("protection_floor", 0.2)
+                    try:
+                        floor_f = float(floor)
+                    except Exception:
+                        floor_f = 0.2
+                    floor_f = float(min(1.0, max(0.0, floor_f)))
+
+                    protect_halo = floor_f + (1.0 - floor_f) * (1.0 - red_rank.pow(gamma_f))
+                    protect_halo = protect_halo.clamp(0.0, 1.0)
 
             m = st["m"]
             lp = st["lp_cpu"].float()
@@ -4886,6 +5377,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                 redundancy_full[halo_idx] = redundancy_to_core.float()
             except Exception:
                 pass
+            if redundancy_to_core_non_halo is not None and non_halo_idx_cpu is not None:
+                try:
+                    redundancy_full[non_halo_idx_cpu] = redundancy_to_core_non_halo.float()
+                except Exception:
+                    pass
 
             # SCAR-Prot and SCAR-Conn importance scores (high=keep)
             prot_score = (lp * protect_full).float()
@@ -4916,12 +5412,52 @@ class LLMAlignmentExperiment(BaseExperiment):
             results[layer_name] = {
                 "num_supernodes": int(super_idx.numel()),
                 "num_halo": int(halo_idx.numel()),
+                "num_non_halo_sample": int(non_halo_idx_cpu.numel()) if non_halo_idx_cpu is not None else 0,
                 "q_samples": N,
                 "conn_mean": float(conn.mean().item()),
                 "protect_halo_mean": float(protect_halo.mean().item()) if protect_halo.numel() else 0.0,
                 "redundancy_to_core_mean": float(redundancy_to_core.mean().item()) if redundancy_to_core.numel() else 0.0,
+                "non_halo_redundancy_to_core_mean": float(redundancy_to_core_non_halo.mean().item())
+                if redundancy_to_core_non_halo is not None and redundancy_to_core_non_halo.numel()
+                else 0.0,
             }
+
+            # Aggregate distributions (for tables / sanity checks)
+            try:
+                halo_vals = redundancy_to_core.detach().float()
+                halo_vals = halo_vals[torch.isfinite(halo_vals)]
+                agg_red_halo.extend([float(x) for x in halo_vals.tolist() if x == x])
+            except Exception:
+                pass
+            if redundancy_to_core_non_halo is not None:
+                try:
+                    non_vals = redundancy_to_core_non_halo.detach().float()
+                    non_vals = non_vals[torch.isfinite(non_vals)]
+                    agg_red_non_halo.extend([float(x) for x in non_vals.tolist() if x == x])
+                except Exception:
+                    pass
         
+        # Add aggregate stats for paper tables (useful even when per-layer values are noisy).
+        if agg_red_halo or agg_red_non_halo:
+            def _stats(vals: List[float]) -> Dict[str, Any]:
+                arr = np.asarray(vals, dtype=np.float64)
+                arr = arr[np.isfinite(arr)]
+                if arr.size == 0:
+                    return {"n": 0, "mean": None, "std": None, "median": None}
+                return {
+                    "n": int(arr.size),
+                    "mean": float(arr.mean()),
+                    "std": float(arr.std()),
+                    "median": float(np.median(arr)),
+                }
+
+            results["_aggregate"] = {
+                "redundancy_to_core": {
+                    "halo": _stats(agg_red_halo),
+                    "non_halo_sample": _stats(agg_red_non_halo),
+                }
+            }
+
         logger.info(f"Computed SCAR protection/connectivity scores for {len(results)} layers")
         return results
     
@@ -5066,14 +5602,32 @@ class LLMAlignmentExperiment(BaseExperiment):
             super_mask = torch.zeros(m, dtype=torch.bool)
             super_mask[super_idx] = True
             
-            # Compute Conn_i from down_proj weights (write-pattern overlap)
+            # Compute Conn_i from down_proj weights (same definition as SCAR-Conn):
+            # Conn_i := sum_{h in TopK(a)} |v_i[h]| / ||v_i||_1  (fraction of write mass on core support)
             W = module.weight.detach().float().cpu()  # [hidden_dim, m]
             abs_W = W.abs()
             a = abs_W[:, super_idx].sum(dim=1)  # [hidden_dim]
-            a_norm = a.sum() + eps
             v_norm = abs_W.sum(dim=0) + eps  # [m]
-            conn_num = (abs_W * a.unsqueeze(1)).sum(dim=0)  # [m]
-            conn = (conn_num / (v_norm * a_norm + eps)).clamp(0.0, 1.0)
+
+            hidden_dim = int(abs_W.shape[0])
+            k = int(supernode_cfg.get("connectivity_topk", 256))
+            mass_frac = supernode_cfg.get("connectivity_mass_fraction", None)
+            a_sorted, a_order = torch.sort(a, descending=True)
+            if mass_frac is not None:
+                try:
+                    mf = float(mass_frac)
+                except Exception:
+                    mf = None
+                if mf is not None and 0.0 < mf < 1.0 and a_sorted.numel() > 0:
+                    cdf = torch.cumsum(a_sorted, dim=0)
+                    total = float(cdf[-1].item())
+                    if total > 0:
+                        target = mf * total
+                        k = int(torch.searchsorted(cdf, torch.tensor(target)).item()) + 1
+            k = max(1, min(int(k), hidden_dim))
+            core_idx = a_order[:k]
+            conn = abs_W.index_select(0, core_idx).sum(dim=0) / v_norm
+            conn = conn.clamp(0.0, 1.0)
 
             non_super_idx = (~super_mask).nonzero(as_tuple=True)[0]
             if non_super_idx.numel() < 2:
@@ -6217,6 +6771,12 @@ class LLMAlignmentExperiment(BaseExperiment):
         if not self.importance_scores:
             raise ValueError("Must compute importance scores before pruning")
 
+        # Per-call diagnostics that downstream artifact collection can use to explain
+        # catastrophic baseline failures (e.g., pruning supernodes).
+        #
+        # Stored as a side effect to avoid changing the public return type.
+        self._last_pruning_diagnostics = {}
+
         # Paper-faithful *unstructured* reproductions for Wanda/SparseGPT (kept separate from channel-adapted baselines).
         if metric in {"wanda_unstructured", "sparsegpt_unstructured"}:
             return self.apply_unstructured_baseline_pruning(sparsity=sparsity, metric=metric, mode=mode)
@@ -6264,6 +6824,12 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         masks = {}
         processed_mlps = set()  # Track which MLPs we've already processed
+
+        # Supernode "hit-rate" diagnostic: fraction of supernodes pruned by this method.
+        super_total = 0
+        super_pruned = 0
+        layers_with_super = 0
+        layers_with_super_pruned = 0
         
         for layer_name in self.importance_scores.keys():
             if metric not in self.importance_scores[layer_name]:
@@ -6284,7 +6850,27 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Get importance scores
             scores = self.importance_scores[layer_name][metric].clone()
 
-            core_mask = self.importance_scores[layer_name].get("supernode_mask")
+            # Supernode masks may be stored under different module-name prefixes
+            # (e.g., `model.layers.*` vs `model.model.layers.*`) depending on whether they were
+            # produced via SCAR hooks (HF model) or via tracked-layer activation capture (wrapper).
+            #
+            # For protection to be applied consistently, prefer the *down_proj* key for this layer
+            # (the canonical FFN-channel space), falling back to the current layer_name.
+            core_mask = None
+            try:
+                key_candidates = [
+                    f"model.layers.{layer_idx}.mlp.down_proj",
+                    f"model.model.layers.{layer_idx}.mlp.down_proj",
+                    layer_name,
+                    layer_name.replace("model.model.", "model."),
+                    layer_name.replace("model.", "model.model.", 1),
+                ]
+                for kcand in key_candidates:
+                    core_mask = (self.importance_scores.get(kcand) or {}).get("supernode_mask")
+                    if core_mask is not None:
+                        break
+            except Exception:
+                core_mask = (self.importance_scores.get(layer_name) or {}).get("supernode_mask")
             if core_mask is not None and self._should_protect_supernodes_for_metric(metric):
                 margin = torch.abs(scores).max().detach().item() + 1.0
                 if mode == "low":
@@ -6294,6 +6880,26 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
+
+            # Diagnostic: how many supernodes did we prune in this layer?
+            if core_mask is not None:
+                try:
+                    cm = core_mask
+                    if not torch.is_tensor(cm):
+                        cm = torch.as_tensor(cm)
+                    cm = cm.to(device=mask.device, dtype=torch.bool)
+
+                    if cm.numel() == mask.numel():
+                        layers_with_super += 1
+                        super_total += int(cm.sum().item())
+                        pruned = (mask == 0)
+                        pruned_super = int((pruned & cm).sum().item())
+                        super_pruned += pruned_super
+                        if pruned_super > 0:
+                            layers_with_super_pruned += 1
+                except Exception:
+                    # Never fail pruning due to diagnostics.
+                    pass
             
             # Get the MLP module - use underlying model to handle HFCausalLM wrapper
             underlying_model = self._get_underlying_model()
@@ -6364,6 +6970,16 @@ class LLMAlignmentExperiment(BaseExperiment):
         masks.update(attention_masks)
 
         self.pruning_masks = masks
+        # Store diagnostics for the caller (run()) to attach into results JSON.
+        self._last_pruning_diagnostics = {
+            "supernode_pruning": {
+                "supernodes_total": int(super_total),
+                "supernodes_pruned": int(super_pruned),
+                "supernodes_pruned_frac": (float(super_pruned) / float(super_total)) if super_total > 0 else None,
+                "layers_with_supernodes": int(layers_with_super),
+                "layers_with_supernodes_pruned": int(layers_with_super_pruned),
+            }
+        }
         logger.info(f"Pruned {len(processed_mlps)} MLP layers with {sparsity:.1%} target sparsity")
         if num_attention_layers > 0:
             logger.info(f"Pruned {num_attention_layers} attention blocks with shared Q/K/V/O masks")
@@ -7033,6 +7649,16 @@ class LLMAlignmentExperiment(BaseExperiment):
                 import traceback
                 logger.error(traceback.format_exc())
 
+        # Structured random baseline (paper: "Random (channel)")
+        if "random" in pruning_strategies:
+            try:
+                # Deterministic by default (seeded by config.seed).
+                self.compute_random_channel_scores()
+            except Exception as rand_err:
+                logger.error(f"Failed random baseline score computation: {rand_err}")
+                import traceback
+                logger.error(traceback.format_exc())
+
         # Example: per-layer histogram with top-5 annotations
         # self.plot_layer_importance_histogram(
         #     layer_name="model.layers.1.mlp.up_proj",
@@ -7098,6 +7724,41 @@ class LLMAlignmentExperiment(BaseExperiment):
                     results["evaluation"]["baseline_perplexity"] = baseline_eval.get("perplexity")
         except Exception as e:
             logger.warning(f"Failed baseline full-metric evaluation: {e}")
+
+        # Some SCAR pruning scores (e.g., `supernode_connectivity_score`) were historically computed
+        # inside the `generate_plots` block. For fast paper sweeps we often run with
+        # `generate_plots=false`, but we still need these scores for pruning to run.
+        if scar_scores and not getattr(self.config, "generate_plots", True):
+            supernode_config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+
+            if getattr(self.config, "do_directed_redundancy", True):
+                try:
+                    directed_redundancy_results = self.compute_directed_redundancy(
+                        scar_scores=scar_scores,
+                        supernode_fraction=supernode_config.get("core_fraction", 0.01),
+                    )
+                    results["directed_redundancy"] = directed_redundancy_results
+                    logger.info("Directed redundancy computation complete")
+                except Exception as dr_err:
+                    logger.error(f"Failed directed redundancy computation: {dr_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
+            if getattr(self.config, "do_connectivity_pruning", True):
+                try:
+                    connectivity_results = self.compute_supernode_connectivity_pruning_score(
+                        scar_scores=scar_scores,
+                        supernode_fraction=supernode_config.get("core_fraction", 0.01),
+                        high_connectivity_fraction=supernode_config.get("follower_fraction", 0.10),
+                        redundancy_weight=supernode_config.get("redundancy_weight", 0.5),
+                        plots_dir=None,
+                    )
+                    results["supernode_connectivity"] = connectivity_results
+                    logger.info("Supernode-connectivity pruning score computation complete")
+                except Exception as conn_err:
+                    logger.error(f"Failed supernode-connectivity computation: {conn_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
 
 
         if self.config.do_pruning_experiments:
@@ -7239,6 +7900,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                                 "num_pruned_layers": len(masks),
                                 "metric": metric,
                                 "mode": mode,
+                                # Extra diagnostics for paper analysis (e.g., explain why some baselines collapse)
+                                **(getattr(self, "_last_pruning_diagnostics", {}) or {}),
                             }
                         else:
                             pruning_data["perplexities"].append(None)
@@ -7366,7 +8029,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # ------------------------------------------------------------------
         if getattr(self.config, "generate_plots", True):
             try:
-                from alignment.analysis.visualization import (
+                from alignment.analysis.visualization.paper_plots import (
                     plot_halo_structure,
                     plot_loss_proxy_concentration,
                     plot_supernode_halo_summary,

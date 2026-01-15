@@ -1,7 +1,7 @@
 """
 Cluster-aware pruning strategy with halo scoring and cluster constraints.
 
-This implements the cluster-and-halo pruning approach from the vision paper:
+This implements a cluster-and-halo pruning approach:
 
 Score_i = α·log(RQ_i) + β·Syn_i - γ·Red_i + λ·HaloSyn_i
 
@@ -9,9 +9,6 @@ With constraints:
 1. Protect critical: prune at most p_C fraction from critical cluster per layer
 2. Target redundant/background: prioritize pruning from these clusters  
 3. Synergy-pair constraint: don't prune both members of top synergistic pairs
-
-References:
-- Channel Clusters and Halo Dependencies for Structured Pruning (ICML 2026)
 """
 
 import logging
@@ -31,7 +28,7 @@ logger = logging.getLogger(__name__)
 class ClusterAwarePruningConfig(PruningConfig):
     """Configuration for cluster-aware pruning."""
     
-    # Score weights (Eq. 14 in paper)
+    # Score weights for the composite pruning score
     alpha: float = 1.0      # Weight for log(RQ)
     beta: float = 0.5       # Weight for Synergy
     gamma: float = 0.3      # Weight for Redundancy (subtracted)
@@ -155,7 +152,7 @@ class ClusterAwarePruning(BasePruningStrategy):
             clusters, n_channels, layer_name
         )
         
-        # 4. Compute composite scores (Eq. 14)
+        # 4. Compute composite scores
         log_rq = np.log(np.clip(metrics['rq'], 1e-10, None))
         
         # Normalize each component to [0, 1] for stable weighting

@@ -289,7 +289,7 @@ class GaussianMIAnalytic(BaseMetric):
             # - RQ = (w^T Σ_x w) / (w^T w)  -- normalizes by weight norm (scale-invariant)
             # - MI = 0.5 * log(1 + (w^T Σ_x w) / σ_n²)  -- uses raw signal variance!
             #
-            # From the theory (see drafts/alignment_notes/alignment_red.tex):
+            # From the theory (see paper):
             # For noisy linear neuron y = w^T X + n where n ~ N(0, σ_n²):
             #   I(X; y) = 0.5 * log(1 + (w^T Σ_X w) / σ_n²)
             #

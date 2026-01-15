@@ -87,6 +87,14 @@ llm:
   
   evaluate_perplexity: true
   evaluation_num_samples: 100
+  # Use NVIDIA Minitron official few-shot settings for downstream tasks
+  # (MMLU 5-shot, HellaSwag 10-shot, ARC 25-shot, WinoGrande 5-shot, etc.).
+  use_nvidia_fewshot: true
+  # Match OATS Table 19 / common pruning-paper protocol for WikiText-2 perplexity:
+  # concatenate full test set and evaluate in contiguous 2048-token blocks (no padding).
+  perplexity_protocol: "oats"
+  wikitext_subset: "wikitext-2-raw-v1"
+  perplexity_seq_len: 2048
   
   evaluation_metrics:
     # Language modeling
@@ -99,6 +107,7 @@ llm:
     - "accuracy_hellaswag"
     - "accuracy_arc_easy"
     - "accuracy_arc_challenge"
+    - "accuracy_openbookqa"
     
     # Common Sense
     - "accuracy_winogrande"
@@ -174,6 +183,21 @@ supernode:
   core_fraction: 0.01
   follower_fraction: 0.10
   halo_fraction: 0.10
+  # Connectivity definition (SCAR-Conn): fraction of a channel's down_proj write-mass
+  # that lands on the top-K hidden dimensions most written-to by supernodes.
+  # (Avoids the ~1/hidden_dim collapse of L1-normalized dot-product overlap for dense matrices.)
+  connectivity_topk: 256
+  # Optional post-processing for Conn (defaults keep current behavior)
+  connectivity_rank_normalize: false
+  connectivity_power: 1.0
+  # Analysis-only: also estimate redundancy-to-core for a small random sample of non-halo channels
+  # (used for paper mechanism plots; does NOT affect pruning decisions).
+  non_halo_sample_size: 256
+  non_halo_sample_seed: 0
+  # Protection mapping (rank-power): Protect = alpha + (1-alpha)*(1 - rank^gamma)
+  protection_normalization: "rank_power"
+  protection_rank_power: 8.0
+  protection_floor: 0.2
   protect_core: true
   # Apply hard supernode protection only for the listed pruning metrics.
   # If omitted, legacy behavior is to protect for *all* pruning metrics.
@@ -286,7 +310,9 @@ pruning:
   dependency_aware: true
   
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-  selection_modes: ["low", "high"]
+  # We only report (and run) the standard pruning direction: prune *low*-scoring channels.
+  # The "high" mode (prune highest scores) is a pathological control and is excluded from paper runs.
+  selection_modes: ["low"]
   
   # ALL algorithms including SOTA baselines
   algorithms:

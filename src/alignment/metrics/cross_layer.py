@@ -13,7 +13,7 @@ following the SCAR/supernode logic of DOWNSTREAM importance:
 
 3. Cross-layer importance score: Combines current-layer and next-layer analysis
 
-Theory (extending alignment_notes, following SCAR logic):
+Theory (cross-layer importance; SCAR-style downstream dependence):
 The key insight is that importance flows FORWARD through the network:
 - A neuron is important if DOWNSTREAM layers depend on it
 - A neuron is redundant if its information is already carried by other neurons

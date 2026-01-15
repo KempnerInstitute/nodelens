@@ -10,7 +10,7 @@
 # - All experiment-specific settings in `extra:` section
 # - Same pruning/evaluation/visualization structure
 #
-# Usage: python scripts/run_experiment.py --config configs/unified/llama3_8b_unified.yaml
+# Usage: python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
 # Estimated runtime: ~6-8 hours on 1x A100
 # =============================================================================
 
@@ -156,7 +156,7 @@ cascade_analysis:
 pruning:
   enabled: true
   ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-  selection_modes: ["low", "high"]
+  selection_modes: ["low"]
   distribution: "uniform"
   min_per_layer: 0.0
   max_per_layer: 0.95

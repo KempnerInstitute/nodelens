@@ -118,6 +118,28 @@ def _create_cluster_experiment(config):
     pruning_ratios = getattr(config, "pruning_amounts", None) or \
                      (pruning_cfg.get("ratios") if isinstance(pruning_cfg, dict) else None) or \
                      [0.1, 0.3, 0.5, 0.7]
+
+    # Pruning distribution / constraints (used by ClusterAnalysisExperiment pruning pipeline)
+    pruning_distribution = (
+        getattr(config, "pruning_distribution", None)
+        or (pruning_cfg.get("distribution") if isinstance(pruning_cfg, dict) else None)
+        or "uniform"
+    )
+    dependency_aware_pruning = bool(
+        getattr(config, "dependency_aware_pruning", None)
+        if hasattr(config, "dependency_aware_pruning")
+        else (pruning_cfg.get("dependency_aware", False) if isinstance(pruning_cfg, dict) else False)
+    )
+    pruning_min_per_layer = float(
+        getattr(config, "pruning_min_per_layer", None)
+        if hasattr(config, "pruning_min_per_layer")
+        else (pruning_cfg.get("min_per_layer", 0.0) if isinstance(pruning_cfg, dict) else 0.0)
+    )
+    pruning_max_per_layer = float(
+        getattr(config, "pruning_max_per_layer", None)
+        if hasattr(config, "pruning_max_per_layer")
+        else (pruning_cfg.get("max_per_layer", 0.95) if isinstance(pruning_cfg, dict) else 0.95)
+    )
     
     # Get fine-tuning settings
     fine_tune_cfg = pruning_cfg.get("fine_tune", {}) if isinstance(pruning_cfg, dict) else {}
@@ -185,6 +207,13 @@ def _create_cluster_experiment(config):
         seed=getattr(config, "seed", 42),
     )
 
+    # Propagate pruning distribution knobs into ClusterAnalysisConfig so all pruning
+    # methods (including cluster-aware) use the same allocation regime.
+    setattr(cluster_config, "pruning_distribution", str(pruning_distribution))
+    setattr(cluster_config, "dependency_aware_pruning", bool(dependency_aware_pruning))
+    setattr(cluster_config, "pruning_min_per_layer", float(pruning_min_per_layer))
+    setattr(cluster_config, "pruning_max_per_layer", float(pruning_max_per_layer))
+
     # Optional: allow sweeping cluster-aware score weights via nested pruning config:
     #   pruning.cluster_aware.{alpha,beta,gamma,lambda_halo,protect_critical_frac}
     if isinstance(pruning_cfg, dict):
@@ -200,6 +229,11 @@ def _create_cluster_experiment(config):
                 setattr(cluster_config, "cluster_aware_lambda_halo", float(ca["lambda_halo"]))
             if "protect_critical_frac" in ca:
                 setattr(cluster_config, "cluster_aware_protect_critical_frac", float(ca["protect_critical_frac"]))
+            # Annealed variant schedule (when using cluster_aware_annealed)
+            if "anneal_start" in ca:
+                setattr(cluster_config, "cluster_aware_anneal_start", float(ca["anneal_start"]))
+            if "anneal_end" in ca:
+                setattr(cluster_config, "cluster_aware_anneal_end", float(ca["anneal_end"]))
 
     # Also support the flat ExperimentConfig fields used by our config loader
     # (and mapped from unified-style dotted CLI overrides).
@@ -209,6 +243,8 @@ def _create_cluster_experiment(config):
         "cluster_aware_gamma",
         "cluster_aware_lambda_halo",
         "cluster_aware_protect_critical_frac",
+        "cluster_aware_anneal_start",
+        "cluster_aware_anneal_end",
     ):
         if hasattr(config, attr):
             setattr(cluster_config, attr, float(getattr(config, attr)))

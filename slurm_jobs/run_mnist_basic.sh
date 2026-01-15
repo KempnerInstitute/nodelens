@@ -17,6 +17,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+export PYTHONPATH="${PWD}:${PWD}/src:${PYTHONPATH:-}"
+
 echo "Starting MNIST basic alignment experiment at $(date)"
 echo "Job ID: ${SLURM_JOB_ID:-N/A}"
 echo "Running on: $(hostname)"
