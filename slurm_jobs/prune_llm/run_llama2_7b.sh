@@ -8,8 +8,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=10:00:00
 #SBATCH --mem=320GB
-#SBATCH --partition=kempner_h100_priority3
-#SBATCH --account=kempner_dev
+#SBATCH --partition=kempner_h100
+#SBATCH --account=kempner_undergrads
 
 # ============================================================================
 # LLAMA-2-7B PAPER RESULTS (Generalization)
@@ -44,13 +44,13 @@ echo ""
 module purge
 module load cuda/12.2.0-fasrc01
 eval "$(conda shell.bash hook)"
-conda activate networkAlignmentAnalysis
+# conda activate networkAlignmentAnalysis
 
 # Prefer SLURM_SUBMIT_DIR (repo root) when available.
 cd "${SLURM_SUBMIT_DIR:-/n/holylabs/kempner_dev/Users/hsafaai/Code/alignment}"
 
 # Create local logs directory for SLURM output files
-mkdir -p logs
+# mkdir -p logs
 
 export PYTHONPATH="${PWD}:${PWD}/src:${PYTHONPATH:-}"
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
