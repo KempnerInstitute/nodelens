@@ -198,7 +198,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     with autocast(device_type=self.config.device, dtype=model_dtype):
                         outputs = self.model(block, labels=labels)
                         loss = outputs.loss
-                    nlls.append(loss * num_valid_tokens)
+                    nlls.append(loss)
                     total_tokens += num_valid_tokens
 
                     # Optional: allow partial evaluation for debugging
@@ -210,7 +210,9 @@ class LLMAlignmentExperiment(BaseExperiment):
                 logger.error("No valid tokens processed for OATS-style perplexity!")
                 return float("inf")
 
-            ppl = torch.exp(torch.stack(nlls).sum() / total_tokens)
+            # Stack losses and compute mean (they're already averaged by the model)
+            mean_loss = torch.stack(nlls).mean()
+            ppl = torch.exp(mean_loss)
             perplexity = float(ppl.item())
             logger.info(f"OATS-style WikiText PPL: {perplexity:.4f}")
             return perplexity
@@ -251,7 +253,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                     num_valid_tokens = (labels != -100).sum().item()
                     if num_valid_tokens > 0:
-                        nlls.append(loss * num_valid_tokens)
+                        nlls.append(loss)
                         total_length += num_valid_tokens
                     else:
                         logger.warning(f"Sample {i}: No valid tokens!")
@@ -263,7 +265,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("No valid tokens processed!")
             return float("inf")
 
-        ppl = torch.exp(torch.stack(nlls).sum() / total_length)
+        mean_loss = torch.stack(nlls).mean()
+        ppl = torch.exp(mean_loss)
         perplexity = ppl.item()
         logger.info(f"Perplexity: {perplexity:.2f}")
         return perplexity
@@ -6755,12 +6758,13 @@ class LLMAlignmentExperiment(BaseExperiment):
     
     def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
         """
-        Apply structured pruning to MLP layers.
-        Prunes gate_proj, up_proj (output dims), and down_proj (input dims) together.
+        Apply pruning to MLP layers.
+        - For WANDA and SparseGPT: applies unstructured (weight-level) pruning to match paper results
+        - For other metrics: applies structured (channel-level) pruning
 
         Args:
-            sparsity: Fraction of neurons to prune
-            metric: Which importance metric to use
+            sparsity: Fraction of neurons/weights to prune
+            metric: Which importance metric to use ('wanda', 'sparsegpt', 'activation_l2_norm', etc.)
             mode: 'low' to prune low-importance, 'high' for high-importance
 
         Returns:
@@ -6777,7 +6781,15 @@ class LLMAlignmentExperiment(BaseExperiment):
         # Stored as a side effect to avoid changing the public return type.
         self._last_pruning_diagnostics = {}
 
-        # Paper-faithful *unstructured* reproductions for Wanda/SparseGPT (kept separate from channel-adapted baselines).
+        # Paper-faithful *unstructured* pruning for WANDA/SparseGPT to match paper results
+        # Other metrics use structured pruning (different characteristics, intentionally kept separate)
+        if metric in {"wanda", "sparsegpt"}:
+            # Convert to unstructured variant for paper-faithful results
+            unstructured_metric = f"{metric}_unstructured"
+            logger.info(f"Using unstructured pruning for {metric} to match paper results")
+            return self.apply_unstructured_baseline_pruning(sparsity=sparsity, metric=unstructured_metric, mode=mode)
+        
+        # Legacy support for explicitly requested unstructured methods
         if metric in {"wanda_unstructured", "sparsegpt_unstructured"}:
             return self.apply_unstructured_baseline_pruning(sparsity=sparsity, metric=metric, mode=mode)
 
@@ -6854,16 +6866,15 @@ class LLMAlignmentExperiment(BaseExperiment):
             # (e.g., `model.layers.*` vs `model.model.layers.*`) depending on whether they were
             # produced via SCAR hooks (HF model) or via tracked-layer activation capture (wrapper).
             #
-            # For protection to be applied consistently, prefer the *down_proj* key for this layer
-            # (the canonical FFN-channel space), falling back to the current layer_name.
+            # Try to get the mask from the same layer as the scores (matching input/output activations)
             core_mask = None
             try:
                 key_candidates = [
-                    f"model.layers.{layer_idx}.mlp.down_proj",
-                    f"model.model.layers.{layer_idx}.mlp.down_proj",
                     layer_name,
                     layer_name.replace("model.model.", "model."),
                     layer_name.replace("model.", "model.model.", 1),
+                    f"model.layers.{layer_idx}.mlp.down_proj",
+                    f"model.model.layers.{layer_idx}.mlp.down_proj",
                 ]
                 for kcand in key_candidates:
                     core_mask = (self.importance_scores.get(kcand) or {}).get("supernode_mask")
@@ -6871,12 +6882,25 @@ class LLMAlignmentExperiment(BaseExperiment):
                         break
             except Exception:
                 core_mask = (self.importance_scores.get(layer_name) or {}).get("supernode_mask")
+            
             if core_mask is not None and self._should_protect_supernodes_for_metric(metric):
+                # Ensure shapes are compatible before applying mask
+                if not torch.is_tensor(core_mask):
+                    core_mask = torch.as_tensor(core_mask)
+                
+                # Only apply protection if mask shape matches scores shape
+                # if core_mask.numel() == scores.numel():
+                core_mask = core_mask.to(device=scores.device, dtype=torch.bool)
+                if core_mask.shape != scores.shape:
+                    core_mask = core_mask.reshape(scores.shape)
+                
                 margin = torch.abs(scores).max().detach().item() + 1.0
                 if mode == "low":
                     scores[core_mask] = scores.max() + margin
                 elif mode == "high":
                     scores[core_mask] = scores.min() - margin
+                # else:
+                #     core_mask = None
 
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)

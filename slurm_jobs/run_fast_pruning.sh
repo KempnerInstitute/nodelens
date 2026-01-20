@@ -8,14 +8,12 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --time=02:00:00
 #SBATCH --mem=80GB
+#SBATCH --partition=kempner_h100
+#SBATCH --account=kempner_undergrads
 
 # ============================================================================
 # FAST LLM PRUNING COMPARISON
 # ============================================================================
-# NOTE: Cluster-specific SBATCH settings like --partition/--account are intentionally omitted.
-# Submit with your local settings, e.g.:
-#   sbatch --partition=<PARTITION> --account=<ACCOUNT> slurm_jobs/run_fast_pruning.sh
-#
 # Quick iteration version for development and testing
 # Expected runtime: ~30-60 minutes on H100
 # 
@@ -27,42 +25,30 @@
 # - 50 eval samples instead of 100
 # ============================================================================
 
-set -euo pipefail
-
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
-
-export PYTHONPATH="${PWD}:${PWD}/src:${PYTHONPATH:-}"
-
 echo "============================================================================"
 echo "FAST LLM PRUNING COMPARISON"
 echo "============================================================================"
-echo "Job ID: ${SLURM_JOB_ID:-N/A}"
+echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $(hostname)"
 echo "Start time: $(date)"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 echo ""
 
+# Environment setup
+module purge
+module load cuda/12.2.0-fasrc01
+eval "$(conda shell.bash hook)"
+conda activate alignenv2
+
+cd /n/holylfs06/LABS/kempner_undergrads/Lab/acherilyn/alignment
+
 mkdir -p logs
 
-if command -v conda >/dev/null 2>&1; then
-    eval "$(conda shell.bash hook)"
-    conda activate "${CONDA_ENV:-networkAlignmentAnalysis}"
-else
-    echo "WARN: conda not found; assuming environment already activated." >&2
-fi
-
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export HF_HOME="${HF_HOME:-${HOME}/.cache/huggingface}"
-HF_TOKEN_FILE="${HF_HOME}/token"
-if [[ -f "$HF_TOKEN_FILE" ]]; then
-    export HF_TOKEN="$(cat "$HF_TOKEN_FILE")"
-    export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
-else
-    echo "WARN: HF token file not found at $HF_TOKEN_FILE (set HF_TOKEN env var if needed)" >&2
-fi
+# export HF_HOME=/n/home13/hsafaai/.cache/huggingface
+# export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
 
 echo "============================================================================"
 echo "FAST MODE CONFIGURATION:"
@@ -95,4 +81,3 @@ echo ""
 echo "============================================================================"
 echo "Fast pruning comparison completed at $(date)"
 echo "============================================================================"
-
