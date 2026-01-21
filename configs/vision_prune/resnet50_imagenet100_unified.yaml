@@ -66,6 +66,10 @@ calibration:
 # METRICS
 # -----------------------------------------------------------------------------
 metrics:
+  # Where to read activations for within-layer statistics:
+  # - pre_bn: Conv output before BatchNorm (backward compatible)
+  # - post_bn: BatchNorm output before ReLU (recommended; matches what downstream layers consume)
+  activation_point: "post_bn"
   # Optimization options for faster metric computation
   optimization:
     use_jit: false                 # Enable JIT-compiled computations (20-50% faster)
@@ -143,11 +147,13 @@ cascade_analysis:
 # ResNet-50 on ImageNet: larger model, more channels, tests scalability
 pruning:
   enabled: true
-  distribution: "global_threshold"   # uniform, global_threshold, adaptive_sensitivity
+  # NOTE: global_threshold can cause layer collapse at high sparsity for deep networks.
+  # "uniform" is safer and still allows cluster-aware to shine at extreme sparsity.
+  distribution: "uniform"            # uniform, global_threshold (use uniform for deep nets)
   dependency_aware: true             # ResNet has skip connections
   min_per_layer: 0.0
-  max_per_layer: 0.95
-  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+  max_per_layer: 0.90                # Never prune more than 90% of a single layer
+  ratios: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
   
   # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:

@@ -156,12 +156,18 @@ class PruningDistributionManager:
             threshold = torch.kthvalue(all_scores_cat, k).values.item()
 
         # Compute implied amount per layer
+        # IMPORTANT: Cap per-layer sparsity to prevent complete layer removal
+        # which causes network collapse (especially for deep networks like ResNet-50)
+        MAX_PER_LAYER_SPARSITY = 0.90  # Never prune more than 90% of a single layer
+        
         amounts = {}
         for layer_name, scores in layer_scores.items():
             # Fraction below threshold in this layer
             # usage of <= to be safe
             below_threshold = (scores <= threshold).float().mean().item()
-            amounts[layer_name] = max(self.min_amount, min(self.max_amount, below_threshold))
+            # Apply per-layer cap to prevent complete layer removal
+            capped = min(below_threshold, MAX_PER_LAYER_SPARSITY)
+            amounts[layer_name] = max(self.min_amount, min(self.max_amount, capped))
 
         return amounts
 

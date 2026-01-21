@@ -5,6 +5,8 @@ These tests validate metrics against known ground truth on synthetic data,
 proving that the implementations match theoretical predictions.
 """
 
+import sys
+
 import pytest
 import torch
 
@@ -491,8 +493,6 @@ def run_all_validation_tests():
 
 if __name__ == "__main__":
     # Can run directly or via pytest
-    import sys
-
     if "--pytest" in sys.argv:
         pytest.main([__file__, "-v"])
     else:

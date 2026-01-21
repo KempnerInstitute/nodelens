@@ -5,8 +5,6 @@ A comprehensive framework for analyzing neural network representations
 through information-theoretic metrics and alignment measures.
 """
 
-__version__ = "0.2.0"
-
 # Core functionality
 from .core.base import BaseMetric
 from .core.registry import METRIC_REGISTRY
@@ -32,7 +30,10 @@ try:
     from .analysis.visualization import AlignmentVisualizer
 except ImportError:
     # Visualization dependencies may not be installed
-    pass
+    AlignmentVisualizer = None
+
+# Package version
+__version__ = "0.2.0"
 
 __all__ = [
     # Core

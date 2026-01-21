@@ -53,6 +53,7 @@ class AlignmentMetricsCallback:
         aggregation: str = "mean",
         tracker: Optional[Any] = None,
         save_history: bool = True,
+        track_per_neuron: bool = False,
     ):
         """
         Initialize alignment metrics callback.
@@ -65,6 +66,8 @@ class AlignmentMetricsCallback:
             aggregation: How to aggregate scores ('mean', 'std', 'both')
             tracker: Optional tracker (WandB, TensorBoard, etc.)
             save_history: Whether to store history for later analysis
+            track_per_neuron: If True, also store full per-neuron score tensors (on CPU) in
+                `tensor_history` for dynamic scoring / post-hoc analysis. Note: this can be memory-intensive.
         """
         self.metrics = metrics
         self.layers = layers
@@ -73,11 +76,16 @@ class AlignmentMetricsCallback:
         self.aggregation = aggregation
         self.tracker = tracker
         self.save_history = save_history
+        self.track_per_neuron = track_per_neuron
 
         # Initialize history storage
         if save_history:
             self.history = {layer: {metric_name: [] for metric_name in metrics} for layer in layers}
             self.step_history = []
+
+        # Optional: store full per-neuron score tensors for each tracked step.
+        if track_per_neuron:
+            self.tensor_history = {layer: {metric_name: [] for metric_name in metrics} for layer in layers}
 
         self.step = 0
 
@@ -101,6 +109,10 @@ class AlignmentMetricsCallback:
         # Only compute at specified frequency
         if self.step % self.frequency != 0:
             return
+
+        # Record the step for history alignment (e.g., dynamic scoring vs loss curves).
+        if self.save_history:
+            self.step_history.append(self.step)
 
         # Sample subset for efficiency (if large batch)
         if self.sample_size is not None and inputs.size(0) > self.sample_size:
@@ -173,6 +185,13 @@ class AlignmentMetricsCallback:
                     else:
                         self.history[layer][metric_name].append(value)
 
+                # Optionally store per-neuron tensors for post-hoc analysis.
+                if self.track_per_neuron and hasattr(self, "tensor_history"):
+                    try:
+                        self.tensor_history[layer][metric_name].append(scores.detach().float().cpu())
+                    except Exception as e:
+                        logger.warning(f"Failed to store tensor history for {layer}/{metric_name}: {e}")
+
                 # Log to tracker
                 if self.tracker:
                     if self.aggregation == "both":
@@ -191,10 +210,13 @@ class AlignmentMetricsCallback:
             logger.warning("History not saved (save_history=False)")
             return {}
 
-        return {
+        out = {
             "history": self.history,
             "steps": self.step_history if hasattr(self, "step_history") else list(range(0, self.step + 1, self.frequency)),
         }
+        if self.track_per_neuron and hasattr(self, "tensor_history"):
+            out["tensor_history"] = self.tensor_history
+        return out
 
     def reset(self):
         """Reset history and step counter."""
@@ -227,6 +249,24 @@ class AlignmentMetricsCallback:
             json.dump(history_data, f, indent=2)
 
         logger.info(f"Saved alignment history to {path}")
+
+        # Save tensor history separately (binary) if enabled.
+        if self.track_per_neuron and hasattr(self, "tensor_history"):
+            tensor_path = path.with_name(f"{path.stem}_tensors.pt")
+            try:
+                torch.save(
+                    {
+                        "tensor_history": self.tensor_history,
+                        "steps": history_data["steps"],
+                        "layers": self.layers,
+                        "metrics": list(self.metrics.keys()),
+                        "frequency": self.frequency,
+                    },
+                    tensor_path,
+                )
+                logger.info(f"Saved tensor history to {tensor_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save tensor history to {tensor_path}: {e}")
 
 
 def create_alignment_callback(metrics: Dict[str, Any], layers: List[str], **config) -> AlignmentMetricsCallback:

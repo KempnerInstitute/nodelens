@@ -51,6 +51,34 @@ class ClusterAwarePruningConfig(PruningConfig):
     
     # Structured pruning (default True for channels)
     structured: bool = True
+    
+    # =========================================================================
+    # IMPROVED FEATURES (depth/sparsity adaptive)
+    # =========================================================================
+    
+    # Depth-adaptive weighting: vary weights based on layer depth
+    depth_adaptive: bool = False          # Enable depth-adaptive weights
+    early_layer_fraction: float = 0.3     # First 30% of layers are "early"
+    
+    # Early layer weights (less aggressive on RQ/synergy)
+    early_alpha: float = 0.5
+    early_beta: float = 0.3
+    early_gamma: float = 0.2
+    early_lambda_halo: float = 0.2
+    
+    # Late layer weights (full cluster-aware)
+    late_alpha: float = 1.2
+    late_beta: float = 0.8
+    late_gamma: float = 0.5
+    late_lambda_halo: float = 0.7
+    
+    # MI-aware scoring: use log(1+RQ) instead of log(RQ) for MI proxy
+    use_mi_proxy: bool = False
+    
+    # Sparsity-adaptive protection: stronger critical protection at high sparsity
+    sparsity_adaptive_protection: bool = False
+    high_sparsity_threshold: float = 0.7  # When to strengthen protection
+    high_sparsity_critical_frac: float = 0.1  # Max critical pruning at high sparsity
 
 
 class ClusterAwarePruning(BasePruningStrategy):

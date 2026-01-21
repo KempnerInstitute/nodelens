@@ -118,6 +118,33 @@ class LLMAlignmentExperiment(BaseExperiment):
                             f"LLM importance scores will fall back to iterating the dataset."
                         )
                     self.dataset = text_dataset
+
+                    # Optional: deterministically shuffle the calibration text *pool* so that
+                    # different seeds correspond to different calibration subsets (when the
+                    # pool size exceeds the sample budget used by SCAR / robustness analyses).
+                    #
+                    # Enable by setting:
+                    #   llm.shuffle_calibration_texts=true
+                    #   llm.calibration_seed=<int>   (defaults to ExperimentConfig.seed)
+                    try:
+                        llm_cfg = getattr(self.config, "llm", {}) or {}
+                        if isinstance(llm_cfg, dict) and bool(llm_cfg.get("shuffle_calibration_texts", False)):
+                            import numpy as np
+
+                            seed = llm_cfg.get("calibration_seed", getattr(self.config, "seed", 0))
+                            try:
+                                seed_i = int(seed)
+                            except Exception:
+                                seed_i = int(getattr(self.config, "seed", 0))
+
+                            if hasattr(self.dataset, "texts") and isinstance(getattr(self.dataset, "texts", None), list):
+                                rng = np.random.default_rng(seed_i)
+                                rng.shuffle(self.dataset.texts)
+                                logger.info(
+                                    f"Shuffled calibration texts: seed={seed_i}, pool={len(self.dataset.texts)}"
+                                )
+                    except Exception as e:
+                        logger.warning(f"Could not shuffle calibration texts (continuing without shuffle): {e}")
                 except Exception as e:
                     logger.error(f"Failed to create text dataset '{dataset_name}': {e}")
                     self.dataset = None
@@ -198,7 +225,9 @@ class LLMAlignmentExperiment(BaseExperiment):
                     with autocast(device_type=self.config.device, dtype=model_dtype):
                         outputs = self.model(block, labels=labels)
                         loss = outputs.loss
-                    nlls.append(loss)
+                    # HF causal LM loss is mean over valid tokens; weight by token count to
+                    # aggregate correctly across variable-length blocks.
+                    nlls.append(loss * num_valid_tokens)
                     total_tokens += num_valid_tokens
 
                     # Optional: allow partial evaluation for debugging
@@ -210,8 +239,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 logger.error("No valid tokens processed for OATS-style perplexity!")
                 return float("inf")
 
-            # Stack losses and compute mean (they're already averaged by the model)
-            mean_loss = torch.stack(nlls).mean()
+            mean_loss = torch.stack(nlls).sum() / total_tokens
             ppl = torch.exp(mean_loss)
             perplexity = float(ppl.item())
             logger.info(f"OATS-style WikiText PPL: {perplexity:.4f}")
@@ -253,7 +281,8 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                     num_valid_tokens = (labels != -100).sum().item()
                     if num_valid_tokens > 0:
-                        nlls.append(loss)
+                        # HF causal LM loss is mean over valid tokens; weight by token count.
+                        nlls.append(loss * num_valid_tokens)
                         total_length += num_valid_tokens
                     else:
                         logger.warning(f"Sample {i}: No valid tokens!")
@@ -265,7 +294,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.error("No valid tokens processed!")
             return float("inf")
 
-        mean_loss = torch.stack(nlls).mean()
+        mean_loss = torch.stack(nlls).sum() / total_length
         ppl = torch.exp(mean_loss)
         perplexity = ppl.item()
         logger.info(f"Perplexity: {perplexity:.2f}")
@@ -2039,7 +2068,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             
             # Pass 1: Compute independent metrics (RQ, OI, Magnitude)
             for metric_name in metric_names:
-                # Skip pairwise for now
+                # TODO: Add an efficient pairwise-metric path (redundancy/synergy) for LLM layers.
+                # Current implementation computes independent metrics only.
                 if "redundancy" in metric_name or "synergy" in metric_name:
                     continue
                     
@@ -2426,6 +2456,306 @@ class LLMAlignmentExperiment(BaseExperiment):
         logger.info(f"SCAR metrics: computed metrics for {len(scar_scores)} FFN layers.")
 
         return scar_scores
+
+    def compute_attention_scar_metrics(
+        self,
+        num_samples: Optional[int] = None,
+        max_length: Optional[int] = None,
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Compute SCAR-style supernode metrics for attention heads in transformer layers.
+
+        This routine performs forward+backward passes on calibration data and uses hooks on
+        attention output projection modules (o_proj) to compute per-head loss sensitivity.
+
+        For each attention head h:
+            - o_h: output of head h (portion of o_proj input corresponding to head h)
+            - g_o_h: gradient w.r.t. head h's output
+
+        Metrics per head h:
+            activation_power_h = E[||o_h||^2]
+            gradient_power_h   = E[||g_o_h||^2]
+            taylor_h           = E[|<g_o_h, o_h>|]  (first-order saliency)
+            loss_proxy_h       = 0.5 * E[(||o_h|| * ||g_o_h||)^2]  (joint second moment)
+
+        This is analogous to FFN channel analysis but applied to attention heads.
+        """
+        if not getattr(self.config, "do_attention_scar_metrics", False):
+            logger.info("Attention SCAR metrics disabled in config; skipping compute_attention_scar_metrics.")
+            return {}
+
+        logger.info("Computing SCAR-style supernode metrics for attention heads...")
+
+        # Determine calibration texts (same logic as FFN SCAR)
+        calibration_texts: List[str] = []
+        if getattr(self.config, "importance_computation_texts", None):
+            calibration_texts = list(self.config.importance_computation_texts)
+        else:
+            if getattr(self, "dataset", None) is not None:
+                if hasattr(self.dataset, "texts"):
+                    calibration_texts = list(self.dataset.texts)
+                else:
+                    try:
+                        for sample in self.dataset:
+                            text = None
+                            if isinstance(sample, dict):
+                                for key in ("text", "raw_text", "input_text"):
+                                    if key in sample:
+                                        text = sample[key]
+                                        break
+                            if isinstance(text, str) and text.strip():
+                                calibration_texts.append(text)
+                            if len(calibration_texts) >= (num_samples or self.config.alignment_data_num_samples):
+                                break
+                    except Exception as e:
+                        logger.error(f"Attention SCAR metrics: failed to iterate over dataset: {e}")
+                        calibration_texts = []
+
+        if not calibration_texts:
+            raise RuntimeError(
+                "Attention SCAR metrics: no calibration texts available. "
+                "Run importance computation first or ensure the dataset provides raw texts."
+            )
+
+        if num_samples is None or num_samples <= 0:
+            num_samples = getattr(self.config, "scar_num_samples", 0) or self.config.alignment_data_num_samples
+        max_length = max_length or getattr(self.config, "scar_max_length", 512)
+
+        num_samples = min(num_samples, len(calibration_texts))
+        logger.info(f"Attention SCAR metrics will use {num_samples} calibration samples (max_length={max_length}).")
+
+        device = torch.device(self.config.device)
+
+        # Get underlying HF model
+        hf_model: nn.Module = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = getattr(hf_model, "model")
+
+        # Detect model architecture parameters
+        num_heads = None
+        head_dim = None
+        if hasattr(hf_model, "config"):
+            config = hf_model.config
+            num_heads = getattr(config, "num_attention_heads", None)
+            hidden_size = getattr(config, "hidden_size", None)
+            if num_heads and hidden_size:
+                head_dim = hidden_size // num_heads
+        
+        if num_heads is None or head_dim is None:
+            logger.warning("Could not detect num_heads/head_dim from model config, trying to infer...")
+            # Try to infer from first attention layer
+            for name, module in hf_model.named_modules():
+                if "self_attn" in name and hasattr(module, "num_heads"):
+                    num_heads = module.num_heads
+                    head_dim = module.head_dim if hasattr(module, "head_dim") else None
+                    break
+        
+        if num_heads is None:
+            raise RuntimeError("Could not determine number of attention heads from model.")
+        
+        logger.info(f"Detected {num_heads} attention heads, head_dim={head_dim}")
+
+        attn_scar_state: Dict[str, Dict[str, Any]] = {}
+        hooks: List[Any] = []
+
+        # Create hooks on all attention o_proj modules (output projection)
+        for layer_name, module in hf_model.named_modules():
+            # Match patterns like: model.layers.X.self_attn.o_proj
+            if not ("self_attn" in layer_name and "o_proj" in layer_name):
+                continue
+            if not isinstance(module, nn.Linear):
+                continue
+
+            # Extract layer index for grouping
+            import re
+            layer_match = re.search(r"layers\.(\d+)", layer_name)
+            layer_idx = layer_match.group(1) if layer_match else layer_name
+
+            attn_scar_state[layer_name] = {
+                "layer_idx": layer_idx,
+                "num_heads": num_heads,
+                "head_dim": head_dim,
+                # Per-head accumulators [num_heads]
+                "head_act_power_sum": None,   # sum of ||o_h||^2
+                "head_grad_power_sum": None,  # sum of ||g_o_h||^2
+                "head_taylor_sum": None,      # sum of |<g_o_h, o_h>|
+                "head_loss_proxy_sum": None,  # sum of (||o_h|| * ||g_o_h||)^2
+                "token_count": 0,
+            }
+
+            def make_hooks(name: str, n_heads: int, h_dim: int):
+                def fwd_hook(mod: nn.Module, inputs: Tuple[torch.Tensor, ...], output: torch.Tensor):
+                    # inputs[0] is the concatenated head outputs before o_proj: [B, T, num_heads * head_dim]
+                    if not inputs:
+                        return
+                    x = inputs[0]
+                    if x is None:
+                        return
+                    
+                    x_flat = x.detach()
+                    # Reshape to [B*T, num_heads, head_dim]
+                    if x_flat.ndim == 3:
+                        B, T, D = x_flat.shape
+                        x_flat = x_flat.reshape(B * T, n_heads, h_dim)
+                    elif x_flat.ndim == 2:
+                        N, D = x_flat.shape
+                        x_flat = x_flat.reshape(N, n_heads, h_dim)
+                    else:
+                        return
+
+                    state = attn_scar_state[name]
+                    
+                    if state["head_act_power_sum"] is None:
+                        state["head_act_power_sum"] = torch.zeros(n_heads, device=x_flat.device, dtype=torch.float32)
+                        state["head_grad_power_sum"] = torch.zeros_like(state["head_act_power_sum"])
+                        state["head_taylor_sum"] = torch.zeros_like(state["head_act_power_sum"])
+                        state["head_loss_proxy_sum"] = torch.zeros_like(state["head_act_power_sum"])
+
+                    # Compute per-head activation power: ||o_h||^2 for each head
+                    # x_flat: [N_tokens, num_heads, head_dim]
+                    head_norms_sq = (x_flat.float() ** 2).sum(dim=-1)  # [N_tokens, num_heads]
+                    state["head_act_power_sum"] += head_norms_sq.sum(dim=0)  # [num_heads]
+                    state["token_count"] += x_flat.shape[0]
+
+                    # Store for backward hook
+                    mod._attn_scar_last_input = x.detach()
+
+                def bwd_hook(mod: nn.Module, grad_input: Tuple[torch.Tensor, ...], grad_output: Tuple[torch.Tensor, ...]):
+                    state = attn_scar_state[name]
+
+                    # grad_input[0] is gradient w.r.t. the input to o_proj (the concatenated heads)
+                    if not grad_input or grad_input[0] is None:
+                        return
+
+                    g_x = grad_input[0]
+
+                    if not hasattr(mod, "_attn_scar_last_input"):
+                        return
+
+                    x = mod._attn_scar_last_input
+                    delattr(mod, "_attn_scar_last_input")
+
+                    # Reshape both to [N_tokens, num_heads, head_dim]
+                    if x.ndim == 3:
+                        B, T, D = x.shape
+                        x_flat = x.reshape(B * T, n_heads, h_dim)
+                        g_flat = g_x.reshape(B * T, n_heads, h_dim)
+                    elif x.ndim == 2:
+                        N, D = x.shape
+                        x_flat = x.reshape(N, n_heads, h_dim)
+                        g_flat = g_x.reshape(N, n_heads, h_dim)
+                    else:
+                        return
+
+                    x_f = x_flat.float()
+                    g_f = g_flat.float()
+
+                    # Per-head gradient power: ||g_o_h||^2
+                    head_grad_norms_sq = (g_f ** 2).sum(dim=-1)  # [N_tokens, num_heads]
+                    state["head_grad_power_sum"] += head_grad_norms_sq.sum(dim=0)
+
+                    # Per-head Taylor saliency: |<g_o_h, o_h>|
+                    head_inner = (g_f * x_f).sum(dim=-1)  # [N_tokens, num_heads]
+                    state["head_taylor_sum"] += head_inner.abs().sum(dim=0)
+
+                    # Per-head loss proxy: (||o_h|| * ||g_o_h||)^2
+                    head_act_norms = (x_f ** 2).sum(dim=-1).sqrt()  # [N_tokens, num_heads]
+                    head_grad_norms = head_grad_norms_sq.sqrt()
+                    head_proxy_contrib = (head_act_norms * head_grad_norms) ** 2
+                    state["head_loss_proxy_sum"] += head_proxy_contrib.sum(dim=0)
+
+                return fwd_hook, bwd_hook
+
+            if head_dim is not None:
+                fwd_hook, bwd_hook = make_hooks(layer_name, num_heads, head_dim)
+                hooks.append(module.register_forward_hook(fwd_hook))
+                hooks.append(module.register_full_backward_hook(bwd_hook))
+
+        if not attn_scar_state:
+            logger.warning("Attention SCAR metrics: no attention o_proj modules found; skipping.")
+            return {}
+
+        # Calibration loop
+        self.model.eval()
+
+        try:
+            for idx, text in enumerate(calibration_texts[:num_samples]):
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=max_length,
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+
+                labels = inputs["input_ids"].clone()
+                pad_token_id = getattr(self.tokenizer, "pad_token_id", None) or getattr(
+                    self.tokenizer, "eos_token_id", None
+                )
+                labels[labels == pad_token_id] = -100
+                inputs["labels"] = labels
+
+                self.model.zero_grad(set_to_none=True)
+                outputs = self.model(**inputs)
+                loss = outputs.loss
+                loss.backward()
+
+                if (idx + 1) % 10 == 0:
+                    logger.info(f"Attention SCAR: processed sample {idx+1}/{num_samples}, loss={loss.item():.4f}")
+
+        finally:
+            for h in hooks:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+
+        # Aggregate metrics per layer
+        attn_scar_scores: Dict[str, Dict[str, torch.Tensor]] = {}
+
+        for layer_name, state in attn_scar_state.items():
+            count = state["token_count"]
+            if count <= 0 or state["head_act_power_sum"] is None:
+                continue
+
+            n_tokens = float(count)
+            
+            head_act_power = state["head_act_power_sum"] / n_tokens
+            head_grad_power = state["head_grad_power_sum"] / n_tokens
+            head_taylor = state["head_taylor_sum"] / n_tokens
+            head_loss_proxy = 0.5 * (state["head_loss_proxy_sum"] / n_tokens)
+
+            attn_scar_scores[layer_name] = {
+                "attn_activation_power": head_act_power,
+                "attn_gradient_power": head_grad_power,
+                "attn_taylor": head_taylor,
+                "attn_loss_proxy": head_loss_proxy,
+                "layer_idx": state["layer_idx"],
+                "num_heads": state["num_heads"],
+            }
+
+            # Store in importance_scores for later use
+            layer_scores = self.importance_scores.get(layer_name, {})
+            layer_scores["attn_activation_power"] = head_act_power
+            layer_scores["attn_gradient_power"] = head_grad_power
+            layer_scores["attn_taylor"] = head_taylor
+            layer_scores["attn_loss_proxy"] = head_loss_proxy
+            self.importance_scores[layer_name] = layer_scores
+
+        logger.info(f"Attention SCAR metrics: computed metrics for {len(attn_scar_scores)} attention layers.")
+
+        # Compute summary statistics for comparison with FFN
+        if attn_scar_scores:
+            all_lp = torch.cat([s["attn_loss_proxy"] for s in attn_scar_scores.values()])
+            top_k = max(1, int(0.1 * len(all_lp)))  # Top 10% for attention (vs 1% for FFN)
+            sorted_lp, _ = torch.sort(all_lp, descending=True)
+            top_mass = sorted_lp[:top_k].sum() / (all_lp.sum() + 1e-8)
+            cv = all_lp.std() / (all_lp.mean() + 1e-8)
+            
+            logger.info(f"Attention SCAR summary: top-10% heads capture {top_mass:.1%} of total loss proxy mass")
+            logger.info(f"Attention SCAR summary: coefficient of variation = {cv:.2f}")
+
+        return attn_scar_scores
     
     def compute_baseline_pruning_scores(
         self,
@@ -2439,7 +2769,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         Scores are stored in self.importance_scores for use in pruning experiments.
         
         Args:
-            strategies: List of baseline strategies to compute. Default: ["wanda", "sparsegpt"]
+            strategies: List of baseline strategies to compute. Default: ["wanda", "sparsegpt", "owl", "llm_pruner"]
             num_calibration_samples: Number of samples for calibration
             
         Returns:
@@ -2448,7 +2778,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         if strategies is None:
             # Check which baseline strategies are configured
             pruning_strategies = getattr(self.config, "pruning_strategies", [])
-            strategies = [s for s in pruning_strategies if s in ["wanda", "sparsegpt"]]
+            strategies = [s for s in pruning_strategies if s in ["wanda", "sparsegpt", "owl", "llm_pruner"]]
         
         if not strategies:
             logger.info("No baseline pruning strategies (wanda/sparsegpt) configured, skipping.")
@@ -2651,7 +2981,113 @@ class LLMAlignmentExperiment(BaseExperiment):
                 logger.error(f"SparseGPT calibration failed: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
+
+        # Compute OWL scores (outlier-aware Wanda)
+        if "owl" in strategies:
+            logger.info("Calibrating OWL (Outlier-aware Wanda) pruning strategy...")
+            try:
+                from alignment.pruning.strategies.llm_baselines import OWLPruning
+                owl = OWLPruning(num_calibration_samples=num_calibration_samples)
+                owl.calibrate(model, calib_dataloader, device=str(device))
+                self._owl_baseline = owl
+                
+                for layer_idx in sorted(layer_indices):
+                    mlp_path = _resolve_mlp_path(layer_idx)
+                    if mlp_path is None:
+                        continue
+
+                    gate_name = f"{mlp_path}.gate_proj"
+                    up_name = f"{mlp_path}.up_proj"
+                    down_name = f"{mlp_path}.down_proj"
+
+                    if gate_name not in module_dict or up_name not in module_dict or down_name not in module_dict:
+                        continue
+
+                    gate = module_dict[gate_name]
+                    up = module_dict[up_name]
+                    down = module_dict[down_name]
+
+                    if not all(isinstance(m, nn.Linear) for m in (gate, up, down)):
+                        continue
+
+                    try:
+                        gate_scores = owl.get_structured_scores(gate, layer_name=gate_name, dim=0)
+                        up_scores = owl.get_structured_scores(up, layer_name=up_name, dim=0)
+                        down_scores = owl.get_structured_scores(down, layer_name=down_name, dim=1)
+
+                        channel_scores = (gate_scores + up_scores + down_scores).detach()
+
+                        for store_name in (gate_name, up_name, down_name):
+                            if store_name not in self.importance_scores:
+                                self.importance_scores[store_name] = {}
+                            self.importance_scores[store_name]["owl"] = channel_scores
+                            
+                            if store_name not in results:
+                                results[store_name] = {}
+                            results[store_name]["owl"] = channel_scores
+                    except Exception as e:
+                        logger.warning(f"Failed to compute OWL channel scores for {mlp_path}: {e}")
+                        continue
+                
+                logger.info(f"OWL: computed channel scores for {len(layer_indices)} MLP layers")
+            except Exception as e:
+                logger.error(f"OWL calibration failed: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
         
+        # Compute LLM-Pruner scores (Taylor-based)
+        if "llm_pruner" in strategies:
+            logger.info("Calibrating LLM-Pruner pruning strategy...")
+            try:
+                from alignment.pruning.strategies.llm_baselines import LLMPrunerChannelMode
+                llm_pruner = LLMPrunerChannelMode(num_calibration_samples=num_calibration_samples)
+                llm_pruner.calibrate(model, calib_dataloader, device=str(device))
+                self._llmpruner_baseline = llm_pruner
+                
+                for layer_idx in sorted(layer_indices):
+                    mlp_path = _resolve_mlp_path(layer_idx)
+                    if mlp_path is None:
+                        continue
+
+                    gate_name = f"{mlp_path}.gate_proj"
+                    up_name = f"{mlp_path}.up_proj"
+                    down_name = f"{mlp_path}.down_proj"
+
+                    if gate_name not in module_dict or up_name not in module_dict or down_name not in module_dict:
+                        continue
+
+                    gate = module_dict[gate_name]
+                    up = module_dict[up_name]
+                    down = module_dict[down_name]
+
+                    if not all(isinstance(m, nn.Linear) for m in (gate, up, down)):
+                        continue
+
+                    try:
+                        gate_scores = llm_pruner.get_structured_scores(gate, layer_name=gate_name, dim=0)
+                        up_scores = llm_pruner.get_structured_scores(up, layer_name=up_name, dim=0)
+                        down_scores = llm_pruner.get_structured_scores(down, layer_name=down_name, dim=1)
+
+                        channel_scores = (gate_scores + up_scores + down_scores).detach()
+
+                        for store_name in (gate_name, up_name, down_name):
+                            if store_name not in self.importance_scores:
+                                self.importance_scores[store_name] = {}
+                            self.importance_scores[store_name]["llm_pruner"] = channel_scores
+                            
+                            if store_name not in results:
+                                results[store_name] = {}
+                            results[store_name]["llm_pruner"] = channel_scores
+                    except Exception as e:
+                        logger.warning(f"Failed to compute LLM-Pruner channel scores for {mlp_path}: {e}")
+                        continue
+                
+                logger.info(f"LLM-Pruner: computed channel scores for {len(layer_indices)} MLP layers")
+            except Exception as e:
+                logger.error(f"LLM-Pruner calibration failed: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+
         return results
 
     def compute_weight_magnitude_channel_scores(self) -> Dict[str, Dict[str, torch.Tensor]]:
@@ -3384,8 +3820,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                     except Exception as e:
                         logger.warning(f"    Could not compute {metric_name}: {e}")
             
-            if len(metric_scores_layer) < 2:
-                logger.warning(f"    Only {len(metric_scores_layer)} metrics available, need at least 2 for comparison")
+            if len(metric_scores_layer) < 1:
+                logger.warning(f"    No metric scores available for layer; skipping")
                 continue
             
             # Identify supernodes for each metric
@@ -5094,11 +5530,17 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "non_halo_idx": None,
                 "sum_q_super": None,
                 "sum_q2_super": None,
+                "sum_q3_super": None,
+                "sum_q4_super": None,
                 "sum_q_halo": None,
                 "sum_q2_halo": None,
+                "sum_q3_halo": None,
+                "sum_q4_halo": None,
                 "sum_q_halo_super": None,
                 "sum_q_non_halo": None,
                 "sum_q2_non_halo": None,
+                "sum_q3_non_halo": None,
+                "sum_q4_non_halo": None,
                 "sum_q_non_halo_super": None,
                 "count": 0,
             }
@@ -5181,25 +5623,37 @@ class LLMAlignmentExperiment(BaseExperiment):
                 if st["sum_q_super"] is None:
                     st["sum_q_super"] = torch.zeros(q_super.shape[1], device=q_super.device, dtype=torch.float32)
                     st["sum_q2_super"] = torch.zeros_like(st["sum_q_super"])
+                    st["sum_q3_super"] = torch.zeros_like(st["sum_q_super"])
+                    st["sum_q4_super"] = torch.zeros_like(st["sum_q_super"])
                     st["sum_q_halo"] = torch.zeros(q_halo.shape[1], device=q_halo.device, dtype=torch.float32)
                     st["sum_q2_halo"] = torch.zeros_like(st["sum_q_halo"])
+                    st["sum_q3_halo"] = torch.zeros_like(st["sum_q_halo"])
+                    st["sum_q4_halo"] = torch.zeros_like(st["sum_q_halo"])
                     st["sum_q_halo_super"] = torch.zeros(
                         (q_halo.shape[1], q_super.shape[1]), device=q_halo.device, dtype=torch.float32
                     )
                     st["sum_q_non_halo"] = torch.zeros(q_non_halo.shape[1], device=q_non_halo.device, dtype=torch.float32)
                     st["sum_q2_non_halo"] = torch.zeros_like(st["sum_q_non_halo"])
+                    st["sum_q3_non_halo"] = torch.zeros_like(st["sum_q_non_halo"])
+                    st["sum_q4_non_halo"] = torch.zeros_like(st["sum_q_non_halo"])
                     st["sum_q_non_halo_super"] = torch.zeros(
                         (q_non_halo.shape[1], q_super.shape[1]), device=q_non_halo.device, dtype=torch.float32
                     )
 
                 st["sum_q_super"] += q_super.sum(dim=0)
                 st["sum_q2_super"] += (q_super * q_super).sum(dim=0)
+                st["sum_q3_super"] += (q_super * q_super * q_super).sum(dim=0)
+                st["sum_q4_super"] += (q_super * q_super * q_super * q_super).sum(dim=0)
                 st["sum_q_halo"] += q_halo.sum(dim=0)
                 st["sum_q2_halo"] += (q_halo * q_halo).sum(dim=0)
+                st["sum_q3_halo"] += (q_halo * q_halo * q_halo).sum(dim=0)
+                st["sum_q4_halo"] += (q_halo * q_halo * q_halo * q_halo).sum(dim=0)
                 st["sum_q_halo_super"] += q_halo.transpose(0, 1) @ q_super  # [|H|,|M|]
                 if q_non_halo.numel() > 0:
                     st["sum_q_non_halo"] += q_non_halo.sum(dim=0)
                     st["sum_q2_non_halo"] += (q_non_halo * q_non_halo).sum(dim=0)
+                    st["sum_q3_non_halo"] += (q_non_halo * q_non_halo * q_non_halo).sum(dim=0)
+                    st["sum_q4_non_halo"] += (q_non_halo * q_non_halo * q_non_halo * q_non_halo).sum(dim=0)
                     st["sum_q_non_halo_super"] += q_non_halo.transpose(0, 1) @ q_super  # [|N|,|M|]
                 st["count"] += N
 
@@ -5264,9 +5718,62 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             sum_q_super = st["sum_q_super"].detach().cpu()
             sum_q2_super = st["sum_q2_super"].detach().cpu()
+            sum_q3_super = st.get("sum_q3_super")
+            sum_q4_super = st.get("sum_q4_super")
             sum_q_halo = st["sum_q_halo"].detach().cpu()
             sum_q2_halo = st["sum_q2_halo"].detach().cpu()
+            sum_q3_halo = st.get("sum_q3_halo")
+            sum_q4_halo = st.get("sum_q4_halo")
             sum_q_halo_super = st["sum_q_halo_super"].detach().cpu()
+
+            # Optional Gaussianity diagnostics for the q-signal: skewness/kurtosis of q_i over tokens.
+            # This is a light-weight check of the Gaussian MI approximation used for redundancy.
+            def _q_gaussianity(sum1, sum2, sum3, sum4, N_tokens: int) -> Dict[str, Any]:
+                if sum1 is None:
+                    return {"n_channels": 0}
+                if hasattr(sum1, "detach"):
+                    sum1 = sum1.detach().cpu()
+                if hasattr(sum2, "detach"):
+                    sum2 = sum2.detach().cpu()
+                if hasattr(sum3, "detach"):
+                    sum3 = sum3.detach().cpu()
+                if hasattr(sum4, "detach"):
+                    sum4 = sum4.detach().cpu()
+                if int(N_tokens) <= 1 or int(getattr(sum1, "numel", lambda: 0)()) <= 0:
+                    return {"n_channels": int(getattr(sum1, "numel", lambda: 0)())}
+
+                Nf = float(N_tokens)
+                m1 = sum1.float() / Nf
+                m2 = sum2.float() / Nf
+                m3 = sum3.float() / Nf
+                m4 = sum4.float() / Nf
+
+                var = (m2 - m1 * m1).clamp_min(0.0)
+                std = var.sqrt()
+
+                mu3 = m3 - 3.0 * m1 * m2 + 2.0 * (m1 * m1 * m1)
+                mu4 = m4 - 4.0 * m1 * m3 + 6.0 * (m1 * m1) * m2 - 3.0 * (m1 * m1 * m1 * m1)
+
+                denom3 = (std * std * std).clamp_min(eps)
+                denom4 = (var * var).clamp_min(eps)
+
+                skew = torch.where(std > 0.0, mu3 / denom3, torch.zeros_like(mu3))
+                kurt_excess = torch.where(var > 0.0, (mu4 / denom4) - 3.0, torch.zeros_like(mu4))
+
+                abs_skew = skew.abs()
+                return {
+                    "n_channels": int(abs_skew.numel()),
+                    "mean_abs_skew": float(abs_skew.mean().item()),
+                    "median_abs_skew": float(abs_skew.median().item()),
+                    "frac_abs_skew_lt_0_5": float((abs_skew < 0.5).float().mean().item()),
+                    "mean_excess_kurtosis": float(kurt_excess.mean().item()),
+                    "median_excess_kurtosis": float(kurt_excess.median().item()),
+                }
+
+            q_gauss_super = _q_gaussianity(sum_q_super, sum_q2_super, sum_q3_super, sum_q4_super, N)
+            q_gauss_halo = _q_gaussianity(sum_q_halo, sum_q2_halo, sum_q3_halo, sum_q4_halo, N)
+            # non-halo gaussianity is computed later if the non-halo sample exists
+            q_gauss_non_halo = {"n_channels": 0}
 
             mean_super = sum_q_super / float(N)
             mean_halo = sum_q_halo / float(N)
@@ -5296,7 +5803,11 @@ class LLMAlignmentExperiment(BaseExperiment):
             ):
                 sum_q_non = st["sum_q_non_halo"].detach().cpu()
                 sum_q2_non = st["sum_q2_non_halo"].detach().cpu()
+                sum_q3_non = st.get("sum_q3_non_halo")
+                sum_q4_non = st.get("sum_q4_non_halo")
                 sum_q_non_super = st["sum_q_non_halo_super"].detach().cpu()
+
+                q_gauss_non_halo = _q_gaussianity(sum_q_non, sum_q2_non, sum_q3_non, sum_q4_non, N)
 
                 mean_non = sum_q_non / float(N)
                 cov_non = (sum_q_non_super / float(N)) - (mean_non.unsqueeze(1) * mean_super.unsqueeze(0))
@@ -5423,6 +5934,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "non_halo_redundancy_to_core_mean": float(redundancy_to_core_non_halo.mean().item())
                 if redundancy_to_core_non_halo is not None and redundancy_to_core_non_halo.numel()
                 else 0.0,
+                "q_gaussianity": {
+                    "supernodes": q_gauss_super,
+                    "halo": q_gauss_halo,
+                    "non_halo_sample": q_gauss_non_halo,
+                },
             }
 
             # Aggregate distributions (for tables / sanity checks)
@@ -5454,10 +5970,58 @@ class LLMAlignmentExperiment(BaseExperiment):
                     "median": float(np.median(arr)),
                 }
 
+            halo_stats = _stats(agg_red_halo)
+            non_stats = _stats(agg_red_non_halo)
+            effect: Dict[str, Any] = {}
+            if halo_stats.get("mean") is not None and non_stats.get("mean") is not None:
+                try:
+                    mean_h = float(halo_stats["mean"])
+                    mean_n = float(non_stats["mean"])
+                    effect["mean_diff"] = float(mean_h - mean_n)
+                    effect["mean_ratio"] = float(mean_h / max(mean_n, 1e-12))
+                except Exception:
+                    pass
+
+            # Bootstrap CIs over channels (quick diagnostic; does not re-bootstrap tokens).
+            try:
+                rng = np.random.default_rng(0)
+                halo_arr = np.asarray(agg_red_halo, dtype=np.float64)
+                halo_arr = halo_arr[np.isfinite(halo_arr)]
+                non_arr = np.asarray(agg_red_non_halo, dtype=np.float64)
+                non_arr = non_arr[np.isfinite(non_arr)]
+
+                max_bs = int(supernode_cfg.get("redundancy_bootstrap_max", 5000) or 5000)
+                n_boot = int(supernode_cfg.get("redundancy_bootstrap_samples", 200) or 200)
+                max_bs = max(100, max_bs)
+                n_boot = max(50, n_boot)
+
+                if halo_arr.size > max_bs:
+                    halo_arr = rng.choice(halo_arr, size=max_bs, replace=False)
+                if non_arr.size > max_bs:
+                    non_arr = rng.choice(non_arr, size=max_bs, replace=False)
+
+                if halo_arr.size > 10 and non_arr.size > 10:
+                    diffs = np.empty(n_boot, dtype=np.float64)
+                    ratios = np.empty(n_boot, dtype=np.float64)
+                    for b in range(n_boot):
+                        mh = float(rng.choice(halo_arr, size=halo_arr.size, replace=True).mean())
+                        mn = float(rng.choice(non_arr, size=non_arr.size, replace=True).mean())
+                        diffs[b] = mh - mn
+                        ratios[b] = mh / max(mn, 1e-12)
+                    effect["bootstrap"] = {
+                        "n_boot": int(n_boot),
+                        "max_samples_per_group": int(max_bs),
+                        "diff_ci95": [float(np.percentile(diffs, 2.5)), float(np.percentile(diffs, 97.5))],
+                        "ratio_ci95": [float(np.percentile(ratios, 2.5)), float(np.percentile(ratios, 97.5))],
+                    }
+            except Exception:
+                pass
+
             results["_aggregate"] = {
                 "redundancy_to_core": {
-                    "halo": _stats(agg_red_halo),
-                    "non_halo_sample": _stats(agg_red_non_halo),
+                    "halo": halo_stats,
+                    "non_halo_sample": non_stats,
+                    "effect": effect,
                 }
             }
 
@@ -6781,15 +7345,8 @@ class LLMAlignmentExperiment(BaseExperiment):
         # Stored as a side effect to avoid changing the public return type.
         self._last_pruning_diagnostics = {}
 
-        # Paper-faithful *unstructured* pruning for WANDA/SparseGPT to match paper results
-        # Other metrics use structured pruning (different characteristics, intentionally kept separate)
-        if metric in {"wanda", "sparsegpt"}:
-            # Convert to unstructured variant for paper-faithful results
-            unstructured_metric = f"{metric}_unstructured"
-            logger.info(f"Using unstructured pruning for {metric} to match paper results")
-            return self.apply_unstructured_baseline_pruning(sparsity=sparsity, metric=unstructured_metric, mode=mode)
-        
-        # Legacy support for explicitly requested unstructured methods
+        # Paper-faithful *unstructured* reproductions for Wanda/SparseGPT are kept separate
+        # from the channel-adapted structured baselines (metric names: "wanda", "sparsegpt").
         if metric in {"wanda_unstructured", "sparsegpt_unstructured"}:
             return self.apply_unstructured_baseline_pruning(sparsity=sparsity, metric=metric, mode=mode)
 
@@ -7278,6 +7835,9 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         self.setup()
 
+        class _SkipScarVisualizations(Exception):
+            """Internal sentinel to skip SCAR plotting when generate_plots=False."""
+
         results: Dict[str, Any] = {"config": self.config.to_dict(), "importance_scores": {}, "pruning_results": {}, "evaluation": {}}
 
         scores = self.compute_importance_scores(
@@ -7292,13 +7852,18 @@ class LLMAlignmentExperiment(BaseExperiment):
             except Exception as e:
                 logger.error(f"Error while computing SCAR supernode metrics: {e}")
             else:
-                if scar_scores and getattr(self.config, "generate_plots", True):
+                if scar_scores:
+                    # Many downstream SCAR analyses (robustness, connectivity, etc.) use `plots_dir`
+                    # even when `generate_plots=False`. Define it unconditionally here.
+                    plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+                    plots_dir.mkdir(parents=True, exist_ok=True)
+
                     try:
+                        if not getattr(self.config, "generate_plots", True):
+                            raise _SkipScarVisualizations()
+
                         import matplotlib.pyplot as plt
 
-                        plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
-                        plots_dir.mkdir(parents=True, exist_ok=True)
-                        
                         # Create organized subfolders
                         scar_plots_dir = plots_dir / "scar"
                         scar_plots_dir.mkdir(parents=True, exist_ok=True)
@@ -7458,6 +8023,9 @@ class LLMAlignmentExperiment(BaseExperiment):
                                     except Exception as cmp_err:
                                         logger.warning(f"Failed to generate supernode comparison for {metric_name}: {cmp_err}")
                                         
+                    except _SkipScarVisualizations:
+                        # Skip plot generation but keep running downstream SCAR analyses.
+                        pass
                     except Exception as viz_err:
                         logger.error(f"Failed to generate SCAR visualizations: {viz_err}")
 
@@ -7637,6 +8205,146 @@ class LLMAlignmentExperiment(BaseExperiment):
                             import traceback
                             logger.error(traceback.format_exc())
 
+        # Optional: Attention SCAR metrics (per-head loss proxy analysis)
+        attn_scar_scores: Dict[str, Any] = {}
+        if getattr(self.config, "do_attention_scar_metrics", False):
+            try:
+                attn_scar_scores = self.compute_attention_scar_metrics()
+                results["attention_scar_scores"] = attn_scar_scores
+            except Exception as attn_err:
+                logger.error(f"Error while computing attention SCAR metrics: {attn_err}")
+                import traceback
+                logger.error(traceback.format_exc())
+            else:
+                if attn_scar_scores and getattr(self.config, "generate_plots", True):
+                    try:
+                        import matplotlib.pyplot as plt
+                        
+                        plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
+                        attn_plots_dir = plots_dir / "attention_scar"
+                        attn_plots_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Convert to float32 for matplotlib
+                        attn_scores_f32 = {}
+                        for layer_name, layer_metrics in attn_scar_scores.items():
+                            attn_scores_f32[layer_name] = {}
+                            for metric_name, values in layer_metrics.items():
+                                if torch.is_tensor(values):
+                                    attn_scores_f32[layer_name][metric_name] = values.float().cpu()
+                                else:
+                                    attn_scores_f32[layer_name][metric_name] = values
+                        
+                        # Plot 1: Attention loss proxy distribution across layers
+                        fig, ax = plt.subplots(figsize=(14, 6))
+                        layer_names = []
+                        all_lp_per_layer = []
+                        for ln in sorted(attn_scores_f32.keys(), key=lambda x: int(attn_scores_f32[x].get("layer_idx", "0"))):
+                            if "attn_loss_proxy" in attn_scores_f32[ln]:
+                                layer_names.append(attn_scores_f32[ln].get("layer_idx", ln))
+                                all_lp_per_layer.append(attn_scores_f32[ln]["attn_loss_proxy"].numpy())
+                        if all_lp_per_layer:
+                            bp = ax.boxplot(all_lp_per_layer, labels=layer_names, patch_artist=True)
+                            for box in bp["boxes"]:
+                                box.set_facecolor("#85C1E9")
+                            ax.set_xlabel("Layer Index")
+                            ax.set_ylabel("Attention Loss Proxy")
+                            ax.set_title("Per-Head Attention Loss Proxy Distribution Across Layers")
+                            ax.grid(True, alpha=0.3)
+                            plt.xticks(rotation=45)
+                            plt.tight_layout()
+                            fig.savefig(attn_plots_dir / "attn_loss_proxy_by_layer.png", dpi=150)
+                        plt.close(fig)
+                        
+                        # Plot 2: Attention vs FFN concentration comparison
+                        if scar_scores:
+                            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+                            
+                            # FFN concentration: top-1% captures X% of loss proxy mass
+                            all_ffn_lp = []
+                            for ln, lm in scar_scores.items():
+                                if "scar_loss_proxy" in lm:
+                                    lp = lm["scar_loss_proxy"]
+                                    if torch.is_tensor(lp):
+                                        all_ffn_lp.append(lp.float().cpu())
+                            if all_ffn_lp:
+                                ffn_lp_cat = torch.cat(all_ffn_lp)
+                                ffn_sorted, _ = torch.sort(ffn_lp_cat, descending=True)
+                                ffn_cumsum = torch.cumsum(ffn_sorted, dim=0) / (ffn_sorted.sum() + 1e-8)
+                                axes[0].plot(torch.linspace(0, 100, len(ffn_cumsum)).numpy(), ffn_cumsum.numpy() * 100, 
+                                            color="#E74C3C", linewidth=2, label="FFN Channels")
+                                axes[0].axvline(x=1.0, color="gray", linestyle="--", alpha=0.7)
+                                axes[0].axhline(y=50, color="gray", linestyle=":", alpha=0.7)
+                                axes[0].set_xlabel("Percentile of Channels")
+                                axes[0].set_ylabel("Cumulative % of Loss Proxy Mass")
+                                axes[0].set_title("FFN: Loss Proxy Concentration")
+                                axes[0].legend()
+                                axes[0].grid(True, alpha=0.3)
+                            
+                            # Attention concentration: top-10% captures X% of loss proxy mass
+                            all_attn_lp = []
+                            for ln, lm in attn_scores_f32.items():
+                                if "attn_loss_proxy" in lm:
+                                    lp = lm["attn_loss_proxy"]
+                                    if torch.is_tensor(lp):
+                                        all_attn_lp.append(lp)
+                                    else:
+                                        all_attn_lp.append(torch.tensor(lp))
+                            if all_attn_lp:
+                                attn_lp_cat = torch.cat(all_attn_lp)
+                                attn_sorted, _ = torch.sort(attn_lp_cat, descending=True)
+                                attn_cumsum = torch.cumsum(attn_sorted, dim=0) / (attn_sorted.sum() + 1e-8)
+                                axes[1].plot(torch.linspace(0, 100, len(attn_cumsum)).numpy(), attn_cumsum.numpy() * 100,
+                                            color="#3498DB", linewidth=2, label="Attention Heads")
+                                axes[1].axvline(x=10.0, color="gray", linestyle="--", alpha=0.7)
+                                axes[1].axhline(y=50, color="gray", linestyle=":", alpha=0.7)
+                                axes[1].set_xlabel("Percentile of Heads")
+                                axes[1].set_ylabel("Cumulative % of Loss Proxy Mass")
+                                axes[1].set_title("Attention: Loss Proxy Concentration")
+                                axes[1].legend()
+                                axes[1].grid(True, alpha=0.3)
+                            
+                            plt.tight_layout()
+                            fig.savefig(attn_plots_dir / "ffn_vs_attn_concentration.png", dpi=150)
+                            plt.close(fig)
+                        
+                        # Plot 3: Heatmap of attention metrics across layers
+                        attn_metric_names = ["attn_activation_power", "attn_gradient_power", "attn_taylor", "attn_loss_proxy"]
+                        num_layers = len(attn_scores_f32)
+                        if num_layers > 0:
+                            sample_heads = list(attn_scores_f32.values())[0].get("num_heads", 32)
+                            
+                            for metric_name in attn_metric_names:
+                                metric_data = []
+                                layer_labels = []
+                                for ln in sorted(attn_scores_f32.keys(), key=lambda x: int(attn_scores_f32[x].get("layer_idx", "0"))):
+                                    if metric_name in attn_scores_f32[ln]:
+                                        vals = attn_scores_f32[ln][metric_name]
+                                        if torch.is_tensor(vals):
+                                            vals = vals.numpy()
+                                        metric_data.append(vals)
+                                        layer_labels.append(f"L{attn_scores_f32[ln].get('layer_idx', ln)}")
+                                
+                                if metric_data:
+                                    metric_arr = np.array(metric_data)  # [num_layers, num_heads]
+                                    fig, ax = plt.subplots(figsize=(16, 8))
+                                    im = ax.imshow(metric_arr, aspect="auto", cmap="viridis")
+                                    ax.set_xlabel("Head Index")
+                                    ax.set_ylabel("Layer")
+                                    ax.set_yticks(range(len(layer_labels)))
+                                    ax.set_yticklabels(layer_labels)
+                                    ax.set_title(f"{metric_name.replace('_', ' ').title()} per Attention Head")
+                                    cbar = plt.colorbar(im, ax=ax)
+                                    cbar.set_label(metric_name)
+                                    plt.tight_layout()
+                                    fig.savefig(attn_plots_dir / f"{metric_name}_heatmap.png", dpi=150)
+                                    plt.close(fig)
+                        
+                        logger.info(f"Attention SCAR plots saved to {attn_plots_dir}")
+                    except Exception as attn_plot_err:
+                        logger.error(f"Failed to generate attention SCAR plots: {attn_plot_err}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+
         # Compute baseline pruning scores (Wanda, SparseGPT) if configured
         # This runs OUTSIDE the SCAR metrics block so it can work independently
         baseline_scores: Dict[str, Any] = {}
@@ -7725,6 +8433,45 @@ class LLMAlignmentExperiment(BaseExperiment):
                             results["scar_scores"][layer_name][metric_name] = {"summary": "unavailable"}
                     else:
                         results["scar_scores"][layer_name][metric_name] = vals
+
+        # Add Attention SCAR metrics summaries (if any)
+        if attn_scar_scores:
+            results["attention_scar_scores"] = {}
+            for layer_name, attn_layer_scores in attn_scar_scores.items():
+                results["attention_scar_scores"][layer_name] = {}
+                for metric_name, vals in attn_layer_scores.items():
+                    if torch.is_tensor(vals):
+                        try:
+                            results["attention_scar_scores"][layer_name][metric_name] = {
+                                "mean": float(vals.mean().item()),
+                                "std": float(vals.std().item()),
+                                "min": float(vals.min().item()),
+                                "max": float(vals.max().item()),
+                            }
+                        except Exception:
+                            results["attention_scar_scores"][layer_name][metric_name] = {"summary": "unavailable"}
+                    else:
+                        results["attention_scar_scores"][layer_name][metric_name] = vals
+            
+            # Compute concentration metrics for attention heads
+            all_attn_lp = []
+            for ln, lm in attn_scar_scores.items():
+                if "attn_loss_proxy" in lm:
+                    lp = lm["attn_loss_proxy"]
+                    if torch.is_tensor(lp):
+                        all_attn_lp.append(lp.float().cpu())
+            if all_attn_lp:
+                attn_lp_cat = torch.cat(all_attn_lp)
+                total_heads = len(attn_lp_cat)
+                top_10pct = max(1, int(0.1 * total_heads))
+                sorted_lp, _ = torch.sort(attn_lp_cat, descending=True)
+                top_10_mass = sorted_lp[:top_10pct].sum() / (attn_lp_cat.sum() + 1e-8)
+                results["attention_scar_summary"] = {
+                    "total_heads": total_heads,
+                    "top_10pct_heads": top_10pct,
+                    "top_10pct_mass_fraction": float(top_10_mass.item()),
+                    "coefficient_of_variation": float((attn_lp_cat.std() / (attn_lp_cat.mean() + 1e-8)).item()),
+                }
 
         if self.config.do_perplexity_computation:
             baseline_ppl = self.evaluate_perplexity(dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples)
@@ -8053,7 +8800,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # ------------------------------------------------------------------
         if getattr(self.config, "generate_plots", True):
             try:
-                from alignment.analysis.visualization.paper_plots import (
+                from alignment.analysis.visualization.llm_mechanism_plots import (
                     plot_halo_structure,
                     plot_loss_proxy_concentration,
                     plot_supernode_halo_summary,

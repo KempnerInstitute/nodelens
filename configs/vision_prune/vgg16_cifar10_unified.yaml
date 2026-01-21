@@ -63,6 +63,10 @@ calibration:
 # METRICS
 # -----------------------------------------------------------------------------
 metrics:
+  # Where to read activations for within-layer statistics:
+  # - pre_bn: Conv output before BatchNorm (backward compatible)
+  # - post_bn: BatchNorm output before ReLU (recommended; matches what downstream layers consume)
+  activation_point: "post_bn"
   # Optimization options for faster metric computation
   optimization:
     use_jit: false                 # Enable JIT-compiled computations (20-50% faster)

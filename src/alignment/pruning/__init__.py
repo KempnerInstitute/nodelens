@@ -69,6 +69,8 @@ from .strategies import (
     SparseGPTPruning,
     TensorizedPruning,
     WandaPruning,
+    OWLPruning,
+    LLMPrunerChannelMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,6 +108,9 @@ PRUNING_STRATEGIES = {
     # LLM Baselines (Sun et al. 2023, Frantar & Alistarh 2023)
     "wanda": WandaPruning,
     "sparsegpt": SparseGPTPruning,
+    # Additional LLM Baselines (OWL, LLM-Pruner)
+    "owl": OWLPruning,
+    "llm_pruner": LLMPrunerChannelMode,
 }
 
 

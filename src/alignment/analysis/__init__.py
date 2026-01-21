@@ -28,6 +28,17 @@ from .clustering import MetricSpaceClustering, ClusterResult, CrossLayerHaloAnal
 # Cascade Analysis
 from .cascade_analysis import CascadeAnalysis, DamagePrediction, CascadeResult, DamageResult
 
+# Mechanism validation (general-purpose; reused beyond the paper)
+from .mechanism_validation import (
+    HaloReceiverDisruptionResult,
+    SynergyPairLesionResult,
+    validate_halo_receiver_disruption,
+    validate_synergy_pair_lesions,
+)
+
+# Semantic hooks (non-pruning interpretability-facing analyses)
+from .semantic_hooks import ClassSelectivityResult, compute_class_selectivity
+
 __all__ = [
     # Aggregation
     "ResultAggregator",
@@ -53,4 +64,12 @@ __all__ = [
     "DamagePrediction",
     "CascadeResult",
     "DamageResult",
+    # Mechanism validation
+    "HaloReceiverDisruptionResult",
+    "SynergyPairLesionResult",
+    "validate_halo_receiver_disruption",
+    "validate_synergy_pair_lesions",
+    # Semantic hooks
+    "ClassSelectivityResult",
+    "compute_class_selectivity",
 ]

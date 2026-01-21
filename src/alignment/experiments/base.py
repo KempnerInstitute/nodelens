@@ -196,7 +196,8 @@ class ExperimentConfig:
     do_connectivity_pruning: bool = True
 
     # SCAR / supernode-specific options for LLMs
-    do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i)
+    do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i) for FFN
+    do_attention_scar_metrics: bool = False  # Whether to compute SCAR-style metrics for attention heads
     scar_num_samples: int = 0      # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
     scar_max_length: int = 512     # Max sequence length for SCAR calibration passes
 

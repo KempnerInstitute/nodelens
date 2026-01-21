@@ -14,8 +14,6 @@ import torch
 from ...core.base import BaseMetric
 from ...core.registry import register_metric
 
-logger = logging.getLogger(__name__)
-
 # Try to import the BROJA 2PID module
 try:
     # Add the external module to path if needed
@@ -24,10 +22,12 @@ try:
     HAS_BROJA = True
 except ImportError:
     HAS_BROJA = False
-    logger.warning(
+    logging.getLogger(__name__).warning(
         "BROJA_2PID module not found. PID metric will use a simplified approximation. "
         "For accurate PID computation, please ensure the BROJA_2PID module is available."
     )
+
+logger = logging.getLogger(__name__)
 
 
 class BasePIDMetric(BaseMetric):

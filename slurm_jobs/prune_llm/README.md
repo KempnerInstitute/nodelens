@@ -30,6 +30,12 @@ export OUTPUT_BASE="/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
 bash slurm_jobs/prune_llm/submit_suite.sh
 ```
 
+- **Submit the full suite into an `OUTPUT_BASE/PAPER` subfolder** (recommended for fresh paper reruns):
+
+```bash
+bash slurm_jobs/prune_llm/submit_suite_paper_folder.sh
+```
+
 ### Optional: submit unstructured baseline reproductions
 
 These are **not enabled by default** (they’re expensive and are mainly for appendix/sanity checks).
@@ -52,7 +58,7 @@ or
 bash slurm_jobs/prune_llm/submit_suite.sh
 ```
 
-### How to collect artifacts (tables + placeholder figures)
+### How to collect artifacts (tables + draft figures)
 
 After jobs finish:
 

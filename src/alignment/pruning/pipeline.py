@@ -119,9 +119,15 @@ def run_pruning_pipeline(
         result["masks"] = flat_masks
         return result
 
-    if distribution in {"global_threshold", "global"}:
-        masks = MaskOperations.global_threshold_mask(tensor_scores, global_amount=target_sparsity, mode=selection_mode)
-    else:
+    # Always compute per-layer amounts via the distribution manager.
+    #
+    # IMPORTANT: For structured pruning, a literal "global threshold mask" can
+    # accidentally prune *all* channels in a layer if that layer's scores all fall
+    # below the global threshold. That yields invalid / degenerate networks (and
+    # misleading results). The manager-based implementation:
+    # - respects min/max per-layer caps
+    # - uses MaskOperations.create_structured_mask, which enforces min_keep>=1
+    # - matches dependency-aware behavior (which already uses per-layer amounts)
         manager = PruningDistributionManager(
             strategy=distribution,
             target_sparsity=target_sparsity,

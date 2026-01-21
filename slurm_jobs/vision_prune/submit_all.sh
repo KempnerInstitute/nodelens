@@ -17,7 +17,7 @@ set -euo pipefail
 
 OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red}"
 
-# Guardrail: avoid accidentally writing into the repo via a relative placeholder.
+# Guardrail: avoid accidentally writing into the repo via a relative path.
 if [[ "$OUTPUT_BASE" != /* ]]; then
   echo "[error] OUTPUT_BASE must be an absolute path. Got: $OUTPUT_BASE"
   echo "[hint] Use: export OUTPUT_BASE=\"/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red\""

@@ -4,7 +4,7 @@
 #SBATCH --error=logs/paper_llama3_sparsegpt_unstruct_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --time=12:00:00
 #SBATCH --mem=320GB
@@ -56,8 +56,14 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # - Else, if you ran `hf auth login` with HF_HOME under OUTPUT_BASE, prefer that token/cache.
 # - Else fall back to scratch cache, then ~/.cache.
 if [[ -z "${HF_HOME:-}" ]]; then
-  if [[ -f "${OUTPUT_BASE}/huggingface_cache/token" ]]; then
-    export HF_HOME="${OUTPUT_BASE}/huggingface_cache"
+  # If OUTPUT_BASE is a PAPER subfolder, the HF cache/token is often stored at the parent.
+  HF_TOKEN_BASE="${OUTPUT_BASE}"
+  if [[ "$(basename "${OUTPUT_BASE}")" == "PAPER" ]]; then
+    HF_TOKEN_BASE="$(dirname "${OUTPUT_BASE}")"
+  fi
+
+  if [[ -f "${HF_TOKEN_BASE}/huggingface_cache/token" ]]; then
+    export HF_HOME="${HF_TOKEN_BASE}/huggingface_cache"
   elif [[ -d /n/holyscratch01/kempner_dev/Users/hsafaai/huggingface_cache ]]; then
     export HF_HOME="/n/holyscratch01/kempner_dev/Users/hsafaai/huggingface_cache"
   else

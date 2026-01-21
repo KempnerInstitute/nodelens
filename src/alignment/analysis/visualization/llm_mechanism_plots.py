@@ -1,5 +1,5 @@
 """
-Paper-oriented plots for the SCAR LLM pruning draft.
+Mechanism diagnostic plots for SCAR-style LLM pruning experiments.
 
 These are intentionally lightweight and deterministic, meant to produce:
 - Loss-proxy concentration plots (supernode heavy-tail)
@@ -14,25 +14,17 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-import matplotlib
-
-# Non-interactive backend for cluster jobs
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
 logger = logging.getLogger(__name__)
 
 
 def _to_numpy(x: Any) -> np.ndarray:
-    try:
-        import torch
-
-        if isinstance(x, torch.Tensor):
-            return x.detach().cpu().numpy()
-    except Exception:
-        pass
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
     if isinstance(x, np.ndarray):
         return x
     return np.asarray(x)

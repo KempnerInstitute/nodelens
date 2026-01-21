@@ -1025,6 +1025,242 @@ class UnifiedVisualizer:
         
         return fig
 
+    # ========== Attention SCAR Visualizations ==========
+
+    def plot_attention_scar_layer_scores(
+        self,
+        attn_scar_scores: Dict[str, Dict[str, Union[torch.Tensor, np.ndarray, List[float]]]],
+        metric_name: str = "attn_loss_proxy",
+        plot_type: str = "box",
+        save_path: Optional[Union[str, Path]] = None,
+        show_statistics: bool = True,
+    ) -> Figure:
+        """
+        Visualize attention SCAR metrics (e.g. attn_loss_proxy) across layers.
+
+        Args:
+            attn_scar_scores: Dict[layer_name -> Dict[metric_name -> per_head_scores]]
+            metric_name: Which attention SCAR metric to visualize
+                         ('attn_loss_proxy', 'attn_activation_power', 'attn_taylor', 'attn_gradient_power')
+            plot_type:   'violin' | 'box' | 'bar'
+            save_path:   Optional path to save the figure
+            show_statistics: Whether to include mean/std text box when applicable
+        """
+        layer_to_scores: Dict[str, Union[torch.Tensor, np.ndarray, List[float]]] = {}
+        for layer_name, metrics in attn_scar_scores.items():
+            if metric_name in metrics:
+                layer_to_scores[layer_name] = metrics[metric_name]
+
+        if not layer_to_scores:
+            logger.warning(f"No attention SCAR scores found for metric '{metric_name}'.")
+            fig, _ = plt.subplots(figsize=self.figsize)
+            return fig
+
+        return self.plot_layer_scores(
+            scores=layer_to_scores,
+            metric_name=metric_name,
+            plot_type=plot_type,
+            save_path=save_path,
+            show_statistics=show_statistics,
+        )
+
+    def plot_attention_head_heatmap(
+        self,
+        attn_scar_scores: Dict[str, Dict[str, Union[torch.Tensor, np.ndarray]]],
+        metric_name: str = "attn_loss_proxy",
+        title: Optional[str] = None,
+        save_path: Optional[Union[str, Path]] = None,
+        normalize: bool = True,
+    ) -> Figure:
+        """
+        Create a heatmap of attention SCAR metric values per head per layer.
+
+        Args:
+            attn_scar_scores: Dict[layer_name -> Dict[metric_name -> per_head_tensor]]
+            metric_name: Which metric to visualize (e.g. 'attn_loss_proxy')
+            title: Plot title (defaults to metric name)
+            save_path: Optional path to save the figure
+            normalize: Whether to normalize values for better visualization
+
+        Returns:
+            Matplotlib figure with [layers x heads] heatmap
+        """
+        # Sort layers by layer index
+        sorted_layers = sorted(
+            attn_scar_scores.keys(),
+            key=lambda x: int(attn_scar_scores[x].get("layer_idx", "0")) if isinstance(attn_scar_scores[x].get("layer_idx"), str) else attn_scar_scores[x].get("layer_idx", 0)
+        )
+        
+        # Collect data
+        data_rows = []
+        layer_labels = []
+        
+        for layer_name in sorted_layers:
+            layer_metrics = attn_scar_scores[layer_name]
+            if metric_name not in layer_metrics:
+                continue
+            
+            vals = layer_metrics[metric_name]
+            if isinstance(vals, torch.Tensor):
+                vals = vals.detach().cpu().numpy()
+            elif not isinstance(vals, np.ndarray):
+                vals = np.asarray(vals)
+            
+            data_rows.append(vals)
+            layer_idx = layer_metrics.get("layer_idx", layer_name)
+            layer_labels.append(f"L{layer_idx}")
+        
+        if not data_rows:
+            logger.warning(f"No data found for attention metric '{metric_name}'.")
+            fig, _ = plt.subplots(figsize=self.figsize)
+            return fig
+        
+        # Stack into 2D array [layers, heads]
+        data_matrix = np.stack(data_rows, axis=0)
+        
+        if normalize:
+            dmin, dmax = data_matrix.min(), data_matrix.max()
+            if dmax - dmin > 1e-12:
+                data_matrix_norm = (data_matrix - dmin) / (dmax - dmin)
+            else:
+                data_matrix_norm = data_matrix * 0 + 0.5
+        else:
+            data_matrix_norm = data_matrix
+        
+        num_layers, num_heads = data_matrix.shape
+        fig, ax = plt.subplots(figsize=(max(12, num_heads * 0.4), max(6, num_layers * 0.25)))
+        
+        if HAS_SEABORN:
+            sns.heatmap(
+                data_matrix_norm, ax=ax, cmap="viridis",
+                xticklabels=[f"H{i}" for i in range(num_heads)],
+                yticklabels=layer_labels,
+                cbar_kws={"label": metric_name.replace("_", " ").title()},
+            )
+        else:
+            im = ax.imshow(data_matrix_norm, aspect="auto", cmap="viridis")
+            ax.set_xticks(np.arange(num_heads))
+            ax.set_yticks(np.arange(num_layers))
+            ax.set_xticklabels([f"H{i}" for i in range(num_heads)])
+            ax.set_yticklabels(layer_labels)
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label(metric_name.replace("_", " ").title())
+        
+        ax.set_xlabel("Head Index", fontsize=12)
+        ax.set_ylabel("Layer", fontsize=12)
+        ax.set_title(title or f"{metric_name.replace('_', ' ').title()} per Attention Head", fontsize=14, fontweight="bold")
+        
+        plt.tight_layout()
+        
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        
+        return fig
+
+    def plot_ffn_vs_attention_concentration(
+        self,
+        scar_scores: Dict[str, Dict[str, torch.Tensor]],
+        attn_scar_scores: Dict[str, Dict[str, torch.Tensor]],
+        ffn_threshold_pct: float = 1.0,
+        attn_threshold_pct: float = 10.0,
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> Figure:
+        """
+        Compare loss proxy concentration between FFN channels and attention heads.
+
+        Creates a side-by-side plot showing:
+        - FFN: top-1% channels capture X% of total loss proxy mass
+        - Attention: top-10% heads capture Y% of total loss proxy mass
+
+        Args:
+            scar_scores: FFN SCAR scores dict with 'scar_loss_proxy' per layer
+            attn_scar_scores: Attention SCAR scores dict with 'attn_loss_proxy' per layer
+            ffn_threshold_pct: Percentile threshold for FFN (default 1%)
+            attn_threshold_pct: Percentile threshold for attention (default 10%)
+            save_path: Optional path to save the figure
+
+        Returns:
+            Matplotlib figure with concentration comparison
+        """
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # FFN concentration
+        all_ffn_lp = []
+        for layer_name, layer_metrics in scar_scores.items():
+            lp = layer_metrics.get("scar_loss_proxy")
+            if lp is not None:
+                if isinstance(lp, torch.Tensor):
+                    all_ffn_lp.append(lp.float().cpu())
+                else:
+                    all_ffn_lp.append(torch.tensor(lp, dtype=torch.float32))
+        
+        if all_ffn_lp:
+            ffn_lp = torch.cat(all_ffn_lp)
+            ffn_sorted, _ = torch.sort(ffn_lp, descending=True)
+            ffn_cumsum = torch.cumsum(ffn_sorted, dim=0) / (ffn_sorted.sum() + 1e-8)
+            percentiles = torch.linspace(0, 100, len(ffn_cumsum)).numpy()
+            
+            axes[0].plot(percentiles, ffn_cumsum.numpy() * 100, color="#E74C3C", linewidth=2, label="FFN Channels")
+            axes[0].axvline(x=ffn_threshold_pct, color="gray", linestyle="--", alpha=0.7, label=f"Top-{ffn_threshold_pct:.0f}%")
+            axes[0].axhline(y=50, color="gray", linestyle=":", alpha=0.7)
+            
+            # Compute fraction at threshold
+            idx_threshold = int((ffn_threshold_pct / 100) * len(ffn_cumsum))
+            if idx_threshold < len(ffn_cumsum):
+                frac_at_threshold = ffn_cumsum[idx_threshold].item() * 100
+                axes[0].scatter([ffn_threshold_pct], [frac_at_threshold], color="#E74C3C", s=100, zorder=5)
+                axes[0].annotate(f"{frac_at_threshold:.1f}%", (ffn_threshold_pct + 2, frac_at_threshold), fontsize=12)
+        
+        axes[0].set_xlabel("Percentile of Channels", fontsize=12)
+        axes[0].set_ylabel("Cumulative % of Loss Proxy Mass", fontsize=12)
+        axes[0].set_title(f"FFN: Top-{ffn_threshold_pct:.0f}% Concentration", fontsize=14, fontweight="bold")
+        axes[0].legend(loc="lower right")
+        axes[0].grid(True, alpha=0.3)
+        axes[0].set_xlim(0, 100)
+        axes[0].set_ylim(0, 100)
+        
+        # Attention concentration
+        all_attn_lp = []
+        for layer_name, layer_metrics in attn_scar_scores.items():
+            lp = layer_metrics.get("attn_loss_proxy")
+            if lp is not None:
+                if isinstance(lp, torch.Tensor):
+                    all_attn_lp.append(lp.float().cpu())
+                else:
+                    all_attn_lp.append(torch.tensor(lp, dtype=torch.float32))
+        
+        if all_attn_lp:
+            attn_lp = torch.cat(all_attn_lp)
+            attn_sorted, _ = torch.sort(attn_lp, descending=True)
+            attn_cumsum = torch.cumsum(attn_sorted, dim=0) / (attn_sorted.sum() + 1e-8)
+            percentiles = torch.linspace(0, 100, len(attn_cumsum)).numpy()
+            
+            axes[1].plot(percentiles, attn_cumsum.numpy() * 100, color="#3498DB", linewidth=2, label="Attention Heads")
+            axes[1].axvline(x=attn_threshold_pct, color="gray", linestyle="--", alpha=0.7, label=f"Top-{attn_threshold_pct:.0f}%")
+            axes[1].axhline(y=50, color="gray", linestyle=":", alpha=0.7)
+            
+            # Compute fraction at threshold
+            idx_threshold = int((attn_threshold_pct / 100) * len(attn_cumsum))
+            if idx_threshold < len(attn_cumsum):
+                frac_at_threshold = attn_cumsum[idx_threshold].item() * 100
+                axes[1].scatter([attn_threshold_pct], [frac_at_threshold], color="#3498DB", s=100, zorder=5)
+                axes[1].annotate(f"{frac_at_threshold:.1f}%", (attn_threshold_pct + 2, frac_at_threshold), fontsize=12)
+        
+        axes[1].set_xlabel("Percentile of Heads", fontsize=12)
+        axes[1].set_ylabel("Cumulative % of Loss Proxy Mass", fontsize=12)
+        axes[1].set_title(f"Attention: Top-{attn_threshold_pct:.0f}% Concentration", fontsize=14, fontweight="bold")
+        axes[1].legend(loc="lower right")
+        axes[1].grid(True, alpha=0.3)
+        axes[1].set_xlim(0, 100)
+        axes[1].set_ylim(0, 100)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        
+        return fig
+
     # ========== Pruning Analysis ==========
 
     def plot_pruning_performance(

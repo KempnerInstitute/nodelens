@@ -66,7 +66,10 @@ class DynamicScoreAggregator:
             metric_name: Which metric to aggregate
 
         Returns:
-            Dynamic scores per neuron [num_neurons]
+            If per-neuron score history is provided, returns dynamic scores per neuron
+            with shape \([num_neurons]\). If only scalar summaries are available in
+            the callback history, falls back to returning the final scalar value as
+            a 0-d tensor.
         """
         if layer_name not in score_history["history"]:
             raise ValueError(f"No history for layer {layer_name}")
@@ -74,20 +77,43 @@ class DynamicScoreAggregator:
         if metric_name not in score_history["history"][layer_name]:
             raise ValueError(f"No {metric_name} history for {layer_name}")
 
-        # Get score evolution
+        # Prefer per-neuron tensor history when available (AlignmentMetricsCallback(track_per_neuron=True)).
+        tensor_hist = score_history.get("tensor_history", {})
+        if layer_name in tensor_hist and metric_name in tensor_hist[layer_name] and len(tensor_hist[layer_name][metric_name]) > 0:
+            tensors = tensor_hist[layer_name][metric_name]
+            score_evolution = torch.stack([t.detach().float().cpu().flatten() for t in tensors], dim=0)  # [T, N]
+            loss_evolution = self._align_loss_history(score_history, loss_history, num_steps=score_evolution.shape[0])
+            return self.aggregate_full(score_evolution, loss_evolution)
+
+        # Fallback: scalar summaries only.
         scores_over_time = score_history["history"][layer_name][metric_name]
-        # This is list of scalar means - need per-neuron history
-        # For now, work with what we have
+        logger.warning(
+            "Dynamic scoring requires per-neuron score history (enable AlignmentMetricsCallback(track_per_neuron=True)); "
+            "falling back to returning the final scalar metric summary."
+        )
+        return torch.tensor(scores_over_time[-1])  # final scalar value
 
-        # If we have per-neuron history (not yet implemented in callback):
-        # scores_over_time = [step1_scores, step2_scores, ...]
-        # where each is [num_neurons]
+    @staticmethod
+    def _align_loss_history(score_history: Dict, loss_history: List[float], num_steps: int) -> List[float]:
+        """Align a full loss curve to the callback's sampled metric steps."""
+        if num_steps <= 0:
+            return []
 
-        # For now, provide framework for when per-neuron tracking is added
-        logger.warning("Current callback tracks scalar means. " "For per-neuron dynamic scoring, need to track full tensors.")
+        # Ideal case: already aligned.
+        if len(loss_history) == num_steps:
+            return list(loss_history)
 
-        # Return placeholder
-        return torch.tensor(scores_over_time[-1])  # Final value
+        steps = score_history.get("steps")
+        if isinstance(steps, list) and len(steps) == num_steps and len(loss_history) > 0:
+            max_step = max(steps) if steps else -1
+            if max_step >= 0 and len(loss_history) > max_step:
+                return [float(loss_history[s]) for s in steps]
+
+        # Fallback: sample loss_history uniformly to match num_steps.
+        if len(loss_history) == 0:
+            return [0.0] * num_steps
+        idxs = torch.linspace(0, len(loss_history) - 1, steps=num_steps).round().to(torch.long).tolist()
+        return [float(loss_history[i]) for i in idxs]
 
     def compute_loss_correlation(
         self, score_evolution: torch.Tensor, loss_evolution: List[float]  # [num_steps, num_neurons]  # [num_steps]
@@ -136,10 +162,7 @@ class DynamicScoreAggregator:
         Returns:
             Trend per neuron [num_neurons]
         """
-        # Simple: final - initial
-        score_evolution[-1] - score_evolution[0]
-
-        # More sophisticated: linear regression slope
+        # Linear regression slope over time for each neuron: y = a + b*t
         num_steps, num_neurons = score_evolution.shape
         time_steps = torch.arange(num_steps, dtype=torch.float32)
 
@@ -217,40 +240,6 @@ class DynamicScoreAggregator:
         )
 
         return dynamic_scores
-
-
-class TrainingAwareScoring:
-    """
-    Enhanced scoring using full training history.
-
-    Requires per-neuron tracking during training (not just scalar means).
-    """
-
-    @staticmethod
-    def enhance_callback_for_per_neuron_tracking():
-        """
-        Instructions for enhancing callback to track per-neuron evolution.
-
-        Current callback tracks: scalar mean per step
-        Enhanced version should track: full tensor per step (memory intensive!)
-
-        Modification needed in AlignmentMetricsCallback:
-
-        ```python
-        # Instead of:
-        score_value = scores.mean().item()
-        self.history[layer][metric].append(score_value)
-
-        # Do:
-        if self.track_per_neuron:
-            self.history[layer][metric].append(scores.cpu())  # Full tensor
-        else:
-            self.history[layer][metric].append(scores.mean().item())
-        ```
-
-        Then dynamic scoring becomes very powerful!
-        """
-        pass
 
 
 def compute_dynamic_importance(

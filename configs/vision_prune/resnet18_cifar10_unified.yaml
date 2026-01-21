@@ -69,6 +69,10 @@ calibration:
 #   magnitude (alias: activation_l2_norm)
 # -----------------------------------------------------------------------------
 metrics:
+  # Where to read activations for within-layer statistics:
+  # - pre_bn: Conv output before BatchNorm (backward compatible)
+  # - post_bn: BatchNorm output before ReLU (recommended; matches what downstream layers consume)
+  activation_point: "post_bn"
   # Optimization options for faster metric computation
   optimization:
     use_jit: false                 # Enable JIT-compiled computations (20-50% faster)
@@ -120,6 +124,13 @@ clustering:
   
   stability_enabled: true
   n_bootstrap: 50
+  
+  # Metric ablation study: validate each metric's contribution
+  # Clusters using subsets of metrics and compares to full 3-metric clustering
+  ablation:
+    enabled: true
+    # Which ablation modes to run (all = full 3 metrics, rq_red = RQ+Redundancy, etc.)
+    modes: ["all", "rq_red", "rq_syn", "red_syn"]
 
 # -----------------------------------------------------------------------------
 # HALO ANALYSIS (Cross-layer dependencies)
@@ -129,6 +140,12 @@ halo_analysis:
   percentile: 90.0
   use_activation_weight: true
   compute_influence_matrix: true
+  
+  # Permutation baseline: shuffle cluster labels to establish null distribution
+  # Tests whether observed halo effects are statistically significant
+  permutation_baseline:
+    enabled: true
+    n_permutations: 100  # Number of random permutations
 
 # -----------------------------------------------------------------------------
 # CASCADE ANALYSIS (Damage testing)
@@ -137,6 +154,14 @@ cascade_analysis:
   enabled: true
   n_remove_per_group: 5
   damage_sample_fraction: 0.2
+
+# -----------------------------------------------------------------------------
+# MULTI-SEED EXPERIMENT
+# -----------------------------------------------------------------------------
+# Run experiment with multiple random seeds for robust statistics (mean ± std)
+multi_seed:
+  enabled: true
+  seeds: [42, 123, 456, 789, 1000]  # 5 seeds for good statistics
 
 # -----------------------------------------------------------------------------
 # PRUNING - Comprehensive testing of all metrics

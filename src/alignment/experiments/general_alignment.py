@@ -1390,17 +1390,17 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         else:
                             strategy = AlignmentPruning(metric=alignment_metric, config=pruning_config)
                     elif strategy_name in metric_based_strategies:
-                        # NEW: Use metric name directly as pruning criterion
-                        from alignment.pruning.strategies import AlignmentPruning, CascadingAlignmentPruning, GlobalAlignmentPruning
+                        # Use metric name directly as pruning criterion.
+                        # Note: in 'cascading' scope we perform the sequential recomputation in this
+                        # experiment loop, so we use the standard AlignmentPruning wrapper (which
+                        # forwards outputs/targets kwargs to the metric implementation).
+                        from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning
 
                         if self.config.pruning_scope == "global":
                             strategy = GlobalAlignmentPruning(metric=strategy_name, config=pruning_config)
-                        elif self.config.pruning_scope == "cascading":
-                            pruning_config.structured = True
-                            strategy = CascadingAlignmentPruning(
-                                metric=strategy_name, direction=getattr(self.config, "cascading_direction", "forward"), config=pruning_config
-                            )
                         else:
+                            if self.config.pruning_scope == "cascading":
+                                pruning_config.structured = True
                             strategy = AlignmentPruning(metric=strategy_name, config=pruning_config)
                     elif strategy_name == "cascading_alignment":
                         # Legacy cascading_alignment handling
@@ -1434,32 +1434,31 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         logger.warning(f"Unsupported pruning strategy: {strategy_name}")
                         continue
 
-                    # Get sample inputs for metric-based pruning (alignment, RQ, MI, etc.)
+                    # Inputs/outputs/targets used by metric-based pruning and (optionally) gradient-based pruning.
                     layer_inputs_dict = {}
-                    # All metric-based pruning strategies need layer inputs
-                    needs_layer_inputs = True
-                    # Store targets for conditional metrics and outputs for activation metrics
-                    sample_targets = None
                     layer_outputs_dict = {}
-                    
-                    if needs_layer_inputs:
-                        # Get a batch of data for alignment computation
+                    sample_targets = None
+                    sample_inputs = None
+
+                    needs_gradients = strategy_name in {"gradient", "fisher"}
+                    needs_layer_inputs = (strategy_name == "alignment") or (strategy_name == "hybrid") or (strategy_name in metric_based_strategies)
+                    needs_layer_outputs = needs_layer_inputs  # capture outputs alongside inputs
+                    needs_sample_batch = needs_layer_inputs or needs_gradients
+
+                    if needs_sample_batch:
                         data_iter = iter(self.data_loader)
                         sample_batch, sample_targets = next(data_iter)
                         sample_inputs = sample_batch.to(self.config.device)
                         sample_targets = sample_targets.to(self.config.device)
 
-                        # For alignment-based pruning, we ALWAYS need inputs for all layers
-                        # (not just for global pruning)
-                        # Use hooks to capture inputs AND outputs for all layers
-                        # (outputs needed for activation-based metrics like activation_l2_norm)
+                    if needs_layer_inputs and self.config.pruning_scope != "cascading":
+                        # Capture inputs AND outputs for all layers once (used for global and layer-wise pruning).
                         hooks = []
-                        layer_outputs_dict = {}
 
                         def capture_input_output(name):
                             def hook(module, input, output):
                                 layer_inputs_dict[name] = input[0].detach()
-                                layer_outputs_dict[name] = output.detach()
+                                layer_outputs_dict[name] = output.detach() if hasattr(output, "detach") else output
 
                             return hook
 
@@ -1482,6 +1481,22 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         # Preprocess CNN inputs using unfold for proper RQ computation
                         layer_inputs_dict = self._preprocess_pruning_inputs(layer_inputs_dict)
 
+                    if needs_gradients and self.config.pruning_scope != "cascading":
+                        # Gradient-based pruning requires a backward pass to populate .grad tensors.
+                        was_training = self.model.training
+                        self.model.eval()
+                        self.model.zero_grad(set_to_none=True)
+                        try:
+                            outputs = self.model(sample_inputs)
+                            logits = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
+                            loss = nn.CrossEntropyLoss()(logits, sample_targets)
+                            loss.backward()
+                            if strategy_name == "fisher" and hasattr(strategy, "accumulate_fisher"):
+                                strategy.accumulate_fisher(self.model)
+                        finally:
+                            if was_training:
+                                self.model.train()
+
                     # Apply pruning
                     if pruning_config.global_pruning and hasattr(strategy, "prune_model"):
                         # Global pruning across all layers
@@ -1497,43 +1512,97 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         zero_params = sum((mask == 0).sum().item() for mask in masks.values())
                         overall_sparsity = zero_params / total_params if total_params > 0 else 0
 
-                    elif self.config.pruning_scope == "cascading" and needs_layer_inputs:
-                        # Cascading alignment needs special handling
+                    elif self.config.pruning_scope == "cascading":
+                        # Cascading pruning: prune layers sequentially, recomputing any required
+                        # per-layer statistics (inputs/outputs/gradients) after each pruning step.
+                        direction = getattr(self.config, "cascading_direction", "forward")
 
-                        # TODO: Extend cascading to other algorithms (magnitude, gradient, etc)
-                        # For now, cascading only works with alignment-based pruning
+                        ordered_layers = []
+                        for lname, module in self.model.named_modules():
+                            if hasattr(module, "weight") and len(module.weight.shape) >= 2:
+                                ordered_layers.append((lname, module))
+                        if direction == "backward":
+                            ordered_layers = ordered_layers[::-1]
 
-                        # Create a function to get current layer inputs
-                        def get_layer_inputs_fn():
-                            # Capture current inputs with hooks
-                            current_inputs = {}
-                            hooks = []
+                        logger.info(f"Cascading {direction} pruning of {len(ordered_layers)} layers (strategy={strategy_name})")
 
-                            def capture_input(name):
-                                def hook(module, input, output):
-                                    current_inputs[name] = input[0].detach()
+                        masks = {}
+                        pruning_failed = False
 
-                                return hook
+                        for idx, (lname, module) in enumerate(ordered_layers):
+                            logger.info(f"[Cascading] Pruning layer {idx+1}/{len(ordered_layers)}: {lname}")
 
-                            # Register hooks
-                            for name, module in self.model.named_modules():
-                                if hasattr(module, "weight") and len(module.weight.shape) >= 2:
-                                    hook = module.register_forward_hook(capture_input(name))
-                                    hooks.append(hook)
+                            layer_inputs = None
+                            layer_outputs = None
 
-                            # Forward pass
-                            with torch.no_grad():
-                                _ = self.model(sample_inputs)
+                            if needs_sample_batch:
+                                captured = {}
 
-                            # Remove hooks
-                            for hook in hooks:
-                                hook.remove()
+                                def _capture_io(_module, _input, _output):
+                                    # Best-effort: capture the tensor input/output if present.
+                                    try:
+                                        captured["inputs"] = _input[0].detach()
+                                    except Exception:
+                                        captured["inputs"] = _input
+                                    try:
+                                        captured["outputs"] = _output.detach()
+                                    except Exception:
+                                        captured["outputs"] = _output
 
-                            # Preprocess CNN inputs
-                            return self._preprocess_pruning_inputs(current_inputs)
+                                handle = module.register_forward_hook(_capture_io)
+                                was_training = self.model.training
+                                self.model.eval()
+                                self.model.zero_grad(set_to_none=True)
+                                try:
+                                    if needs_gradients:
+                                        outputs = self.model(sample_inputs)
+                                        logits = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
+                                        loss = nn.CrossEntropyLoss()(logits, sample_targets)
+                                        loss.backward()
+                                        if strategy_name == "fisher" and hasattr(strategy, "accumulate_fisher"):
+                                            strategy.accumulate_fisher(self.model)
+                                    else:
+                                        with torch.no_grad():
+                                            _ = self.model(sample_inputs)
+                                except Exception as e:
+                                    logger.error(f"[Cascading] Failed to compute forward/gradients for {lname}: {e}")
+                                    pruning_failed = True
+                                finally:
+                                    handle.remove()
+                                    if was_training:
+                                        self.model.train()
 
-                        # Apply cascading pruning
-                        masks = strategy.prune_model(self.model, get_layer_inputs_fn, amount=amount)
+                                if pruning_failed:
+                                    break
+
+                                raw_inputs = captured.get("inputs", None)
+                                if raw_inputs is not None:
+                                    # Preprocess CNN inputs for proper RQ computation (unfold, etc).
+                                    layer_inputs = self._preprocess_pruning_inputs({lname: raw_inputs}).get(lname)
+                                layer_outputs = captured.get("outputs", None)
+
+                            if needs_layer_inputs and layer_inputs is None:
+                                logger.debug(f"[Cascading] No captured inputs for layer {lname}; skipping.")
+                                continue
+
+                            try:
+                                mask = strategy.prune(
+                                    module,
+                                    inputs=layer_inputs,
+                                    outputs=layer_outputs,
+                                    targets=sample_targets,
+                                    module_name=lname,
+                                    amount=amount,
+                                )
+                                masks[lname] = mask
+                            except Exception as e:
+                                logger.error(f"Pruning failed for strategy {strategy_name}: {e}")
+                                pruning_failed = True
+                                break
+
+                        if pruning_failed:
+                            logger.warning(f"Skipping strategy {strategy_name} due to errors")
+                            continue
 
                         # Calculate overall sparsity
                         total_params = sum(mask.numel() for mask in masks.values())
@@ -1565,16 +1634,21 @@ class GeneralAlignmentExperiment(BaseExperiment):
                             pruning_failed = False
                             for name, module in self.model.named_modules():
                                 if hasattr(module, "weight") and len(module.weight.shape) >= 2:
-                                    # All metric-based strategies require inputs
-                                    layer_inputs = layer_inputs_dict.get(name)
-                                    if layer_inputs is None:
+                                    layer_inputs = layer_inputs_dict.get(name) if needs_layer_inputs else None
+                                    if needs_layer_inputs and layer_inputs is None:
                                         logger.debug(f"No captured inputs for layer {name} - skipping pruning for this layer")
                                         continue
 
                                     try:
                                         # Get outputs for this layer (needed for activation-based metrics)
                                         layer_outputs = layer_outputs_dict.get(name)
-                                        strategy.prune(module, inputs=layer_inputs, outputs=layer_outputs, targets=sample_targets)
+                                        strategy.prune(
+                                            module,
+                                            inputs=layer_inputs,
+                                            outputs=layer_outputs,
+                                            targets=sample_targets,
+                                            module_name=name,
+                                        )
                                         sparsity = strategy.get_sparsity(module)
                                         layer_sparsities[name] = sparsity
                                     except Exception as e:
@@ -2788,8 +2862,9 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
     def _pruning_experiments_tensorized_detailed(self) -> Dict[str, Any]:
         """Tensorized pruning with detailed per-network results."""
-        # This would be similar to the above but preserve individual network results
-        # For now, we'll fall back to aggregated results
+        # TODO: Implement per-network (not aggregated) tensorized pruning results.
+        # This should return the same keys as `_pruning_experiments_tensorized()`, but with
+        # per-network curves preserved for later variance/error-bar plots.
         logger.info("Detailed tensorized pruning not yet implemented, using aggregated results")
         return self._pruning_experiments_tensorized()
 
@@ -3304,8 +3379,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         """Perform pruning experiments on a single specific network (fallback for compatibility)."""
         logger.info(f"Using single network pruning for network {network_id} (fallback mode)")
 
-        # This is a simplified fallback implementation
-        # In practice, this would only be used if tensorized pruning failss
+        # TODO: Implement a real single-network pruning run (strategy loop + finetune + eval),
+        # matching the tensorized outputs structure, so callers don't get empty results.
         results = {"strategies": {}, "final_model_performance": {}, "network_id": network_id}
 
         # For now, return empty results - the tensorized version should handle everything
@@ -4142,8 +4217,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
         sparsities = torch.zeros(num_networks, num_amounts)
         for net_idx in range(num_networks):
             for amount_idx, amount in enumerate(pruning_amounts):
-                # Just use the pruning amount as sparsity for now
-                # More accurate calculation would require checking actual masks
+                # TODO: Compute actual sparsity from the masks (not the requested pruning amount),
+                # especially if mask construction has ties/constraints that affect the achieved rate.
                 sparsities[net_idx, amount_idx] = amount
 
         # TRULY PARALLEL EVALUATION - all configs at once!
@@ -4158,6 +4233,8 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
         # Fine-tuning phase
         if self.config.fine_tune_after_pruning:
+            # TODO: Implement fine-tuning for ultra-parallel mode (e.g., batched finetune or per-config micro-finetune),
+            # or explicitly disable this mode when fine_tune_after_pruning=True.
             logger.info("    Fine-tuning is not yet implemented for ultra-parallel mode")
             # For now, just copy the before results
             accuracies_after = accuracies_before.clone()

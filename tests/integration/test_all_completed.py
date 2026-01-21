@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Test script to verify all placeholders have been properly implemented.
+Integration sanity checks for the `alignment` package.
+
+This is a lightweight script (not a pytest suite) intended to:
+- verify core modules import cleanly
+- smoke-test a few key APIs (metrics, pruning utils, tracking)
 """
 
 import logging
@@ -19,9 +23,18 @@ def test_imports():
     logger.info("Testing imports...")
 
     try:
-        # Core imports
+        import alignment
 
-        # Utils imports
+        # Core / registry
+        from alignment.core import ModelWrapper  # noqa: F401
+        from alignment.metrics import METRIC_REGISTRY  # noqa: F401
+        from alignment.metrics.base import MetricComputer  # noqa: F401
+
+        # Pruning + services
+        from alignment.pruning import get_pruning_strategy  # noqa: F401
+        from alignment.services import MaskOperations  # noqa: F401
+
+        logger.info(f"✓ alignment imports OK (version={getattr(alignment, '__version__', 'unknown')})")
 
         logger.info("✓ All imports successful")
         return True
@@ -217,8 +230,8 @@ def main():
     logger.info(f"\nTotal: {passed}/{total} passed")
 
     if passed == total:
-        logger.info("\n🎉 ALL PLACEHOLDERS HAVE BEEN PROPERLY IMPLEMENTED! 🎉")
-        logger.info("\nThe alignment module is now complete with:")
+        logger.info("\nAll integration sanity checks passed.")
+        logger.info("\nAlignment module capabilities validated:")
         logger.info("- 17+ functional metrics")
         logger.info("- Comprehensive pruning utilities")
         logger.info("- Batch and parallel processing")

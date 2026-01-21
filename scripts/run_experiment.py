@@ -34,58 +34,60 @@ from typing import Optional
 import torch
 import yaml
 
-# Add the project root and src directory to Python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-repo_root = os.path.dirname(current_dir)
-sys.path.insert(0, repo_root)
-sys.path.insert(0, os.path.join(repo_root, "src"))
+try:
+    from alignment.experiments.general_alignment import GeneralAlignmentExperiment
+    from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+    from alignment.experiments.cluster_experiments import (
+        ClusterAnalysisExperiment,
+        ClusterAnalysisConfig,
+        VisionExperiment,  # backward compat
+        VisionExperimentConfig,  # backward compat
+    )
+except ImportError:
+    # Repo-local runs (without installing the package): add project root + src/ to sys.path.
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(current_dir)
+    sys.path.insert(0, repo_root)
+    sys.path.insert(0, os.path.join(repo_root, "src"))
 
-# Configure tqdm globally to avoid ANSI escape codes in log files
-# This is especially important when running under SLURM where output is redirected to files
-# The [A escape codes you see in logs are cursor movement codes from tqdm progress bars
+    from alignment.experiments.general_alignment import GeneralAlignmentExperiment
+    from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+    from alignment.experiments.cluster_experiments import (
+        ClusterAnalysisExperiment,
+        ClusterAnalysisConfig,
+        VisionExperiment,  # backward compat
+        VisionExperimentConfig,  # backward compat
+    )
 
-# Set environment variable for libraries that respect it (e.g., transformers)
-# This tells tqdm to use simpler formatting
-os.environ.setdefault('TQDM_DISABLE', '0')  # Keep tqdm enabled but configure it
-
+# Configure tqdm to avoid ANSI escape codes in log files (common under SLURM).
 try:
     from tqdm import tqdm
     import tqdm as tqdm_module
-    
-    # Check if we're in a terminal (TTY) - if not, we're likely logging to a file
-    is_tty = hasattr(sys.stderr, 'isatty') and sys.stderr.isatty()
-    
-    # Also check if we're running under SLURM (common case where logs go to files)
-    is_slurm = 'SLURM_JOB_ID' in os.environ
-    
+
+    # Check if we're in a terminal (TTY) - if not, we're likely logging to a file.
+    is_tty = hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+
+    # Also check if we're running under SLURM (common case where logs go to files).
+    is_slurm = "SLURM_JOB_ID" in os.environ
+
     if not is_tty or is_slurm:
-        # When not in terminal or under SLURM, configure tqdm to avoid ANSI escape codes
-        # This prevents escape codes like [A from appearing in log files
         original_tqdm = tqdm_module.tqdm
-        
+
         def patched_tqdm(*args, **kwargs):
-            # Force ASCII mode and simpler formatting when output might go to a file
-            kwargs.setdefault('ascii', True)  # Use ASCII instead of Unicode blocks (prevents █▋ characters)
-            kwargs.setdefault('ncols', 100)   # Fixed width
-            kwargs.setdefault('file', sys.stderr)  # Always use stderr
-            # Disable dynamic resizing which can cause issues
-            kwargs.setdefault('dynamic_ncols', False)
-            # Minimize escape codes
-            kwargs.setdefault('leave', False)  # Don't leave progress bar after completion
+            # Force ASCII mode and simpler formatting when output might go to a file.
+            kwargs.setdefault("ascii", True)  # prevent Unicode blocks in logs
+            kwargs.setdefault("ncols", 100)  # fixed width
+            kwargs.setdefault("file", sys.stderr)  # always use stderr
+            kwargs.setdefault("dynamic_ncols", False)  # avoid resizing escape codes
+            kwargs.setdefault("leave", False)  # don't leave progress bars in logs
             return original_tqdm(*args, **kwargs)
-        
+
         tqdm_module.tqdm = patched_tqdm
 except ImportError:
     pass  # tqdm not available, skip configuration
 
-from alignment.experiments.general_alignment import GeneralAlignmentExperiment
-from alignment.experiments.llm_experiments import LLMAlignmentExperiment
-from alignment.experiments.cluster_experiments import (
-    ClusterAnalysisExperiment,
-    ClusterAnalysisConfig,
-    VisionExperiment,  # backward compat
-    VisionExperimentConfig,  # backward compat
-)
+# Set environment variable for libraries that respect it (e.g., transformers).
+os.environ.setdefault("TQDM_DISABLE", "0")
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +175,13 @@ def _create_cluster_experiment(config):
         dataset_name=getattr(config, "dataset_name", dataset_cfg.get("name", "cifar10") if isinstance(dataset_cfg, dict) else "cifar10"),
         n_calibration=getattr(config, "n_calibration", metrics_cfg.get("n_calibration_samples", 5000) if isinstance(metrics_cfg, dict) else 5000),
         n_clusters=getattr(config, "n_clusters", clustering_cfg.get("n_clusters", 4) if isinstance(clustering_cfg, dict) else 4),
+        activation_point=str(
+            getattr(
+                config,
+                "activation_point",
+                metrics_cfg.get("activation_point", "pre_bn") if isinstance(metrics_cfg, dict) else "pre_bn",
+            )
+        ),
         activation_samples=getattr(
             config,
             "activation_samples",
@@ -279,6 +288,9 @@ def _create_cluster_experiment(config):
     elif "mobilenet" in model_name:
         model = torchvision.models.mobilenet_v2(weights=weights_arg or 'IMAGENET1K_V1')
         model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+    elif "alexnet" in model_name:
+        model = torchvision.models.alexnet(weights=weights_arg or 'IMAGENET1K_V1')
+        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
     
@@ -369,6 +381,10 @@ def _create_cluster_experiment(config):
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=num_workers)
     
+    # Track architecture tweaks so we can reproduce the exact model when loading checkpoints later.
+    resnet_cifar_stem_tweaked = False
+    mobilenet_cifar_stride1 = False
+    
     # CIFAR-specific stem tweak: using the ImageNet stem (7x7,stride2 + maxpool)
     # degrades CIFAR accuracy. Use the standard CIFAR stem and (when pretrained)
     # seed weights by center-cropping the 7x7 conv filter.
@@ -384,6 +400,18 @@ def _create_cluster_experiment(config):
                 pass
             model.conv1 = new_conv
             model.maxpool = torch.nn.Identity()
+            resnet_cifar_stem_tweaked = True
+
+    # MobileNetV2 CIFAR stem tweak: the ImageNet stride-2 stem collapses spatial resolution too early
+    # on 32x32 inputs and can lead to unstable/weak CIFAR fine-tuning. Use stride=1 for the first conv.
+    if ("cifar" in dataset_name) and ("mobilenet" in model_name):
+        try:
+            conv0 = model.features[0][0]  # ConvBNReLU: [conv, bn, relu]
+            if isinstance(conv0, torch.nn.Conv2d):
+                conv0.stride = (1, 1)
+                mobilenet_cifar_stride1 = True
+        except Exception:
+            pass
 
     # Train/fine-tune the model on target dataset before experiments.
     # If you want a pure "no-training" analysis, provide an explicit checkpoint and set do_train=false.
@@ -418,6 +446,9 @@ def _create_cluster_experiment(config):
         'model_name': model_name,
         'dataset_name': dataset_name,
         'num_classes': num_classes,
+        # Architecture metadata for reproducibility when loading from paper scripts
+        'cifar_resnet_stem_tweaked': resnet_cifar_stem_tweaked,
+        'cifar_mobilenet_stride1': mobilenet_cifar_stride1,
     }, trained_checkpoint)
     logger.info(f"Saved trained model checkpoint to {trained_checkpoint}")
     

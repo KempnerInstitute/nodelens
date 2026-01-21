@@ -15,18 +15,18 @@ Compatible with any neural network architecture:
 """
 
 import logging
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-import json
-import numpy as np
 
-logger = logging.getLogger(__name__)
+import numpy as np
 
 try:
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader
+
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
@@ -34,6 +34,8 @@ except ImportError:
 from ..analysis.clustering import MetricSpaceClustering, CrossLayerHaloAnalysis
 from ..analysis.cascade_analysis import CascadeAnalysis, DamagePrediction
 from ..pruning.pipeline import PruningPipelineOptions, run_pruning_pipeline
+
+logger = logging.getLogger(__name__)
 
 
 class _CovAccumulator:
@@ -113,6 +115,11 @@ class ClusterAnalysisConfig:
     dataset_name: str = "cifar10"
     n_calibration: int = 5000
     n_clusters: int = 4
+    # Where to read the channel signal Y_i for within-layer statistics:
+    # - "pre_bn": hook Conv2d outputs (pre-BN, pre-ReLU). (Backward compatible default.)
+    # - "post_bn": hook the matching BatchNorm outputs when available (post-BN, pre-ReLU).
+    #   For RQ we fold BN scaling into the denominator so the metric stays comparable.
+    activation_point: str = "pre_bn"
     # How to form channel samples from Conv outputs Y[B,C,H,W]
     # - "flatten_spatial": treat spatial positions as samples (subsample per image)
     # - "gap": global-average-pool per image (one sample per image)
@@ -142,6 +149,14 @@ class ClusterAnalysisConfig:
     output_dir: str = "results/cluster_analysis"
     device: str = "cuda"
     seed: int = 42
+    # Multi-seed support for robust statistics
+    seeds: Optional[List[int]] = None  # If provided, run experiment with each seed
+    # Ablation settings
+    run_metric_ablation: bool = False  # Run clustering with metric subsets
+    metric_ablations: List[str] = field(default_factory=lambda: ["all", "rq_red", "rq_syn", "red_syn"])
+    # Permutation baseline settings
+    run_permutation_baseline: bool = False  # Run halo permutation tests
+    n_permutations: int = 100
 
 
 # Backward compatibility alias
@@ -178,6 +193,8 @@ class ClusterAnalysisExperiment:
         self.cluster_results = {}
         self.halo_results = {}
         self.halo_flow_results = {}
+        self.permutation_results = {}  # Permutation baseline results
+        self.ablation_results = {}     # Metric ablation results
         self.cascade_results = {}
         self.pruning_results = {}
         self.pruning_cluster_distributions = {}
@@ -222,10 +239,35 @@ class ClusterAnalysisExperiment:
                 batch_acts[name] = out.detach()
             return fn
 
-        # Register hooks
+        # Register hooks.
+        # By default we hook conv outputs (pre-BN); optionally hook matching BN outputs (post-BN)
+        # while still storing under the conv's name so downstream code stays consistent.
+        modules = dict(self.model.named_modules())
+        activation_point = str(getattr(self.config, "activation_point", "pre_bn")).lower()
+
+        def _bn_for_conv_name(conv_name: str):
+            # Best-effort mapping using common naming conventions (ResNet/VGG).
+            cand = [
+                conv_name.replace("conv", "bn"),
+                conv_name.replace(".conv", ".bn"),
+                conv_name + "_bn",
+            ]
+            if "downsample.0" in conv_name:
+                cand.append(conv_name.replace("downsample.0", "downsample.1"))
+            for n in cand:
+                m = modules.get(n)
+                if m is not None and m.__class__.__name__.lower().startswith("batchnorm"):
+                    return n, m
+            return None, None
+
         handles = []
         for name, layer in self.layers:
-            handles.append(layer.register_forward_hook(hook_fn(name)))
+            hook_mod = layer
+            if activation_point in {"post_bn", "postbn", "bn"}:
+                _bn_name, bn = _bn_for_conv_name(name)
+                if bn is not None:
+                    hook_mod = bn
+            handles.append(hook_mod.register_forward_hook(hook_fn(name)))
 
         activation_mode = str(getattr(self.config, "activation_samples", "flatten_spatial")).lower()
         samples_per_img = int(getattr(self.config, "spatial_samples_per_image", 16))
@@ -323,7 +365,24 @@ class ClusterAnalysisExperiment:
             weight = layer.weight.data.cpu()  # [C_out, C_in, k, k]
             weight_flat = weight.view(weight.size(0), -1)  # [C_out, ...]
             weight_norm = weight_flat.norm(dim=1).numpy().astype(np.float64) ** 2
-            rq = var_y / (weight_norm[:n_channels] + 1e-10)
+            # If we used post-BN activations as Y, fold the BN scale into the denominator so
+            # RQ remains comparable to the pre-BN definition (since Var(BN(y)) scales by gamma^2/rv).
+            if activation_point in {"post_bn", "postbn", "bn"}:
+                _bn_name, bn = _bn_for_conv_name(name)
+                if bn is not None and hasattr(bn, "weight") and hasattr(bn, "running_var"):
+                    try:
+                        gamma = bn.weight.detach().cpu().numpy().astype(np.float64)
+                        rv = bn.running_var.detach().cpu().numpy().astype(np.float64)
+                        eps = float(getattr(bn, "eps", 1e-5))
+                        scale_sq = (gamma[:n_channels] ** 2) / (rv[:n_channels] + eps)
+                        denom = (weight_norm[:n_channels] * scale_sq) + 1e-10
+                        rq = var_y / denom
+                    except Exception:
+                        rq = var_y / (weight_norm[:n_channels] + 1e-10)
+                else:
+                    rq = var_y / (weight_norm[:n_channels] + 1e-10)
+            else:
+                rq = var_y / (weight_norm[:n_channels] + 1e-10)
             metrics["rq"] = rq.astype(np.float64)
 
             # 2) Redundancy via Gaussian MI from correlations
@@ -438,14 +497,29 @@ class ClusterAnalysisExperiment:
             return 0.0
         return max(0.0, 0.5 * float(np.log(var_t * det_y / det_all)))
     
-    def run_clustering(self) -> Dict[str, Any]:
-        """Cluster channels in each layer."""
+    def run_clustering(self, run_ablation: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Cluster channels in each layer.
+        
+        Args:
+            run_ablation: If True, also run ablation study with metric subsets.
+                         Uses config.run_metric_ablation if not specified.
+        
+        Returns:
+            Dict with cluster results (and ablation results if enabled)
+        """
         logger.info("Clustering channels...")
+        
+        run_ablation = run_ablation if run_ablation is not None else getattr(
+            self.config, 'run_metric_ablation', False
+        )
         
         clusterer = MetricSpaceClustering(
             n_clusters=self.config.n_clusters,
             seed=self.config.seed,
         )
+        
+        ablation_results = {}
         
         for name, metrics in self.layer_metrics.items():
             result = clusterer.fit(
@@ -461,19 +535,69 @@ class ClusterAnalysisExperiment:
                 "type_mapping": result.type_mapping,
                 "type_counts": result.type_counts,
                 "layer_name": name,
+                "ablation_mode": "all",
             }
             logger.info(f"  {name}: silhouette={result.silhouette:.3f}, types={result.type_counts}")
+            
+            # Run ablation study if enabled
+            if run_ablation:
+                ablations = getattr(self.config, 'metric_ablations', 
+                                   ["all", "rq_red", "rq_syn", "red_syn"])
+                abl_results = clusterer.run_ablation_study(
+                    metrics["rq"],
+                    metrics["redundancy"],
+                    metrics["synergy"],
+                    name,
+                    ablations=ablations,
+                )
+                ablation_results[name] = {
+                    ablation: {
+                        "silhouette": res.silhouette,
+                        "ari_vs_full": res.ari_vs_full,
+                        "ami_vs_full": res.ami_vs_full,
+                        "type_counts": res.cluster_result.type_counts,
+                    }
+                    for ablation, res in abl_results.items()
+                }
+                logger.info(f"    Ablation: {[f'{k}: sil={v.silhouette:.3f}' for k,v in abl_results.items()]}")
+        
+        if run_ablation:
+            self.cluster_results["_ablation"] = ablation_results
         
         return self.cluster_results
     
-    def run_halo_analysis(self) -> Dict[str, Any]:
+    def run_halo_analysis(
+        self,
+        run_permutation: Optional[bool] = None,
+        n_permutations: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Analyze cross-layer halos with activation-weighted influence.
         
         Uses effective influence: ||W||_1 * std(Y) to account for
         batch normalization scaling effects.
+        
+        Args:
+            run_permutation: If True, run permutation test to establish null baseline.
+                            Uses config.run_permutation_baseline if not specified.
+            n_permutations: Number of permutations for baseline (default: config.n_permutations)
+        
+        Returns:
+            Dict with halo results per transition
         """
         logger.info("Analyzing cross-layer halos...")
+        
+        # Get permutation settings
+        run_permutation = run_permutation if run_permutation is not None else getattr(
+            self.config, 'run_permutation_baseline', False
+        )
+        n_permutations = n_permutations if n_permutations is not None else getattr(
+            self.config, 'n_permutations', 100
+        )
+        
+        # Initialize permutation results storage if needed
+        if not hasattr(self, 'permutation_results'):
+            self.permutation_results = {}
         
         halo_analyzer = CrossLayerHaloAnalysis(
             percentile=self.config.halo_percentile,
@@ -481,6 +605,8 @@ class ClusterAnalysisExperiment:
         )
         
         layer_names = list(self.cluster_results.keys())
+        # Filter out special keys like "_ablation"
+        layer_names = [n for n in layer_names if not n.startswith("_")]
         modules = dict(self.model.named_modules())
         
         # Choose halo transitions along *direct weight-connected* edges by matching channel dimensions.
@@ -590,6 +716,33 @@ class ClusterAnalysisExperiment:
                     self.halo_flow_results[f"{src_name}->{tgt_name}"] = flow
             except Exception as exc:
                 logger.debug("Could not compute halo flow matrix for %s->%s: %s", src_name, tgt_name, exc)
+            
+            # Run permutation baseline if enabled
+            if run_permutation:
+                try:
+                    src_labels = np.asarray(src_result.get("labels", np.array([], dtype=int))).astype(int)
+                    src_labels = src_labels[: min(len(src_labels), n_in)]
+                    
+                    perm_results = halo_analyzer.permutation_baseline(
+                        influence=influence,
+                        labels=src_labels,
+                        type_mapping=src_result["type_mapping"],
+                        redundancy=tgt_metrics["redundancy"],
+                        synergy=tgt_metrics["synergy"],
+                        n_permutations=n_permutations,
+                        seed=self.config.seed,
+                    )
+                    self.permutation_results[f"{src_name}->{tgt_name}"] = perm_results
+                    
+                    # Log significant results
+                    for ctype, pres in perm_results.items():
+                        if pres.get('p_syn', 1.0) < 0.05 or pres.get('p_red', 1.0) < 0.05:
+                            logger.info(
+                                f"    Permutation test {ctype}: z_syn={pres['z_syn']:.2f} "
+                                f"(p={pres['p_syn']:.3f}), z_red={pres['z_red']:.2f} (p={pres['p_red']:.3f})"
+                            )
+                except Exception as exc:
+                    logger.debug("Permutation baseline failed for %s->%s: %s", src_name, tgt_name, exc)
         
         return self.halo_results
     
@@ -1978,6 +2131,7 @@ class ClusterAnalysisExperiment:
                 "n_clusters": self.config.n_clusters,
                 "activation_samples": getattr(self.config, "activation_samples", "flatten_spatial"),
                 "spatial_samples_per_image": getattr(self.config, "spatial_samples_per_image", 16),
+                "seed": getattr(self.config, "seed", 42),
             },
             "layer_metrics": self.layer_metrics,
             "cluster_results": {
@@ -1988,10 +2142,12 @@ class ClusterAnalysisExperiment:
                     "centroids": v["centroids"].tolist() if hasattr(v["centroids"], 'tolist') else v["centroids"],
                     "type_mapping": {str(kk): vv for kk, vv in v["type_mapping"].items()},
                 }
-                for k, v in self.cluster_results.items()
+                for k, v in self.cluster_results.items() if not k.startswith("_")
             },
             "halo_results": self.halo_results,
             "halo_flow_results": self.halo_flow_results,
+            "permutation_results": getattr(self, 'permutation_results', {}),
+            "ablation_results": self.cluster_results.get("_ablation", {}),
             "cascade_results": self.cascade_results,
             "pruning_results": getattr(self, 'pruning_results', {}),
             "pruning_cluster_distributions": getattr(self, "pruning_cluster_distributions", {}),
@@ -2477,3 +2633,215 @@ class ClusterAnalysisExperiment:
 
 # Backward compatibility aliases
 VisionExperiment = ClusterAnalysisExperiment
+
+
+def aggregate_multi_seed_results(results_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Aggregate results from multiple seed runs into mean ± std statistics.
+    
+    This is the key function for robust statistical reporting. It computes
+    mean and standard deviation across seeds for all numeric metrics.
+    
+    Args:
+        results_list: List of result dictionaries from run_full_analysis(),
+                     one per seed.
+    
+    Returns:
+        Aggregated results with 'mean', 'std', 'seeds', and 'n_seeds' fields
+        for all numeric values.
+    
+    Example:
+        >>> seeds = [42, 123, 456]
+        >>> all_results = []
+        >>> for seed in seeds:
+        ...     config.seed = seed
+        ...     exp = ClusterAnalysisExperiment(config, model, train_loader, test_loader)
+        ...     all_results.append(exp.run_full_analysis())
+        >>> aggregated = aggregate_multi_seed_results(all_results)
+        >>> print(aggregated['pruning_results']['methods']['cluster_aware'][0.5])
+        # {'accuracy_mean': 0.923, 'accuracy_std': 0.004, 'n_seeds': 3}
+    """
+    if not results_list:
+        return {}
+    
+    if len(results_list) == 1:
+        # Single seed - just return with metadata
+        result = results_list[0].copy()
+        result["_aggregation"] = {"n_seeds": 1, "seeds": [result.get("config", {}).get("seed", 42)]}
+        return result
+    
+    seeds = [r.get("config", {}).get("seed", i) for i, r in enumerate(results_list)]
+    
+    def _aggregate_numeric(values: List[Any]) -> Dict[str, Any]:
+        """Aggregate a list of values into mean/std."""
+        numeric = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if not numeric:
+            return {"value": values[0] if values else None, "n_seeds": len(values)}
+        arr = np.array(numeric, dtype=np.float64)
+        return {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+            "min": float(np.min(arr)),
+            "max": float(np.max(arr)),
+            "n_seeds": len(numeric),
+        }
+    
+    def _aggregate_dict(dicts: List[Dict]) -> Dict:
+        """Recursively aggregate dictionaries."""
+        if not dicts or not all(isinstance(d, dict) for d in dicts):
+            return {}
+        
+        all_keys = set()
+        for d in dicts:
+            all_keys.update(d.keys())
+        
+        result = {}
+        for key in all_keys:
+            values = [d.get(key) for d in dicts if key in d]
+            
+            if not values:
+                continue
+            
+            # Check type of first non-None value
+            first = next((v for v in values if v is not None), None)
+            
+            if first is None:
+                result[key] = None
+            elif isinstance(first, dict):
+                result[key] = _aggregate_dict([v for v in values if isinstance(v, dict)])
+            elif isinstance(first, (int, float)) and not isinstance(first, bool):
+                result[key] = _aggregate_numeric(values)
+            elif isinstance(first, list) and all(isinstance(x, (int, float)) for x in first):
+                # List of numbers - aggregate element-wise
+                try:
+                    arr = np.array([v for v in values if isinstance(v, list)], dtype=np.float64)
+                    result[key] = {
+                        "mean": np.mean(arr, axis=0).tolist(),
+                        "std": np.std(arr, axis=0).tolist(),
+                        "n_seeds": len(arr),
+                    }
+                except Exception:
+                    result[key] = values[0]
+            else:
+                # Non-numeric - just take first value
+                result[key] = first
+        
+        return result
+    
+    # Aggregate main result sections
+    aggregated = {
+        "config": results_list[0].get("config", {}),
+        "_aggregation": {
+            "n_seeds": len(results_list),
+            "seeds": seeds,
+        },
+    }
+    
+    # Sections to aggregate
+    for section in ["pruning_results", "cascade_results", "halo_results", "permutation_results"]:
+        section_data = [r.get(section, {}) for r in results_list]
+        if any(section_data):
+            aggregated[section] = _aggregate_dict(section_data)
+    
+    # For cluster results, aggregate silhouette scores
+    cluster_sections = [r.get("cluster_results", {}) for r in results_list]
+    if any(cluster_sections):
+        aggregated["cluster_results"] = {}
+        all_layers = set()
+        for cs in cluster_sections:
+            all_layers.update(cs.keys())
+        
+        for layer in all_layers:
+            layer_data = [cs.get(layer, {}) for cs in cluster_sections if layer in cs]
+            if layer_data:
+                sil_values = [d.get("silhouette", 0.0) for d in layer_data]
+                aggregated["cluster_results"][layer] = {
+                    "silhouette": _aggregate_numeric(sil_values),
+                    "type_counts": layer_data[0].get("type_counts", {}),  # Take first
+                    "type_mapping": layer_data[0].get("type_mapping", {}),
+                }
+    
+    # Copy ablation results (typically don't vary much across seeds)
+    if "ablation_results" in results_list[0]:
+        aggregated["ablation_results"] = results_list[0]["ablation_results"]
+    
+    return aggregated
+
+
+def run_multi_seed_experiment(
+    config: ClusterAnalysisConfig,
+    model_fn,
+    train_loader,
+    test_loader,
+    seeds: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """
+    Run the full experiment across multiple seeds and aggregate results.
+    
+    Args:
+        config: Base configuration (seed field will be overwritten per run)
+        model_fn: Callable that returns a fresh model instance for each seed
+        train_loader: Training data loader
+        test_loader: Test data loader
+        seeds: List of random seeds (default: [42, 123, 456, 789, 1000])
+    
+    Returns:
+        Aggregated results with mean ± std across seeds
+    
+    Example:
+        >>> def make_model():
+        ...     return torchvision.models.resnet18(pretrained=True)
+        >>> config = ClusterAnalysisConfig(model_name="resnet18")
+        >>> results = run_multi_seed_experiment(
+        ...     config, make_model, train_loader, test_loader,
+        ...     seeds=[42, 123, 456]
+        ... )
+    """
+    import copy
+    
+    seeds = seeds or getattr(config, 'seeds', None) or [42, 123, 456, 789, 1000]
+    
+    all_results = []
+    
+    for i, seed in enumerate(seeds):
+        logger.info(f"=== Running seed {seed} ({i+1}/{len(seeds)}) ===")
+        
+        # Create fresh config and model for this seed
+        seed_config = copy.deepcopy(config)
+        seed_config.seed = seed
+        seed_config.output_dir = str(Path(config.output_dir) / f"seed_{seed}")
+        
+        # Set random seeds
+        if HAS_TORCH:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+        
+        # Create fresh model
+        model = model_fn()
+        
+        # Run experiment
+        exp = ClusterAnalysisExperiment(seed_config, model, train_loader, test_loader)
+        results = exp.run_full_analysis(
+            include_pruning=getattr(config, 'pruning_ratios', None) is not None
+        )
+        all_results.append(results)
+        
+        # Clean up
+        del model, exp
+        if HAS_TORCH and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    # Aggregate results
+    aggregated = aggregate_multi_seed_results(all_results)
+    
+    # Save aggregated results
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "results_aggregated.json", "w") as f:
+        json.dump(aggregated, f, indent=2, default=str)
+    
+    logger.info(f"Aggregated results from {len(seeds)} seeds saved to {output_dir}")
+    
+    return aggregated
