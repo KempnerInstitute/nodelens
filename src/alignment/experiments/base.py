@@ -209,6 +209,8 @@ class ExperimentConfig:
     generalized_importance: Dict[str, Any] = field(default_factory=dict)  # Generalized importance config
     do_halo_analysis: bool = False  # Flag for halo analysis
     do_generalized_importance: bool = False  # Flag for generalized importance
+    do_scar_optimal: bool = False  # Flag for SCAR-optimal (learned component weights)
+    do_random_supernode_ablation: bool = False  # Flag for random supernode ablation control
 
     # Performance optimization
     eval_batches: Optional[int] = None  # Limit evaluation to N batches (None = all)

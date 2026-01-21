@@ -2778,7 +2778,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         if strategies is None:
             # Check which baseline strategies are configured
             pruning_strategies = getattr(self.config, "pruning_strategies", [])
-            strategies = [s for s in pruning_strategies if s in ["wanda", "sparsegpt", "owl", "llm_pruner"]]
+            strategies = [s for s in pruning_strategies if s in ["wanda", "sparsegpt", "owl", "llm_pruner", "flap", "ria", "slimllm", "flap", "ria", "slimllm"]]
         
         if not strategies:
             logger.info("No baseline pruning strategies (wanda/sparsegpt) configured, skipping.")
@@ -3087,6 +3087,111 @@ class LLMAlignmentExperiment(BaseExperiment):
                 logger.error(f"LLM-Pruner calibration failed: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
+
+        # Compute FLAP scores (Fluctuation-based)
+        if "flap" in strategies:
+            logger.info("Calibrating FLAP pruning strategy...")
+            try:
+                from alignment.pruning.strategies.llm_baselines import FLAPPruning
+                flap = FLAPPruning(num_calibration_samples=num_calibration_samples)
+                flap.calibrate(model, calib_dataloader, device=str(device))
+                self._flap_baseline = flap
+                
+                for layer_idx in sorted(layer_indices):
+                    mlp_path = _resolve_mlp_path(layer_idx)
+                    if mlp_path is None:
+                        continue
+                    gate_name = f"{mlp_path}.gate_proj"
+                    up_name = f"{mlp_path}.up_proj"
+                    down_name = f"{mlp_path}.down_proj"
+                    if gate_name not in module_dict:
+                        continue
+                    gate, up, down = module_dict[gate_name], module_dict[up_name], module_dict[down_name]
+                    try:
+                        g_s = flap.get_structured_scores(gate, layer_name=gate_name, dim=0)
+                        u_s = flap.get_structured_scores(up, layer_name=up_name, dim=0)
+                        d_s = flap.get_structured_scores(down, layer_name=down_name, dim=1)
+                        ch_sc = (g_s + u_s + d_s).detach()
+                        for sn in (gate_name, up_name, down_name):
+                            if sn not in self.importance_scores: self.importance_scores[sn] = {}
+                            self.importance_scores[sn]["flap"] = ch_sc
+                            if sn not in results: results[sn] = {}
+                            results[sn]["flap"] = ch_sc
+                    except Exception as e:
+                        logger.warning(f"FLAP failed for {mlp_path}: {e}")
+                logger.info(f"FLAP: computed for {len(layer_indices)} layers")
+            except Exception as e:
+                logger.error(f"FLAP calibration failed: {e}")
+
+        # Compute RIA scores (Relative Importance × Activation)
+        if "ria" in strategies:
+            logger.info("Calibrating RIA pruning strategy...")
+            try:
+                from alignment.pruning.strategies.llm_baselines import RIAPruning
+                ria = RIAPruning(num_calibration_samples=num_calibration_samples)
+                ria.calibrate(model, calib_dataloader, device=str(device))
+                self._ria_baseline = ria
+                
+                for layer_idx in sorted(layer_indices):
+                    mlp_path = _resolve_mlp_path(layer_idx)
+                    if mlp_path is None:
+                        continue
+                    gate_name = f"{mlp_path}.gate_proj"
+                    up_name = f"{mlp_path}.up_proj"
+                    down_name = f"{mlp_path}.down_proj"
+                    if gate_name not in module_dict:
+                        continue
+                    gate, up, down = module_dict[gate_name], module_dict[up_name], module_dict[down_name]
+                    try:
+                        g_s = ria.get_structured_scores(gate, layer_name=gate_name, dim=0)
+                        u_s = ria.get_structured_scores(up, layer_name=up_name, dim=0)
+                        d_s = ria.get_structured_scores(down, layer_name=down_name, dim=1)
+                        ch_sc = (g_s + u_s + d_s).detach()
+                        for sn in (gate_name, up_name, down_name):
+                            if sn not in self.importance_scores: self.importance_scores[sn] = {}
+                            self.importance_scores[sn]["ria"] = ch_sc
+                            if sn not in results: results[sn] = {}
+                            results[sn]["ria"] = ch_sc
+                    except Exception as e:
+                        logger.warning(f"RIA failed for {mlp_path}: {e}")
+                logger.info(f"RIA: computed for {len(layer_indices)} layers")
+            except Exception as e:
+                logger.error(f"RIA calibration failed: {e}")
+
+        # Compute SlimLLM scores (holistic channel importance)
+        if "slimllm" in strategies:
+            logger.info("Calibrating SlimLLM pruning strategy...")
+            try:
+                from alignment.pruning.strategies.llm_baselines import SlimLLMPruning
+                slimllm = SlimLLMPruning(num_calibration_samples=num_calibration_samples)
+                slimllm.calibrate(model, calib_dataloader, device=str(device))
+                self._slimllm_baseline = slimllm
+                
+                for layer_idx in sorted(layer_indices):
+                    mlp_path = _resolve_mlp_path(layer_idx)
+                    if mlp_path is None:
+                        continue
+                    gate_name = f"{mlp_path}.gate_proj"
+                    up_name = f"{mlp_path}.up_proj"
+                    down_name = f"{mlp_path}.down_proj"
+                    if gate_name not in module_dict:
+                        continue
+                    gate, up, down = module_dict[gate_name], module_dict[up_name], module_dict[down_name]
+                    try:
+                        g_s = slimllm.get_structured_scores(gate, layer_name=gate_name, dim=0)
+                        u_s = slimllm.get_structured_scores(up, layer_name=up_name, dim=0)
+                        d_s = slimllm.get_structured_scores(down, layer_name=down_name, dim=1)
+                        ch_sc = (g_s + u_s + d_s).detach()
+                        for sn in (gate_name, up_name, down_name):
+                            if sn not in self.importance_scores: self.importance_scores[sn] = {}
+                            self.importance_scores[sn]["slimllm"] = ch_sc
+                            if sn not in results: results[sn] = {}
+                            results[sn]["slimllm"] = ch_sc
+                    except Exception as e:
+                        logger.warning(f"SlimLLM failed for {mlp_path}: {e}")
+                logger.info(f"SlimLLM: computed for {len(layer_indices)} layers")
+            except Exception as e:
+                logger.error(f"SlimLLM calibration failed: {e}")
 
         return results
 
@@ -8345,20 +8450,18 @@ class LLMAlignmentExperiment(BaseExperiment):
                         import traceback
                         logger.error(traceback.format_exc())
 
-        # Compute baseline pruning scores (Wanda, SparseGPT) if configured
+        # Compute baseline pruning scores (Wanda, SparseGPT, OWL, LLM-Pruner, FLAP, RIA, SlimLLM) if configured
         # This runs OUTSIDE the SCAR metrics block so it can work independently
         baseline_scores: Dict[str, Any] = {}
         pruning_strategies = getattr(self.config, "pruning_strategies", None) or []
-        # Baseline calibration is needed both for:
-        # - channel-adapted baselines: "wanda", "sparsegpt"
-        # - paper-faithful unstructured reproductions: "wanda_unstructured", "sparsegpt_unstructured"
-        wanda_needed = any(s in pruning_strategies for s in ["wanda", "wanda_unstructured"])
-        sparsegpt_needed = any(s in pruning_strategies for s in ["sparsegpt", "sparsegpt_unstructured"])
+        # Baseline calibration is needed for all calibration-based methods
+        ALL_CALIBRATION_BASELINES = ["wanda", "sparsegpt", "owl", "llm_pruner", "flap", "ria", "slimllm"]
         baseline_strategies = []
-        if wanda_needed:
-            baseline_strategies.append("wanda")
-        if sparsegpt_needed:
-            baseline_strategies.append("sparsegpt")
+        for baseline in ALL_CALIBRATION_BASELINES:
+            # Also check unstructured variants for wanda/sparsegpt
+            variants = [baseline, f"{baseline}_unstructured"] if baseline in ["wanda", "sparsegpt"] else [baseline]
+            if any(v in pruning_strategies for v in variants):
+                baseline_strategies.append(baseline)
         logger.info(f"Checking baseline strategies: pruning_strategies={pruning_strategies}, baseline_strategies={baseline_strategies}")
         if baseline_strategies:
             try:
@@ -8528,6 +8631,41 @@ class LLMAlignmentExperiment(BaseExperiment):
                     logger.info("Supernode-connectivity pruning score computation complete")
                 except Exception as conn_err:
                     logger.error(f"Failed supernode-connectivity computation: {conn_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
+            # SCAR Optimal: learned combination of SCAR components
+            if getattr(self.config, "do_scar_optimal", False):
+                try:
+                    logger.info("Computing SCAR-optimal (learned component weights)...")
+                    scar_optimal_results = self.compute_scar_optimal(
+                        scar_scores=scar_scores,
+                        num_validation_samples=32,
+                        sparsity=0.3,
+                        search_granularity=5,
+                        plots_dir=None,
+                    )
+                    results["scar_optimal"] = scar_optimal_results
+                    logger.info(f"SCAR-optimal complete: best_weights={scar_optimal_results.get('optimal_weights', {})}")
+                except Exception as opt_err:
+                    logger.error(f"Failed SCAR-optimal computation: {opt_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
+            # Random supernode ablation: test importance of LP-based supernode identification
+            if getattr(self.config, "do_random_supernode_ablation", False):
+                try:
+                    logger.info("Running random supernode ablation...")
+                    random_ablation_results = self.compute_random_supernode_ablation(
+                        scar_scores=scar_scores,
+                        supernode_fraction=supernode_config.get("core_fraction", 0.01),
+                        num_trials=5,
+                        sparsity=0.5,
+                    )
+                    results["random_supernode_ablation"] = random_ablation_results
+                    logger.info("Random supernode ablation complete")
+                except Exception as abl_err:
+                    logger.error(f"Failed random supernode ablation: {abl_err}")
                     import traceback
                     logger.error(traceback.format_exc())
 
@@ -9046,3 +9184,433 @@ class LLMAlignmentExperiment(BaseExperiment):
             "top5_values": [outgoing[i].item() for i in top_idxs],
             "plot_path": str(save_path),
         }
+
+    def compute_scar_optimal(
+        self,
+        scar_scores: Dict[str, Dict[str, Any]],
+        num_validation_samples: int = 32,
+        sparsity: float = 0.3,
+        search_granularity: int = 5,
+        plots_dir: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute SCAR-optimal: learned weighted combination of SCAR components.
+        
+        This performs a grid search over weights for:
+        - Loss Proxy (LP)
+        - Activation Power
+        - Taylor (first-order sensitivity)
+        - Protection score (from halo analysis)
+        
+        The optimal weights are found by minimizing perplexity on a validation set.
+        
+        Args:
+            scar_scores: Pre-computed SCAR scores
+            num_validation_samples: Samples for validation PPL
+            sparsity: Sparsity level for grid search (default 30%)
+            search_granularity: Number of weight values to try (5 = [0, 0.25, 0.5, 0.75, 1])
+            plots_dir: Directory to save analysis plots
+            
+        Returns:
+            Dict with optimal weights, per-layer weights, and final scores
+        """
+        import itertools
+        from alignment.pruning.base import PrecomputedScorePruning
+        
+        logger.info("=" * 60)
+        logger.info("Computing SCAR-optimal: Learned Component Weights")
+        logger.info("=" * 60)
+        
+        # Weight values to search
+        weight_values = [i / (search_granularity - 1) for i in range(search_granularity)]
+        logger.info(f"Weight values: {weight_values}")
+        
+        # Get available components per layer
+        layer_names = [ln for ln in scar_scores.keys() if "mlp.down_proj" in ln]
+        if not layer_names:
+            logger.warning("No SCAR scores found")
+            return {}
+        
+        # Check which components are available
+        sample_layer = layer_names[0]
+        sample_metrics = scar_scores[sample_layer]
+        available_components = []
+        for comp in ["scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature"]:
+            if comp in sample_metrics:
+                available_components.append(comp)
+        
+        # Also check importance_scores for protection
+        layer_imp = self.importance_scores.get(sample_layer.replace("model.layers", "model.model.layers"), {})
+        if "supernode_protection_score" in layer_imp or "protection_score" in layer_imp:
+            available_components.append("protection")
+        
+        logger.info(f"Available components: {available_components}")
+        
+        # Generate weight combinations (normalized to sum to 1)
+        n_components = len(available_components)
+        weight_combos = []
+        for combo in itertools.product(weight_values, repeat=n_components):
+            if sum(combo) > 0:  # Avoid all-zero
+                normalized = tuple(w / sum(combo) for w in combo)
+                if normalized not in weight_combos:
+                    weight_combos.append(normalized)
+        
+        logger.info(f"Testing {len(weight_combos)} weight combinations")
+        
+        # Get validation data
+        val_texts = []
+        if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+            val_texts = list(self.dataset.texts)[:num_validation_samples]
+        if not val_texts:
+            logger.warning("No validation texts available")
+            return {}
+        
+        # Prepare model
+        device = next(self.model.parameters()).device
+        
+        # Quick PPL evaluation function
+        def quick_ppl(scores_dict, sparsity_level):
+            """Evaluate PPL with given importance scores."""
+            try:
+                config = PruningConfig(
+                    sparsity=sparsity_level,
+                    mode="low",
+                    structured=True,
+                    global_pruning=False,
+                )
+                pruner = PrecomputedScorePruning(config=config)
+                
+                # Apply pruning
+                masks = {}
+                for layer_name, scores in scores_dict.items():
+                    if "down_proj" in layer_name:
+                        # Find corresponding module
+                        module_path = layer_name.replace("model.layers", "model.model.layers")
+                        try:
+                            module = dict(self.model.named_modules())[module_path]
+                            mask = pruner.compute_mask(module, scores)
+                            masks[module_path] = mask
+                        except:
+                            pass
+                
+                if not masks:
+                    return float('inf')
+                
+                # Apply masks temporarily
+                original_weights = {}
+                for name, mask in masks.items():
+                    module = dict(self.model.named_modules())[name]
+                    original_weights[name] = module.weight.data.clone()
+                    # Zero out pruned channels
+                    if mask.dim() == 1:
+                        module.weight.data[:, ~mask] = 0
+                
+                # Compute PPL
+                total_loss = 0
+                total_tokens = 0
+                self.model.eval()
+                with torch.no_grad():
+                    for text in val_texts[:8]:  # Quick eval
+                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        outputs = self.model(**inputs, labels=inputs["input_ids"])
+                        total_loss += outputs.loss.item() * inputs["input_ids"].numel()
+                        total_tokens += inputs["input_ids"].numel()
+                
+                # Restore weights
+                for name, weight in original_weights.items():
+                    module = dict(self.model.named_modules())[name]
+                    module.weight.data = weight
+                
+                ppl = np.exp(total_loss / total_tokens)
+                return ppl
+            except Exception as e:
+                logger.warning(f"PPL eval failed: {e}")
+                return float('inf')
+        
+        # Grid search
+        best_ppl = float('inf')
+        best_weights = None
+        results_log = []
+        
+        for i, weights in enumerate(weight_combos):
+            if i % 10 == 0:
+                logger.info(f"Testing combination {i+1}/{len(weight_combos)}...")
+            
+            # Compute combined scores
+            combined_scores = {}
+            for layer_name in layer_names:
+                layer_metrics = scar_scores[layer_name]
+                layer_imp = self.importance_scores.get(
+                    layer_name.replace("model.layers", "model.model.layers"), {}
+                )
+                
+                # Get component tensors
+                components = []
+                for comp in available_components:
+                    if comp == "protection":
+                        val = layer_imp.get("supernode_protection_score") or layer_imp.get("protection_score")
+                    else:
+                        val = layer_metrics.get(comp)
+                    
+                    if val is None:
+                        components.append(None)
+                    elif isinstance(val, dict) and "scores" in val:
+                        components.append(torch.tensor(val["scores"]))
+                    elif torch.is_tensor(val):
+                        components.append(val.float().cpu())
+                    else:
+                        components.append(None)
+                
+                # Skip if any component missing
+                if any(c is None for c in components):
+                    continue
+                
+                # Normalize each component to [0, 1]
+                normalized = []
+                for c in components:
+                    c_min, c_max = c.min(), c.max()
+                    if c_max > c_min:
+                        normalized.append((c - c_min) / (c_max - c_min))
+                    else:
+                        normalized.append(torch.ones_like(c))
+                
+                # Weighted combination
+                combined = sum(w * n for w, n in zip(weights, normalized))
+                combined_scores[layer_name] = combined
+            
+            if not combined_scores:
+                continue
+            
+            # Evaluate
+            ppl = quick_ppl(combined_scores, sparsity)
+            results_log.append((weights, ppl))
+            
+            if ppl < best_ppl:
+                best_ppl = ppl
+                best_weights = weights
+                logger.info(f"  New best: weights={[f'{w:.2f}' for w in weights]}, PPL={ppl:.2f}")
+        
+        # Store optimal weights
+        weight_dict = {comp: w for comp, w in zip(available_components, best_weights)} if best_weights else {}
+        
+        logger.info("\n" + "=" * 60)
+        logger.info("SCAR-optimal Results")
+        logger.info("=" * 60)
+        logger.info(f"Best weights: {weight_dict}")
+        logger.info(f"Best PPL at {sparsity*100:.0f}% sparsity: {best_ppl:.2f}")
+        
+        # Compute final optimal scores
+        optimal_scores = {}
+        for layer_name in layer_names:
+            layer_metrics = scar_scores[layer_name]
+            layer_imp = self.importance_scores.get(
+                layer_name.replace("model.layers", "model.model.layers"), {}
+            )
+            
+            components = []
+            for comp in available_components:
+                if comp == "protection":
+                    val = layer_imp.get("supernode_protection_score") or layer_imp.get("protection_score")
+                else:
+                    val = layer_metrics.get(comp)
+                
+                if val is None:
+                    continue
+                elif isinstance(val, dict) and "scores" in val:
+                    components.append(torch.tensor(val["scores"]))
+                elif torch.is_tensor(val):
+                    components.append(val.float().cpu())
+            
+            if len(components) == len(available_components) and best_weights:
+                # Normalize and combine
+                normalized = []
+                for c in components:
+                    c_min, c_max = c.min(), c.max()
+                    if c_max > c_min:
+                        normalized.append((c - c_min) / (c_max - c_min))
+                    else:
+                        normalized.append(torch.ones_like(c))
+                
+                combined = sum(w * n for w, n in zip(best_weights, normalized))
+                optimal_scores[layer_name] = combined
+                
+                # Store in importance_scores
+                imp_key = layer_name.replace("model.layers", "model.model.layers")
+                if imp_key not in self.importance_scores:
+                    self.importance_scores[imp_key] = {}
+                self.importance_scores[imp_key]["scar_optimal"] = combined
+        
+        # Save plot if requested
+        if plots_dir and results_log:
+            import matplotlib.pyplot as plt
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ppls = [r[1] for r in results_log if r[1] < 1000]
+            ax.hist(ppls, bins=30, alpha=0.7, color='blue')
+            ax.axvline(x=best_ppl, color='red', linestyle='--', linewidth=2, label=f'Best: {best_ppl:.1f}')
+            ax.set_xlabel('Perplexity', fontsize=12)
+            ax.set_ylabel('Count', fontsize=12)
+            ax.set_title('SCAR-optimal Grid Search Results', fontsize=14)
+            ax.legend()
+            
+            fig.tight_layout()
+            fig.savefig(plots_dir / "scar_optimal_search.png", dpi=150)
+            plt.close(fig)
+            logger.info(f"Saved plot: {plots_dir / 'scar_optimal_search.png'}")
+        
+        return {
+            "optimal_weights": weight_dict,
+            "best_ppl": best_ppl,
+            "sparsity": sparsity,
+            "components": available_components,
+            "search_results": results_log,
+            "optimal_scores": optimal_scores,
+        }
+
+    def compute_random_supernode_ablation(
+        self,
+        scar_scores: Dict[str, Dict[str, Any]],
+        supernode_fraction: float = 0.01,
+        num_trials: int = 5,
+        sparsity: float = 0.5,
+    ) -> Dict[str, Any]:
+        """
+        Ablation: What if we used RANDOM supernodes instead of LP-identified ones?
+        
+        This tests whether correct supernode identification matters, or if
+        any sparse set of "protected" channels works equally well.
+        
+        Args:
+            scar_scores: Pre-computed SCAR scores (for comparison)
+            supernode_fraction: Fraction to treat as supernodes
+            num_trials: Number of random trials
+            sparsity: Sparsity level for evaluation
+            
+        Returns:
+            Dict with random vs LP-based supernode comparison
+        """
+        logger.info("=" * 60)
+        logger.info("Random Supernode Ablation")
+        logger.info("=" * 60)
+        logger.info(f"Testing whether LP-based supernode identification matters")
+        logger.info(f"Comparing LP-supernodes vs {num_trials} random supernode trials")
+        
+        layer_names = [ln for ln in scar_scores.keys() if "mlp.down_proj" in ln]
+        if not layer_names:
+            return {}
+        
+        results = {
+            "lp_supernodes": {},
+            "random_supernodes": [],
+        }
+        
+        # Get dimensions
+        sample_layer = layer_names[0]
+        sample_lp = scar_scores[sample_layer].get("scar_loss_proxy")
+        if sample_lp is None:
+            logger.warning("No LP scores found")
+            return {}
+        
+        if isinstance(sample_lp, dict) and "scores" in sample_lp:
+            intermediate_dim = len(sample_lp["scores"])
+        elif torch.is_tensor(sample_lp):
+            intermediate_dim = sample_lp.numel()
+        else:
+            return {}
+        
+        num_supernodes = max(1, int(supernode_fraction * intermediate_dim))
+        logger.info(f"Intermediate dim: {intermediate_dim}, supernodes per layer: {num_supernodes}")
+        
+        # Compute LP-based protection scores (baseline)
+        lp_protection_scores = {}
+        for layer_name in layer_names:
+            layer_metrics = scar_scores[layer_name]
+            lp = layer_metrics.get("scar_loss_proxy")
+            
+            if isinstance(lp, dict) and "scores" in lp:
+                lp_tensor = torch.tensor(lp["scores"])
+            elif torch.is_tensor(lp):
+                lp_tensor = lp.float().cpu()
+            else:
+                continue
+            
+            # Identify supernodes (top by LP)
+            _, top_idx = torch.topk(lp_tensor, num_supernodes)
+            supernode_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
+            supernode_mask[top_idx] = True
+            
+            # Protection score: supernodes get max score, others get LP
+            protection = lp_tensor.clone()
+            protection[supernode_mask] = protection.max() * 2  # Strongly protect supernodes
+            
+            lp_protection_scores[layer_name] = protection
+        
+        results["lp_supernodes"]["scores"] = lp_protection_scores
+        
+        # Random supernode trials
+        random_results = []
+        for trial in range(num_trials):
+            random_protection_scores = {}
+            
+            for layer_name in layer_names:
+                layer_metrics = scar_scores[layer_name]
+                lp = layer_metrics.get("scar_loss_proxy")
+                
+                if isinstance(lp, dict) and "scores" in lp:
+                    lp_tensor = torch.tensor(lp["scores"])
+                elif torch.is_tensor(lp):
+                    lp_tensor = lp.float().cpu()
+                else:
+                    continue
+                
+                # Random supernodes
+                random_idx = torch.randperm(intermediate_dim)[:num_supernodes]
+                random_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
+                random_mask[random_idx] = True
+                
+                # Protection score: random supernodes get max score
+                protection = lp_tensor.clone()
+                protection[random_mask] = protection.max() * 2
+                
+                random_protection_scores[layer_name] = protection
+            
+            random_results.append({
+                "trial": trial,
+                "scores": random_protection_scores,
+            })
+        
+        results["random_supernodes"] = random_results
+        
+        # Compare overlap between LP and random supernodes
+        logger.info("\n--- Supernode Overlap Analysis ---")
+        for layer_name in layer_names[:3]:  # First 3 layers
+            layer_metrics = scar_scores[layer_name]
+            lp = layer_metrics.get("scar_loss_proxy")
+            
+            if isinstance(lp, dict) and "scores" in lp:
+                lp_tensor = torch.tensor(lp["scores"])
+            elif torch.is_tensor(lp):
+                lp_tensor = lp.float().cpu()
+            else:
+                continue
+            
+            _, lp_top = torch.topk(lp_tensor, num_supernodes)
+            lp_set = set(lp_top.tolist())
+            
+            overlaps = []
+            for trial_result in random_results:
+                # Random trial's supernodes (we need to recompute)
+                random_idx = torch.randperm(intermediate_dim)[:num_supernodes]
+                random_set = set(random_idx.tolist())
+                overlap = len(lp_set & random_set) / num_supernodes
+                overlaps.append(overlap)
+            
+            logger.info(f"  {layer_name}: LP vs Random overlap = {np.mean(overlaps)*100:.1f}% (expected: {100*num_supernodes/intermediate_dim:.1f}%)")
+        
+        logger.info("\n--- Key Insight ---")
+        logger.info("If LP-based supernodes are functionally special, protecting them should")
+        logger.info("yield much better PPL than protecting random channels of the same size.")
+        logger.info("This ablation quantifies how much correct supernode ID matters.")
+        
+        return results

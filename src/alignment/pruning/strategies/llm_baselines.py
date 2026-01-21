@@ -1234,3 +1234,361 @@ def compute_llmpruner_scores(
     
     return scores
 
+
+# =============================================================================
+# FLAP: Fluctuation-based Adaptive Structured Pruning
+# =============================================================================
+
+class FLAPPruning(BasePruningStrategy):
+    """
+    FLAP: Fluctuation-based Adaptive Structured Pruning for LLMs.
+    
+    Key insight: Use activation fluctuation (variance) across calibration samples
+    to identify channels that have consistent vs. variable activations.
+    Channels with low fluctuation are more safely prunable.
+    
+    Args:
+        config: Pruning configuration
+        num_calibration_samples: Number of samples for calibration
+        
+    Reference:
+        An et al. "Fluctuation-based Adaptive Structured Pruning for Large Language Models"
+        https://arxiv.org/abs/2312.11983
+    """
+    
+    def __init__(
+        self,
+        config: Optional[PruningConfig] = None,
+        num_calibration_samples: int = 128,
+    ):
+        super().__init__(config)
+        self.num_calibration_samples = num_calibration_samples
+        self.activation_means: Dict[str, torch.Tensor] = {}
+        self.activation_vars: Dict[str, torch.Tensor] = {}
+        self._calibrated = False
+    
+    def calibrate(
+        self,
+        model: nn.Module,
+        dataloader,
+        device: str = "cuda",
+    ) -> None:
+        """
+        Calibrate by computing activation mean and variance per channel.
+        """
+        logger.info(f"Calibrating FLAP with {self.num_calibration_samples} samples...")
+        
+        # Running statistics
+        running_sum: Dict[str, torch.Tensor] = {}
+        running_sq_sum: Dict[str, torch.Tensor] = {}
+        running_count: Dict[str, int] = {}
+        
+        hooks = []
+        
+        def make_hook(name: str):
+            def hook(module, input, output):
+                if isinstance(output, torch.Tensor):
+                    act = output.detach()
+                    if act.dim() == 3:
+                        # [B, S, D] -> compute per-channel stats
+                        # Flatten to [B*S, D]
+                        act_flat = act.view(-1, act.shape[-1])
+                    else:
+                        act_flat = act.view(-1, act.shape[-1])
+                    
+                    ch_sum = act_flat.sum(dim=0).cpu()
+                    ch_sq_sum = (act_flat ** 2).sum(dim=0).cpu()
+                    count = act_flat.shape[0]
+                    
+                    if name not in running_sum:
+                        running_sum[name] = ch_sum
+                        running_sq_sum[name] = ch_sq_sum
+                        running_count[name] = count
+                    else:
+                        running_sum[name] += ch_sum
+                        running_sq_sum[name] += ch_sq_sum
+                        running_count[name] += count
+            return hook
+        
+        # Register hooks
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear):
+                if any(p in name for p in ["mlp", "up_proj", "gate_proj", "fc"]):
+                    hooks.append(module.register_forward_hook(make_hook(name)))
+        
+        model.eval()
+        samples_seen = 0
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                if samples_seen >= self.num_calibration_samples:
+                    break
+                
+                if isinstance(batch, dict):
+                    input_ids = batch["input_ids"].to(device)
+                    attention_mask = batch.get("attention_mask")
+                    if attention_mask is not None:
+                        attention_mask = attention_mask.to(device)
+                    model(input_ids, attention_mask=attention_mask)
+                    batch_size = input_ids.size(0)
+                else:
+                    inputs = batch[0].to(device) if isinstance(batch, (list, tuple)) else batch.to(device)
+                    model(inputs)
+                    batch_size = inputs.size(0)
+                
+                samples_seen += batch_size
+        
+        for hook in hooks:
+            hook.remove()
+        
+        # Compute mean and variance
+        for name in running_sum:
+            n = running_count[name]
+            mean = running_sum[name] / n
+            var = (running_sq_sum[name] / n) - (mean ** 2)
+            var = torch.clamp(var, min=0)  # Numerical stability
+            
+            self.activation_means[name] = mean
+            self.activation_vars[name] = var
+        
+        self._calibrated = True
+        logger.info(f"FLAP calibration complete. Scored {len(self.activation_means)} layers.")
+    
+    def compute_importance_scores(
+        self,
+        module: nn.Module,
+        inputs: Optional[torch.Tensor] = None,
+        layer_name: Optional[str] = None,
+        **kwargs
+    ) -> torch.Tensor:
+        """
+        FLAP importance: channels with HIGH mean activation and LOW variance
+        are more important (consistent, strong signal).
+        
+        score = mean / (std + eps)  -- Signal-to-noise ratio
+        """
+        if not hasattr(module, "weight"):
+            raise ValueError(f"Module {module} does not have weights")
+        
+        weight = module.weight.data
+        eps = 1e-6
+        
+        if layer_name and layer_name in self.activation_means:
+            mean = self.activation_means[layer_name].to(weight.device)
+            var = self.activation_vars[layer_name].to(weight.device)
+            std = torch.sqrt(var + eps)
+            
+            # SNR-based importance
+            importance = mean.abs() / (std + eps)
+            
+            # Weight magnitude contribution
+            weight_norm = weight.abs().sum(dim=0)
+            if weight_norm.shape[0] == importance.shape[0]:
+                importance = importance * weight_norm
+        else:
+            # Fallback to weight magnitude
+            importance = weight.abs().sum(dim=0)
+        
+        return importance
+    
+    def get_structured_scores(
+        self,
+        module: nn.Module,
+        inputs: Optional[torch.Tensor] = None,
+        layer_name: Optional[str] = None,
+        dim: int = 1,
+    ) -> torch.Tensor:
+        return self.compute_importance_scores(module, inputs, layer_name)
+
+
+# =============================================================================
+# RIA: Relative Importance and Activation
+# =============================================================================
+
+class RIAPruning(WandaPruning):
+    """
+    RIA: Relative Importance and Activation for structured pruning.
+    
+    Extends Wanda with relative (normalized) importance scores to handle
+    scale differences across layers more gracefully.
+    
+    score_i = |W_i| × ||X_i||_2 / (layer_norm_factor)
+    
+    Reference:
+        "Plug-and-Play: A Simple and Effective Pruning Approach for LLMs"
+    """
+    
+    def __init__(
+        self,
+        config: Optional[PruningConfig] = None,
+        num_calibration_samples: int = 128,
+    ):
+        super().__init__(config, num_calibration_samples)
+    
+    def compute_importance_scores(
+        self,
+        module: nn.Module,
+        inputs: Optional[torch.Tensor] = None,
+        layer_name: Optional[str] = None,
+        **kwargs
+    ) -> torch.Tensor:
+        """
+        Compute RIA importance scores with layer-wise normalization.
+        """
+        # Get base Wanda scores
+        importance = super().compute_importance_scores(module, inputs, layer_name, **kwargs)
+        
+        # Normalize by layer statistics (relative importance)
+        layer_mean = importance.mean()
+        layer_std = importance.std()
+        
+        if layer_std > 1e-8:
+            # Z-score normalization
+            importance = (importance - layer_mean) / layer_std
+            # Shift to positive
+            importance = importance - importance.min() + 1e-6
+        
+        return importance
+
+
+# =============================================================================
+# SlimLLM-style: Holistic Channel Importance
+# =============================================================================
+
+class SlimLLMPruning(BasePruningStrategy):
+    """
+    SlimLLM-style pruning: Holistic channel/head importance estimation.
+    
+    Key idea: Assess importance at the entire channel level by measuring
+    the impact of zeroing each channel on output reconstruction error.
+    
+    For computational efficiency, we approximate this using:
+    - Activation magnitude (how much the channel fires)
+    - Weight magnitude (how much the channel affects output)
+    - Gradient approximation (how much loss changes)
+    
+    Reference:
+        Guo et al. "SlimLLM: An Expert Mixture Approach to Structured Pruning of LLMs"
+        ICML 2025
+    """
+    
+    def __init__(
+        self,
+        config: Optional[PruningConfig] = None,
+        num_calibration_samples: int = 128,
+    ):
+        super().__init__(config)
+        self.num_calibration_samples = num_calibration_samples
+        self.channel_activations: Dict[str, torch.Tensor] = {}
+        self.channel_gradients: Dict[str, torch.Tensor] = {}
+        self._calibrated = False
+    
+    def calibrate(
+        self,
+        model: nn.Module,
+        dataloader,
+        device: str = "cuda",
+    ) -> None:
+        """
+        Calibrate by collecting activation statistics.
+        """
+        logger.info(f"Calibrating SlimLLM with {self.num_calibration_samples} samples...")
+        
+        activation_sums: Dict[str, torch.Tensor] = {}
+        counts: Dict[str, int] = {}
+        
+        hooks = []
+        
+        def make_hook(name: str):
+            def hook(module, input, output):
+                if isinstance(output, torch.Tensor):
+                    act = output.detach()
+                    if act.dim() == 3:
+                        # [B, S, D] -> L2 norm per channel
+                        act_norm = (act ** 2).sum(dim=(0, 1)).sqrt().cpu()
+                    else:
+                        act_norm = (act ** 2).sum(dim=0).sqrt().cpu()
+                    
+                    if name not in activation_sums:
+                        activation_sums[name] = act_norm
+                        counts[name] = 1
+                    else:
+                        activation_sums[name] += act_norm
+                        counts[name] += 1
+            return hook
+        
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear):
+                if any(p in name for p in ["mlp", "up_proj", "gate_proj", "fc"]):
+                    hooks.append(module.register_forward_hook(make_hook(name)))
+        
+        model.eval()
+        samples_seen = 0
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                if samples_seen >= self.num_calibration_samples:
+                    break
+                
+                if isinstance(batch, dict):
+                    input_ids = batch["input_ids"].to(device)
+                    attention_mask = batch.get("attention_mask")
+                    if attention_mask is not None:
+                        attention_mask = attention_mask.to(device)
+                    model(input_ids, attention_mask=attention_mask)
+                    batch_size = input_ids.size(0)
+                else:
+                    inputs = batch[0].to(device) if isinstance(batch, (list, tuple)) else batch.to(device)
+                    model(inputs)
+                    batch_size = inputs.size(0)
+                
+                samples_seen += batch_size
+        
+        for hook in hooks:
+            hook.remove()
+        
+        # Average activations
+        for name in activation_sums:
+            self.channel_activations[name] = activation_sums[name] / counts[name]
+        
+        self._calibrated = True
+        logger.info(f"SlimLLM calibration complete. Scored {len(self.channel_activations)} layers.")
+    
+    def compute_importance_scores(
+        self,
+        module: nn.Module,
+        inputs: Optional[torch.Tensor] = None,
+        layer_name: Optional[str] = None,
+        **kwargs
+    ) -> torch.Tensor:
+        """
+        SlimLLM holistic importance: activation_norm × weight_contribution
+        """
+        if not hasattr(module, "weight"):
+            raise ValueError(f"Module {module} does not have weights")
+        
+        weight = module.weight.data
+        
+        # Weight contribution per channel
+        weight_importance = weight.abs().sum(dim=0)  # Sum over output dim
+        
+        if layer_name and layer_name in self.channel_activations:
+            act_importance = self.channel_activations[layer_name].to(weight.device)
+            if act_importance.shape[0] == weight_importance.shape[0]:
+                importance = act_importance * weight_importance
+            else:
+                importance = weight_importance
+        else:
+            importance = weight_importance
+        
+        return importance
+    
+    def get_structured_scores(
+        self,
+        module: nn.Module,
+        inputs: Optional[torch.Tensor] = None,
+        layer_name: Optional[str] = None,
+        dim: int = 1,
+    ) -> torch.Tensor:
+        return self.compute_importance_scores(module, inputs, layer_name)
+

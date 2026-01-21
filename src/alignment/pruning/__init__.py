@@ -71,6 +71,9 @@ from .strategies import (
     WandaPruning,
     OWLPruning,
     LLMPrunerChannelMode,
+    FLAPPruning,
+    RIAPruning,
+    SlimLLMPruning,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,9 +111,12 @@ PRUNING_STRATEGIES = {
     # LLM Baselines (Sun et al. 2023, Frantar & Alistarh 2023)
     "wanda": WandaPruning,
     "sparsegpt": SparseGPTPruning,
-    # Additional LLM Baselines (OWL, LLM-Pruner)
+    # Additional LLM Baselines (OWL, LLM-Pruner, FLAP, RIA, SlimLLM)
     "owl": OWLPruning,
     "llm_pruner": LLMPrunerChannelMode,
+    "flap": FLAPPruning,
+    "ria": RIAPruning,
+    "slimllm": SlimLLMPruning,
 }
 
 

@@ -166,6 +166,7 @@ def _create_cluster_experiment(config):
     
     # Get pruning algorithms/methods
     pruning_methods = getattr(config, "pruning_strategies", None) or \
+                     (pruning_cfg.get("methods") if isinstance(pruning_cfg, dict) else None) or \
                      (pruning_cfg.get("algorithms") if isinstance(pruning_cfg, dict) else None) or \
                      ['random', 'magnitude', 'taylor', 'composite', 'cluster_aware']
     

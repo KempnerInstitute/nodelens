@@ -888,7 +888,9 @@ class ClusterAnalysisExperiment:
                     
                     logger.info("    Result: %.2f%% (drop %.2f%%)", acc_after * 100, (baseline_acc - acc_after) * 100)
                 except Exception as exc:
+                    import traceback
                     logger.warning("    Pruning failed for %s @ %.0f%%: %s", method, ratio * 100, exc)
+                    logger.warning("    Traceback:\n%s", traceback.format_exc())
                     method_results[ratio] = {"error": str(exc)}
                 finally:
                     del model_copy

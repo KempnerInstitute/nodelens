@@ -119,7 +119,7 @@ def run_pruning_pipeline(
         result["masks"] = flat_masks
         return result
 
-    # Always compute per-layer amounts via the distribution manager.
+    # Non-dependency-aware path: compute per-layer amounts via the distribution manager.
     #
     # IMPORTANT: For structured pruning, a literal "global threshold mask" can
     # accidentally prune *all* channels in a layer if that layer's scores all fall
@@ -128,17 +128,17 @@ def run_pruning_pipeline(
     # - respects min/max per-layer caps
     # - uses MaskOperations.create_structured_mask, which enforces min_keep>=1
     # - matches dependency-aware behavior (which already uses per-layer amounts)
-        manager = PruningDistributionManager(
-            strategy=distribution,
-            target_sparsity=target_sparsity,
-            min_amount=options.min_amount,
-            max_amount=options.max_amount,
-        )
-        per_layer_amounts = manager.compute_distribution(model, layer_names, layer_scores=tensor_scores)
-        masks = {}
-        for name in layer_names:
-            amount = per_layer_amounts.get(name, target_sparsity)
-            masks[name] = MaskOperations.create_structured_mask(tensor_scores[name], amount=amount, mode=selection_mode)
+    manager = PruningDistributionManager(
+        strategy=distribution,
+        target_sparsity=target_sparsity,
+        min_amount=options.min_amount,
+        max_amount=options.max_amount,
+    )
+    per_layer_amounts = manager.compute_distribution(model, layer_names, layer_scores=tensor_scores)
+    masks = {}
+    for name in layer_names:
+        amount = per_layer_amounts.get(name, target_sparsity)
+        masks[name] = MaskOperations.create_structured_mask(tensor_scores[name], amount=amount, mode=selection_mode)
 
     _apply_masks_to_modules(layer_modules, masks)
 

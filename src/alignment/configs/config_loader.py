@@ -279,10 +279,16 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         if "selection_modes" in pruning:
             original_pruning["selection_modes"] = pruning["selection_modes"]
         
-        # Convert algorithm names
-        if "algorithms" in pruning:
+        # Convert algorithm names (support both "algorithms" and "methods" keys)
+        methods_key = None
+        if "methods" in pruning:
+            methods_key = "methods"
+        elif "algorithms" in pruning:
+            methods_key = "algorithms"
+        
+        if methods_key:
             converted_algorithms = []
-            for alg in pruning["algorithms"]:
+            for alg in pruning[methods_key]:
                 # Important: pruning algorithm names are *not* the same as metric names.
                 # In particular, unified configs often use "magnitude" to mean the
                 # standard *weight* magnitude pruning baseline (filter/channel L2),
@@ -291,7 +297,8 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                     converted_algorithms.append("magnitude")
                 else:
                     converted_algorithms.append(METRIC_UNIFIED_TO_ORIGINAL.get(alg, alg))
-            original_pruning["algorithms"] = converted_algorithms
+            # Store as "methods" to match what _map_nested_to_flat_config expects
+            original_pruning["methods"] = converted_algorithms
         
         # Convert scoring methods
         if "scoring_methods" in pruning:
@@ -977,15 +984,18 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map pruning parameters (prioritize nested pruning block, fallback to top-level)
     # Pruning uses metrics from metrics.enabled as scoring criteria.
     # Random selection is handled via selection_modes, not as a separate strategy.
-    if "algorithms" in pruning_block:
+    if "methods" in pruning_block:
+        # Primary: use pruning.methods for pruning method list
+        flat_config["pruning_strategies"] = pruning_block["methods"]
+    elif "algorithms" in pruning_block:
         # Backward compatibility: explicit algorithms list
         flat_config["pruning_strategies"] = pruning_block["algorithms"]
-    elif flat_config.get("metrics"):
-        # Use computed metrics as pruning strategies
-        flat_config["pruning_strategies"] = list(flat_config["metrics"])
     else:
-        # Fallback default
-        flat_config["pruning_strategies"] = nested_config.get("pruning_strategies", ["rayleigh_quotient"])
+        # Fallback to default pruning methods
+        flat_config["pruning_strategies"] = nested_config.get(
+            "pruning_strategies", 
+            ["random", "magnitude", "taylor", "cluster_aware", "cluster_aware_annealed"]
+        )
     
     flat_config["pruning_amounts"] = pruning_block.get("sparsity_levels", nested_config.get("pruning_amounts", [0.1, 0.3, 0.5, 0.7, 0.9]))
     selection_modes = pruning_block.get("selection_modes", nested_config.get("pruning_selection_mode", "low"))

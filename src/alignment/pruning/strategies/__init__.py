@@ -9,7 +9,15 @@ from .cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig, Compo
 from .eigenvector import EigenvectorPruning
 from .gradient import FisherPruning, GradientPruning, MomentumPruning
 from .movement import AdaptiveMovementPruning, MovementPruning
-from .llm_baselines import WandaPruning, SparseGPTPruning, OWLPruning, LLMPrunerChannelMode
+from .llm_baselines import (
+    WandaPruning,
+    SparseGPTPruning,
+    OWLPruning,
+    LLMPrunerChannelMode,
+    FLAPPruning,
+    RIAPruning,
+    SlimLLMPruning,
+)
 from .magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, MagnitudePruning
 from .parallel import AsyncParallelPruning, ParallelModePruning, TensorizedPruning
 from .parallel_batch import ParallelBatchPruning
@@ -50,9 +58,12 @@ __all__ = [
     "ClusterAwarePruning",
     "ClusterAwarePruningConfig",
     "CompositePruning",
-    # LLM Baselines (Wanda, SparseGPT, OWL, LLM-Pruner)
+    # LLM Baselines (Wanda, SparseGPT, OWL, LLM-Pruner, FLAP, RIA, SlimLLM)
     "WandaPruning",
     "SparseGPTPruning",
     "OWLPruning",
     "LLMPrunerChannelMode",
+    "FLAPPruning",
+    "RIAPruning",
+    "SlimLLMPruning",
 ]
