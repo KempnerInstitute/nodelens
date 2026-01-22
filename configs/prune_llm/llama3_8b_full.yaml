@@ -205,8 +205,14 @@ supernode:
     - "scar_loss_proxy"                 # SCAR-LP
     - "supernode_protection_score"      # SCAR-Prot
     - "supernode_connectivity_score"    # SCAR-Conn
-  # If true, treat anti-correlated q-signals as NON-redundant (recommended ablation)
-  positive_redundancy: false
+  # Redundancy definition (paper): count only positive correlation as redundancy (anti-correlation is not redundancy).
+  positive_redundancy: true
+  # Aggregate redundancy-to-core as a Top-k mean (reduces max inflation / multiple comparisons).
+  redundancy_reduce: "topk_mean"
+  redundancy_topk: 5
+  # Multiple-comparisons control: also compute redundancy-to-core against a matched random core (analysis-only).
+  compute_random_core_baseline: true
+  random_core_seed: 12345
   
   cross_layer_analysis: true
   compare_by_connection: true

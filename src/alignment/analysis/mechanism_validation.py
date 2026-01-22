@@ -219,9 +219,15 @@ def compute_synergy_pairs_from_loader(
     activation_samples: str = "flatten_spatial",
     spatial_samples_per_image: int = 16,
     seed: int = 123,
-) -> Tuple[List[Tuple[int, int]], np.ndarray]:
+) -> Tuple[List[Tuple[int, int]], np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute pair synergy scores for all pairs (i<j) in a conv layer.
+
+    Returns:
+      - pairs: list of (i,j) with i<j
+      - syn: predicted Gaussian synergy proxy per pair
+      - mi_i: TaskMI per channel, I_G(T; Y_i) (Gaussian MI)
+      - mi_ij: Redundancy matrix between channels, I_G(Y_i; Y_j) (Gaussian MI)
 
     Synergy is defined as:
       S(T; Yi, Yj) = I(T; [Yi, Yj]) - max(I(T; Yi), I(T; Yj))
@@ -294,6 +300,13 @@ def compute_synergy_pairs_from_loader(
     corr_ty = np.clip(corr_ty, -0.999, 0.999)
     mi_i = np.maximum(0.0, -0.5 * np.log(1.0 - corr_ty**2))
 
+    # I(Yi;Yj) redundancy matrix from correlations
+    denom = np.sqrt(np.outer(var_y, var_y)) + 1e-12
+    corr = cov_yy / denom
+    corr = np.clip(corr, -0.999, 0.999)
+    mi_ij = -0.5 * np.log(1.0 - corr**2)
+    np.fill_diagonal(mi_ij, 0.0)
+
     pairs: List[Tuple[int, int]] = []
     syn = []
     for i in range(n_channels):
@@ -309,7 +322,7 @@ def compute_synergy_pairs_from_loader(
             pairs.append((i, j))
             syn.append(float(mi_joint - max(float(mi_i[i]), float(mi_i[j]))))
 
-    return pairs, np.asarray(syn, dtype=np.float64)
+    return pairs, np.asarray(syn, dtype=np.float64), mi_i.astype(np.float64), mi_ij.astype(np.float64)
 
 
 @dataclass
@@ -344,13 +357,13 @@ def validate_synergy_pair_lesions(
 
     - Compute predicted synergy for all pairs from calibration activations.
     - Select top-N pairs by predicted synergy.
-    - Build matched control pairs with similar max(single-channel damage).
+    - Build matched control pairs with similar (single-channel damage, task MI, redundancy).
     - Evaluate excess damage Δ_ij - max(Δ_i, Δ_j) on eval set (no fine-tuning).
     """
     rng = np.random.default_rng(int(seed))
 
     # 1) Predicted synergies
-    pairs, syn = compute_synergy_pairs_from_loader(
+    pairs, syn, mi_i, mi_ij = compute_synergy_pairs_from_loader(
         model=model,
         loader=calib_loader,
         layer_name=layer_name,
@@ -392,6 +405,22 @@ def validate_synergy_pair_lesions(
         i, j = pair
         return max(delta.get(int(i), 0.0), delta.get(int(j), 0.0))
 
+    def max_task_mi(pair: Tuple[int, int]) -> float:
+        i, j = int(pair[0]), int(pair[1])
+        if mi_i is None or mi_i.size == 0:
+            return 0.0
+        if i >= mi_i.size or j >= mi_i.size:
+            return 0.0
+        return float(max(float(mi_i[i]), float(mi_i[j])))
+
+    def redundancy_mi(pair: Tuple[int, int]) -> float:
+        i, j = int(pair[0]), int(pair[1])
+        if mi_ij is None or mi_ij.size == 0:
+            return 0.0
+        if i >= mi_ij.shape[0] or j >= mi_ij.shape[1]:
+            return 0.0
+        return float(mi_ij[i, j])
+
     # 5) Candidate control pairs sampled from pool
     top_set = set(top_pairs_list)
     cand_pairs: List[Tuple[int, int]] = []
@@ -406,17 +435,42 @@ def validate_synergy_pair_lesions(
     if not cand_pairs:
         raise RuntimeError("Failed to sample control pairs")
 
-    # 6) Greedy matching by max single-channel damage
+    # 6) Greedy matching with multiple controls:
+    #   - max single-channel damage (on eval set)
+    #   - max task MI (on calibration set)
+    #   - within-layer redundancy I(Yi;Yj) (on calibration set)
+    #
+    # We match in a robustly-scaled feature space so one dimension doesn't dominate
+    # solely due to units.
     used: set[Tuple[int, int]] = set()
     matched_controls: List[Tuple[int, int]] = []
+
+    # Precompute candidate features for speed
+    cand_feat = {}
+    for cp in cand_pairs:
+        cand_feat[cp] = np.asarray(
+            [max_delta(cp), max_task_mi(cp), redundancy_mi(cp)],
+            dtype=np.float64,
+        )
+    feat_mat = np.stack(list(cand_feat.values()), axis=0) if cand_feat else np.zeros((0, 3), dtype=np.float64)
+    if feat_mat.shape[0] < 10:
+        raise RuntimeError("Not enough control candidates to match; increase pool_size/eval size.")
+    q25 = np.percentile(feat_mat, 25, axis=0)
+    q75 = np.percentile(feat_mat, 75, axis=0)
+    scale = (q75 - q25)
+    scale = np.where(scale > 1e-12, scale, (np.std(feat_mat, axis=0) + 1e-12))
+
     for sp in top_pairs_list:
-        target_m = max_delta(sp)
+        target = np.asarray([max_delta(sp), max_task_mi(sp), redundancy_mi(sp)], dtype=np.float64)
         best = None
         best_gap = None
         for cp in cand_pairs:
             if cp in used:
                 continue
-            gap = abs(max_delta(cp) - target_m)
+            v = cand_feat.get(cp)
+            if v is None:
+                continue
+            gap = float(np.abs((v - target) / scale).sum())
             if best is None or (best_gap is not None and gap < best_gap):
                 best = cp
                 best_gap = gap

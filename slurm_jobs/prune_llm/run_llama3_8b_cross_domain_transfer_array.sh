@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=paper_llama3_calib
-#SBATCH --output=logs/paper_llama3_calib_%A_%a.out
-#SBATCH --error=logs/paper_llama3_calib_%A_%a.err
+#SBATCH --job-name=paper_llama3_xfer
+#SBATCH --output=logs/paper_llama3_xfer_%A_%a.out
+#SBATCH --error=logs/paper_llama3_xfer_%A_%a.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
@@ -10,27 +10,26 @@
 #SBATCH --mem=320GB
 #SBATCH --partition=kempner_eng
 #SBATCH --account=kempner_dev
-#SBATCH --array=0-4
+#SBATCH --array=0-3
 
 # ----------------------------------------------------------------------------
-# LLaMA-3.1-8B SWEEP: calibration sensitivity for SCAR-Conn @ 50% sparsity
+# LLaMA-3.1-8B: Cross-domain calibration → pruning transfer (SCAR-Conn @ 50%)
+#
+# Goal: calibrate/score/prune on domain A, evaluate on *fixed* target eval sets
+# (WikiText-2 + C4 perplexity) to quantify transfer vs calibration domain shift.
 #
 # Task mapping:
-#   0: wikitext, n=128
-#   1: wikitext, n=64
-#   2: wikitext, n=32
-#   3: c4,      n=128
-#   4: mixed_wikitext_c4, n=128
-#
-# Notes:
-# - We restrict pruning to SCAR-Conn at 50% and evaluate perplexity only (fast).
+#   0: wikitext (WikiText-2), n=64
+#   1: c4      (C4),         n=64
+#   2: code    (CodeSearchNet python), n=64
+#   3: arxiv   (scientific_papers/arxiv), n=64
 # ----------------------------------------------------------------------------
 
 set -euo pipefail
 
-DATASETS=("wikitext" "wikitext" "wikitext" "c4" "mixed_wikitext_c4")
-NSAMPLES=(128 64 32 128 128)
-TAGS=("wikitext_128" "wikitext_64" "wikitext_32" "c4_128" "mixed_128")
+DATASETS=("wikitext" "c4" "code" "arxiv")
+NSAMPLES=(64 64 64 64)
+TAGS=("wikitext" "c4" "code" "arxiv")
 
 IDX="${SLURM_ARRAY_TASK_ID}"
 DATASET="${DATASETS[$IDX]}"
@@ -38,7 +37,7 @@ N="${NSAMPLES[$IDX]}"
 TAG="${TAGS[$IDX]}"
 
 echo "============================================================================"
-echo "SCAR Paper Sweep: LLaMA-3.1-8B calibration sensitivity (${TAG})"
+echo "SCAR Paper Sweep: LLaMA-3.1-8B cross-domain transfer (${TAG})"
 echo "============================================================================"
 echo "Job ID: ${SLURM_JOB_ID}  Array Task: ${SLURM_ARRAY_TASK_ID}"
 echo "Node: $(hostname)"
@@ -64,12 +63,16 @@ export PYTHONPATH="${PWD}:${PWD}/src:${PYTHONPATH:-}"
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # HuggingFace auth/cache:
-# - Respect HF_HOME if already set (e.g. exported from submission script).
-# - Else, if you ran `hf auth login` with HF_HOME under OUTPUT_BASE, prefer that token/cache.
-# - Else fall back to scratch cache, then ~/.cache.
 if [[ -z "${HF_HOME:-}" ]]; then
-  if [[ -f "${OUTPUT_BASE}/huggingface_cache/token" ]]; then
+  OUTPUT_BASE_ROOT="${OUTPUT_BASE}"
+  if [[ "${OUTPUT_BASE_ROOT}" == */PAPER ]]; then
+    OUTPUT_BASE_ROOT="${OUTPUT_BASE_ROOT%/PAPER}"
+  fi
+  if [[ -f "${OUTPUT_BASE_ROOT}/huggingface_cache/token" ]]; then
+    export HF_HOME="${OUTPUT_BASE_ROOT}/huggingface_cache"
+  elif [[ -f "${OUTPUT_BASE}/huggingface_cache/token" ]]; then
     export HF_HOME="${OUTPUT_BASE}/huggingface_cache"
   elif [[ -d /n/holyscratch01/kempner_dev/Users/hsafaai/huggingface_cache ]]; then
     export HF_HOME="/n/holyscratch01/kempner_dev/Users/hsafaai/huggingface_cache"
@@ -98,7 +101,7 @@ python scripts/run_experiment.py \
   --config configs/prune_llm/llama3_8b_full.yaml \
   --device cuda \
   --base-output-dir "$OUTPUT_BASE" \
-  name="llama3_8b_paper_results_calib_${TAG}" \
+  name="llama3_8b_paper_results_xfer_${TAG}" \
   generate_plots=false \
   dataset_name="${DATASET}" \
   alignment_data_num_samples="${N}" \
@@ -111,11 +114,13 @@ python scripts/run_experiment.py \
   do_connectivity_pruning=true \
   do_halo_analysis=false \
   do_generalized_importance=false \
-  supernode_robustness.enabled=false \
-  supernode_summary.enabled=false
+  supernode_summary.enabled=false \
+  halo_analysis.enabled=false \
+  generalized_importance.enabled=false \
+  supernode_robustness.enabled=false
 
 echo ""
 echo "============================================================================"
-echo "LLaMA-3.1-8B calibration sweep (${TAG}) completed at $(date)"
+echo "LLaMA-3.1-8B cross-domain transfer (${TAG}) completed at $(date)"
 echo "============================================================================"
 

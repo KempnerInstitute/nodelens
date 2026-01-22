@@ -228,7 +228,15 @@ class ClusterAnalysisExperiment:
         self.model.eval()
 
         # Per-layer accumulators (filled lazily once we see a batch for the layer)
-        accs: Dict[str, _CovAccumulator] = {}
+        #
+        # IMPORTANT (task-level targets): for decision-level quantities involving the
+        # image-level target T (e.g., TaskMI, synergy), treating spatial positions as
+        # independent samples creates pseudo-replication because T is repeated for all
+        # positions within an image. To avoid inflating the effective sample size, we
+        # compute task-level stats from per-image pooled activations (GAP) regardless
+        # of how we sample for within-layer redundancy.
+        accs_local: Dict[str, _CovAccumulator] = {}
+        accs_task: Dict[str, _CovAccumulator] = {}
 
         # Temporary per-batch activations captured by hooks
         batch_acts: Dict[str, "torch.Tensor"] = {}
@@ -314,9 +322,12 @@ class ClusterAnalysisExperiment:
                     out_cpu = out.detach().cpu()  # [B, C, H, W]
                     b, c, h, w = out_cpu.shape
 
+                    # ---------------------------
+                    # Local sampling (redundancy/RQ): configurable
+                    # ---------------------------
                     if activation_mode in {"gap", "global", "global_avg", "global_average"}:
-                        y_s = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
-                        t_s = T_img
+                        y_local = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
+                        t_local = T_img
                     else:
                         # Spatially-flattened samples, subsampled per image
                         hw = int(h * w)
@@ -326,15 +337,24 @@ class ClusterAnalysisExperiment:
                         if p < hw:
                             idx = rng.integers(0, hw, size=(b, p), endpoint=False)
                             row = np.arange(b)[:, None]
-                            y_s = y_hw_np[row, idx, :].reshape(b * p, c)
-                            t_s = np.repeat(T_img, p)
+                            y_local = y_hw_np[row, idx, :].reshape(b * p, c)
+                            t_local = np.repeat(T_img, p)
                         else:
-                            y_s = y_hw_np.reshape(b * hw, c)
-                            t_s = np.repeat(T_img, hw)
+                            y_local = y_hw_np.reshape(b * hw, c)
+                            t_local = np.repeat(T_img, hw)
 
-                    if name not in accs:
-                        accs[name] = _CovAccumulator(n_channels=c)
-                    accs[name].update(y_s, t_s)
+                    if name not in accs_local:
+                        accs_local[name] = _CovAccumulator(n_channels=c)
+                    accs_local[name].update(y_local, t_local)
+
+                    # ---------------------------
+                    # Task-level sampling (TaskMI/synergy): per-image pooled (GAP)
+                    # ---------------------------
+                    y_task = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
+                    t_task = T_img
+                    if name not in accs_task:
+                        accs_task[name] = _CovAccumulator(n_channels=c)
+                    accs_task[name].update(y_task, t_task)
 
                 n_seen += int(x.size(0))
 
@@ -344,11 +364,13 @@ class ClusterAnalysisExperiment:
 
         # Compute metrics per layer from accumulated Gaussian stats
         for name, layer in self.layers:
-            acc = accs.get(name)
+            acc = accs_local.get(name)
             if acc is None:
                 continue
+            acc_t = accs_task.get(name, acc)
 
             var_t, var_y, cov_yy, cov_ty = acc.finalize()
+            var_t_task, var_y_task, cov_yy_task, cov_ty_task = acc_t.finalize()
             n_channels = int(var_y.shape[0])
 
             metrics: Dict[str, np.ndarray] = {}
@@ -393,11 +415,14 @@ class ClusterAnalysisExperiment:
             np.fill_diagonal(mi_matrix, 0.0)
             metrics["redundancy"] = mi_matrix.mean(axis=1).astype(np.float64)
 
-            # 3) Synergy with scalar target under Gaussian approximation (MMI)
-            # MI(T;Y_i) depends only on corr(T,Y_i)
-            corr_ty = cov_ty / (np.sqrt(var_t * var_y) + 1e-12)
-            corr_ty = np.clip(corr_ty, -0.999, 0.999)
-            mi_t = np.maximum(0.0, -0.5 * np.log(1.0 - corr_ty ** 2))
+            # 3) TaskMI + Synergy with scalar target under Gaussian approximation (MMI)
+            #
+            # IMPORTANT: We compute these from per-image pooled activations to avoid
+            # pseudo-replication when activation_samples="flatten_spatial".
+            corr_ty_task = cov_ty_task / (np.sqrt(var_t_task * var_y_task) + 1e-12)
+            corr_ty_task = np.clip(corr_ty_task, -0.999, 0.999)
+            mi_t = np.maximum(0.0, -0.5 * np.log(1.0 - corr_ty_task ** 2))
+            metrics["task_mi"] = mi_t.astype(np.float64)
 
             candidate_pool = int(getattr(self.config, "synergy_candidate_pool", 50))
             top_m = int(getattr(self.config, "synergy_pairs", 10))
@@ -406,10 +431,15 @@ class ClusterAnalysisExperiment:
 
             synergy = np.zeros(n_channels, dtype=np.float64)
 
-            # Precompute partner ordering by redundancy (MI) per channel
-            # Use the MI matrix row i, excluding i.
+            # Partner ordering by redundancy (Gaussian MI) on task-level pooled activations.
+            denom_task = np.sqrt(np.outer(var_y_task, var_y_task)) + 1e-12
+            corr_task = cov_yy_task / denom_task
+            corr_task = np.clip(corr_task, -0.999, 0.999)
+            mi_matrix_task = -0.5 * np.log(1.0 - corr_task ** 2)
+            np.fill_diagonal(mi_matrix_task, 0.0)
+
             for i in range(n_channels):
-                order = np.argsort(-mi_matrix[i])
+                order = np.argsort(-mi_matrix_task[i])
                 order = order[order != i]
                 cand = order[:candidate_pool]
                 if cand.size == 0:
@@ -420,13 +450,13 @@ class ClusterAnalysisExperiment:
                 for j in cand:
                     j = int(j)
                     mi_j = float(mi_t[j])
-                    cov_i_j = float(cov_yy[i, j])
+                    cov_i_j = float(cov_yy_task[i, j])
                     mi_joint = self._gaussian_mi_joint_from_stats(
-                        var_t=var_t,
-                        var_i=float(var_y[i]),
-                        var_j=float(var_y[j]),
-                        cov_t_i=float(cov_ty[i]),
-                        cov_t_j=float(cov_ty[j]),
+                        var_t=var_t_task,
+                        var_i=float(var_y_task[i]),
+                        var_j=float(var_y_task[j]),
+                        cov_t_i=float(cov_ty_task[i]),
+                        cov_t_j=float(cov_ty_task[j]),
                         cov_i_j=cov_i_j,
                     )
                     s = mi_joint - mi_i - mi_j + min(mi_i, mi_j)
@@ -837,7 +867,7 @@ class ClusterAnalysisExperiment:
             for ratio in ratios:
                 logger.info(f"  Target sparsity: {ratio:.0%}")
                 model_copy = copy.deepcopy(self.model)
-                layer_modules = self._get_layer_module_map(model_copy)
+                layer_modules = self._filter_pruning_layer_modules(self._get_layer_module_map(model_copy))
                 selection_mode = self._selection_mode_for_method(method)
                 
                 try:
@@ -850,6 +880,11 @@ class ClusterAnalysisExperiment:
                         )
                     else:
                         layer_scores = self._compute_layer_scores_for_method(method, model_copy)
+                        # If we filtered prunable layers (e.g., pointwise-only for MobileNet),
+                        # restrict pruning scores to the same subset for *all* methods so the
+                        # comparison stays fair.
+                        if layer_modules:
+                            layer_scores = {k: v for k, v in layer_scores.items() if k in layer_modules}
                         if not layer_scores:
                             raise ValueError("No layer scores available for method")
 
@@ -905,6 +940,69 @@ class ClusterAnalysisExperiment:
     def _get_layer_module_map(self, model: nn.Module) -> Dict[str, nn.Module]:
         modules = dict(model.named_modules())
         return {name: modules.get(name) for name, _ in self.layers if name in modules}
+
+    def _filter_pruning_layer_modules(self, layer_modules: Dict[str, nn.Module]) -> Dict[str, nn.Module]:
+        """
+        Optionally restrict which Conv layers are *prunable* (without changing which layers
+        we analyze for metrics/clustering).
+
+        This is especially useful for MobileNetV2-style architectures where:
+        - depthwise convolutions are structurally delicate
+        - most FLOPs live in pointwise (1x1) convolutions
+
+        Config knobs (flattened):
+          - pruning_skip_depthwise: bool
+          - pruning_pointwise_only: bool
+        """
+        if not layer_modules:
+            return layer_modules
+
+        skip_depthwise = bool(getattr(self.config, "pruning_skip_depthwise", False))
+        pointwise_only = bool(getattr(self.config, "pruning_pointwise_only", False))
+        if not (skip_depthwise or pointwise_only):
+            return layer_modules
+
+        def _is_depthwise_conv(m: nn.Module) -> bool:
+            if not isinstance(m, nn.Conv2d):
+                return False
+            groups = int(getattr(m, "groups", 1))
+            in_ch = int(getattr(m, "in_channels", 0))
+            out_ch = int(getattr(m, "out_channels", 0))
+            try:
+                in_per_group = int(m.weight.shape[1])
+            except Exception:
+                in_per_group = 0
+            return (groups > 1) and (groups == in_ch) and (out_ch == in_ch) and (in_per_group == 1)
+
+        def _is_pointwise_conv(m: nn.Module) -> bool:
+            if not isinstance(m, nn.Conv2d):
+                return False
+            k = getattr(m, "kernel_size", None)
+            if isinstance(k, int):
+                k = (k, k)
+            return (k == (1, 1)) and (int(getattr(m, "groups", 1)) == 1)
+
+        kept: Dict[str, nn.Module] = {}
+        for name, m in layer_modules.items():
+            if not isinstance(m, nn.Conv2d):
+                kept[name] = m
+                continue
+            if pointwise_only and (not _is_pointwise_conv(m)):
+                continue
+            if skip_depthwise and _is_depthwise_conv(m):
+                continue
+            kept[name] = m
+
+        if len(kept) != len(layer_modules):
+            logger.info(
+                "Pruning layer filter applied: kept %d/%d layers (pointwise_only=%s, skip_depthwise=%s)",
+                len(kept),
+                len(layer_modules),
+                pointwise_only,
+                skip_depthwise,
+            )
+
+        return kept
 
     def _selection_mode_for_method(self, method: str) -> str:
         if method == "random":
@@ -1420,7 +1518,10 @@ class ClusterAnalysisExperiment:
         by_type_pruned: Dict[str, int] = {}
         by_type_total: Dict[str, int] = {}
 
-        layer_names = [nm for nm, _ in self.layers]
+        # Use *all* analyzed layers for halo "next-layer" selection, but only prune the
+        # subset of layers passed via `layer_modules` (e.g., pointwise-only for MobileNet).
+        layer_names_all = [nm for nm, _ in self.layers]
+        prunable_set = set(layer_modules.keys())
         module_map = dict(model.named_modules())
 
         # ------------------------------------------------------------------
@@ -1443,7 +1544,9 @@ class ClusterAnalysisExperiment:
         layer_pruners: Dict[str, "ClusterAwarePruning"] = {}
         layer_num_channels: Dict[str, int] = {}
 
-        for idx, layer_name in enumerate(layer_names):
+        for idx, layer_name in enumerate(layer_names_all):
+            if prunable_set and (layer_name not in prunable_set):
+                continue
             layer = module_map.get(layer_name)
             if layer is None or not hasattr(layer, "weight") or layer.weight is None:
                 continue
@@ -1454,8 +1557,8 @@ class ClusterAnalysisExperiment:
             # Pick the next *weight-connected* layer by matching channel dimensions (same logic as halo analysis).
             src_out = int(layer.weight.shape[0])
             next_layer_name = None
-            for j in range(idx + 1, len(layer_names)):
-                cand_name = layer_names[j]
+            for j in range(idx + 1, len(layer_names_all)):
+                cand_name = layer_names_all[j]
                 cand_layer = module_map.get(cand_name)
                 if cand_layer is None or not hasattr(cand_layer, "weight"):
                     continue
@@ -1558,7 +1661,7 @@ class ClusterAnalysisExperiment:
                 max_amount=float(max_amount),
             )
             # Only include layers we actually scored
-            scored_names = [nm for nm in layer_names if nm in layer_scores]
+            scored_names = [nm for nm in layer_names_all if nm in layer_scores]
             per_layer_amounts = manager.compute_distribution(model, scored_names, layer_scores=layer_scores)
         except Exception as exc:
             logger.warning(
@@ -1570,7 +1673,7 @@ class ClusterAnalysisExperiment:
             per_layer_amounts = {nm: clipped for nm in layer_scores.keys()}
 
         # Second pass: apply pruning using per-layer allocated amounts
-        for layer_name in layer_names:
+        for layer_name in layer_names_all:
             layer = module_map.get(layer_name)
             if layer is None or not hasattr(layer, "weight") or layer.weight is None:
                 continue
@@ -2110,7 +2213,9 @@ class ClusterAnalysisExperiment:
             # Check if fine-tuning is enabled
             fine_tune_enabled = getattr(self.config, 'fine_tune_after_pruning', True)
             fine_tune_epochs = getattr(self.config, 'fine_tune_epochs', 10) if fine_tune_enabled else 0
-            fine_tune_lr = getattr(self.config, 'fine_tune_lr', 0.0001)
+            # Support both fine_tune_lr and fine_tune_learning_rate config keys
+            fine_tune_lr = getattr(self.config, 'fine_tune_lr', None) or \
+                           getattr(self.config, 'fine_tune_learning_rate', None) or 0.0001
             fine_tune_max_batches = getattr(self.config, "fine_tune_max_batches", None)
             fine_tune_weight_decay = float(getattr(self.config, "fine_tune_weight_decay", 0.0) or 0.0)
             

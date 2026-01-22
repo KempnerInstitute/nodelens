@@ -1,0 +1,111 @@
+# =============================================================================
+# ResNet-18 on CIFAR-10 - Halo/Constraint Ablation (UNIFIED)
+# =============================================================================
+# Purpose: produce a protocol-consistent ablation table comparing:
+#   - cluster_aware (full)
+#   - cluster_aware_no_halo
+#   - cluster_aware_no_constraints
+#   - composite (per-channel composite baseline)
+#
+# This is intentionally lightweight:
+#   - only one sparsity level (50%)
+#   - only the ablation methods needed for Table 3
+#   - uses the SAME post-prune fine-tuning settings as the main ResNet-18 run
+# =============================================================================
+
+experiment:
+  name: "resnet18_cifar10_cluster_analysis_ablation"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision/resnet18_cifar10_ablation"
+
+model:
+  name: "resnet18"
+  pretrained: true
+  num_classes: 10
+
+dataset:
+  name: "cifar10"
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+training:
+  enabled: true
+  epochs: 50
+  learning_rate: 0.05
+  optimizer: "sgd"
+  scheduler: "cosine"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+calibration:
+  num_samples: 5000
+
+metrics:
+  activation_point: "post_bn"
+  optimization:
+    use_jit: false
+    use_gpu_acceleration: false
+    force_cpu_for_large_ops: true
+    cpu_threshold: 100000000
+
+  rayleigh_quotient:
+    enabled: true
+    relative: false
+    shrinkage: true
+
+  redundancy:
+    enabled: true
+    sampling: "all"
+
+  synergy:
+    enabled: true
+    target: "logit_margin"
+    num_pairs: 10
+    sampling: "top_k"
+
+clustering:
+  enabled: true
+  n_clusters: 4
+  type_names: ["critical", "redundant", "synergistic", "background"]
+  normalize_features: true
+  features: ["rayleigh_quotient", "redundancy", "synergy"]
+  stability_enabled: false
+  ablation:
+    enabled: false
+
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  use_activation_weight: true
+  compute_influence_matrix: true
+  permutation_baseline:
+    enabled: false
+
+cascade_analysis:
+  enabled: true
+  n_remove_per_group: 5
+  damage_sample_fraction: 0.2
+
+pruning:
+  enabled: true
+  distribution: "global_threshold"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  ratios: [0.5]
+  methods:
+    - "cluster_aware"
+    - "cluster_aware_no_halo"
+    - "cluster_aware_no_constraints"
+    - "composite"
+    - "cluster_aware_annealed"
+  fine_tuning:
+    enabled: true
+    epochs: 5
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+    max_batches: 200
+

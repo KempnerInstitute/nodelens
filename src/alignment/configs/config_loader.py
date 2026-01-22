@@ -311,13 +311,23 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original_pruning["scoring_methods"] = converted_scoring
         
         # Other pruning fields
-        for key in ["distribution", "structured", "dependency_aware", "target", "single_strategy"]:
+        # Note: unified configs commonly specify per-layer caps as min_per_layer/max_per_layer.
+        for key in [
+            "distribution",
+            "structured",
+            "dependency_aware",
+            "target",
+            "single_strategy",
+            "min_per_layer",
+            "max_per_layer",
+        ]:
             if key in pruning:
                 original_pruning[key] = pruning[key]
         
-        # Fine-tune settings
-        if "fine_tune" in pruning:
-            original_pruning["fine_tune"] = pruning["fine_tune"]
+        # Fine-tune settings (support both "fine_tune" and "fine_tuning")
+        fine_tune_block = pruning.get("fine_tune") or pruning.get("fine_tuning")
+        if fine_tune_block:
+            original_pruning["fine_tune"] = fine_tune_block
         
         original["pruning"] = original_pruning
     
@@ -963,7 +973,8 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     if "structured" in pruning_block:
         flat_config["alignment_structured_pruning"] = pruning_block["structured"]
 
-    fine_tune_block = pruning_block.get("fine_tune")
+    # Support both "fine_tune" and "fine_tuning" keys
+    fine_tune_block = pruning_block.get("fine_tune") or pruning_block.get("fine_tuning")
     if isinstance(fine_tune_block, dict):
         if "enabled" in fine_tune_block:
             flat_config["fine_tune_after_pruning"] = fine_tune_block.get("enabled", True)

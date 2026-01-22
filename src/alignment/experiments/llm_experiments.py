@@ -3476,6 +3476,12 @@ class LLMAlignmentExperiment(BaseExperiment):
         if not cfg.get("protect_core", True):
             return False
 
+        # Internal ablation metrics construct their own "protected set" (LP vs random).
+        # Applying *additional* LP-core protection here would contaminate the control
+        # (random-supernode metrics would still protect true LP supernodes).
+        if isinstance(metric, str) and metric.startswith("random_supernode_ablation_"):
+            return False
+
         protect_metrics = cfg.get("protect_core_metrics", None)
         if protect_metrics is None:
             return True
@@ -5448,7 +5454,8 @@ class LLMAlignmentExperiment(BaseExperiment):
           supernode write pattern a = Σ_{s in supernodes} |v_s|
         - **Halo**: top `high_connectivity_fraction` of non-supernodes by Conn_i
         - **Loss-relevant redundancy to core** (halo only): using the scalar contribution
-          q_i = u_i * (v_i^T g_y), compute Gaussian MI to each supernode and take the max
+          q_i = u_i * (v_i^T g_y), compute Gaussian MI to each supernode and aggregate
+          via a Top-k mean (default k=5; reduces max-inflation / multiple-comparisons effects)
         - **Protection** Protect_i in [0, 1] (halo only): 1 - normalized(redundancy_to_core)
 
         It then produces two **importance scores** (high = keep; prune with mode="low"):
@@ -5477,7 +5484,9 @@ class LLMAlignmentExperiment(BaseExperiment):
         eps = 1e-8
         results: Dict[str, Dict[str, Any]] = {}
         supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
-        positive_redundancy = bool(supernode_cfg.get("positive_redundancy", False))
+        # Default to positive-only redundancy (anti-correlation does NOT count as redundancy),
+        # matching the paper definition; can be disabled for sensitivity analyses.
+        positive_redundancy = bool(supernode_cfg.get("positive_redundancy", True))
         if positive_redundancy:
             logger.info("  Redundancy: using positive-only correlation (anti-correlation does NOT count as redundancy)")
         
@@ -5601,26 +5610,41 @@ class LLMAlignmentExperiment(BaseExperiment):
             _, halo_rel = torch.topk(halo_scores, k=num_halo, largest=True)
             halo_idx = non_super_idx[halo_rel].long()
 
+            # Extract layer index once (used for deterministic sampling seeds)
+            try:
+                layer_idx_int = int(layer_name.split("layers.")[-1].split(".")[0])
+            except Exception:
+                layer_idx_int = 0
+
             # Optional: sample a subset of *non-halo* channels for redundancy-to-core analysis.
             # This lets us explicitly compare halo-to-core redundancy vs non-halo-to-core redundancy
             # without the prohibitive cost of computing redundancy for *all* non-halo channels.
             non_halo_sample_size = int(supernode_cfg.get("non_halo_sample_size", 256) or 0)
             non_halo_idx = torch.empty((0,), dtype=torch.long)
-            if non_halo_sample_size > 0:
+            rand_core_idx = torch.empty((0,), dtype=torch.long)
+            compute_random_core = bool(supernode_cfg.get("compute_random_core_baseline", True))
+            if non_halo_sample_size > 0 or compute_random_core:
                 halo_mask_tmp = torch.zeros(m, dtype=torch.bool)
                 halo_mask_tmp[halo_idx] = True
                 non_halo_all = (~super_mask & ~halo_mask_tmp).nonzero(as_tuple=True)[0]
                 if non_halo_all.numel() > 0:
-                    sample_n = min(non_halo_sample_size, int(non_halo_all.numel()))
-                    seed_base = int(supernode_cfg.get("non_halo_sample_seed", 0) or 0)
-                    try:
-                        layer_idx_int = int(layer_name.split("layers.")[-1].split(".")[0])
-                    except Exception:
-                        layer_idx_int = 0
-                    g = torch.Generator()
-                    g.manual_seed(seed_base + layer_idx_int)
-                    perm = torch.randperm(int(non_halo_all.numel()), generator=g)
-                    non_halo_idx = non_halo_all[perm[:sample_n]].long()
+                    if non_halo_sample_size > 0:
+                        sample_n = min(non_halo_sample_size, int(non_halo_all.numel()))
+                        seed_base = int(supernode_cfg.get("non_halo_sample_seed", 0) or 0)
+                        g = torch.Generator()
+                        g.manual_seed(seed_base + layer_idx_int)
+                        perm = torch.randperm(int(non_halo_all.numel()), generator=g)
+                        non_halo_idx = non_halo_all[perm[:sample_n]].long()
+
+                    # Random-core baseline (multiple-comparisons control): pick a random set
+                    # of the same size as the supernode core from the non-halo pool.
+                    if compute_random_core:
+                        rand_n = min(int(num_supernodes), int(non_halo_all.numel()))
+                        seed_base_rand = int(supernode_cfg.get("random_core_seed", 12345) or 0)
+                        g2 = torch.Generator()
+                        g2.manual_seed(seed_base_rand + layer_idx_int)
+                        perm2 = torch.randperm(int(non_halo_all.numel()), generator=g2)
+                        rand_core_idx = non_halo_all[perm2[:rand_n]].long()
 
             plan[layer_name] = {
                 "lp_cpu": lp_cpu,
@@ -5628,11 +5652,13 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "super_idx_cpu": super_idx,
                 "halo_idx_cpu": halo_idx,
                 "non_halo_idx_cpu": non_halo_idx,
+                "rand_core_idx_cpu": rand_core_idx,
                 "m": m,
                 # device-side indices + streaming sums (initialized lazily in hooks)
                 "super_idx": None,
                 "halo_idx": None,
                 "non_halo_idx": None,
+                "rand_core_idx": None,
                 "sum_q_super": None,
                 "sum_q2_super": None,
                 "sum_q3_super": None,
@@ -5647,6 +5673,10 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "sum_q3_non_halo": None,
                 "sum_q4_non_halo": None,
                 "sum_q_non_halo_super": None,
+                "sum_q_rand": None,
+                "sum_q2_rand": None,
+                "sum_q_halo_rand": None,
+                "sum_q_non_halo_rand": None,
                 "count": 0,
             }
 
@@ -5699,28 +5729,36 @@ class LLMAlignmentExperiment(BaseExperiment):
                     st["halo_idx"] = st["halo_idx_cpu"].to(device=u_flat.device)
                 if st.get("non_halo_idx") is None or (st.get("non_halo_idx") is not None and st["non_halo_idx"].device != u_flat.device):
                     st["non_halo_idx"] = st.get("non_halo_idx_cpu", torch.empty((0,), dtype=torch.long)).to(device=u_flat.device)
+                if st.get("rand_core_idx") is None or (st.get("rand_core_idx") is not None and st["rand_core_idx"].device != u_flat.device):
+                    st["rand_core_idx"] = st.get("rand_core_idx_cpu", torch.empty((0,), dtype=torch.long)).to(device=u_flat.device)
 
                 super_idx_dev = st["super_idx"]
                 halo_idx_dev = st["halo_idx"]
                 non_halo_idx_dev = st.get("non_halo_idx")
                 if non_halo_idx_dev is None:
                     non_halo_idx_dev = torch.empty((0,), device=u_flat.device, dtype=torch.long)
+                rand_core_idx_dev = st.get("rand_core_idx")
+                if rand_core_idx_dev is None:
+                    rand_core_idx_dev = torch.empty((0,), device=u_flat.device, dtype=torch.long)
 
                 # Compute q = u * s where s := dL/du is already computed by backprop.
                 # We only materialize the supernode+halo indices.
-                idx_union = torch.cat([super_idx_dev, halo_idx_dev, non_halo_idx_dev], dim=0)  # [|M|+|H|+|N|]
+                idx_union = torch.cat([super_idx_dev, halo_idx_dev, non_halo_idx_dev, rand_core_idx_dev], dim=0)  # [|M|+|H|+|N|+|R|]
                 try:
                     u_sel = u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
                     s_sel = g_u_flat.index_select(1, idx_union).float()  # [N, |M|+|H|]
                 except Exception:
                     return
 
-                q_sel = u_sel * s_sel  # [N, |M|+|H|]
+                q_sel = u_sel * s_sel  # [N, |M|+|H|+|N|+|R|]
                 n_super = super_idx_dev.numel()
                 n_halo = halo_idx_dev.numel()
+                n_non_halo = non_halo_idx_dev.numel()
+                n_rand = rand_core_idx_dev.numel()
                 q_super = q_sel[:, :n_super]  # [N, |M|]
                 q_halo = q_sel[:, n_super : n_super + n_halo]   # [N, |H|]
-                q_non_halo = q_sel[:, n_super + n_halo :]  # [N, |N|]
+                q_non_halo = q_sel[:, n_super + n_halo : n_super + n_halo + n_non_halo]  # [N, |N|]
+                q_rand = q_sel[:, n_super + n_halo + n_non_halo :]  # [N, |R|]
 
                 N = q_sel.shape[0]
                 
@@ -5744,6 +5782,14 @@ class LLMAlignmentExperiment(BaseExperiment):
                     st["sum_q_non_halo_super"] = torch.zeros(
                         (q_non_halo.shape[1], q_super.shape[1]), device=q_non_halo.device, dtype=torch.float32
                     )
+                    st["sum_q_rand"] = torch.zeros(q_rand.shape[1], device=q_sel.device, dtype=torch.float32)
+                    st["sum_q2_rand"] = torch.zeros_like(st["sum_q_rand"])
+                    st["sum_q_halo_rand"] = torch.zeros(
+                        (q_halo.shape[1], q_rand.shape[1]), device=q_sel.device, dtype=torch.float32
+                    )
+                    st["sum_q_non_halo_rand"] = torch.zeros(
+                        (q_non_halo.shape[1], q_rand.shape[1]), device=q_sel.device, dtype=torch.float32
+                    )
 
                 st["sum_q_super"] += q_super.sum(dim=0)
                 st["sum_q2_super"] += (q_super * q_super).sum(dim=0)
@@ -5760,6 +5806,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                     st["sum_q3_non_halo"] += (q_non_halo * q_non_halo * q_non_halo).sum(dim=0)
                     st["sum_q4_non_halo"] += (q_non_halo * q_non_halo * q_non_halo * q_non_halo).sum(dim=0)
                     st["sum_q_non_halo_super"] += q_non_halo.transpose(0, 1) @ q_super  # [|N|,|M|]
+                if q_rand.numel() > 0:
+                    st["sum_q_rand"] += q_rand.sum(dim=0)
+                    st["sum_q2_rand"] += (q_rand * q_rand).sum(dim=0)
+                    st["sum_q_halo_rand"] += q_halo.transpose(0, 1) @ q_rand  # [|H|,|R|]
+                    if q_non_halo.numel() > 0:
+                        st["sum_q_non_halo_rand"] += q_non_halo.transpose(0, 1) @ q_rand  # [|N|,|R|]
                 st["count"] += N
 
             return fwd_hook, bwd_hook
@@ -5895,7 +5947,21 @@ class LLMAlignmentExperiment(BaseExperiment):
             rho_sq = (corr_eff * corr_eff).clamp(0.0, 0.9999)
             mi = -0.5 * torch.log(1 - rho_sq)
 
-            redundancy_to_core = mi.max(dim=1).values  # [|H|]
+            # Aggregate redundancy-to-core with a Top-k mean (reduces max inflation / multiple-comparisons effects).
+            red_reduce = str(supernode_cfg.get("redundancy_reduce", "topk_mean")).lower()
+            try:
+                red_topk = int(supernode_cfg.get("redundancy_topk", 5))
+            except Exception:
+                red_topk = 5
+            red_topk = max(1, min(int(red_topk), int(mi.shape[1])))
+
+            redundancy_to_core_max = mi.max(dim=1).values  # [|H|]
+            redundancy_to_core_topk_mean = torch.topk(mi, k=red_topk, dim=1, largest=True).values.mean(dim=1)  # [|H|]
+            redundancy_to_core = (
+                redundancy_to_core_topk_mean
+                if red_reduce in {"topk", "topk_mean", "mean_topk", "avg_topk", "average_topk"}
+                else redundancy_to_core_max
+            )
 
             # Optional: redundancy-to-core for a sampled set of non-halo channels (analysis only).
             redundancy_to_core_non_halo = None
@@ -5924,7 +5990,85 @@ class LLMAlignmentExperiment(BaseExperiment):
                 corr_eff_non = torch.clamp(corr_non, min=0.0) if positive_redundancy else corr_non
                 rho_sq_non = (corr_eff_non * corr_eff_non).clamp(0.0, 0.9999)
                 mi_non = -0.5 * torch.log(1 - rho_sq_non)
-                redundancy_to_core_non_halo = mi_non.max(dim=1).values  # [|N|]
+                redundancy_to_core_non_halo_max = mi_non.max(dim=1).values  # [|N|]
+                red_topk_non = max(1, min(int(red_topk), int(mi_non.shape[1])))
+                redundancy_to_core_non_halo_topk_mean = (
+                    torch.topk(mi_non, k=red_topk_non, dim=1, largest=True).values.mean(dim=1)
+                )  # [|N|]
+                redundancy_to_core_non_halo = (
+                    redundancy_to_core_non_halo_topk_mean
+                    if red_reduce in {"topk", "topk_mean", "mean_topk", "avg_topk", "average_topk"}
+                    else redundancy_to_core_non_halo_max
+                )
+
+            # Optional multiple-comparisons control: redundancy-to-core against a matched random core
+            # (same size as the supernode core, sampled from the non-halo pool).
+            redundancy_to_rand_core = None
+            redundancy_to_rand_core_non_halo = None
+            rand_core_idx_cpu = st.get("rand_core_idx_cpu", None)
+            if (
+                rand_core_idx_cpu is not None
+                and hasattr(rand_core_idx_cpu, "numel")
+                and int(rand_core_idx_cpu.numel()) > 0
+                and st.get("sum_q_halo_rand") is not None
+                and st.get("sum_q_rand") is not None
+                and st.get("sum_q2_rand") is not None
+            ):
+                sum_q_rand = st["sum_q_rand"].detach().cpu()
+                sum_q2_rand = st["sum_q2_rand"].detach().cpu()
+                sum_q_halo_rand = st["sum_q_halo_rand"].detach().cpu()
+
+                mean_rand = sum_q_rand / float(N)
+                var_rand = (sum_q2_rand / float(N)) - (mean_rand * mean_rand)
+
+                cov_hr = (sum_q_halo_rand / float(N)) - (mean_halo.unsqueeze(1) * mean_rand.unsqueeze(0))
+                denom_hr = torch.sqrt(var_halo.clamp_min(0).unsqueeze(1) * var_rand.clamp_min(0).unsqueeze(0) + eps)
+                corr_hr = torch.where(denom_hr > 0, cov_hr / denom_hr, torch.zeros_like(cov_hr))
+                corr_hr = corr_hr.clamp(-0.9999, 0.9999)
+
+                corr_eff_hr = torch.clamp(corr_hr, min=0.0) if positive_redundancy else corr_hr
+                rho_sq_hr = (corr_eff_hr * corr_eff_hr).clamp(0.0, 0.9999)
+                mi_rand = -0.5 * torch.log(1 - rho_sq_hr)
+
+                rand_topk = max(1, min(int(red_topk), int(mi_rand.shape[1])))
+                redundancy_to_rand_core_max = mi_rand.max(dim=1).values  # [|H|]
+                redundancy_to_rand_core_topk_mean = (
+                    torch.topk(mi_rand, k=rand_topk, dim=1, largest=True).values.mean(dim=1)
+                )  # [|H|]
+                redundancy_to_rand_core = (
+                    redundancy_to_rand_core_topk_mean
+                    if red_reduce in {"topk", "topk_mean", "mean_topk", "avg_topk", "average_topk"}
+                    else redundancy_to_rand_core_max
+                )
+
+                # Non-halo sampled channels vs random core (optional)
+                if st.get("sum_q_non_halo_rand") is not None and st.get("sum_q_non_halo") is not None and st.get("sum_q2_non_halo") is not None:
+                    sum_q_non = st["sum_q_non_halo"].detach().cpu()
+                    sum_q2_non = st["sum_q2_non_halo"].detach().cpu()
+                    sum_q_non_rand = st["sum_q_non_halo_rand"].detach().cpu()
+
+                    mean_non = sum_q_non / float(N)
+                    var_non = (sum_q2_non / float(N)) - (mean_non * mean_non)
+
+                    cov_nr = (sum_q_non_rand / float(N)) - (mean_non.unsqueeze(1) * mean_rand.unsqueeze(0))
+                    denom_nr = torch.sqrt(var_non.clamp_min(0).unsqueeze(1) * var_rand.clamp_min(0).unsqueeze(0) + eps)
+                    corr_nr = torch.where(denom_nr > 0, cov_nr / denom_nr, torch.zeros_like(cov_nr))
+                    corr_nr = corr_nr.clamp(-0.9999, 0.9999)
+
+                    corr_eff_nr = torch.clamp(corr_nr, min=0.0) if positive_redundancy else corr_nr
+                    rho_sq_nr = (corr_eff_nr * corr_eff_nr).clamp(0.0, 0.9999)
+                    mi_non_rand = -0.5 * torch.log(1 - rho_sq_nr)
+
+                    non_rand_topk = max(1, min(int(red_topk), int(mi_non_rand.shape[1])))
+                    redundancy_to_rand_core_non_halo_max = mi_non_rand.max(dim=1).values
+                    redundancy_to_rand_core_non_halo_topk_mean = (
+                        torch.topk(mi_non_rand, k=non_rand_topk, dim=1, largest=True).values.mean(dim=1)
+                    )
+                    redundancy_to_rand_core_non_halo = (
+                        redundancy_to_rand_core_non_halo_topk_mean
+                        if red_reduce in {"topk", "topk_mean", "mean_topk", "avg_topk", "average_topk"}
+                        else redundancy_to_rand_core_non_halo_max
+                    )
 
             # Convert redundancy-to-core into a [0, 1] protection score.
             #
@@ -6032,13 +6176,22 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "num_supernodes": int(super_idx.numel()),
                 "num_halo": int(halo_idx.numel()),
                 "num_non_halo_sample": int(non_halo_idx_cpu.numel()) if non_halo_idx_cpu is not None else 0,
+                "rand_core_size": int(st.get("rand_core_idx_cpu").numel()) if st.get("rand_core_idx_cpu") is not None else 0,
                 "q_samples": N,
                 "conn_mean": float(conn.mean().item()),
+                "redundancy_reduce": str(red_reduce),
+                "redundancy_topk": int(red_topk),
                 "protect_halo_mean": float(protect_halo.mean().item()) if protect_halo.numel() else 0.0,
                 "redundancy_to_core_mean": float(redundancy_to_core.mean().item()) if redundancy_to_core.numel() else 0.0,
                 "non_halo_redundancy_to_core_mean": float(redundancy_to_core_non_halo.mean().item())
                 if redundancy_to_core_non_halo is not None and redundancy_to_core_non_halo.numel()
                 else 0.0,
+                "redundancy_to_rand_core_mean": float(redundancy_to_rand_core.mean().item())
+                if redundancy_to_rand_core is not None and hasattr(redundancy_to_rand_core, "numel") and int(redundancy_to_rand_core.numel()) > 0
+                else None,
+                "non_halo_redundancy_to_rand_core_mean": float(redundancy_to_rand_core_non_halo.mean().item())
+                if redundancy_to_rand_core_non_halo is not None and hasattr(redundancy_to_rand_core_non_halo, "numel") and int(redundancy_to_rand_core_non_halo.numel()) > 0
+                else None,
                 "q_gaussianity": {
                     "supernodes": q_gauss_super,
                     "halo": q_gauss_halo,
@@ -6053,11 +6206,25 @@ class LLMAlignmentExperiment(BaseExperiment):
                 agg_red_halo.extend([float(x) for x in halo_vals.tolist() if x == x])
             except Exception:
                 pass
+            if redundancy_to_rand_core is not None:
+                try:
+                    rand_vals = redundancy_to_rand_core.detach().float()
+                    rand_vals = rand_vals[torch.isfinite(rand_vals)]
+                    agg_red_rand_halo.extend([float(x) for x in rand_vals.tolist() if x == x])
+                except Exception:
+                    pass
             if redundancy_to_core_non_halo is not None:
                 try:
                     non_vals = redundancy_to_core_non_halo.detach().float()
                     non_vals = non_vals[torch.isfinite(non_vals)]
                     agg_red_non_halo.extend([float(x) for x in non_vals.tolist() if x == x])
+                except Exception:
+                    pass
+            if redundancy_to_rand_core_non_halo is not None:
+                try:
+                    non_rand_vals = redundancy_to_rand_core_non_halo.detach().float()
+                    non_rand_vals = non_rand_vals[torch.isfinite(non_rand_vals)]
+                    agg_red_rand_non_halo.extend([float(x) for x in non_rand_vals.tolist() if x == x])
                 except Exception:
                     pass
         
@@ -6122,13 +6289,35 @@ class LLMAlignmentExperiment(BaseExperiment):
             except Exception:
                 pass
 
-            results["_aggregate"] = {
+            agg_out: Dict[str, Any] = {
                 "redundancy_to_core": {
                     "halo": halo_stats,
                     "non_halo_sample": non_stats,
                     "effect": effect,
                 }
             }
+
+            # Matched random-core baseline (multiple-comparisons control), if available.
+            if agg_red_rand_halo or agg_red_rand_non_halo:
+                rand_halo_stats = _stats(agg_red_rand_halo)
+                rand_non_stats = _stats(agg_red_rand_non_halo)
+                rand_effect: Dict[str, Any] = {}
+                if rand_halo_stats.get("mean") is not None and rand_non_stats.get("mean") is not None:
+                    try:
+                        mean_h = float(rand_halo_stats["mean"])
+                        mean_n = float(rand_non_stats["mean"])
+                        rand_effect["mean_diff"] = float(mean_h - mean_n)
+                        rand_effect["mean_ratio"] = float(mean_h / max(mean_n, 1e-12))
+                    except Exception:
+                        pass
+
+                agg_out["redundancy_to_random_core"] = {
+                    "halo": rand_halo_stats,
+                    "non_halo_sample": rand_non_stats,
+                    "effect": rand_effect,
+                }
+
+            results["_aggregate"] = agg_out
 
         logger.info(f"Computed SCAR protection/connectivity scores for {len(results)} layers")
         return results
@@ -6157,7 +6346,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         Redundancy proxy:
           - \(\rho_{ij}=\mathrm{corr}(q_i,q_j)\) over calibration tokens
           - Optional **positive-only** redundancy: \(\rho^+_{ij}=\max(0,\rho_{ij})\)
-          - \(\mathrm{Red}(i,j) = -\tfrac12 \log(1-(\rho_{ij})^2)\)
+          - \(\mathrm{Red}(i,j) = -\tfrac12 \log(1-(\rho^+_{ij})^2)\)
 
         Notes:
         - Supernodes are identified by `scar_loss_proxy` when available (paper definition).
@@ -6180,7 +6369,9 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         # Use positive-only redundancy when configured (matches SCAR ablation)
         supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
-        positive_redundancy = bool(supernode_cfg.get("positive_redundancy", False))
+        # Default to positive-only redundancy (anti-correlation does NOT count as redundancy),
+        # matching the paper definition; can be disabled for sensitivity analyses.
+        positive_redundancy = bool(supernode_cfg.get("positive_redundancy", True))
         if positive_redundancy:
             logger.info("  Redundancy: using positive-only correlation (anti-correlation does NOT count as redundancy)")
 
@@ -7479,6 +7670,8 @@ class LLMAlignmentExperiment(BaseExperiment):
         precomputed_metrics = [
             # SCAR metrics (computed by SCAR analysis)
             "scar_loss_proxy", "scar_activation_power", "scar_taylor", "scar_curvature",
+            # Learned combination (computed by compute_scar_optimal)
+            "scar_optimal",
             # Supernode/connectivity metrics
             "directed_redundancy", "supernode_protection_score", "supernode_connectivity_score",
             # Random baseline (scores are generated and stored in importance_scores)
@@ -7488,13 +7681,20 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Generalized importance (no outlier assumption)
             "generalized_importance", "neighborhood_redundancy",
             # LLM baseline methods (computed by compute_baseline_pruning_scores)
-            "wanda", "sparsegpt",
+            "wanda", "sparsegpt", "owl", "llm_pruner", "flap", "ria", "slimllm",
         ]
+        from alignment.pruning.base import PrecomputedScorePruning
         if metric in precomputed_metrics:
-            from alignment.pruning.base import PrecomputedScorePruning
             pruner = PrecomputedScorePruning(config=config)
         else:
-            pruner = AlignmentPruning(metric=metric, config=config)
+            # If a metric is not registered but scores are present in `importance_scores`,
+            # fall back to the precomputed-score pruner. This makes it safe to add new
+            # baseline strategies/ablations without touching a hard-coded allowlist.
+            try:
+                pruner = AlignmentPruning(metric=metric, config=config)
+            except KeyError:
+                logger.info(f"Metric '{metric}' not found in registry; using PrecomputedScorePruning")
+                pruner = PrecomputedScorePruning(config=config)
 
         masks = {}
         processed_mlps = set()  # Track which MLPs we've already processed
@@ -8634,6 +8834,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     import traceback
                     logger.error(traceback.format_exc())
 
+
+        # Optional ablations that should run regardless of `generate_plots`.
+        if scar_scores:
+            supernode_config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+
             # SCAR Optimal: learned combination of SCAR components
             if getattr(self.config, "do_scar_optimal", False):
                 try:
@@ -8669,7 +8874,6 @@ class LLMAlignmentExperiment(BaseExperiment):
                     import traceback
                     logger.error(traceback.format_exc())
 
-
         if self.config.do_pruning_experiments:
             sparsity_levels = self.config.pruning_amounts
             
@@ -8678,6 +8882,20 @@ class LLMAlignmentExperiment(BaseExperiment):
             if not pruning_strategies:
                 # Fallback to single metric for backward compatibility
                 pruning_strategies = [self.config.pruning_alignment_metric]
+
+            # Augment pruning strategies with optional experiment-derived metrics.
+            # - SCAR-optimal produces a precomputed per-channel score stored under metric="scar_optimal".
+            # - Random-supernode ablation can expose additional precomputed metrics to evaluate.
+            pruning_strategies = list(pruning_strategies)
+            if getattr(self.config, "do_scar_optimal", False) and "scar_optimal" not in pruning_strategies:
+                pruning_strategies.append("scar_optimal")
+
+            random_ablation_cfg = results.get("random_supernode_ablation") if isinstance(results, dict) else None
+            extra_ablation_metrics = (random_ablation_cfg or {}).get("pruning_metrics") if isinstance(random_ablation_cfg, dict) else None
+            if isinstance(extra_ablation_metrics, list):
+                for m in extra_ablation_metrics:
+                    if isinstance(m, str) and m not in pruning_strategies:
+                        pruning_strategies.append(m)
             
             # Check for single_strategy option (useful for memory-constrained LLM experiments)
             single_strategy = getattr(self.config, "single_strategy", None)
@@ -9488,8 +9706,16 @@ class LLMAlignmentExperiment(BaseExperiment):
             sparsity: Sparsity level for evaluation
             
         Returns:
-            Dict with random vs LP-based supernode comparison
+            Dict describing the injected pruning metrics and the sampled indices.
+
+        Notes:
+            This function *injects* additional precomputed per-channel pruning scores into
+            `self.importance_scores` under synthetic metric names (returned in
+            `results["pruning_metrics"]`). The standard pruning loop can then evaluate these
+            metrics and write PPL into `results["pruning_results"]`.
         """
+        import re
+
         logger.info("=" * 60)
         logger.info("Random Supernode Ablation")
         logger.info("=" * 60)
@@ -9499,118 +9725,125 @@ class LLMAlignmentExperiment(BaseExperiment):
         layer_names = [ln for ln in scar_scores.keys() if "mlp.down_proj" in ln]
         if not layer_names:
             return {}
-        
-        results = {
-            "lp_supernodes": {},
-            "random_supernodes": [],
-        }
-        
-        # Get dimensions
-        sample_layer = layer_names[0]
-        sample_lp = scar_scores[sample_layer].get("scar_loss_proxy")
-        if sample_lp is None:
+
+        # Map layer index -> projection module keys in importance_scores (so pruning can see the metric everywhere).
+        layer_to_proj_keys: Dict[int, List[str]] = {}
+        for k in self.importance_scores.keys():
+            m = re.search(r"layers\.(\d+)\.mlp\.(gate_proj|up_proj|down_proj)", k)
+            if m:
+                layer_to_proj_keys.setdefault(int(m.group(1)), []).append(k)
+
+        # Parse LP tensors per layer
+        lp_tensors: Dict[str, torch.Tensor] = {}
+        for layer_name in layer_names:
+            layer_metrics = scar_scores.get(layer_name) or {}
+            lp = layer_metrics.get("scar_loss_proxy")
+            if isinstance(lp, dict) and "scores" in lp:
+                lp_tensor = torch.tensor(lp["scores"], dtype=torch.float32)
+            elif torch.is_tensor(lp):
+                lp_tensor = lp.float().detach().cpu()
+            else:
+                continue
+            if lp_tensor.numel() > 0:
+                lp_tensors[layer_name] = lp_tensor
+
+        if not lp_tensors:
             logger.warning("No LP scores found")
             return {}
-        
-        if isinstance(sample_lp, dict) and "scores" in sample_lp:
-            intermediate_dim = len(sample_lp["scores"])
-        elif torch.is_tensor(sample_lp):
-            intermediate_dim = sample_lp.numel()
-        else:
-            return {}
-        
+
+        intermediate_dim = next(iter(lp_tensors.values())).numel()
         num_supernodes = max(1, int(supernode_fraction * intermediate_dim))
         logger.info(f"Intermediate dim: {intermediate_dim}, supernodes per layer: {num_supernodes}")
-        
-        # Compute LP-based protection scores (baseline)
-        lp_protection_scores = {}
-        for layer_name in layer_names:
-            layer_metrics = scar_scores[layer_name]
-            lp = layer_metrics.get("scar_loss_proxy")
-            
-            if isinstance(lp, dict) and "scores" in lp:
-                lp_tensor = torch.tensor(lp["scores"])
-            elif torch.is_tensor(lp):
-                lp_tensor = lp.float().cpu()
-            else:
+
+        base_seed = int(getattr(self.config, "seed", 0) or 0)
+        lp_metric = "random_supernode_ablation_lp"
+        random_metrics = [f"random_supernode_ablation_random_{t}" for t in range(int(num_trials))]
+        pruning_metrics = [lp_metric] + random_metrics
+
+        results: Dict[str, Any] = {
+            "target_sparsity": float(sparsity),
+            "supernode_fraction": float(supernode_fraction),
+            "num_trials": int(num_trials),
+            "num_supernodes": int(num_supernodes),
+            "seed": base_seed,
+            "lp_metric": lp_metric,
+            "random_metrics": random_metrics,
+            "pruning_metrics": pruning_metrics,
+            "lp_indices": {},
+            "random_indices": [],
+            "overlap": {},
+        }
+
+        def _store_metric(layer_idx: int, metric_name: str, scores: torch.Tensor) -> None:
+            keys = layer_to_proj_keys.get(layer_idx) or []
+            for k in keys:
+                if k not in self.importance_scores:
+                    self.importance_scores[k] = {}
+                self.importance_scores[k][metric_name] = scores
+
+        # LP-supernode protection metric
+        for layer_name, lp_tensor in lp_tensors.items():
+            m = re.search(r"layers\.(\d+)\.mlp", layer_name)
+            if not m:
                 continue
-            
-            # Identify supernodes (top by LP)
+            layer_idx = int(m.group(1))
+
             _, top_idx = torch.topk(lp_tensor, num_supernodes)
-            supernode_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
-            supernode_mask[top_idx] = True
-            
-            # Protection score: supernodes get max score, others get LP
+            results["lp_indices"][layer_name] = top_idx.tolist()
+
             protection = lp_tensor.clone()
-            protection[supernode_mask] = protection.max() * 2  # Strongly protect supernodes
-            
-            lp_protection_scores[layer_name] = protection
-        
-        results["lp_supernodes"]["scores"] = lp_protection_scores
-        
-        # Random supernode trials
-        random_results = []
-        for trial in range(num_trials):
-            random_protection_scores = {}
-            
-            for layer_name in layer_names:
-                layer_metrics = scar_scores[layer_name]
-                lp = layer_metrics.get("scar_loss_proxy")
-                
-                if isinstance(lp, dict) and "scores" in lp:
-                    lp_tensor = torch.tensor(lp["scores"])
-                elif torch.is_tensor(lp):
-                    lp_tensor = lp.float().cpu()
-                else:
+            if protection.numel() > 0:
+                protection[top_idx] = protection.max() * 2
+            _store_metric(layer_idx, lp_metric, protection)
+
+        # Random trials (deterministic from seed, trial, layer_idx)
+        for trial in range(int(num_trials)):
+            metric_name = random_metrics[trial]
+            trial_entry: Dict[str, Any] = {"trial": int(trial), "seed": int(base_seed + 100000 * (trial + 1)), "indices": {}}
+
+            for layer_name, lp_tensor in lp_tensors.items():
+                m = re.search(r"layers\.(\d+)\.mlp", layer_name)
+                if not m:
                     continue
-                
-                # Random supernodes
-                random_idx = torch.randperm(intermediate_dim)[:num_supernodes]
-                random_mask = torch.zeros(intermediate_dim, dtype=torch.bool)
-                random_mask[random_idx] = True
-                
-                # Protection score: random supernodes get max score
+                layer_idx = int(m.group(1))
+
+                g = torch.Generator(device="cpu")
+                g.manual_seed(base_seed + 100000 * (trial + 1) + layer_idx)
+                random_idx = torch.randperm(intermediate_dim, generator=g)[:num_supernodes]
+                trial_entry["indices"][layer_name] = random_idx.tolist()
+
                 protection = lp_tensor.clone()
-                protection[random_mask] = protection.max() * 2
-                
-                random_protection_scores[layer_name] = protection
-            
-            random_results.append({
-                "trial": trial,
-                "scores": random_protection_scores,
-            })
-        
-        results["random_supernodes"] = random_results
-        
-        # Compare overlap between LP and random supernodes
-        logger.info("\n--- Supernode Overlap Analysis ---")
-        for layer_name in layer_names[:3]:  # First 3 layers
-            layer_metrics = scar_scores[layer_name]
-            lp = layer_metrics.get("scar_loss_proxy")
-            
-            if isinstance(lp, dict) and "scores" in lp:
-                lp_tensor = torch.tensor(lp["scores"])
-            elif torch.is_tensor(lp):
-                lp_tensor = lp.float().cpu()
-            else:
-                continue
-            
-            _, lp_top = torch.topk(lp_tensor, num_supernodes)
-            lp_set = set(lp_top.tolist())
-            
-            overlaps = []
-            for trial_result in random_results:
-                # Random trial's supernodes (we need to recompute)
-                random_idx = torch.randperm(intermediate_dim)[:num_supernodes]
-                random_set = set(random_idx.tolist())
-                overlap = len(lp_set & random_set) / num_supernodes
-                overlaps.append(overlap)
-            
-            logger.info(f"  {layer_name}: LP vs Random overlap = {np.mean(overlaps)*100:.1f}% (expected: {100*num_supernodes/intermediate_dim:.1f}%)")
-        
-        logger.info("\n--- Key Insight ---")
-        logger.info("If LP-based supernodes are functionally special, protecting them should")
-        logger.info("yield much better PPL than protecting random channels of the same size.")
-        logger.info("This ablation quantifies how much correct supernode ID matters.")
-        
+                if protection.numel() > 0:
+                    protection[random_idx] = protection.max() * 2
+                _store_metric(layer_idx, metric_name, protection)
+
+            results["random_indices"].append(trial_entry)
+
+        # Overlap stats (LP vs random per layer)
+        try:
+            overlap_by_layer: Dict[str, Any] = {}
+            for layer_name in layer_names:
+                lp_idx = results["lp_indices"].get(layer_name)
+                if not lp_idx:
+                    continue
+                lp_set = set(lp_idx)
+                overlaps: List[float] = []
+                for tr in results["random_indices"]:
+                    ridx = (tr.get("indices") or {}).get(layer_name)
+                    if not ridx:
+                        continue
+                    overlaps.append(len(lp_set & set(ridx)) / float(num_supernodes))
+                if overlaps:
+                    overlap_by_layer[layer_name] = {
+                        "mean_overlap_frac": float(np.mean(overlaps)),
+                        "std_overlap_frac": float(np.std(overlaps)),
+                        "expected_overlap_frac": float(num_supernodes / float(intermediate_dim)),
+                    }
+            results["overlap"] = overlap_by_layer
+        except Exception as e:
+            logger.warning(f"Overlap analysis failed: {e}")
+
+        logger.info("Random supernode ablation metrics injected into importance_scores.")
+        logger.info(f"Injected pruning metrics: {pruning_metrics}")
+
         return results

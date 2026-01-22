@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=06:00:00
 #SBATCH --mem=320GB
-#SBATCH --partition=kempner_h100_priority3
+#SBATCH --partition=kempner_eng
 #SBATCH --account=kempner_dev
 #SBATCH --array=0-8
 
