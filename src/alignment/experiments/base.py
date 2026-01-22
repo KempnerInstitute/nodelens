@@ -150,6 +150,10 @@ class ExperimentConfig:
     # None = prune all layers, string = prune only that layer
     pruning_target_layer: Optional[str] = None
 
+    # Optional: restrict which convs are prunable (useful for MobileNet-style nets)
+    pruning_pointwise_only: bool = False  # prune only 1x1 conv layers
+    pruning_skip_depthwise: bool = False  # skip depthwise conv layers
+
     # Plotting and visualization
     generate_plots: bool = True
     plot_format: str = "png"

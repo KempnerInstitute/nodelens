@@ -1183,7 +1183,35 @@ class LLMPrunerChannelMode(BasePruningStrategy):
         """
         Get per-channel importance scores for structured pruning.
         """
-        return self.compute_importance_scores(module, inputs, layer_name)
+        if not hasattr(module, "weight"):
+            raise ValueError(f"Module {module} does not have weights")
+
+        weight = module.weight.data  # [out_features, in_features]
+
+        # Per-output-channel (rows) vs per-input-channel (cols)
+        if dim == 0:
+            weight_mag = weight.abs().sum(dim=1)  # [out_features]
+
+            taylor = None
+            if layer_name and layer_name in self.taylor_scores:
+                taylor = self.taylor_scores[layer_name].to(weight.device)
+            elif self._calibrated and layer_name:
+                # Try partial match
+                for name in self.taylor_scores:
+                    if name.endswith(layer_name) or layer_name in name:
+                        taylor = self.taylor_scores[name].to(weight.device)
+                        break
+
+            if taylor is not None and taylor.shape == weight_mag.shape:
+                return (taylor.abs() * weight_mag).detach()
+
+            return weight_mag.detach()
+
+        if dim == 1:
+            # We do not currently compute input-channel Taylor stats; fall back to column norms.
+            return weight.abs().sum(dim=0).detach()  # [in_features]
+
+        raise ValueError(f"Invalid dim={dim}; expected 0 (rows) or 1 (cols).")
 
 
 # Convenience functions for new baselines
@@ -1398,7 +1426,19 @@ class FLAPPruning(BasePruningStrategy):
         layer_name: Optional[str] = None,
         dim: int = 1,
     ) -> torch.Tensor:
-        return self.compute_importance_scores(module, inputs, layer_name)
+        if not hasattr(module, "weight"):
+            raise ValueError(f"Module {module} does not have weights")
+
+        if dim == 0:
+            # Natural FLAP score: per-output-channel fluctuation/SNR
+            return self.compute_importance_scores(module, inputs, layer_name)
+
+        if dim == 1:
+            # Column importance: fall back to weight column norms (input-channel contribution)
+            weight = module.weight.data  # [out_features, in_features]
+            return weight.abs().sum(dim=0).detach()
+
+        raise ValueError(f"Invalid dim={dim}; expected 0 (rows) or 1 (cols).")
 
 
 # =============================================================================
@@ -1569,8 +1609,8 @@ class SlimLLMPruning(BasePruningStrategy):
         
         weight = module.weight.data
         
-        # Weight contribution per channel
-        weight_importance = weight.abs().sum(dim=0)  # Sum over output dim
+        # Weight contribution per *output* channel (rows)
+        weight_importance = weight.abs().sum(dim=1)  # Sum over input dim
         
         if layer_name and layer_name in self.channel_activations:
             act_importance = self.channel_activations[layer_name].to(weight.device)
@@ -1590,5 +1630,17 @@ class SlimLLMPruning(BasePruningStrategy):
         layer_name: Optional[str] = None,
         dim: int = 1,
     ) -> torch.Tensor:
-        return self.compute_importance_scores(module, inputs, layer_name)
+        if not hasattr(module, "weight"):
+            raise ValueError(f"Module {module} does not have weights")
+
+        if dim == 0:
+            # Natural SlimLLM score: per-output-channel holistic importance
+            return self.compute_importance_scores(module, inputs, layer_name)
+
+        if dim == 1:
+            # Column importance: fall back to weight column norms (input-channel contribution).
+            weight = module.weight.data  # [out_features, in_features]
+            return weight.abs().sum(dim=0).detach()
+
+        raise ValueError(f"Invalid dim={dim}; expected 0 (rows) or 1 (cols).")
 

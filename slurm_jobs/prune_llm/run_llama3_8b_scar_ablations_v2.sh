@@ -57,7 +57,7 @@ python scripts/run_experiment.py \
   pruning_strategies="['scar_loss_proxy', 'supernode_protection_score', 'supernode_connectivity_score']" \
   pruning_amounts="[0.3, 0.5]" \
   pruning_selection_mode="['low']" \
-  "llm.evaluation_metrics=['perplexity']" \
+  "llm.evaluation_metrics=['perplexity','accuracy_mmlu','accuracy_hellaswag','accuracy_piqa','accuracy_boolq']" \
   "llm.calibration_num_samples=64" \
   "llm.evaluation_num_samples=64" \
   do_connectivity_pruning=true \

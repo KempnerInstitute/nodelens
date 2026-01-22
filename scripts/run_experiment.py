@@ -142,6 +142,18 @@ def _create_cluster_experiment(config):
         if hasattr(config, "pruning_max_per_layer")
         else (pruning_cfg.get("max_per_layer", 0.95) if isinstance(pruning_cfg, dict) else 0.95)
     )
+
+    # Optional pruning layer filters (e.g., MobileNetV2 pointwise-only pruning)
+    pruning_pointwise_only = bool(
+        getattr(config, "pruning_pointwise_only", False)
+        if hasattr(config, "pruning_pointwise_only")
+        else (pruning_cfg.get("pointwise_only", False) if isinstance(pruning_cfg, dict) else False)
+    )
+    pruning_skip_depthwise = bool(
+        getattr(config, "pruning_skip_depthwise", False)
+        if hasattr(config, "pruning_skip_depthwise")
+        else (pruning_cfg.get("skip_depthwise", False) if isinstance(pruning_cfg, dict) else False)
+    )
     
     # Get fine-tuning settings
     fine_tune_cfg = pruning_cfg.get("fine_tune", {}) if isinstance(pruning_cfg, dict) else {}
@@ -223,6 +235,8 @@ def _create_cluster_experiment(config):
     setattr(cluster_config, "dependency_aware_pruning", bool(dependency_aware_pruning))
     setattr(cluster_config, "pruning_min_per_layer", float(pruning_min_per_layer))
     setattr(cluster_config, "pruning_max_per_layer", float(pruning_max_per_layer))
+    setattr(cluster_config, "pruning_pointwise_only", bool(pruning_pointwise_only))
+    setattr(cluster_config, "pruning_skip_depthwise", bool(pruning_skip_depthwise))
 
     # Optional: allow sweeping cluster-aware score weights via nested pruning config:
     #   pruning.cluster_aware.{alpha,beta,gamma,lambda_halo,protect_critical_frac}

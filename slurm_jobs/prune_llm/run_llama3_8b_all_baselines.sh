@@ -31,7 +31,14 @@ module purge
 module load cuda/12.2.0-fasrc01
 eval "$(conda shell.bash hook)"
 conda activate networkAlignmentAnalysis
-cd "${SLURM_SUBMIT_DIR:-/n/holylabs/kempner_dev/Users/hsafaai/Code/alignment}"
+# Robustly locate the `alignment/` repo even if `sbatch` was invoked from the monorepo root.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" && -d "${SLURM_SUBMIT_DIR}/scripts" ]]; then
+  cd "${SLURM_SUBMIT_DIR}"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -d "${SLURM_SUBMIT_DIR}/alignment/scripts" ]]; then
+  cd "${SLURM_SUBMIT_DIR}/alignment"
+else
+  cd "/n/holylabs/kempner_dev/Users/hsafaai/Code/alignment"
+fi
 mkdir -p logs
 export PYTHONPATH="${PWD}:${PWD}/src:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=false
@@ -59,7 +66,7 @@ python scripts/run_experiment.py \
   pruning_strategies="['scar_loss_proxy', 'wanda', 'sparsegpt', 'owl', 'llm_pruner', 'flap', 'ria', 'slimllm', 'weight_magnitude', 'random']" \
   pruning_amounts="[0.5]" \
   pruning_selection_mode="['low']" \
-  "llm.evaluation_metrics=['perplexity']" \
+  "llm.evaluation_metrics=['perplexity','accuracy_mmlu','accuracy_hellaswag','accuracy_piqa','accuracy_boolq']" \
   "llm.calibration_num_samples=128" \
   "llm.evaluation_num_samples=128" \
   do_connectivity_pruning=true \

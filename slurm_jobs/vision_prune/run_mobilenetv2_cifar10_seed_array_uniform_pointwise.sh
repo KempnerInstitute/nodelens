@@ -22,7 +22,7 @@ SEEDS=(42 123 456)
 IDX="${SLURM_ARRAY_TASK_ID}"
 SEED="${SEEDS[$IDX]}"
 
-OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red}"
+OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER}"
 
 echo "============================================================================"
 echo "Vision Paper: MobileNetV2/CIFAR-10 (UNIFORM + POINTWISE-ONLY) seed=${SEED}"

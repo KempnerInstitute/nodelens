@@ -320,6 +320,8 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             "single_strategy",
             "min_per_layer",
             "max_per_layer",
+            "pointwise_only",
+            "skip_depthwise",
         ]:
             if key in pruning:
                 original_pruning[key] = pruning[key]
@@ -1038,6 +1040,14 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         "target_layer", nested_config.get("pruning_target_layer", None)
     )
 
+    # Optional pruning layer filters (primarily for MobileNet-like nets)
+    flat_config["pruning_pointwise_only"] = pruning_block.get(
+        "pointwise_only", nested_config.get("pruning_pointwise_only", False)
+    )
+    flat_config["pruning_skip_depthwise"] = pruning_block.get(
+        "skip_depthwise", nested_config.get("pruning_skip_depthwise", False)
+    )
+
     # Performance settings (all optimizations enabled by default)
     # Check both old "optimization" block and new "performance" block
     perf_block = nested_config.get("performance", nested_config.get("optimization", {}))
@@ -1273,6 +1283,9 @@ def load_config_with_overrides(
             "pruning.fine_tune.learning_rate": "fine_tune_learning_rate",
             "pruning.fine_tune.max_batches": "fine_tune_max_batches",
             "pruning.fine_tune.weight_decay": "fine_tune_weight_decay",
+            # Optional: restrict which conv layers are prunable
+            "pruning.pointwise_only": "pruning_pointwise_only",
+            "pruning.skip_depthwise": "pruning_skip_depthwise",
         }
 
         for arg in cli_args:

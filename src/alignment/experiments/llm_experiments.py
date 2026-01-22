@@ -5867,6 +5867,8 @@ class LLMAlignmentExperiment(BaseExperiment):
         # ------------------------------------------------------------------
         agg_red_halo: List[float] = []
         agg_red_non_halo: List[float] = []
+        agg_red_rand_halo: List[float] = []
+        agg_red_rand_non_halo: List[float] = []
         for layer_name, st in plan.items():
             N = int(st.get("count", 0))
             if N <= 1 or st["sum_q_halo_super"] is None:
@@ -9433,7 +9435,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             Dict with optimal weights, per-layer weights, and final scores
         """
         import itertools
-        from alignment.pruning.base import PrecomputedScorePruning
+        import re
         
         logger.info("=" * 60)
         logger.info("Computing SCAR-optimal: Learned Component Weights")
@@ -9487,64 +9489,78 @@ class LLMAlignmentExperiment(BaseExperiment):
         device = next(self.model.parameters()).device
         
         # Quick PPL evaluation function
-        def quick_ppl(scores_dict, sparsity_level):
-            """Evaluate PPL with given importance scores."""
+        def quick_ppl(scores_dict, amount_to_prune: float) -> float:
+            """
+            Quick PPL evaluation for SCAR-optimal grid search.
+
+            Notes:
+            - This is intentionally lightweight (few samples, short context).
+            - We prune only FFN `down_proj` *columns* according to the provided per-channel scores.
+            """
             try:
-                config = PruningConfig(
-                    sparsity=sparsity_level,
-                    mode="low",
-                    structured=True,
-                    global_pruning=False,
-                )
-                pruner = PrecomputedScorePruning(config=config)
-                
-                # Apply pruning
-                masks = {}
+                module_dict = dict(self.model.named_modules())
+
+                # Apply pruning masks temporarily (store/restore weights)
+                original_weights: Dict[str, torch.Tensor] = {}
+
                 for layer_name, scores in scores_dict.items():
-                    if "down_proj" in layer_name:
-                        # Find corresponding module
-                        module_path = layer_name.replace("model.layers", "model.model.layers")
-                        try:
-                            module = dict(self.model.named_modules())[module_path]
-                            mask = pruner.compute_mask(module, scores)
-                            masks[module_path] = mask
-                        except:
-                            pass
-                
-                if not masks:
-                    return float('inf')
-                
-                # Apply masks temporarily
-                original_weights = {}
-                for name, mask in masks.items():
-                    module = dict(self.model.named_modules())[name]
-                    original_weights[name] = module.weight.data.clone()
-                    # Zero out pruned channels
-                    if mask.dim() == 1:
-                        module.weight.data[:, ~mask] = 0
-                
+                    if "down_proj" not in layer_name:
+                        continue
+
+                    module_path = layer_name.replace("model.layers", "model.model.layers")
+                    module = module_dict.get(module_path)
+                    if module is None or not hasattr(module, "weight"):
+                        continue
+
+                    s = scores.detach().to(device=module.weight.device, dtype=torch.float32).flatten()
+                    if s.numel() == 0:
+                        continue
+
+                    k = int(float(amount_to_prune) * float(s.numel()))
+                    if k <= 0:
+                        continue
+
+                    # Prune LOW scores (keep high-scoring channels)
+                    _, idx = torch.topk(s, k, largest=False)
+                    keep = torch.ones(s.numel(), dtype=torch.bool, device=s.device)
+                    keep[idx] = False  # False = prune
+
+                    # Save & apply: zero out pruned *columns*
+                    original_weights[module_path] = module.weight.data.clone()
+                    module.weight.data[:, ~keep] = 0
+
+                if not original_weights:
+                    return float("inf")
+
                 # Compute PPL
-                total_loss = 0
+                total_loss = 0.0
                 total_tokens = 0
                 self.model.eval()
                 with torch.no_grad():
-                    for text in val_texts[:8]:  # Quick eval
-                        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+                    for text in val_texts[:8]:
+                        inputs = self.tokenizer(
+                            text, return_tensors="pt", truncation=True, max_length=256
+                        )
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         outputs = self.model(**inputs, labels=inputs["input_ids"])
-                        total_loss += outputs.loss.item() * inputs["input_ids"].numel()
-                        total_tokens += inputs["input_ids"].numel()
-                
-                # Restore weights
-                for name, weight in original_weights.items():
-                    module = dict(self.model.named_modules())[name]
-                    module.weight.data = weight
-                
-                ppl = np.exp(total_loss / total_tokens)
+                        total_loss += float(outputs.loss.item()) * int(inputs["input_ids"].numel())
+                        total_tokens += int(inputs["input_ids"].numel())
+
+                ppl = float(np.exp(total_loss / max(total_tokens, 1)))
                 return ppl
             except Exception as e:
                 logger.warning(f"PPL eval failed: {e}")
-                return float('inf')
+                return float("inf")
+            finally:
+                # Restore weights
+                try:
+                    module_dict = dict(self.model.named_modules())
+                    for name, weight in original_weights.items():
+                        module = module_dict.get(name)
+                        if module is not None and hasattr(module, "weight"):
+                            module.weight.data = weight
+                except Exception:
+                    pass
         
         # Grid search
         best_ppl = float('inf')
@@ -9653,11 +9669,25 @@ class LLMAlignmentExperiment(BaseExperiment):
                 combined = sum(w * n for w, n in zip(best_weights, normalized))
                 optimal_scores[layer_name] = combined
                 
-                # Store in importance_scores
+                # Store in importance_scores for *all* FFN projections in this layer, so pruning can see it.
+                try:
+                    m = re.search(r"layers\.(\d+)\\.mlp", layer_name)
+                    layer_idx = int(m.group(1)) if m else None
+                except Exception:
+                    layer_idx = None
+
+                # Default: store on the down_proj key (legacy)
                 imp_key = layer_name.replace("model.layers", "model.model.layers")
                 if imp_key not in self.importance_scores:
                     self.importance_scores[imp_key] = {}
                 self.importance_scores[imp_key]["scar_optimal"] = combined
+
+                if layer_idx is not None:
+                    for proj in ("gate_proj", "up_proj", "down_proj"):
+                        k = f"model.model.layers.{layer_idx}.mlp.{proj}"
+                        if k not in self.importance_scores:
+                            self.importance_scores[k] = {}
+                        self.importance_scores[k]["scar_optimal"] = combined
         
         # Save plot if requested
         if plots_dir and results_log:
