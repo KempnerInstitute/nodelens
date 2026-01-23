@@ -16,7 +16,6 @@ Compatible with any neural network architecture:
 
 import logging
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -36,6 +35,41 @@ from ..analysis.cascade_analysis import CascadeAnalysis, DamagePrediction
 from ..pruning.pipeline import PruningPipelineOptions, run_pruning_pipeline
 
 logger = logging.getLogger(__name__)
+
+def _json_default(obj):
+    """
+    JSON encoder helper for experiment outputs.
+
+    We explicitly handle numpy arrays/scalars (and torch tensors) so results.json stores
+    numeric arrays as JSON lists instead of stringified numpy reprs.
+    """
+    try:
+        from pathlib import Path
+
+        if isinstance(obj, Path):
+            return str(obj)
+    except Exception:
+        pass
+    try:
+        import numpy as _np
+
+        if isinstance(obj, _np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (_np.floating,)):
+            return float(obj)
+        if isinstance(obj, (_np.integer,)):
+            return int(obj)
+    except Exception:
+        pass
+    try:
+        import torch as _torch
+
+        if isinstance(obj, _torch.Tensor):
+            return obj.detach().cpu().tolist()
+    except Exception:
+        pass
+    # Fall back to string to avoid hard crashes during artifact writing.
+    return str(obj)
 
 
 class _CovAccumulator:
@@ -108,70 +142,15 @@ class _CovAccumulator:
         return var_t, var_y, cov_yy, cov_ty
 
 
-@dataclass
-class ClusterAnalysisConfig:
-    """Configuration for cluster-based analysis experiments."""
-    model_name: str = "resnet18"
-    dataset_name: str = "cifar10"
-    n_calibration: int = 5000
-    n_clusters: int = 4
-    # Where to read the channel signal Y_i for within-layer statistics:
-    # - "pre_bn": hook Conv2d outputs (pre-BN, pre-ReLU). (Backward compatible default.)
-    # - "post_bn": hook the matching BatchNorm outputs when available (post-BN, pre-ReLU).
-    #   For RQ we fold BN scaling into the denominator so the metric stays comparable.
-    activation_point: str = "pre_bn"
-    # How to form channel samples from Conv outputs Y[B,C,H,W]
-    # - "flatten_spatial": treat spatial positions as samples (subsample per image)
-    # - "gap": global-average-pool per image (one sample per image)
-    activation_samples: str = "flatten_spatial"
-    spatial_samples_per_image: int = 16  # used when activation_samples="flatten_spatial"
-    synergy_target: str = "logit_margin"  # logit_margin, correct_logit
-    # Synergy settings:
-    # - synergy_candidate_pool: number of candidate partners per channel (chosen by redundancy)
-    # - synergy_pairs: top-m partners to average (Eq. per_channel_syn)
-    synergy_candidate_pool: int = 50
-    synergy_pairs: int = 10
-    halo_percentile: float = 90.0
-    use_activation_weight: bool = True  # Use activation-weighted influence for halos
-    cascade_n_remove: int = 5
-    damage_sample_frac: float = 0.2
-    # Pruning experiment settings
-    pruning_ratios: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7])
-    pruning_methods: List[str] = field(default_factory=lambda: [
-        'random', 'magnitude', 'taylor', 'network_slimming', 'composite', 'cluster_aware'
-    ])
-    fine_tune_after_pruning: bool = False  # Whether to fine-tune after pruning
-    fine_tune_epochs: int = 10
-    fine_tune_lr: float = 0.0001
-    fine_tune_max_batches: Optional[int] = None
-    fine_tune_weight_decay: float = 0.0
-    # Pruning allocation / fairness knobs
-    dependency_aware_pruning: bool = False
-    pruning_distribution: str = "uniform"
-    pruning_min_per_layer: float = 0.0
-    pruning_max_per_layer: float = 0.95
-    # Safety cap for per-layer sparsity when using global-threshold style distributions.
-    # Set to 1.0 to disable (legacy behavior).
-    pruning_max_per_layer_sparsity_cap: float = 0.90
-    # Optional pruning layer filters (primarily for MobileNet-like nets)
-    pruning_pointwise_only: bool = False
-    pruning_skip_depthwise: bool = False
-    # Output
-    output_dir: str = "results/cluster_analysis"
-    device: str = "cuda"
-    seed: int = 42
-    # Multi-seed support for robust statistics
-    seeds: Optional[List[int]] = None  # If provided, run experiment with each seed
-    # Ablation settings
-    run_metric_ablation: bool = False  # Run clustering with metric subsets
-    metric_ablations: List[str] = field(default_factory=lambda: ["all", "rq_red", "rq_syn", "red_syn"])
-    # Permutation baseline settings
-    run_permutation_baseline: bool = False  # Run halo permutation tests
-    n_permutations: int = 100
+from .base import ExperimentConfig
 
-
-# Backward compatibility alias
-VisionExperimentConfig = ClusterAnalysisConfig
+# ---------------------------------------------------------------------
+# Backward-compatible aliases:
+# Historically this module defined a separate `ClusterAnalysisConfig` dataclass.
+# We now use the repo-standard `ExperimentConfig` as the single source of truth.
+# ---------------------------------------------------------------------
+ClusterAnalysisConfig = ExperimentConfig
+VisionExperimentConfig = ExperimentConfig
 
 
 class ClusterAnalysisExperiment:
@@ -181,7 +160,7 @@ class ClusterAnalysisExperiment:
     Works with any architecture that has Conv2d or Linear layers.
     
     Example:
-        >>> config = ClusterAnalysisConfig(model_name="resnet18")
+        >>> config = ClusterAnalysisConfig(name="cluster_analysis", model_name="resnet18")
         >>> exp = ClusterAnalysisExperiment(config, model, train_loader, test_loader)
         >>> results = exp.run()
     """
@@ -204,6 +183,11 @@ class ClusterAnalysisExperiment:
         self.cluster_results = {}
         self.halo_results = {}
         self.halo_flow_results = {}
+        # Within-layer connectivity summaries (vision)
+        self.within_layer_connectivity = {}
+        # Temporary storage of within-layer top-k neighbors (computed during metrics pass),
+        # used to aggregate type×type connectivity matrices after clustering.
+        self._within_layer_neighbors: Dict[str, Dict[str, np.ndarray]] = {}
         self.permutation_results = {}  # Permutation baseline results
         self.ablation_results = {}     # Metric ablation results
         self.cascade_results = {}
@@ -216,8 +200,16 @@ class ClusterAnalysisExperiment:
         self._calibration_indices: Optional[List[int]] = None
         self._calibration_loader: Optional["DataLoader"] = None
         
-        # Setup output directory
-        self.output_dir = Path(config.output_dir)
+        # Setup output directory.
+        # The standard runner (`scripts/run_experiment.py`) sets `config.experiment_dir`
+        # to a unique job directory; fall back to legacy keys when needed.
+        out_dir = (
+            getattr(config, "experiment_dir", None)
+            or getattr(config, "output_dir", None)  # legacy
+            or getattr(config, "results_path", None)  # legacy
+            or "results/cluster_analysis"
+        )
+        self.output_dir = Path(str(out_dir))
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Get analyzable layers
@@ -246,8 +238,8 @@ class ClusterAnalysisExperiment:
             return list(self._calibration_indices)
 
         path = self._calibration_indices_path()
-        seed = int(getattr(self.config, "seed", 42))
-        n_cal = int(getattr(self.config, "n_calibration", 5000))
+        seed = int(self.config.seed)
+        n_cal = int(self.config.n_calibration)
 
         if path.exists():
             try:
@@ -290,12 +282,24 @@ class ClusterAnalysisExperiment:
         return list(self._calibration_indices)
 
     def _get_calibration_loader(self) -> "DataLoader":
-        """Build (and cache) a deterministic calibration DataLoader from saved indices."""
+        """
+        Build (and cache) a calibration DataLoader.
+
+        Modes:
+        - calibration_mode="indices" (default): deterministic subset via saved indices (reproducible).
+        - calibration_mode="train_loader": use the provided train_loader directly (legacy behavior).
+        """
         if self._calibration_loader is not None:
             return self._calibration_loader
 
         if not HAS_TORCH:
             raise RuntimeError("Torch is required to build a calibration DataLoader")
+
+        cal_mode = str(self.config.calibration_mode).lower()
+        if cal_mode in {"train_loader", "train", "legacy", "dataloader"}:
+            # Legacy mode: use the original training loader (incl. its shuffle/augmentations).
+            self._calibration_loader = self.train_loader
+            return self._calibration_loader
 
         from torch.utils.data import DataLoader, Subset
 
@@ -309,7 +313,7 @@ class ClusterAnalysisExperiment:
         batch_size = int(getattr(self.train_loader, "batch_size", 128) or 128)
         pin_memory = bool(getattr(self.train_loader, "pin_memory", False))
         collate_fn = getattr(self.train_loader, "collate_fn", None)
-        num_workers = int(getattr(self.config, "calibration_num_workers", 0))
+        num_workers = int(self.config.calibration_num_workers)
         num_workers = max(0, num_workers)
 
         self._calibration_loader = DataLoader(
@@ -424,7 +428,7 @@ class ClusterAnalysisExperiment:
         # By default we hook conv outputs (pre-BN); optionally hook matching BN outputs (post-BN)
         # while still storing under the conv's name so downstream code stays consistent.
         modules = dict(self.model.named_modules())
-        activation_point = str(getattr(self.config, "activation_point", "pre_bn")).lower()
+        activation_point = str(self.config.activation_point).lower()
 
         def _bn_for_conv_name(conv_name: str):
             # Best-effort mapping using common naming conventions (ResNet/VGG).
@@ -450,11 +454,15 @@ class ClusterAnalysisExperiment:
                     hook_mod = bn
             handles.append(hook_mod.register_forward_hook(hook_fn(name)))
 
-        activation_mode = str(getattr(self.config, "activation_samples", "flatten_spatial")).lower()
-        samples_per_img = int(getattr(self.config, "spatial_samples_per_image", 16))
+        activation_mode = str(self.config.activation_samples).lower()
+        task_mode_raw = self.config.task_activation_samples
+        task_mode = "gap" if task_mode_raw is None else str(task_mode_raw).lower()
+        if task_mode in {"match", "same", "local"}:
+            task_mode = activation_mode
+        samples_per_img = int(self.config.spatial_samples_per_image)
         samples_per_img = max(1, samples_per_img)
 
-        rng = np.random.default_rng(int(getattr(self.config, "seed", 42)))
+        rng = np.random.default_rng(int(self.config.seed))
 
         n_seen = 0
         with torch.no_grad():
@@ -521,10 +529,20 @@ class ClusterAnalysisExperiment:
                     accs_local[name].update(y_local, t_local)
 
                     # ---------------------------
-                    # Task-level sampling (TaskMI/synergy): per-image pooled (GAP)
+                    # Task-level sampling (TaskMI/synergy)
                     # ---------------------------
-                    y_task = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
-                    t_task = T_img
+                    if task_mode in {"gap", "global", "global_avg", "global_average"}:
+                        # Default: per-image pooled (GAP) to avoid pseudo-replication.
+                        y_task = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
+                        t_task = T_img
+                    elif task_mode == activation_mode:
+                        # Legacy reproduction: reuse the exact same samples as y_local.
+                        y_task = y_local
+                        t_task = t_local
+                    else:
+                        # Best-effort: treat non-GAP task_mode as "match local".
+                        y_task = y_local
+                        t_task = t_local
                     if name not in accs_task:
                         accs_task[name] = _CovAccumulator(n_channels=c)
                     accs_task[name].update(y_task, t_task)
@@ -579,6 +597,14 @@ class ClusterAnalysisExperiment:
             else:
                 rq = var_y / (weight_norm[:n_channels] + 1e-10)
             metrics["rq"] = rq.astype(np.float64)
+            metrics["weight_norm_sq"] = weight_norm[:n_channels].astype(np.float64)
+            metrics["activation_var"] = var_y[:n_channels].astype(np.float64)
+
+            # 1b) Input MI proxy (scale-sensitive): 0.5 * log(1 + RQ * ||w||^2 / sigma0^2)
+            # We use a per-layer reference sigma0^2 to make the proxy comparable across depth.
+            signal_power = (rq * weight_norm[:n_channels]).astype(np.float64)
+            sigma0_sq = float(np.median(signal_power)) + 1e-12
+            metrics["mi_in_proxy"] = (0.5 * np.log1p(signal_power / sigma0_sq)).astype(np.float64)
 
             # 2) Redundancy via Gaussian MI from correlations
             denom = np.sqrt(np.outer(var_y, var_y)) + 1e-12
@@ -597,8 +623,8 @@ class ClusterAnalysisExperiment:
             mi_t = np.maximum(0.0, -0.5 * np.log(1.0 - corr_ty_task ** 2))
             metrics["task_mi"] = mi_t.astype(np.float64)
 
-            candidate_pool = int(getattr(self.config, "synergy_candidate_pool", 50))
-            top_m = int(getattr(self.config, "synergy_pairs", 10))
+            candidate_pool = int(self.config.synergy_candidate_pool)
+            top_m = int(self.config.synergy_pairs)
             candidate_pool = max(2, min(candidate_pool, n_channels))
             top_m = max(1, min(top_m, candidate_pool - 1))
 
@@ -611,15 +637,36 @@ class ClusterAnalysisExperiment:
             mi_matrix_task = -0.5 * np.log(1.0 - corr_task ** 2)
             np.fill_diagonal(mi_matrix_task, 0.0)
 
+            # Optional: within-layer connectivity summaries (store only top-k neighbors per channel).
+            collect_within = bool(getattr(self.config, "compute_within_layer_connectivity", False))
+            red_k = int(getattr(self.config, "within_layer_red_topk", 0) or 0)
+            syn_k = int(getattr(self.config, "within_layer_syn_topk", 0) or 0)
+            red_idx = None
+            red_val = None
+            syn_idx = None
+            syn_val = None
+            if collect_within:
+                red_k = max(1, min(int(red_k), n_channels - 1))
+                syn_k = max(1, min(int(syn_k), candidate_pool))
+                red_idx = -np.ones((n_channels, red_k), dtype=np.int32)
+                red_val = np.zeros((n_channels, red_k), dtype=np.float32)
+                syn_idx = -np.ones((n_channels, syn_k), dtype=np.int32)
+                syn_val = np.zeros((n_channels, syn_k), dtype=np.float32)
+
             for i in range(n_channels):
                 order = np.argsort(-mi_matrix_task[i])
                 order = order[order != i]
+                if collect_within and red_idx is not None and red_val is not None:
+                    rr = order[:red_k]
+                    if rr.size:
+                        red_idx[i, : rr.size] = rr.astype(np.int32)
+                        red_val[i, : rr.size] = mi_matrix_task[i, rr].astype(np.float32)
                 cand = order[:candidate_pool]
                 if cand.size == 0:
                     continue
 
                 mi_i = float(mi_t[i])
-                syn_vals: List[float] = []
+                syn_pairs: List[Tuple[float, int]] = []
                 for j in cand:
                     j = int(j)
                     mi_j = float(mi_t[j])
@@ -633,13 +680,26 @@ class ClusterAnalysisExperiment:
                         cov_i_j=cov_i_j,
                     )
                     s = mi_joint - mi_i - mi_j + min(mi_i, mi_j)
-                    syn_vals.append(float(s))
+                    syn_pairs.append((float(s), j))
 
-                if syn_vals:
-                    syn_vals.sort(reverse=True)
-                    synergy[i] = float(np.mean(syn_vals[:top_m]))
+                if syn_pairs:
+                    syn_pairs.sort(key=lambda x: x[0], reverse=True)
+                    synergy[i] = float(np.mean([s for (s, _j) in syn_pairs[:top_m]]))
+                    if collect_within and syn_idx is not None and syn_val is not None:
+                        top_edges = syn_pairs[:syn_k]
+                        if top_edges:
+                            syn_idx[i, : len(top_edges)] = np.asarray([j for (_s, j) in top_edges], dtype=np.int32)
+                            syn_val[i, : len(top_edges)] = np.asarray([s for (s, _j) in top_edges], dtype=np.float32)
 
             metrics["synergy"] = synergy
+
+            if collect_within and red_idx is not None and red_val is not None and syn_idx is not None and syn_val is not None:
+                self._within_layer_neighbors[name] = {
+                    "red_idx": red_idx,
+                    "red_val": red_val,
+                    "syn_idx": syn_idx,
+                    "syn_val": syn_val,
+                }
 
             self.layer_metrics[name] = metrics
             logger.info(
@@ -651,6 +711,116 @@ class ClusterAnalysisExperiment:
             )
 
         return self.layer_metrics
+
+    def compute_loss_proxy(self) -> Dict[str, np.ndarray]:
+        """
+        Compute a per-channel loss proxy (Fisher/Gauss-Newton style) on calibration data.
+
+        For each channel i in a conv layer, define per-image:
+          q_i(x) = sum_{h,w} A_i(x) * dL/dA_i(x)
+        and proxy:
+          LP_i = 0.5 * E_x[ q_i(x)^2 ].
+
+        Notes:
+        - Uses the same activation_point hook convention as compute_metrics.
+        - This is intended as an analysis signal ("importance ground truth") and is optional.
+        """
+        if not HAS_TORCH:
+            raise RuntimeError("Torch is required to compute loss proxy")
+        import torch
+
+        logger.info("Computing per-channel loss proxy on calibration data...")
+        self.model.eval()
+        criterion = nn.CrossEntropyLoss()
+
+        # Accumulate sum of q^2 over images, per layer/channel
+        sum_q2: Dict[str, np.ndarray] = {}
+        n_seen = 0
+        max_images = int(self.config.loss_proxy_n_calibration or 1024)
+        max_images = max(1, max_images)
+
+        activation_point = str(self.config.activation_point).lower()
+        modules = dict(self.model.named_modules())
+
+        # Forward hook registers a gradient hook on the activation tensor to accumulate q^2
+        def hook_fn(name: str):
+            def fn(_m, _inp, out):
+                if out is None or not hasattr(out, "register_hook"):
+                    return
+                if getattr(out, "ndim", 0) != 4:
+                    return
+
+                def grad_hook(grad):
+                    try:
+                        # q: [B, C]
+                        q = (out * grad).sum(dim=(2, 3))
+                        q2 = (q ** 2).sum(dim=0)  # [C]
+                        q2_np = q2.detach().cpu().double().numpy()
+                        if name not in sum_q2:
+                            sum_q2[name] = np.zeros_like(q2_np, dtype=np.float64)
+                        # Guard against occasional shape mismatches
+                        m = min(sum_q2[name].shape[0], q2_np.shape[0])
+                        sum_q2[name][:m] += q2_np[:m]
+                    except Exception:
+                        return
+
+                out.register_hook(grad_hook)
+
+            return fn
+
+        # Register hooks (conv or corresponding BN module)
+        handles = []
+        for name, layer in self.layers:
+            hook_mod = layer
+            if activation_point in {"post_bn", "postbn", "bn"}:
+                bn = self._find_bn_for_conv(self.model, name)
+                if bn is not None:
+                    hook_mod = bn
+            handles.append(hook_mod.register_forward_hook(hook_fn(name)))
+
+        try:
+            for x, y in self._get_calibration_loader():
+                if n_seen >= max_images:
+                    break
+
+                remaining = int(max_images) - int(n_seen)
+                if remaining <= 0:
+                    break
+                if x.size(0) > remaining:
+                    x = x[:remaining]
+                    y = y[:remaining]
+
+                x = x.to(self.device)
+                y = y.to(self.device)
+
+                self.model.zero_grad(set_to_none=True)
+                logits = self.model(x)
+                loss = criterion(logits, y)
+                loss.backward()
+
+                n_seen += int(x.size(0))
+        finally:
+            for h in handles:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+
+        if n_seen <= 0:
+            raise RuntimeError("Loss proxy saw 0 images; cannot compute")
+
+        # Normalize and store in layer_metrics
+        for name, layer in self.layers:
+            lp = sum_q2.get(name)
+            if lp is None:
+                continue
+            lp = 0.5 * (lp / float(n_seen))
+            if name not in self.layer_metrics:
+                self.layer_metrics[name] = {}
+            self.layer_metrics[name]["loss_proxy"] = lp.astype(np.float64)
+
+        logger.info("Loss proxy computed on %d images", int(n_seen))
+        return {k: v.astype(np.float64) for k, v in sum_q2.items()}
     
     def _gaussian_mi(self, x: np.ndarray, y: np.ndarray) -> float:
         """Compute Gaussian MI between two variables."""
@@ -713,13 +883,12 @@ class ClusterAnalysisExperiment:
         """
         logger.info("Clustering channels...")
         
-        run_ablation = run_ablation if run_ablation is not None else getattr(
-            self.config, 'run_metric_ablation', False
-        )
+        run_ablation = run_ablation if run_ablation is not None else bool(self.config.run_metric_ablation)
         
         clusterer = MetricSpaceClustering(
             n_clusters=self.config.n_clusters,
             seed=self.config.seed,
+            type_mapping_mode=str(self.config.type_mapping_mode).lower(),
         )
         
         ablation_results = {}
@@ -744,8 +913,7 @@ class ClusterAnalysisExperiment:
             
             # Run ablation study if enabled
             if run_ablation:
-                ablations = getattr(self.config, 'metric_ablations', 
-                                   ["all", "rq_red", "rq_syn", "red_syn"])
+                ablations = list(self.config.metric_ablations)
                 abl_results = clusterer.run_ablation_study(
                     metrics["rq"],
                     metrics["redundancy"],
@@ -768,6 +936,115 @@ class ClusterAnalysisExperiment:
             self.cluster_results["_ablation"] = ablation_results
         
         return self.cluster_results
+
+    def run_within_layer_connectivity(self) -> Dict[str, Any]:
+        """
+        Aggregate within-layer top-k neighbor summaries into type×type connectivity matrices.
+
+        This supports within-layer organization analyses (e.g., whether redundancy edges
+        cluster within semantic types, whether synergy edges preferentially connect
+        specific type pairs, etc.).
+
+        Requirements:
+        - `compute_metrics()` must have been run with `config.compute_within_layer_connectivity=True`
+          so `self._within_layer_neighbors[layer]` is populated.
+        - `run_clustering()` must have been run so we can map channels to semantic types.
+        """
+        if not bool(getattr(self.config, "compute_within_layer_connectivity", False)):
+            self.within_layer_connectivity = {}
+            return self.within_layer_connectivity
+
+        type_order = ["critical", "synergistic", "redundant", "background"]
+        t2i = {t: i for i, t in enumerate(type_order)}
+
+        def _norm_type(t: str) -> str:
+            tt = str(t).lower().strip()
+            return tt if tt in t2i else "background"
+
+        out: Dict[str, Any] = {}
+        for layer_name, neigh in self._within_layer_neighbors.items():
+            cr = self.cluster_results.get(layer_name, {})
+            if not isinstance(cr, dict) or "labels" not in cr or "type_mapping" not in cr:
+                continue
+
+            labels = np.asarray(cr.get("labels", []), dtype=np.int64).reshape(-1)
+            tm = cr.get("type_mapping", {}) or {}
+            # cluster-id -> semantic type
+            cid2type: Dict[int, str] = {}
+            for k, v in tm.items():
+                try:
+                    cid2type[int(k)] = _norm_type(v)
+                except Exception:
+                    continue
+
+            if labels.size == 0:
+                continue
+
+            ch_type = np.asarray([cid2type.get(int(cid), "background") for cid in labels], dtype=object)
+
+            # Initialize matrices
+            red_sum = np.zeros((4, 4), dtype=np.float64)
+            red_cnt = np.zeros((4, 4), dtype=np.int64)
+            syn_sum = np.zeros((4, 4), dtype=np.float64)
+            syn_cnt = np.zeros((4, 4), dtype=np.int64)
+
+            # Redundancy edges (directed i -> j)
+            red_idx = np.asarray(neigh.get("red_idx", np.zeros((0, 0), dtype=np.int32)), dtype=np.int32)
+            red_val = np.asarray(neigh.get("red_val", np.zeros((0, 0), dtype=np.float32)), dtype=np.float64)
+            n_i = int(min(labels.size, red_idx.shape[0], red_val.shape[0]))
+            for i in range(n_i):
+                ti = t2i[_norm_type(ch_type[i])]
+                for k in range(red_idx.shape[1]):
+                    j = int(red_idx[i, k])
+                    if j < 0 or j >= labels.size:
+                        continue
+                    tj = t2i[_norm_type(ch_type[j])]
+                    w = float(red_val[i, k])
+                    if not np.isfinite(w):
+                        continue
+                    red_sum[ti, tj] += w
+                    red_cnt[ti, tj] += 1
+
+            # Synergy edges (directed i -> j, use positive part)
+            syn_idx = np.asarray(neigh.get("syn_idx", np.zeros((0, 0), dtype=np.int32)), dtype=np.int32)
+            syn_val = np.asarray(neigh.get("syn_val", np.zeros((0, 0), dtype=np.float32)), dtype=np.float64)
+            n_i = int(min(labels.size, syn_idx.shape[0], syn_val.shape[0]))
+            for i in range(n_i):
+                ti = t2i[_norm_type(ch_type[i])]
+                for k in range(syn_idx.shape[1]):
+                    j = int(syn_idx[i, k])
+                    if j < 0 or j >= labels.size:
+                        continue
+                    tj = t2i[_norm_type(ch_type[j])]
+                    w = float(syn_val[i, k])
+                    if not np.isfinite(w):
+                        continue
+                    w = max(0.0, w)
+                    syn_sum[ti, tj] += w
+                    syn_cnt[ti, tj] += 1
+
+            red_mat = red_sum / np.maximum(1, red_cnt)
+            syn_mat = syn_sum / np.maximum(1, syn_cnt)
+
+            red_total = int(red_cnt.sum())
+            syn_total = int(syn_cnt.sum())
+            red_within = float(red_cnt.diagonal().sum() / max(1, red_total))
+            syn_within = float(syn_cnt.diagonal().sum() / max(1, syn_total))
+
+            out[layer_name] = {
+                "type_order": type_order,
+                "red_matrix": red_mat,
+                "syn_matrix": syn_mat,
+                "red_edges": red_total,
+                "syn_edges": syn_total,
+                "red_within_type_frac": red_within,
+                "syn_within_type_frac": syn_within,
+                "red_topk": int(getattr(self.config, "within_layer_red_topk", 0) or 0),
+                "syn_topk": int(getattr(self.config, "within_layer_syn_topk", 0) or 0),
+            }
+
+        self.within_layer_connectivity = out
+        return self.within_layer_connectivity
     
     def run_halo_analysis(
         self,
@@ -791,12 +1068,8 @@ class ClusterAnalysisExperiment:
         logger.info("Analyzing cross-layer halos...")
         
         # Get permutation settings
-        run_permutation = run_permutation if run_permutation is not None else getattr(
-            self.config, 'run_permutation_baseline', False
-        )
-        n_permutations = n_permutations if n_permutations is not None else getattr(
-            self.config, 'n_permutations', 100
-        )
+        run_permutation = run_permutation if run_permutation is not None else bool(self.config.run_permutation_baseline)
+        n_permutations = n_permutations if n_permutations is not None else int(self.config.n_permutations)
         
         # Initialize permutation results storage if needed
         if not hasattr(self, 'permutation_results'):
@@ -804,7 +1077,7 @@ class ClusterAnalysisExperiment:
         
         halo_analyzer = CrossLayerHaloAnalysis(
             percentile=self.config.halo_percentile,
-            use_activation_weight=getattr(self.config, 'use_activation_weight', True),
+            use_activation_weight=bool(self.config.use_activation_weight),
         )
         
         layer_names = list(self.cluster_results.keys())
@@ -879,6 +1152,24 @@ class ClusterAnalysisExperiment:
 
                 n_in_actual = min(n_in, len(sigma))
                 influence[:, :n_in_actual] = influence[:, :n_in_actual] * sigma[:n_in_actual]
+
+            # ------------------------------------------------------------------
+            # Per-channel fan-out metrics (source -> next layer)
+            # ------------------------------------------------------------------
+            # p(j|i) ∝ influence[j,i]; entropy measures "broadcast vs specialized" usage.
+            try:
+                col_sum = influence.sum(axis=0) + 1e-12  # [in]
+                p = influence / col_sum[None, :]
+                ent = -(p * np.log(p + 1e-12)).sum(axis=0)  # [in]
+                eff = np.exp(ent)  # effective fanout
+                if src_name in self.layer_metrics:
+                    n_store = min(int(self.layer_metrics[src_name].get("rq", np.array([])).shape[0] or 0), ent.shape[0])
+                    if n_store <= 0:
+                        n_store = min(src_out, ent.shape[0])
+                    self.layer_metrics[src_name]["fanout_entropy"] = ent[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["fanout_effective"] = eff[:n_store].astype(np.float64)
+            except Exception:
+                pass
             
             halo_data = {}
             for cid, ctype in src_result["type_mapping"].items():
@@ -1005,31 +1296,26 @@ class ClusterAnalysisExperiment:
         """
         import copy
         
-        ratios = ratios or getattr(self.config, "pruning_ratios", None) \
-                       or getattr(self.config, "pruning_amounts", None) \
-                       or [0.1, 0.3, 0.5, 0.7]
-        
-        default_methods = [
-            "random", "magnitude",
-            "network_slimming",
-            "rq_low", "rq_high",
-            "redundancy_low", "redundancy_high",
-            "synergy_low", "synergy_high",
-            "composite", "composite_pos_red",
-            "rq_minus_red", "rq_plus_red",
-            "magnitude_plus_rq", "magnitude_minus_red", "magnitude_plus_red",
-        ]
-        methods = methods or getattr(self.config, "pruning_methods", None) \
-                          or getattr(self.config, "pruning_algorithms", None) \
-                          or getattr(self.config, "pruning_strategies", None) \
-                          or default_methods
-        
+        ratios = ratios or list(self.config.pruning_amounts)
+        if not ratios:
+            raise ValueError("No pruning ratios provided (ratios arg empty and config.pruning_amounts empty).")
+
+        # Prefer explicit config-driven strategy selection.
+        # (Legacy aliases supported for older configs/scripts.)
+        legacy_methods = getattr(self.config, "pruning_methods", None) or getattr(self.config, "pruning_algorithms", None)
+        methods = methods or (list(self.config.pruning_strategies) if self.config.pruning_strategies else None) or legacy_methods
+        if not methods:
+            raise ValueError(
+                "No pruning methods specified. Set config.pruning_strategies (recommended) "
+                "or pass `methods=[...]` to run_pruning_experiments."
+            )
+
         pipeline_options = PruningPipelineOptions(
-            distribution=getattr(self.config, "pruning_distribution", "uniform"),
-            dependency_aware=bool(getattr(self.config, "dependency_aware_pruning", False)),
-            min_amount=getattr(self.config, "pruning_min_per_layer", 0.0),
-            max_amount=getattr(self.config, "pruning_max_per_layer", 0.95),
-            max_per_layer_sparsity_cap=getattr(self.config, "pruning_max_per_layer_sparsity_cap", 0.90),
+            distribution=str(self.config.pruning_distribution),
+            dependency_aware=bool(self.config.dependency_aware_pruning),
+            min_amount=float(self.config.pruning_min_per_layer),
+            max_amount=float(self.config.pruning_max_per_layer),
+            max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
         )
         
         baseline_acc = self._evaluate_accuracy()
@@ -1115,7 +1401,7 @@ class ClusterAnalysisExperiment:
         
         self.pruning_results = results
         with open(self.output_dir / "pruning_results.json", "w") as f:
-            json.dump(results, f, indent=2, default=str)
+            json.dump(results, f, indent=2, default=_json_default)
         return results
 
     def _get_layer_module_map(self, model: nn.Module) -> Dict[str, nn.Module]:
@@ -1138,8 +1424,8 @@ class ClusterAnalysisExperiment:
         if not layer_modules:
             return layer_modules
 
-        skip_depthwise = bool(getattr(self.config, "pruning_skip_depthwise", False))
-        pointwise_only = bool(getattr(self.config, "pruning_pointwise_only", False))
+        skip_depthwise = bool(self.config.pruning_skip_depthwise)
+        pointwise_only = bool(self.config.pruning_pointwise_only)
         if not (skip_depthwise or pointwise_only):
             return layer_modules
 
@@ -1206,7 +1492,7 @@ class ClusterAnalysisExperiment:
             return {}
 
         # Keep this small by default; configurable via config if present.
-        max_samples = int(getattr(self.config, "taylor_samples", 1024))
+        max_samples = int(self.config.taylor_samples)
         max_samples = max(1, max_samples)
 
         model = model.to(self.device)
@@ -1262,9 +1548,9 @@ class ClusterAnalysisExperiment:
             return {}
 
         # Weiszfeld settings (keep small; this is run once and cached)
-        iters = int(getattr(self.config, "geometric_median_iters", 10))
+        iters = int(self.config.geometric_median_iters)
         iters = max(1, min(iters, 50))
-        eps = float(getattr(self.config, "geometric_median_eps", 1e-8))
+        eps = float(self.config.geometric_median_eps)
         eps = max(eps, 1e-12)
 
         modules = dict(model.named_modules())
@@ -1310,11 +1596,11 @@ class ClusterAnalysisExperiment:
 
         import torch.nn.functional as F
 
-        max_images = int(getattr(self.config, "hrank_images", 256))
+        max_images = int(self.config.hrank_images)
         max_images = max(1, max_images)
-        pool = int(getattr(self.config, "hrank_pool", 8))
+        pool = int(self.config.hrank_pool)
         pool = max(2, min(pool, 32))
-        sv_eps = float(getattr(self.config, "hrank_sv_eps", 1e-3))
+        sv_eps = float(self.config.hrank_sv_eps)
         sv_eps = max(sv_eps, 1e-6)
 
         model = model.to(self.device)
@@ -1661,8 +1947,8 @@ class ClusterAnalysisExperiment:
             # behave like Taylor/Magnitude at low sparsity and like Cluster-aware at high sparsity.
             #
             # anneal_w(r)=0 below start, 1 above end.
-            start = float(getattr(self.config, "cluster_aware_anneal_start", 0.70))
-            end = float(getattr(self.config, "cluster_aware_anneal_end", 0.90))
+            start = float(self.config.cluster_aware_anneal_start)
+            end = float(self.config.cluster_aware_anneal_end)
             if end <= start:
                 end = start + 1e-6
             if ratio <= start:
@@ -1681,16 +1967,16 @@ class ClusterAnalysisExperiment:
             cfg.synergy_pair_constraint = bool(w_anneal >= 0.5)
 
         # Allow paper scripts / SLURM jobs to sweep score weights via config overrides
-        cfg.alpha = float(getattr(self.config, "cluster_aware_alpha", cfg.alpha))
-        cfg.beta = float(getattr(self.config, "cluster_aware_beta", cfg.beta))
-        cfg.gamma = float(getattr(self.config, "cluster_aware_gamma", cfg.gamma))
-        cfg.lambda_halo = float(getattr(self.config, "cluster_aware_lambda_halo", cfg.lambda_halo))
-        cfg.protect_critical_frac = float(getattr(self.config, "cluster_aware_protect_critical_frac", cfg.protect_critical_frac))
+        cfg.alpha = float(self.config.cluster_aware_alpha)
+        cfg.beta = float(self.config.cluster_aware_beta)
+        cfg.gamma = float(self.config.cluster_aware_gamma)
+        cfg.lambda_halo = float(self.config.cluster_aware_lambda_halo)
+        cfg.protect_critical_frac = float(self.config.cluster_aware_protect_critical_frac)
 
         # Keep halo settings consistent with experiment config unless overridden
-        cfg.halo_percentile = float(getattr(self.config, "halo_percentile", cfg.halo_percentile))
-        cfg.use_activation_weight = bool(getattr(self.config, "use_activation_weight", cfg.use_activation_weight))
-        cfg.n_clusters = int(getattr(self.config, "n_clusters", cfg.n_clusters))
+        cfg.halo_percentile = float(self.config.halo_percentile)
+        cfg.use_activation_weight = bool(self.config.use_activation_weight)
+        cfg.n_clusters = int(self.config.n_clusters)
 
         masks: Dict[str, torch.Tensor] = {}
         stats: Dict[str, Any] = {}
@@ -1716,9 +2002,9 @@ class ClusterAnalysisExperiment:
         # we compute the per-layer cluster-aware scores first, then allocate per
         # layer amounts from those scores.
         # ------------------------------------------------------------------
-        distribution = getattr(self.config, "pruning_distribution", "uniform")
-        min_amount = float(getattr(self.config, "pruning_min_per_layer", 0.0))
-        max_amount = float(getattr(self.config, "pruning_max_per_layer", 0.95))
+        distribution = str(self.config.pruning_distribution)
+        min_amount = float(self.config.pruning_min_per_layer)
+        max_amount = float(self.config.pruning_max_per_layer)
 
         # First pass: compute per-layer cluster-aware scores (no pruning yet)
         layer_scores: Dict[str, torch.Tensor] = {}
@@ -1814,8 +2100,8 @@ class ClusterAnalysisExperiment:
                 s_ca = _minmax(scores.detach().cpu())
                 s_t = _minmax(t)
 
-                start = float(getattr(self.config, "cluster_aware_anneal_start", 0.70))
-                end = float(getattr(self.config, "cluster_aware_anneal_end", 0.90))
+                start = float(self.config.cluster_aware_anneal_start)
+                end = float(self.config.cluster_aware_anneal_end)
                 if end <= start:
                     end = start + 1e-6
                 if ratio <= start:
@@ -2379,9 +2665,23 @@ class ClusterAnalysisExperiment:
         
         # 1. Compute metrics
         self.compute_metrics()
+
+        # 1b. Optional: loss proxy importance signal
+        if bool(self.config.compute_loss_proxy):
+            try:
+                self.compute_loss_proxy()
+            except Exception as exc:
+                logger.warning("Loss proxy computation failed (continuing): %s", exc)
         
         # 2. Clustering
         self.run_clustering()
+
+        # 2b. Optional: within-layer connectivity summaries (requires clustering labels)
+        if bool(getattr(self.config, "compute_within_layer_connectivity", False)):
+            try:
+                self.run_within_layer_connectivity()
+            except Exception as exc:
+                logger.warning("Within-layer connectivity computation failed (continuing): %s", exc)
         
         # 3. Halo analysis
         self.run_halo_analysis()
@@ -2390,32 +2690,38 @@ class ClusterAnalysisExperiment:
         self.run_cascade_test()
         
         # 5. Pruning experiments (optional)
-        if include_pruning and getattr(self.config, 'pruning_ratios', None):
-            # Check if fine-tuning is enabled
-            fine_tune_enabled = getattr(self.config, 'fine_tune_after_pruning', True)
-            fine_tune_epochs = getattr(self.config, 'fine_tune_epochs', 10) if fine_tune_enabled else 0
-            # Support both fine_tune_lr and fine_tune_learning_rate config keys
-            fine_tune_lr = getattr(self.config, 'fine_tune_lr', None) or \
-                           getattr(self.config, 'fine_tune_learning_rate', None) or 0.0001
-            fine_tune_max_batches = getattr(self.config, "fine_tune_max_batches", None)
-            fine_tune_weight_decay = float(getattr(self.config, "fine_tune_weight_decay", 0.0) or 0.0)
-            
-            logger.info(f"Fine-tuning after pruning: {'enabled' if fine_tune_epochs > 0 else 'disabled'}")
-            
-            self.run_pruning_experiments(
-                ratios=self.config.pruning_ratios,
-                methods=getattr(self.config, "pruning_methods", None),
-                fine_tune_epochs=fine_tune_epochs,
-                fine_tune_lr=fine_tune_lr,
-                fine_tune_max_batches=fine_tune_max_batches,
-                fine_tune_weight_decay=fine_tune_weight_decay,
-            )
+        # NOTE: `pruning_amounts` has a non-empty default; we gate pruning on the explicit flag.
+        if include_pruning and bool(self.config.do_pruning_experiments):
+            ratios_cfg = list(self.config.pruning_amounts)
+            if not ratios_cfg:
+                logger.warning("do_pruning_experiments=True but pruning_amounts is empty; skipping pruning")
+            else:
+                # Fine-tuning configuration
+                fine_tune_epochs = int(self.config.fine_tune_epochs) if bool(self.config.fine_tune_after_pruning) else 0
+                fine_tune_lr = (
+                    float(self.config.fine_tune_learning_rate)
+                    if self.config.fine_tune_learning_rate is not None
+                    else float(self.config.learning_rate) * 0.1
+                )
+                fine_tune_max_batches = self.config.fine_tune_max_batches
+                fine_tune_weight_decay = float(self.config.fine_tune_weight_decay or 0.0)
+
+                logger.info(f"Fine-tuning after pruning: {'enabled' if fine_tune_epochs > 0 else 'disabled'}")
+
+                self.run_pruning_experiments(
+                    ratios=ratios_cfg,
+                    methods=list(self.config.pruning_strategies) if self.config.pruning_strategies else None,
+                    fine_tune_epochs=fine_tune_epochs,
+                    fine_tune_lr=fine_tune_lr,
+                    fine_tune_max_batches=fine_tune_max_batches,
+                    fine_tune_weight_decay=fine_tune_weight_decay,
+                )
         
         # Save results (including centroids for visualization)
         metadata = self._collect_run_metadata()
         try:
             with open(self.output_dir / "run_metadata.json", "w") as f:
-                json.dump(metadata, f, indent=2, default=str)
+                json.dump(metadata, f, indent=2, default=_json_default)
         except Exception as exc:
             logger.debug("Could not write run_metadata.json: %s", exc)
 
@@ -2425,18 +2731,24 @@ class ClusterAnalysisExperiment:
                 "model_name": self.config.model_name,
                 "dataset_name": self.config.dataset_name,
                 "n_clusters": self.config.n_clusters,
-                "n_calibration": int(getattr(self.config, "n_calibration", 5000)),
-                "activation_samples": getattr(self.config, "activation_samples", "flatten_spatial"),
-                "activation_point": str(getattr(self.config, "activation_point", "pre_bn")),
-                "spatial_samples_per_image": getattr(self.config, "spatial_samples_per_image", 16),
-                "seed": getattr(self.config, "seed", 42),
+                "n_calibration": int(self.config.n_calibration),
+                "activation_samples": str(self.config.activation_samples),
+                "task_activation_samples": self.config.task_activation_samples,
+                "activation_point": str(self.config.activation_point),
+                "spatial_samples_per_image": int(self.config.spatial_samples_per_image),
+                "seed": int(self.config.seed),
                 "calibration_indices_file": str(self._calibration_indices_path()),
-                "pruning_distribution": str(getattr(self.config, "pruning_distribution", "uniform")),
-                "pruning_min_per_layer": float(getattr(self.config, "pruning_min_per_layer", 0.0)),
-                "pruning_max_per_layer": float(getattr(self.config, "pruning_max_per_layer", 0.95)),
-                "pruning_max_per_layer_sparsity_cap": float(
-                    getattr(self.config, "pruning_max_per_layer_sparsity_cap", 0.90)
-                ),
+                "calibration_mode": str(self.config.calibration_mode),
+                "type_mapping_mode": str(self.config.type_mapping_mode),
+                "compute_loss_proxy": bool(self.config.compute_loss_proxy),
+                "loss_proxy_n_calibration": int(self.config.loss_proxy_n_calibration or 0),
+                "compute_within_layer_connectivity": bool(getattr(self.config, "compute_within_layer_connectivity", False)),
+                "within_layer_red_topk": int(getattr(self.config, "within_layer_red_topk", 0) or 0),
+                "within_layer_syn_topk": int(getattr(self.config, "within_layer_syn_topk", 0) or 0),
+                "pruning_distribution": str(self.config.pruning_distribution),
+                "pruning_min_per_layer": float(self.config.pruning_min_per_layer),
+                "pruning_max_per_layer": float(self.config.pruning_max_per_layer),
+                "pruning_max_per_layer_sparsity_cap": float(self.config.pruning_max_per_layer_sparsity_cap),
             },
             "layer_metrics": self.layer_metrics,
             "cluster_results": {
@@ -2451,6 +2763,7 @@ class ClusterAnalysisExperiment:
             },
             "halo_results": self.halo_results,
             "halo_flow_results": self.halo_flow_results,
+            "within_layer_connectivity": self.within_layer_connectivity,
             "permutation_results": getattr(self, 'permutation_results', {}),
             "ablation_results": self.cluster_results.get("_ablation", {}),
             "cascade_results": self.cascade_results,
@@ -2459,7 +2772,7 @@ class ClusterAnalysisExperiment:
         }
         
         with open(self.output_dir / "results.json", "w") as f:
-            json.dump(results, f, indent=2, default=str)
+            json.dump(results, f, indent=2, default=_json_default)
         
         logger.info(f"Results saved to {self.output_dir}")
         return results
@@ -2697,13 +3010,22 @@ class ClusterAnalysisExperiment:
         # ==================================================================
         # 6. Cluster evolution across depth
         # ==================================================================
-        layer_results = [
-            {"layer_name": k, "type_counts": v["type_counts"]}
-            for k, v in self.cluster_results.items()
-        ]
-        _p = clustering_dir / "cluster_evolution.png"
-        plot_cluster_evolution(layer_results, _p)
-        _copy_legacy(_p, fig_dir / "cluster_evolution.png")
+        layer_results = []
+        # Prefer the canonical layer order from self.layers to keep depth plots consistent
+        for lname, _layer in self.layers:
+            v = self.cluster_results.get(lname, {})
+            if not isinstance(v, dict):
+                continue
+            tc = v.get("type_counts", None)
+            if tc is None:
+                continue
+            layer_results.append({"layer_name": lname, "type_counts": tc})
+        if layer_results:
+            _p = clustering_dir / "cluster_evolution.png"
+            plot_cluster_evolution(layer_results, _p)
+            _copy_legacy(_p, fig_dir / "cluster_evolution.png")
+        else:
+            logger.debug("Skipping cluster evolution plot (missing type_counts for all layers).")
         
         # ==================================================================
         # 7. Cascade test results
@@ -3096,7 +3418,7 @@ def run_multi_seed_experiment(
     Example:
         >>> def make_model():
         ...     return torchvision.models.resnet18(pretrained=True)
-        >>> config = ClusterAnalysisConfig(model_name="resnet18")
+        >>> config = ClusterAnalysisConfig(name="cluster_analysis", model_name="resnet18")
         >>> results = run_multi_seed_experiment(
         ...     config, make_model, train_loader, test_loader,
         ...     seeds=[42, 123, 456]
@@ -3104,7 +3426,7 @@ def run_multi_seed_experiment(
     """
     import copy
     
-    seeds = seeds or getattr(config, 'seeds', None) or [42, 123, 456, 789, 1000]
+    seeds = seeds or getattr(config, "seeds", None) or [42, 123, 456, 789, 1000]
     
     all_results = []
     
@@ -3114,7 +3436,13 @@ def run_multi_seed_experiment(
         # Create fresh config and model for this seed
         seed_config = copy.deepcopy(config)
         seed_config.seed = seed
-        seed_config.output_dir = str(Path(config.output_dir) / f"seed_{seed}")
+        base_dir = (
+            getattr(config, "experiment_dir", None)
+            or getattr(config, "output_dir", None)  # legacy
+            or getattr(config, "results_path", None)  # legacy
+            or "results/cluster_analysis"
+        )
+        seed_config.experiment_dir = str(Path(str(base_dir)) / f"seed_{seed}")
         
         # Set random seeds
         if HAS_TORCH:
@@ -3129,7 +3457,7 @@ def run_multi_seed_experiment(
         # Run experiment
         exp = ClusterAnalysisExperiment(seed_config, model, train_loader, test_loader)
         results = exp.run_full_analysis(
-            include_pruning=getattr(config, 'pruning_ratios', None) is not None
+            include_pruning=bool(getattr(config, "do_pruning_experiments", False))
         )
         all_results.append(results)
         
@@ -3142,10 +3470,17 @@ def run_multi_seed_experiment(
     aggregated = aggregate_multi_seed_results(all_results)
     
     # Save aggregated results
-    output_dir = Path(config.output_dir)
+    output_dir = Path(
+        str(
+            getattr(config, "experiment_dir", None)
+            or getattr(config, "output_dir", None)  # legacy
+            or getattr(config, "results_path", None)  # legacy
+            or "results/cluster_analysis"
+        )
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / "results_aggregated.json", "w") as f:
-        json.dump(aggregated, f, indent=2, default=str)
+        json.dump(aggregated, f, indent=2, default=_json_default)
     
     logger.info(f"Aggregated results from {len(seeds)} seeds saved to {output_dir}")
     

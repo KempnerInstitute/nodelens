@@ -187,52 +187,27 @@ def _create_cluster_experiment(config):
                      (pruning_cfg.get("algorithms") if isinstance(pruning_cfg, dict) else None) or \
                      ['random', 'magnitude', 'taylor', 'composite', 'cluster_aware']
     
-    # Build ClusterAnalysisConfig from the loaded config
-    cluster_config = ClusterAnalysisConfig(
-        model_name=getattr(config, "model_name", model_cfg.get("name", "resnet18") if isinstance(model_cfg, dict) else "resnet18"),
-        dataset_name=getattr(config, "dataset_name", dataset_cfg.get("name", "cifar10") if isinstance(dataset_cfg, dict) else "cifar10"),
-        n_calibration=getattr(config, "n_calibration", metrics_cfg.get("n_calibration_samples", 5000) if isinstance(metrics_cfg, dict) else 5000),
-        n_clusters=getattr(config, "n_clusters", clustering_cfg.get("n_clusters", 4) if isinstance(clustering_cfg, dict) else 4),
-        activation_point=str(
-            getattr(
-                config,
-                "activation_point",
-                metrics_cfg.get("activation_point", "pre_bn") if isinstance(metrics_cfg, dict) else "pre_bn",
-            )
-        ),
-        activation_samples=getattr(
-            config,
-            "activation_samples",
-            metrics_cfg.get("activation_samples", "flatten_spatial") if isinstance(metrics_cfg, dict) else "flatten_spatial",
-        ),
-        spatial_samples_per_image=int(
-            getattr(
-                config,
-                "spatial_samples_per_image",
-                metrics_cfg.get("spatial_samples_per_image", 16) if isinstance(metrics_cfg, dict) else 16,
-            )
-        ),
-        synergy_target=getattr(config, "synergy_target", metrics_cfg.get("synergy_target", "logit_margin") if isinstance(metrics_cfg, dict) else "logit_margin"),
-        synergy_candidate_pool=int(
-            getattr(
-                config,
-                "synergy_candidate_pool",
-                metrics_cfg.get("synergy_candidate_pool", 50) if isinstance(metrics_cfg, dict) else 50,
-            )
-        ),
-        synergy_pairs=getattr(config, "synergy_pairs", metrics_cfg.get("synergy_num_pairs", 10) if isinstance(metrics_cfg, dict) else 10),
-        halo_percentile=getattr(config, "halo_percentile", halo_cfg.get("percentile", 90.0) if isinstance(halo_cfg, dict) else 90.0),
-        pruning_ratios=pruning_ratios,
-        pruning_methods=pruning_methods,
-        fine_tune_after_pruning=fine_tune_enabled,
-        fine_tune_epochs=fine_tune_epochs,
-        fine_tune_lr=fine_tune_lr,
-        fine_tune_max_batches=fine_tune_max_batches,
-        fine_tune_weight_decay=fine_tune_weight_decay,
-        output_dir=getattr(config, "experiment_dir", "results/cluster_analysis"),
-        device=getattr(config, "device", "cuda"),
-        seed=getattr(config, "seed", 42),
-    )
+    # ClusterAnalysisExperiment consumes the repo-standard ExperimentConfig directly.
+    # Keep names from the historical API for minimal downstream churn.
+    cluster_config = config
+
+    # Ensure the pruning-related fields are consistent if any were supplied via legacy nesting.
+    try:
+        cluster_config.pruning_amounts = list(pruning_ratios)
+    except Exception:
+        pass
+    try:
+        cluster_config.pruning_strategies = list(pruning_methods)
+    except Exception:
+        pass
+    try:
+        cluster_config.fine_tune_after_pruning = bool(fine_tune_enabled)
+        cluster_config.fine_tune_epochs = int(fine_tune_epochs)
+        cluster_config.fine_tune_learning_rate = float(fine_tune_lr)
+        cluster_config.fine_tune_max_batches = fine_tune_max_batches
+        cluster_config.fine_tune_weight_decay = float(fine_tune_weight_decay)
+    except Exception:
+        pass
 
     # Metric ablation + permutation baseline (vision diagnostics)
     ablation_cfg = clustering_cfg.get("ablation", {}) if isinstance(clustering_cfg, dict) else {}
@@ -257,20 +232,25 @@ def _create_cluster_experiment(config):
     if n_permutations is None:
         n_permutations = 100
 
-    setattr(cluster_config, "run_metric_ablation", run_metric_ablation)
-    setattr(cluster_config, "metric_ablations", list(metric_ablations))
-    setattr(cluster_config, "run_permutation_baseline", run_permutation_baseline)
-    setattr(cluster_config, "n_permutations", int(n_permutations))
+    try:
+        cluster_config.run_metric_ablation = bool(run_metric_ablation)
+        cluster_config.metric_ablations = list(metric_ablations)
+        cluster_config.run_permutation_baseline = bool(run_permutation_baseline)
+        cluster_config.n_permutations = int(n_permutations)
+    except Exception:
+        pass
 
-    # Propagate pruning distribution knobs into ClusterAnalysisConfig so all pruning
-    # methods (including cluster-aware) use the same allocation regime.
-    setattr(cluster_config, "pruning_distribution", str(pruning_distribution))
-    setattr(cluster_config, "dependency_aware_pruning", bool(dependency_aware_pruning))
-    setattr(cluster_config, "pruning_min_per_layer", float(pruning_min_per_layer))
-    setattr(cluster_config, "pruning_max_per_layer", float(pruning_max_per_layer))
-    setattr(cluster_config, "pruning_max_per_layer_sparsity_cap", float(pruning_max_per_layer_sparsity_cap))
-    setattr(cluster_config, "pruning_pointwise_only", bool(pruning_pointwise_only))
-    setattr(cluster_config, "pruning_skip_depthwise", bool(pruning_skip_depthwise))
+    # Ensure pruning allocation knobs are on the flat config (cluster-aware and baselines share these).
+    try:
+        cluster_config.pruning_distribution = str(pruning_distribution)
+        cluster_config.dependency_aware_pruning = bool(dependency_aware_pruning)
+        cluster_config.pruning_min_per_layer = float(pruning_min_per_layer)
+        cluster_config.pruning_max_per_layer = float(pruning_max_per_layer)
+        cluster_config.pruning_max_per_layer_sparsity_cap = float(pruning_max_per_layer_sparsity_cap)
+        cluster_config.pruning_pointwise_only = bool(pruning_pointwise_only)
+        cluster_config.pruning_skip_depthwise = bool(pruning_skip_depthwise)
+    except Exception:
+        pass
 
     # Optional: allow sweeping cluster-aware score weights via nested pruning config:
     #   pruning.cluster_aware.{alpha,beta,gamma,lambda_halo,protect_critical_frac}
@@ -308,20 +288,33 @@ def _create_cluster_experiment(config):
             setattr(cluster_config, attr, float(getattr(config, attr)))
     
     # Load model
-    model_name = cluster_config.model_name.lower()
-    dataset_name = cluster_config.dataset_name.lower()
-    # Prefer explicit num_classes from config.model.num_classes when present
+    model_name = str(cluster_config.model_name).lower()
+    dataset_name = str(cluster_config.dataset_name).lower()
+
+    # Prefer explicit num_classes from model_config when present; otherwise infer from dataset.
+    model_cfg = getattr(cluster_config, "model_config", {}) or {}
+    # NOTE: be careful with substring matches: "cifar100" contains "cifar10".
+    # Always check the more specific dataset names first.
     num_classes = (
-        int(model_cfg.get("num_classes")) if isinstance(model_cfg, dict) and model_cfg.get("num_classes") is not None
-        else (10 if "cifar10" in dataset_name else 100 if "cifar100" in dataset_name else 100 if "imagenet100" in dataset_name else 1000)
+        int(model_cfg.get("num_classes"))
+        if isinstance(model_cfg, dict) and model_cfg.get("num_classes") is not None
+        else (
+            100
+            if "cifar100" in dataset_name
+            else 10
+            if "cifar10" in dataset_name
+            else 100
+            if "imagenet100" in dataset_name
+            else 1000
+        )
     )
-    
-    # Check for pre-trained checkpoint
-    model_cfg = _get_nested(config, "model", {})
-    checkpoint_path = model_cfg.get("checkpoint", None) if isinstance(model_cfg, dict) else None
-    checkpoint_path = checkpoint_path or getattr(config, "model_checkpoint", None)
-    
-    pretrained = bool(model_cfg.get("pretrained", True)) if isinstance(model_cfg, dict) else True
+
+    # Optional: explicit checkpoint
+    checkpoint_path = getattr(cluster_config, "model_checkpoint", None) or (
+        model_cfg.get("checkpoint") if isinstance(model_cfg, dict) else None
+    )
+
+    pretrained = bool(getattr(cluster_config, "pretrained", True))
     weights_name = model_cfg.get("weights", None) if isinstance(model_cfg, dict) else None
     weights_arg = weights_name if pretrained else None
 
@@ -342,6 +335,16 @@ def _create_cluster_experiment(config):
         model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
+
+    # CIFAR-style ResNet adaptation (matches common CIFAR ResNet checkpoints):
+    # - 3x3 conv1 (stride 1) instead of 7x7 (stride 2)
+    # - remove initial maxpool
+    if ("cifar10" in dataset_name or "cifar100" in dataset_name) and ("resnet" in model_name):
+        try:
+            model.conv1 = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            model.maxpool = torch.nn.Identity()
+        except Exception:
+            pass
     
     # Load checkpoint if available, otherwise model needs to be trained
     if checkpoint_path and os.path.exists(checkpoint_path):
@@ -356,7 +359,27 @@ def _create_cluster_experiment(config):
         needs_training = True
     
     # Load dataset
-    if "cifar10" in dataset_name:
+    # NOTE: "cifar100" contains "cifar10" as a substring; check cifar100 first.
+    if "cifar100" in dataset_name:
+        mean = (0.5071, 0.4867, 0.4408)
+        std = (0.2675, 0.2565, 0.2761)
+        root = (
+            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
+            or getattr(config, "data_path", None)
+            or "./data"
+        )
+        train_transform = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]
+        )
+        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
+        train_dataset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=train_transform)
+        test_dataset = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=test_transform)
+    elif "cifar10" in dataset_name:
         mean = (0.4914, 0.4822, 0.4465)
         std = (0.2470, 0.2435, 0.2616)
         root = (
@@ -376,25 +399,6 @@ def _create_cluster_experiment(config):
         test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
         train_dataset = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=train_transform)
         test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=test_transform)
-    elif "cifar100" in dataset_name:
-        mean = (0.5071, 0.4867, 0.4408)
-        std = (0.2675, 0.2565, 0.2761)
-        root = (
-            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
-            or getattr(config, "data_path", None)
-            or "./data"
-        )
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
-        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
-        train_dataset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=train_transform)
-        test_dataset = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=test_transform)
     elif "imagenet100" in dataset_name:
         # Expected folder structure: {root}/train/* and {root}/val/* (ImageFolder)
         root = dataset_cfg.get("root", "./data/imagenet100") if isinstance(dataset_cfg, dict) else "./data/imagenet100"
@@ -439,17 +443,29 @@ def _create_cluster_experiment(config):
     # seed weights by center-cropping the 7x7 conv filter.
     if ("cifar" in dataset_name) and ("resnet" in model_name):
         if hasattr(model, "conv1") and hasattr(model, "maxpool"):
-            old_conv = model.conv1
-            new_conv = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            # Only apply the CIFAR stem tweak when the model still has an ImageNet-style stem.
+            # If a CIFAR checkpoint was loaded (conv1 already 3x3, stride1), do NOT overwrite it.
+            needs_stem_tweak = True
             try:
-                if pretrained and hasattr(old_conv, "weight") and old_conv.weight.shape[-1] == 7:
-                    with torch.no_grad():
-                        new_conv.weight.copy_(old_conv.weight[:, :, 2:5, 2:5])
+                conv1 = model.conv1
+                if isinstance(conv1, torch.nn.Conv2d):
+                    if tuple(conv1.kernel_size) == (3, 3) and tuple(conv1.stride) == (1, 1):
+                        needs_stem_tweak = False
             except Exception:
                 pass
-            model.conv1 = new_conv
-            model.maxpool = torch.nn.Identity()
-            resnet_cifar_stem_tweaked = True
+
+            if needs_stem_tweak:
+                old_conv = model.conv1
+                new_conv = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                try:
+                    if pretrained and hasattr(old_conv, "weight") and old_conv.weight.shape[-1] == 7:
+                        with torch.no_grad():
+                            new_conv.weight.copy_(old_conv.weight[:, :, 2:5, 2:5])
+                except Exception:
+                    pass
+                model.conv1 = new_conv
+                model.maxpool = torch.nn.Identity()
+                resnet_cifar_stem_tweaked = True
 
     # MobileNetV2 CIFAR stem tweak: the ImageNet stride-2 stem collapses spatial resolution too early
     # on 32x32 inputs and can lead to unstable/weak CIFAR fine-tuning. Use stride=1 for the first conv.
@@ -486,7 +502,12 @@ def _create_cluster_experiment(config):
         )
     
     # Save the trained model checkpoint
-    output_dir = Path(cluster_config.output_dir)
+    # Standard runner sets config.experiment_dir to the job directory.
+    output_dir = Path(
+        getattr(cluster_config, "experiment_dir", None)
+        or getattr(cluster_config, "results_path", None)  # legacy
+        or "results/cluster_analysis"
+    )
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True, parents=True)
     trained_checkpoint = checkpoint_dir / "trained_model.pth"
@@ -949,6 +970,29 @@ def main():
     # Override base_output_dir if provided via CLI
     if args.base_output_dir:
         config.base_output_dir = args.base_output_dir
+
+    # -------------------------------------------------------------------------
+    # Global seeding (important for reproducibility of:
+    # - DataLoader shuffle order
+    # - stochastic data augmentation (RandomCrop/Flip) across workers
+    # - any metric sampling that uses numpy/torch RNGs
+    # -------------------------------------------------------------------------
+    try:
+        import random
+        import numpy as np
+        import torch
+
+        seed = int(getattr(config, "seed", 42))
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        # Keep cuDNN deterministic for stable results across reruns.
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
 
     is_analysis_only = bool(args.analysis_only)
 

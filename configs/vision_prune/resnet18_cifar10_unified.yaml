@@ -70,9 +70,21 @@ calibration:
 # -----------------------------------------------------------------------------
 metrics:
   # Where to read activations for within-layer statistics:
-  # - pre_bn: Conv output before BatchNorm (backward compatible)
-  # - post_bn: BatchNorm output before ReLU (recommended; matches what downstream layers consume)
-  activation_point: "post_bn"
+  # - pre_bn: Conv output before BatchNorm (matches Jan-20 behaviour, best pruning performance)
+  # - post_bn: BatchNorm output before ReLU (matches what downstream layers consume, but worse pruning)
+  activation_point: "pre_bn"
+  # How to sample activations for task-level metrics (TaskMI, synergy):
+  # - match: use same spatial samples as local metrics (matches Jan-20 behaviour)
+  # - gap: use global-average-pooled per-image samples (avoids pseudo-replication, slightly worse pruning)
+  task_activation_samples: "match"
+  # Optional: compute per-channel Fisher/Gauss-Newton loss proxy on calibration data.
+  # This is used for the "importance prediction" analysis blocks in the paper.
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 1024
+  # Optional: within-layer connectivity summaries (for within-layer organization analyses)
+  within_layer_connectivity: true
+  within_layer_red_topk: 20
+  within_layer_syn_topk: 10
   # Optimization options for faster metric computation
   optimization:
     use_jit: false                 # Enable JIT-compiled computations (20-50% faster)

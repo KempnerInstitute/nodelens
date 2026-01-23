@@ -43,7 +43,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $(hostname)"
 echo "Start time: $(date)"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM}"
+OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/PAPER}"
 echo "Output Base: $OUTPUT_BASE"
 echo ""
 

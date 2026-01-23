@@ -56,7 +56,8 @@ calibration:
 # METRICS
 # -----------------------------------------------------------------------------
 metrics:
-  activation_point: "post_bn"
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
   optimization:
     use_jit: false
     use_gpu_acceleration: false

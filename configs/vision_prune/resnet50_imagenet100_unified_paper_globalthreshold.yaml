@@ -41,7 +41,10 @@ calibration:
   num_samples: 5000
 
 metrics:
-  activation_point: "post_bn"
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 512
   optimization:
     use_jit: false
     use_gpu_acceleration: false

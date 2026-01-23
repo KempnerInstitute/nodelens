@@ -19,32 +19,45 @@
 
 set -euo pipefail
 
-cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
 module purge
 module load cuda/12.2.0-fasrc01
 eval "$(conda shell.bash hook)"
 conda activate networkAlignmentAnalysis
+
+# Robustly locate the `alignment/` repo even if `sbatch` was invoked from the monorepo root.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" && -d "${SLURM_SUBMIT_DIR}/scripts" ]]; then
+  cd "${SLURM_SUBMIT_DIR}"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -d "${SLURM_SUBMIT_DIR}/alignment/scripts" ]]; then
+  cd "${SLURM_SUBMIT_DIR}/alignment"
+else
+  cd "/n/holylabs/kempner_dev/Users/hsafaai/Code/alignment"
+fi
+mkdir -p logs
 
 export PYTHONPATH="${PWD}:${PWD}/src:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # HuggingFace setup
-export HF_HOME="/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/huggingface_cache"
-if [[ -f "${HF_HOME}/token" ]]; then
-    export HF_TOKEN="$(cat "${HF_HOME}/token")"
-    export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
+OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/PAPER}"
+if [[ -z "${HF_HOME:-}" ]]; then
+  HF_TOKEN_BASE="$(dirname "${OUTPUT_BASE}")"
+  if [[ -f "${HF_TOKEN_BASE}/huggingface_cache/token" ]]; then
+    export HF_HOME="${HF_TOKEN_BASE}/huggingface_cache"
+  else
+    export HF_HOME="/n/home13/hsafaai/.cache/huggingface"
+  fi
 fi
-mkdir -p "$HF_HOME"
-
-OUTPUT_BASE="/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/PAPER"
-timestamp=$(date +%Y%m%d_%H%M%S)
-job_id=${SLURM_JOB_ID:-local}
+HF_TOKEN_FILE="${HF_HOME}/token"
+if [[ -f "$HF_TOKEN_FILE" ]]; then
+  export HF_TOKEN="$(cat "$HF_TOKEN_FILE")"
+  export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
+fi
 
 echo "=========================================="
 echo "SCAR Ablation Experiments v2"
 echo "=========================================="
-echo "Job ID: $job_id"
+echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 
 # Run main SCAR experiment with ablation flags

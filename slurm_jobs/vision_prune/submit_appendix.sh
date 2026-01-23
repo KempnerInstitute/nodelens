@@ -11,6 +11,7 @@
 set -euo pipefail
 
 OUTPUT_BASE="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red}"
+PARTITION="${PARTITION:-kempner_eng}"
 
 if [[ "$OUTPUT_BASE" != /* ]]; then
   echo "[error] OUTPUT_BASE must be an absolute path. Got: $OUTPUT_BASE"
@@ -23,6 +24,7 @@ echo "=============================================="
 echo "Submitting Vision Paper Appendix Suite"
 echo "=============================================="
 echo "OUTPUT_BASE: $OUTPUT_BASE"
+echo "PARTITION: $PARTITION"
 echo ""
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
@@ -30,16 +32,16 @@ mkdir -p logs
 
 export OUTPUT_BASE
 
-JOB_GAP=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_resnet18_cifar10_gap.sh | awk '{print $4}')
+JOB_GAP=$(sbatch -p "$PARTITION" --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_resnet18_cifar10_gap.sh | awk '{print $4}')
 echo "GAP robustness (ResNet-18): $JOB_GAP"
 
-JOB_ABL=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_resnet18_cifar10_ablation.sh | awk '{print $4}')
+JOB_ABL=$(sbatch -p "$PARTITION" --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_resnet18_cifar10_ablation.sh | awk '{print $4}')
 echo "Ablation (ResNet-18 @ 50%): $JOB_ABL"
 
-JOB_WS=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_weightsweep_resnet18_array.sh | awk '{print $4}')
+JOB_WS=$(sbatch -p "$PARTITION" --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_weightsweep_resnet18_array.sh | awk '{print $4}')
 echo "Weight sweep array (ResNet-18): $JOB_WS"
 
-JOB_DP=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_damage_prediction_resnet18.sh | awk '{print $4}')
+JOB_DP=$(sbatch -p "$PARTITION" --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_damage_prediction_resnet18.sh | awk '{print $4}')
 echo "Damage prediction eval (ResNet-18): $JOB_DP"
 
 echo ""

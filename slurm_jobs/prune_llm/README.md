@@ -21,7 +21,7 @@ All jobs write to a single `OUTPUT_BASE` using the unified job directory structu
 - **Set output base** (or let scripts use the default in each file):
 
 ```bash
-export OUTPUT_BASE="/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+export OUTPUT_BASE="/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/PAPER"
 ```
 
 - **Submit the full suite**:
@@ -44,6 +44,20 @@ Enable them by setting:
 
 ```bash
 export SUBMIT_UNSTRUCTURED_BASELINES=1
+```
+
+### Optional: submit extra LLaMA-3 paper jobs
+
+`run_all_paper.sh` supports additional LLaMA-3 jobs that are helpful for paper-finalization:
+- `paper_llama3_all_baselines` (structured baseline suite @ 50%)
+- `paper_scar_ablations` (SCAR ablations v2)
+- `paper_llama3_mech` (mechanism probes: LP-vs-magnitude, bus concentration, read-halo dependence, conditional halo ablation)
+
+Toggles:
+
+```bash
+export SUBMIT_LLAMA3_EXTRAS=1   # default: 1
+export SUBMIT_TWO_HALO=0        # default: 0
 ```
 
 Then run either:

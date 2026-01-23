@@ -58,9 +58,22 @@ class MetricSpaceClustering:
     by clustering with subsets of the three metrics.
     """
     
-    def __init__(self, n_clusters: int = 4, seed: int = 42):
+    def __init__(
+        self,
+        n_clusters: int = 4,
+        seed: int = 42,
+        *,
+        type_mapping_mode: str = "global",
+    ):
         self.n_clusters = n_clusters
         self.seed = seed
+        mode = str(type_mapping_mode or "global").lower()
+        # Backward-compatibility: accept older config values but normalize them.
+        if mode in {"greedy", "greedy_legacy", "greedy_sequential"}:
+            mode = "greedy"
+        else:
+            mode = "global"
+        self.type_mapping_mode: Literal["global", "greedy"] = mode  # type: ignore[assignment]
 
     def fit(
         self, 
@@ -216,6 +229,37 @@ class MetricSpaceClustering:
         
         return results
 
+    def _types_greedy(self, c: np.ndarray) -> Dict[int, str]:
+        """
+        Greedy sequential type assignment.
+
+        This mapping is intentionally simple and can be more label-swap prone than
+        the global (permutation) assignment, especially when centroids are close.
+        """
+        if len(c) < 4:
+            return {i: "unknown" for i in range(len(c))}
+        m: Dict[int, str] = {}
+        used = set()
+
+        i = int(np.argmax(c[:, 0] - c[:, 1]))
+        m[i] = "critical"
+        used.add(i)
+
+        rem = [j for j in range(len(c)) if j not in used]
+        i = rem[int(np.argmax([c[j, 1] for j in rem]))]
+        m[i] = "redundant"
+        used.add(i)
+
+        rem = [j for j in range(len(c)) if j not in used]
+        i = rem[int(np.argmax([c[j, 2] for j in rem]))]
+        m[i] = "synergistic"
+        used.add(i)
+
+        for j in range(len(c)):
+            if j not in m:
+                m[j] = "background"
+        return m
+
     def _types(self, c, metrics_used: Tuple[bool, bool, bool] = (True, True, True)):
         """
         Assign cluster types based on centroids.
@@ -227,6 +271,9 @@ class MetricSpaceClustering:
         Returns:
             Dict mapping cluster_id to type name
         """
+        if self.type_mapping_mode == "greedy":
+            return self._types_greedy(c)
+
         use_rq, use_red, use_syn = metrics_used
         
         if len(c) < 4:

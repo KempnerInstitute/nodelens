@@ -12,6 +12,7 @@ set -euo pipefail
 
 OUTPUT_BASE_ROOT="${OUTPUT_BASE:-/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red}"
 OUTPUT_BASE="${OUTPUT_BASE_ROOT}/PAPER"
+PARTITION="${PARTITION:-kempner_eng}"
 
 if [[ "$OUTPUT_BASE" != /* ]]; then
   echo "[error] OUTPUT_BASE must be an absolute path. Got: $OUTPUT_BASE"
@@ -24,6 +25,7 @@ echo "Submitting CIFAR-100 comparison runs (PAPER folder, multi-seed)"
 echo "=============================================="
 echo "OUTPUT_BASE_ROOT: $OUTPUT_BASE_ROOT"
 echo "OUTPUT_BASE (runs): $OUTPUT_BASE"
+echo "PARTITION: $PARTITION"
 echo ""
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
@@ -31,7 +33,7 @@ mkdir -p logs
 
 export OUTPUT_BASE
 
-JOB_R18=$(sbatch --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_resnet18_cifar100_seed_array.sh | awk '{print $4}')
+JOB_R18=$(sbatch -p "$PARTITION" --export=ALL,OUTPUT_BASE="$OUTPUT_BASE" slurm_jobs/vision_prune/run_resnet18_cifar100_seed_array.sh | awk '{print $4}')
 echo "ResNet-18/CIFAR-100 (3 seeds): $JOB_R18"
 
 echo ""

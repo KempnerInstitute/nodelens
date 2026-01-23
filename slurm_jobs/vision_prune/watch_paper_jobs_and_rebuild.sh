@@ -51,6 +51,21 @@ echo "[watch] all jobs finished: $(date)"
 echo "[watch] rebuilding paper artifacts..."
 
 cd /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment
+
+# Regenerate deterministic run manifest for paper scripts (pins exact run dirs).
+# This prevents "latest run" heuristics from accidentally picking stale runs.
+if [[ -d "${RESULTS_BASE}/PAPER" ]]; then
+  echo "[watch] generating run_manifest.json from: ${RESULTS_BASE}/PAPER"
+  python drafts/alignment_notes/paper/scripts/generate_run_manifest.py \
+    --results-base "${RESULTS_BASE}/PAPER" \
+    --experiment resnet18_cifar10_cluster_analysis \
+    --experiment vgg16_cifar10_cluster_analysis \
+    --experiment mobilenetv2_cifar10_cluster_analysis \
+    --experiment resnet18_cifar100_cluster_analysis \
+    --experiment resnet50_imagenet100_cluster_analysis \
+    --experiment alexnet_imagenet100_cluster_analysis
+fi
+
 python drafts/alignment_notes/paper/scripts/build_all_artifacts.py \
   --results-base "$RESULTS_BASE" \
   --paper-dir "$PAPER_DIR"

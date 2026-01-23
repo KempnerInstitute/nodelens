@@ -223,6 +223,33 @@ supernode:
     - "mutual_information"
     - "redundancy"
 
+  # --------------------------------------------------------------------------
+  # Optional cross-layer "read-halo" analysis (mechanistic only; does NOT affect pruning).
+  # Produces: figures/paper/fig_read_halo_dependence.png (if compute_dependence=true).
+  # --------------------------------------------------------------------------
+  read_halo_analysis:
+    enabled: false
+    read_halo_fraction: 0.10
+    num_texts: 4
+    max_length: 256
+    random_seed: 0
+    compute_dependence: false
+    dependence_max_points: 20000
+
+  # --------------------------------------------------------------------------
+  # Optional conditional halo ablation (causal redundancy probe; expensive).
+  # Produces: figures/paper/fig_halo_conditional_ablation.png.
+  # --------------------------------------------------------------------------
+  conditional_halo_ablation:
+    enabled: false
+    # If layer_indices is null, use layer_stride (e.g., every 4th layer).
+    layer_stride: 4
+    layer_indices: null
+    num_texts: 16
+    max_length: 256
+    match_bins: 10
+    seed: 0
+
 # ============================================================================
 # SUPERNODE ROBUSTNESS ANALYSIS
 # ============================================================================
@@ -333,6 +360,10 @@ pruning:
     # Supernode-aware
     - "supernode_protection_score"
     - "supernode_connectivity_score"
+    # Cross-layer read-halo (optional ablations; disabled unless supernode.read_halo_pruning.enabled=true)
+    - "supernode_read_halo_score"
+    - "supernode_read_halo_protect_score"
+    - "supernode_two_halo_score"
     
     # Generalized (no outlier assumption)
     - "generalized_importance"
@@ -360,6 +391,9 @@ pruning:
     - "scar_taylor"
     - "supernode_protection_score"
     - "supernode_connectivity_score"
+    - "supernode_read_halo_score"
+    - "supernode_read_halo_protect_score"
+    - "supernode_two_halo_score"
     - "generalized_importance"
     - "cross_layer_importance"
     - "within_layer_importance"

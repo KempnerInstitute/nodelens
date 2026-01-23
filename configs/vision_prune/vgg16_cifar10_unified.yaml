@@ -66,7 +66,15 @@ metrics:
   # Where to read activations for within-layer statistics:
   # - pre_bn: Conv output before BatchNorm (backward compatible)
   # - post_bn: BatchNorm output before ReLU (recommended; matches what downstream layers consume)
-  activation_point: "post_bn"
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
+  # Optional: compute per-channel Fisher/Gauss-Newton loss proxy on calibration data.
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 1024
+  # Optional: within-layer connectivity summaries (for within-layer organization analyses)
+  within_layer_connectivity: true
+  within_layer_red_topk: 20
+  within_layer_syn_topk: 10
   # Optimization options for faster metric computation
   optimization:
     use_jit: false                 # Enable JIT-compiled computations (20-50% faster)

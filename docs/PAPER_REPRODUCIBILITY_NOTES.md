@@ -1,8 +1,7 @@
 ## Paper reproducibility notes (alignment repo)
 
 This note records **output-affecting** changes observed between the code version used for early “paper runs”
-(`009eff7`, 2026-01-20) and the later version (`084b65c`, 2026-01-22), and the additional reproducibility
-instrumentation we added afterwards.
+(`009eff7`) and a later version (`084b65c`), plus the reproducibility instrumentation added afterwards.
 
 ### A. Output-affecting algorithm changes (009eff7 → 084b65c)
 
@@ -79,11 +78,64 @@ To make paper runs exactly reproducible from “current code”, we added:
   - expose `max_per_layer_sparsity_cap` via `PruningPipelineOptions` and `PruningDistributionManager` kwargs.
   - default remains `0.90` (current behaviour); set `1.0` to emulate legacy behaviour.
 
-### D. Paper protocol recommendation
+### D. Isolation experiments (Jan 2026): quantifying each factor
+
+To understand which changes contributed to performance differences, we ran controlled isolation
+experiments using the **exact Jan-20 checkpoint** but varying one config at a time:
+
+| Isolation Run | activation_point | task_activation_samples | type_mapping_mode | calibration_mode | cap | cluster_aware@0.9 |
+|---------------|------------------|------------------------|-------------------|------------------|-----|-------------------|
+| Jan-20 ref    | pre_bn (implicit)| match (implicit)       | greedy (implicit) | train_loader     | 1.0 | **0.7866**        |
+| isoA          | **post_bn**      | gap                    | global            | indices          | 0.9 | 0.6262            |
+| isoB          | pre_bn           | **gap**                | global            | indices          | 0.9 | 0.7413            |
+| isoC          | pre_bn           | match                  | **global**        | indices          | 0.9 | 0.7594            |
+| isoD          | pre_bn           | match                  | **greedy**        | indices          | 0.9 | 0.7567            |
+| isoE          | pre_bn           | match                  | greedy            | indices          | 1.0 | 0.7567            |
+| isoF          | pre_bn           | match                  | greedy            | **train_loader** | 1.0 | 0.7271            |
+| isoG          | pre_bn           | match                  | global            | **train_loader** | 1.0 | 0.7322            |
+
+**Key findings:**
+
+1. **activation_point is the dominant factor**: `post_bn` (isoA: 0.6262) is ~12% worse than `pre_bn` (0.74-0.76).
+   The old code always hooked Conv2d outputs directly (pre-BN), so `activation_point=pre_bn` is required
+   to match Jan-20 behaviour.
+
+2. **task_activation_samples matters**: Using `gap` (isoB: 0.7413) is ~1.8% worse than `match` (isoC: 0.7594).
+   The old code used spatially-flattened samples for all metrics including TaskMI/synergy, so
+   `task_activation_samples=match` is needed to reproduce.
+
+3. **type_mapping_mode has minimal effect**: `greedy` (isoD: 0.7567) vs `global` (isoC: 0.7594) differ by <0.3%.
+
+4. **calibration_mode affects results**: `indices` (deterministic) gives 0.75-0.76, while `train_loader`
+   (shuffled) gives 0.72-0.73. The variance from shuffle order is significant.
+
+5. **Remaining gap to Jan-20 (~2.7%)**: The best isolation run (isoC: 0.7594) still trails Jan-20 (0.7866)
+   by ~2.7%. This gap is attributed to **different calibration samples**:
+   - Jan-20 ran `do_train=true` (50 epochs), which advanced the torch RNG by ~50 `randperm(50000)` calls
+   - After training, the shuffled DataLoader produced a specific sequence of calibration samples
+   - Isolation runs used `do_train=false` (fresh RNG) or deterministic indices
+   - **Without the original RNG state, exact reproduction is impossible**
+
+### E. Recommendations for going forward
+
+1. **For new paper runs**: Use `activation_point=pre_bn` and `task_activation_samples=match` to match
+   the proven Jan-20 algorithm behaviour while benefiting from reproducibility improvements.
+
+2. **For reproducibility**: Always use `calibration_mode=indices` to get deterministic calibration subsets.
+   This trades off the exact Jan-20 samples for guaranteed reproducibility.
+
+3. **Accept ~2-3% variance**: Calibration sample selection introduces variance. Report mean ± std over
+   multiple seeds rather than relying on single-run numbers.
+
+4. **Run from scratch with saved indices**: For the best of both worlds, run `do_train=true` with
+   the new code (which saves calibration_indices.json) to get a fresh, fully reproducible baseline.
+
+### F. Paper protocol recommendation
 
 For the paper, we should:
-- pick a **single** algorithm version (recommended: the newer task-level synergy + global type mapping),
-- run **multi-seed** experiments and report mean ± std,
-- generate all figures/tables from an explicit **manifest** of run directories (no mtime heuristics),
-- record commit hashes + calibration indices in every run directory.
+- Use `activation_point=pre_bn` and `task_activation_samples=match` (matches Jan-20 algorithm)
+- Use `calibration_mode=indices` (deterministic, reproducible)
+- Run **multi-seed** experiments and report mean ± std
+- Generate all figures/tables from an explicit **manifest** of run directories (no mtime heuristics)
+- Record commit hashes + calibration indices in every run directory
 

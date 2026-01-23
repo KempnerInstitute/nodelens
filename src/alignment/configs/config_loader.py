@@ -225,6 +225,36 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             "enabled": enabled_metrics,
             **metric_configs,
         }
+
+        # Preserve vision/cluster-analysis sampling knobs when present.
+        # These are consumed by ClusterAnalysisExperiment (not by the generic metric registry).
+        for k in (
+            "activation_point",
+            "activation_samples",
+            "task_activation_samples",
+            "spatial_samples_per_image",
+            "synergy_candidate_pool",
+            # Reproducibility knobs
+            "calibration_mode",
+            "calibration_num_workers",
+            "n_calibration_samples",
+            # New analysis artifacts (vision)
+            "within_layer_connectivity",
+            "within_layer_red_topk",
+            "within_layer_syn_topk",
+            "compute_loss_proxy",
+            "loss_proxy_n_calibration",
+        ):
+            if k in metrics:
+                original["metrics"][k] = metrics.get(k)
+
+        # Synergy settings (unified -> original top-level convenience keys)
+        if isinstance(metrics.get("synergy"), dict):
+            syn = metrics["synergy"]
+            if "target" in syn:
+                original["metrics"]["synergy_target"] = syn.get("target")
+            if "num_pairs" in syn:
+                original["metrics"]["synergy_num_pairs"] = syn.get("num_pairs")
         
         # Composite weights - convert unified names to original
         if "composite_weights" in metrics:
@@ -897,6 +927,60 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         # Composite weights from metrics block
         if "composite_weights" in metrics_block:
             flat_config["alignment_composite_weights"] = metrics_block["composite_weights"]
+
+        # -----------------------------------------------------------------
+        # Vision cluster-analysis metric sampling knobs (kept flat for clarity)
+        # -----------------------------------------------------------------
+        if "activation_point" in metrics_block:
+            flat_config["activation_point"] = metrics_block.get("activation_point", flat_config.get("activation_point", "pre_bn"))
+        if "activation_samples" in metrics_block:
+            flat_config["activation_samples"] = metrics_block.get("activation_samples", flat_config.get("activation_samples", "flatten_spatial"))
+        if "task_activation_samples" in metrics_block:
+            flat_config["task_activation_samples"] = metrics_block.get("task_activation_samples")
+        if "spatial_samples_per_image" in metrics_block:
+            flat_config["spatial_samples_per_image"] = int(metrics_block.get("spatial_samples_per_image", flat_config.get("spatial_samples_per_image", 16)))
+        if "synergy_target" in metrics_block:
+            flat_config["synergy_target"] = metrics_block.get("synergy_target", flat_config.get("synergy_target", "logit_margin"))
+        # Also accept unified-style per-metric config (synergy_gaussian_mmi) after conversion.
+        if isinstance(metrics_block.get("synergy_gaussian_mmi"), dict):
+            syn_cfg = metrics_block["synergy_gaussian_mmi"]
+            if "target" in syn_cfg and "synergy_target" not in metrics_block:
+                flat_config["synergy_target"] = syn_cfg.get("target", flat_config.get("synergy_target", "logit_margin"))
+            if "num_pairs" in syn_cfg and "synergy_num_pairs" not in metrics_block:
+                flat_config["synergy_pairs"] = int(syn_cfg.get("num_pairs", flat_config.get("synergy_pairs", 10)))
+        if "synergy_candidate_pool" in metrics_block:
+            flat_config["synergy_candidate_pool"] = int(metrics_block.get("synergy_candidate_pool", flat_config.get("synergy_candidate_pool", 50)))
+        if "synergy_num_pairs" in metrics_block:
+            flat_config["synergy_pairs"] = int(metrics_block.get("synergy_num_pairs", flat_config.get("synergy_pairs", 10)))
+        if "compute_loss_proxy" in metrics_block:
+            flat_config["compute_loss_proxy"] = bool(metrics_block.get("compute_loss_proxy", False))
+        if "loss_proxy_n_calibration" in metrics_block:
+            flat_config["loss_proxy_n_calibration"] = int(metrics_block.get("loss_proxy_n_calibration", flat_config.get("loss_proxy_n_calibration", 1024)))
+        # Within-layer connectivity summaries (vision)
+        if "within_layer_connectivity" in metrics_block:
+            flat_config["compute_within_layer_connectivity"] = bool(metrics_block.get("within_layer_connectivity", False))
+        if "within_layer_red_topk" in metrics_block and metrics_block.get("within_layer_red_topk") is not None:
+            flat_config["within_layer_red_topk"] = int(metrics_block.get("within_layer_red_topk", flat_config.get("within_layer_red_topk", 20)))
+        if "within_layer_syn_topk" in metrics_block and metrics_block.get("within_layer_syn_topk") is not None:
+            flat_config["within_layer_syn_topk"] = int(metrics_block.get("within_layer_syn_topk", flat_config.get("within_layer_syn_topk", 10)))
+
+        # Calibration-mode knobs (optional)
+        if "calibration_mode" in metrics_block:
+            flat_config["calibration_mode"] = str(metrics_block.get("calibration_mode", flat_config.get("calibration_mode", "indices")))
+        if "calibration_num_workers" in metrics_block:
+            flat_config["calibration_num_workers"] = int(metrics_block.get("calibration_num_workers", flat_config.get("calibration_num_workers", 0)))
+
+        # Calibration sample count (vision cluster analysis).
+        if "n_calibration_samples" in metrics_block:
+            flat_config["n_calibration"] = int(metrics_block.get("n_calibration_samples", flat_config.get("n_calibration", 5000)))
+        elif "num_samples" in metrics_block:
+            # Unified configs often use metrics.num_samples as the calibration size.
+            flat_config["n_calibration"] = int(metrics_block.get("num_samples", flat_config.get("n_calibration", 5000)))
+
+    # Calibration block (unified-format convenience): calibration.num_samples
+    cal_block = nested_config.get("calibration", {})
+    if isinstance(cal_block, dict) and "num_samples" in cal_block:
+        flat_config["n_calibration"] = int(cal_block.get("num_samples", flat_config.get("n_calibration", 5000)))
     
     # Handle nested alignment block (backward compatibility)
     if "alignment" in nested_config and isinstance(nested_config["alignment"], dict):
@@ -1057,6 +1141,58 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["dependency_aware_pruning"] = pruning_block.get(
         "dependency_aware", nested_config.get("dependency_aware_pruning", False)
     )
+
+    # Optional: restrict which conv layers are prunable (vision)
+    if "pointwise_only" in pruning_block:
+        flat_config["pruning_pointwise_only"] = bool(pruning_block.get("pointwise_only", False))
+    if "skip_depthwise" in pruning_block:
+        flat_config["pruning_skip_depthwise"] = bool(pruning_block.get("skip_depthwise", False))
+
+    # Cluster-aware annealing window (optional; used by 'cluster_aware_annealed' variant)
+    if isinstance(pruning_block.get("cluster_aware"), dict):
+        ca = pruning_block["cluster_aware"]
+        if "anneal_start" in ca:
+            flat_config["cluster_aware_anneal_start"] = float(ca.get("anneal_start", flat_config.get("cluster_aware_anneal_start", 0.70)))
+        if "anneal_end" in ca:
+            flat_config["cluster_aware_anneal_end"] = float(ca.get("anneal_end", flat_config.get("cluster_aware_anneal_end", 0.90)))
+
+    # Halo-analysis direct knobs (vision)
+    halo_block = nested_config.get("halo_analysis", {})
+    if isinstance(halo_block, dict):
+        if "percentile" in halo_block:
+            flat_config["halo_percentile"] = float(halo_block.get("percentile", flat_config.get("halo_percentile", 90.0)))
+        if "use_activation_weight" in halo_block:
+            flat_config["use_activation_weight"] = bool(halo_block.get("use_activation_weight", flat_config.get("use_activation_weight", True)))
+        perm = halo_block.get("permutation_baseline", {})
+        if isinstance(perm, dict):
+            if "enabled" in perm:
+                flat_config["run_permutation_baseline"] = bool(perm.get("enabled", False))
+            if "n_permutations" in perm:
+                flat_config["n_permutations"] = int(perm.get("n_permutations", flat_config.get("n_permutations", 100)))
+
+    # Clustering block (vision)
+    clustering_block = nested_config.get("clustering", {})
+    if isinstance(clustering_block, dict):
+        if "n_clusters" in clustering_block:
+            flat_config["n_clusters"] = int(clustering_block.get("n_clusters", flat_config.get("n_clusters", 4)))
+        if "type_mapping_mode" in clustering_block:
+            flat_config["type_mapping_mode"] = str(clustering_block.get("type_mapping_mode", flat_config.get("type_mapping_mode", "global")))
+        abl = clustering_block.get("ablation", {})
+        if isinstance(abl, dict):
+            if "enabled" in abl:
+                flat_config["run_metric_ablation"] = bool(abl.get("enabled", False))
+            if "modes" in abl:
+                flat_config["metric_ablations"] = list(abl.get("modes", flat_config.get("metric_ablations", ["all", "rq_red", "rq_syn", "red_syn"])))
+
+    # Cascade analysis (vision)
+    cascade_block = nested_config.get("cascade_analysis", {})
+    if isinstance(cascade_block, dict):
+        if "n_remove_per_group" in cascade_block:
+            flat_config["cascade_n_remove"] = int(cascade_block.get("n_remove_per_group", flat_config.get("cascade_n_remove", 5)))
+        elif "n_remove_per_cluster" in cascade_block:
+            flat_config["cascade_n_remove"] = int(cascade_block.get("n_remove_per_cluster", flat_config.get("cascade_n_remove", 5)))
+        if "damage_sample_fraction" in cascade_block:
+            flat_config["damage_sample_frac"] = float(cascade_block.get("damage_sample_fraction", flat_config.get("damage_sample_frac", 0.2)))
     
     # Single-layer pruning: specify a layer name to prune only that layer
     flat_config["pruning_target_layer"] = pruning_block.get(
@@ -1287,16 +1423,29 @@ def load_config_with_overrides(
         # dict (which ExperimentConfig cannot accept).
         dotted_key_map = {
             # Activation sampling / CNN handling for cluster experiments
+            "metrics.activation_point": "activation_point",
             "metrics.activation_samples": "activation_samples",
+            "metrics.task_activation_samples": "task_activation_samples",
             "metrics.spatial_samples_per_image": "spatial_samples_per_image",
             "metrics.synergy_target": "synergy_target",
             "metrics.synergy_candidate_pool": "synergy_candidate_pool",
             "metrics.synergy_num_pairs": "synergy_pairs",
+            "metrics.compute_loss_proxy": "compute_loss_proxy",
+            "metrics.loss_proxy_n_calibration": "loss_proxy_n_calibration",
+            "metrics.within_layer_connectivity": "compute_within_layer_connectivity",
+            "metrics.within_layer_red_topk": "within_layer_red_topk",
+            "metrics.within_layer_syn_topk": "within_layer_syn_topk",
+            "metrics.calibration_mode": "calibration_mode",
+            "metrics.calibration_num_workers": "calibration_num_workers",
+            "metrics.n_calibration_samples": "n_calibration",
             # Clustering
             "clustering.n_clusters": "n_clusters",
+            "clustering.type_mapping_mode": "type_mapping_mode",
             "clustering.ablation.enabled": "run_metric_ablation",
             "clustering.ablation.modes": "metric_ablations",
             # Halo permutation baselines
+            "halo_analysis.percentile": "halo_percentile",
+            "halo_analysis.use_activation_weight": "use_activation_weight",
             "halo_analysis.permutation_baseline.enabled": "run_permutation_baseline",
             "halo_analysis.permutation_baseline.n_permutations": "n_permutations",
             # Cluster-aware pruning weight sweeps (paper)
@@ -1305,7 +1454,13 @@ def load_config_with_overrides(
             "pruning.cluster_aware.gamma": "cluster_aware_gamma",
             "pruning.cluster_aware.lambda_halo": "cluster_aware_lambda_halo",
             "pruning.cluster_aware.protect_critical_frac": "cluster_aware_protect_critical_frac",
+            "pruning.cluster_aware.anneal_start": "cluster_aware_anneal_start",
+            "pruning.cluster_aware.anneal_end": "cluster_aware_anneal_end",
             # Pruning distribution safety caps
+            "pruning.distribution": "pruning_distribution",
+            "pruning.dependency_aware": "dependency_aware_pruning",
+            "pruning.min_per_layer": "pruning_min_per_layer",
+            "pruning.max_per_layer": "pruning_max_per_layer",
             "pruning.max_per_layer_sparsity_cap": "pruning_max_per_layer_sparsity_cap",
             # Fine-tuning after pruning
             "pruning.fine_tune.enabled": "fine_tune_after_pruning",

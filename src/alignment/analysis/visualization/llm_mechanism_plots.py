@@ -570,3 +570,275 @@ def plot_scar_schematic(
         _save(fig, save_path, dpi=dpi)
     return fig
 
+
+def _spearman_np(a: Any, b: Any) -> float:
+    a = _to_numpy(a).astype(np.float64).reshape(-1)
+    b = _to_numpy(b).astype(np.float64).reshape(-1)
+    if a.size == 0 or b.size == 0 or a.size != b.size:
+        return 0.0
+    ra = a.argsort().argsort().astype(np.float64)
+    rb = b.argsort().argsort().astype(np.float64)
+    ra -= ra.mean()
+    rb -= rb.mean()
+    denom = (np.linalg.norm(ra) * np.linalg.norm(rb)) + 1e-12
+    rho = float((ra @ rb) / denom)
+    return rho if np.isfinite(rho) else 0.0
+
+
+def plot_lp_vs_magnitude_controls(
+    *,
+    loss_proxy: Any,
+    activation_power: Any,
+    downproj_col_norm: Optional[Any] = None,
+    upproj_row_norm: Optional[Any] = None,
+    gateproj_row_norm: Optional[Any] = None,
+    super_mask: Optional[Any] = None,
+    layer_label: str = "",
+    rho: float = 0.01,
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """
+    Two-panel plot:
+      (a) log-log scatter: activation power vs loss proxy (supernodes highlighted)
+      (b) rank correlations between LP and simple magnitude controls
+    """
+    lp = _to_numpy(loss_proxy).astype(np.float64).reshape(-1)
+    ap = _to_numpy(activation_power).astype(np.float64).reshape(-1)
+    n = int(min(lp.size, ap.size))
+    lp = lp[:n]
+    ap = ap[:n]
+
+    eps = 1e-12
+    lp = np.maximum(lp, 0.0)
+    ap = np.maximum(ap, 0.0)
+
+    if super_mask is None:
+        # Default: supernodes = top-rho by LP.
+        k = max(1, int(round(float(rho) * float(n))))
+        idx = np.argsort(lp)[::-1]
+        super_mask_np = np.zeros(n, dtype=bool)
+        super_mask_np[idx[:k]] = True
+    else:
+        super_mask_np = _to_numpy(super_mask).astype(bool).reshape(-1)[:n]
+
+    x = np.log10(ap + eps)
+    y = np.log10(lp + eps)
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+
+    # (a) scatter
+    ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    idx_non = np.where(~super_mask_np)[0]
+    idx_sup = np.where(super_mask_np)[0]
+    ax.scatter(x[idx_non], y[idx_non], s=6, alpha=0.18, color="#7f8c8d", edgecolors="none", label="Non-supernode")
+    ax.scatter(x[idx_sup], y[idx_sup], s=10, alpha=0.75, color="#c0392b", edgecolors="none", label=f"Supernode (top {rho*100:.1f}%)")
+    ax.set_xlabel(r"$\log_{10}\, \mathbb{E}[u_i^2]$ (activation power)")
+    ax.set_ylabel(r"$\log_{10}\, \mathrm{LP}_i$")
+    title = "LP vs activation magnitude"
+    if layer_label:
+        title += f"\n{layer_label}"
+    ax.set_title(title, fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="lower right", fontsize=8, frameon=True)
+
+    # (b) correlation summary (Spearman on log space)
+    ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    rows: List[Tuple[str, float]] = []
+    rows.append(("ρ(LP, ActPower)", _spearman_np(y, x)))
+
+    if downproj_col_norm is not None:
+        dn = _to_numpy(downproj_col_norm).astype(np.float64).reshape(-1)[:n]
+        dn = np.log10(np.maximum(dn, 0.0) + eps)
+        rows.append(("ρ(LP, ||v_i||)", _spearman_np(y, dn)))
+    if upproj_row_norm is not None:
+        un = _to_numpy(upproj_row_norm).astype(np.float64).reshape(-1)[:n]
+        un = np.log10(np.maximum(un, 0.0) + eps)
+        rows.append(("ρ(LP, ||W_up[i]||)", _spearman_np(y, un)))
+    if gateproj_row_norm is not None:
+        gn = _to_numpy(gateproj_row_norm).astype(np.float64).reshape(-1)[:n]
+        gn = np.log10(np.maximum(gn, 0.0) + eps)
+        rows.append(("ρ(LP, ||W_gate[i]||)", _spearman_np(y, gn)))
+
+    ax.axis("off")
+    txt = "\n".join([f"{name}: {val:+.3f}" for name, val in rows])
+    ax.text(
+        0.02,
+        0.90,
+        txt,
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=9.5,
+        family="monospace",
+        bbox=dict(boxstyle="round,pad=0.4", facecolor="#ecf0f1", edgecolor="#2c3e50", alpha=0.9),
+    )
+    ax.set_title("Rank correlation controls", fontsize=10.5)
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+
+
+def plot_bus_concentration(
+    *,
+    layer_indices: Sequence[int],
+    d_eff_super: Sequence[float],
+    d_eff_random: Optional[Sequence[float]] = None,
+    curves: Optional[Dict[int, Dict[str, Any]]] = None,
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """
+    Two-panel plot:
+      (a) Cumulative write-mass curves for selected layers (supernodes vs random baseline)
+      (b) Effective dimension d_eff vs depth
+
+    `curves` (optional) is a dict: layer_idx -> { "frac": [...], "cum_super": [...], "cum_rand": [...] }.
+    """
+    layers = np.asarray(list(layer_indices), dtype=int)
+    deff_s = np.asarray(list(d_eff_super), dtype=np.float64)
+    deff_r = None if d_eff_random is None else np.asarray(list(d_eff_random), dtype=np.float64)
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+
+    ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    if isinstance(curves, dict) and curves:
+        # Plot up to 3 layers for readability
+        show = list(sorted(curves.keys()))
+        if len(show) > 3:
+            show = [show[0], show[len(show) // 2], show[-1]]
+        colors = ["#2980b9", "#8e44ad", "#16a085"]
+        for c, li in zip(colors, show):
+            rec = curves.get(li) or {}
+            frac = np.asarray(rec.get("frac", []), dtype=np.float64)
+            cs = np.asarray(rec.get("cum_super", []), dtype=np.float64)
+            cr = np.asarray(rec.get("cum_rand", []), dtype=np.float64)
+            if frac.size and cs.size:
+                ax.plot(frac, cs, color=c, linewidth=2.0, label=f"Layer {li} (super)")
+            if frac.size and cr.size:
+                ax.plot(frac, cr, color=c, linewidth=1.6, linestyle="--", alpha=0.9, label=f"Layer {li} (rand)")
+    else:
+        ax.text(0.5, 0.5, "No curves provided", ha="center", va="center", transform=ax.transAxes, fontsize=9.5)
+    ax.set_xlabel("Residual dims kept (sorted by write mass)")
+    ax.set_ylabel("Cumulative write mass")
+    ax.set_ylim(0, 1.02)
+    ax.set_title("Bus concentration (examples)", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="lower right", fontsize=7.5, frameon=True)
+
+    ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(layers, deff_s, "o-", color="#2c3e50", linewidth=2.0, markersize=3.5, label="Supernodes")
+    if deff_r is not None and deff_r.size == deff_s.size:
+        ax.plot(layers, deff_r, "o--", color="#7f8c8d", linewidth=1.8, markersize=3.0, label="Random")
+    ax.set_xlabel("Layer index")
+    ax.set_ylabel(r"Effective dimension $d_{\mathrm{eff}}$")
+    ax.set_title("Low-dimensional write support", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="upper right", fontsize=8, frameon=True)
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+
+
+def plot_read_halo_dependence_summary(
+    *,
+    layer_indices: Sequence[int],
+    spearman_rho: Sequence[float],
+    read_halo_mean_abs_delta_u: Sequence[float],
+    random_mean_abs_delta_u: Sequence[float],
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """Two-panel summary of read-halo dependence across depth."""
+    layers = np.asarray(list(layer_indices), dtype=int)
+    rho = np.asarray(list(spearman_rho), dtype=np.float64)
+    mh = np.asarray(list(read_halo_mean_abs_delta_u), dtype=np.float64)
+    mr = np.asarray(list(random_mean_abs_delta_u), dtype=np.float64)
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+
+    ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(layers, rho, "o-", color="#2980b9", linewidth=2.0, markersize=3.5)
+    ax.axhline(0.0, color="#7f8c8d", linestyle="--", linewidth=1.2, alpha=0.8)
+    ax.set_xlabel("Layer index (target)")
+    ax.set_ylabel("Spearman ρ(ReadConn, mean|Δu|)")
+    ax.set_title("ReadConn predicts bus dependence", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+
+    ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(layers, mh, "o-", color="#f39c12", linewidth=2.0, markersize=3.5, label="Read-halo")
+    ax.plot(layers, mr, "o--", color="#95a5a6", linewidth=1.8, markersize=3.0, label="Random")
+    ax.set_xlabel("Layer index (target)")
+    ax.set_ylabel(r"Mean $|\Delta u_j|$")
+    ax.set_title("Dependence gap", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="upper right", fontsize=8, frameon=True)
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+
+
+def plot_conditional_halo_ablation(
+    *,
+    layer_indices: Sequence[int],
+    delta_nll_halo: Sequence[float],
+    delta_nll_matched: Sequence[float],
+    delta_nll_supernodes: Optional[Sequence[float]] = None,
+    delta_nll_halo_plus_supernodes: Optional[Sequence[float]] = None,
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """
+    Two-panel plot for the conditional causal test:
+      (a) Ablate halo subset vs matched non-halo subset (supernodes intact)
+      (b) Ablate supernodes (and optionally supernodes + halo)
+    """
+    layers = np.asarray(list(layer_indices), dtype=int)
+    dh = np.asarray(list(delta_nll_halo), dtype=np.float64)
+    dm = np.asarray(list(delta_nll_matched), dtype=np.float64)
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+
+    ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(layers, dh, "o-", color="#1f77b4", linewidth=2.0, markersize=3.5, label="Ablate halo subset")
+    ax.plot(layers, dm, "o--", color="#7f8c8d", linewidth=1.8, markersize=3.0, label="Ablate matched non-halo")
+    ax.axhline(0.0, color="#2c3e50", linestyle=":", linewidth=1.2, alpha=0.8)
+    ax.set_xlabel("Layer index")
+    ax.set_ylabel(r"$\Delta$NLL (per token)")
+    ax.set_title("Conditional halo redundancy", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="upper left", fontsize=8, frameon=True)
+
+    ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    if delta_nll_supernodes is not None:
+        ds = np.asarray(list(delta_nll_supernodes), dtype=np.float64)
+        ax.plot(layers, ds, "o-", color="#c0392b", linewidth=2.0, markersize=3.5, label="Ablate supernodes")
+    if delta_nll_halo_plus_supernodes is not None:
+        db = np.asarray(list(delta_nll_halo_plus_supernodes), dtype=np.float64)
+        ax.plot(layers, db, "o--", color="#d35400", linewidth=1.8, markersize=3.0, label="Ablate supernodes + halo")
+    ax.axhline(0.0, color="#2c3e50", linestyle=":", linewidth=1.2, alpha=0.8)
+    ax.set_xlabel("Layer index")
+    ax.set_ylabel(r"$\Delta$NLL (per token)")
+    ax.set_title("Supernodes as loss-critical hubs", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="upper left", fontsize=8, frameon=True)
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+

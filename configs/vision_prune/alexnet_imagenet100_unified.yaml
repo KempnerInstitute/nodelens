@@ -64,7 +64,14 @@ calibration:
 # -----------------------------------------------------------------------------
 metrics:
   # AlexNet doesn't have BatchNorm, so we use post_activation
-  activation_point: "post_bn"
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
+  # Enable LP importance (used by paper appendix figures; lightweight at this calibration size)
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 1024
+  # Deterministic calibration subset (recommended for reproducibility)
+  calibration_mode: "indices"
+  calibration_num_workers: 0
   optimization:
     use_jit: false
     use_gpu_acceleration: false

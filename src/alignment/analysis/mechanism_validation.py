@@ -333,6 +333,7 @@ class SynergyPairLesionResult:
     top_pairs: List[Tuple[int, int]]
     top_synergy: np.ndarray
     matched_control_pairs: List[Tuple[int, int]]
+    matched_control_synergy: np.ndarray
     excess_damage_top: np.ndarray
     excess_damage_control: np.ndarray
     spearman_rho: float
@@ -379,6 +380,8 @@ def validate_synergy_pair_lesions(
     top_idx = np.argsort(-syn)[:top_n]
     top_pairs_list = [pairs[int(k)] for k in top_idx.tolist()]
     top_synergy = syn[top_idx]
+    # Map all computed pairs to synergy so we can look up control-pair scores without re-running stats.
+    syn_all = {pairs[i]: float(syn[i]) for i in range(len(pairs))}
 
     # 2) Channel pool for matching controls
     pool_size = int(max(2 * top_n, pool_size))
@@ -502,8 +505,8 @@ def validate_synergy_pair_lesions(
     excess_ctl_arr = np.asarray(excess_ctl, dtype=np.float64)
 
     # Correlation on evaluated top pairs
-    syn_map = {p: float(s) for p, s in zip(top_pairs_list, top_synergy.tolist())}
-    syn_x = np.asarray([syn_map[p] for p in top_used], dtype=np.float64)
+    syn_x = np.asarray([float(syn_all.get(p, 0.0)) for p in top_used], dtype=np.float64)
+    syn_ctl = np.asarray([float(syn_all.get(p, 0.0)) for p in matched_controls], dtype=np.float64)
     rho = spearman(syn_x, excess_top_arr)
 
     return SynergyPairLesionResult(
@@ -513,6 +516,7 @@ def validate_synergy_pair_lesions(
         top_pairs=top_used,
         top_synergy=syn_x,
         matched_control_pairs=matched_controls,
+        matched_control_synergy=syn_ctl,
         excess_damage_top=excess_top_arr,
         excess_damage_control=excess_ctl_arr,
         spearman_rho=float(rho),

@@ -57,7 +57,8 @@ calibration:
 # METRICS
 # -----------------------------------------------------------------------------
 metrics:
-  activation_point: "post_bn"  # AlexNet doesn't have BN, but we handle gracefully
+  activation_point: "pre_bn"  # AlexNet doesn't have BN, but we handle gracefully
+  task_activation_samples: "match"
   optimization:
     use_jit: false
     use_gpu_acceleration: false

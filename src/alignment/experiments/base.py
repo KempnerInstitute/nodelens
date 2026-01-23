@@ -39,6 +39,8 @@ class ExperimentConfig:
     model_name: str = "resnet18"
     model_config: Dict[str, Any] = field(default_factory=dict)
     pretrained: bool = False
+    # Optional explicit checkpoint path (used by scripts/run_experiment.py)
+    model_checkpoint: Optional[str] = None
 
     # Dataset configuration
     dataset_name: str = "cifar10"
@@ -93,15 +95,37 @@ class ExperimentConfig:
     # ---------------------------------------------------------------------
     # Vision / cluster-analysis extras (used by ClusterAnalysisExperiment)
     # ---------------------------------------------------------------------
+    # Calibration loader selection:
+    # - "indices": deterministic Subset loader based on saved indices (recommended)
+    # - "train_loader": iterate the provided train_loader directly (non-reproducible; may include augmentation + shuffle)
+    calibration_mode: str = "indices"
+    calibration_num_workers: int = 0
+    # Number of calibration examples used for cluster metrics (RQ/Red/Syn/TaskMI, etc.)
+    n_calibration: int = 5000
+
     # How to form channel samples from Conv outputs Y[B,C,H,W]
     # - "flatten_spatial": treat spatial positions as samples (subsample per image)
     # - "gap": global-average-pool per image (one sample per image)
+    # Where to read the channel signal for within-layer statistics:
+    # - "pre_bn": hook Conv2d outputs (pre-BN, pre-ReLU). (Backward compatible default.)
+    # - "post_bn": hook BatchNorm outputs when available (post-BN, pre-ReLU).
+    activation_point: str = "pre_bn"
     activation_samples: str = "flatten_spatial"
+    # How to form samples for task-level metrics (TaskMI, synergy).
+    # Default: None -> use GAP (avoids pseudo-replication).
+    # If you explicitly want to reuse the local sampling scheme, set to "match"
+    # (not recommended: it repeats the same image-level target across spatial samples).
+    task_activation_samples: Optional[str] = None
     spatial_samples_per_image: int = 16  # used when activation_samples="flatten_spatial"
     n_clusters: int = 4
     synergy_target: str = "logit_margin"  # logit_margin, correct_logit, logit_pc1
     synergy_candidate_pool: int = 50
     synergy_pairs: int = 10
+
+    # Cluster type mapping mode:
+    # - "global": permutation-based one-to-one assignment (stable; default).
+    # - "greedy": greedy sequential assignment (can be more label-swap prone).
+    type_mapping_mode: str = "global"
 
     # Ablation / permutation diagnostics (vision)
     run_metric_ablation: bool = False
@@ -109,12 +133,43 @@ class ExperimentConfig:
     run_permutation_baseline: bool = False
     n_permutations: int = 100
 
+    # Optional: compute per-channel loss proxy (Fisher/GN-style) on calibration data.
+    compute_loss_proxy: bool = False
+    loss_proxy_n_calibration: int = 1024
+
+    # Optional: within-layer connectivity summaries (vision).
+    # These are analysis artifacts to support within-layer organization claims (graph/community structure).
+    # When enabled, we compute lightweight adjacency summaries (top-k neighbors) and aggregate them into
+    # small type×type connectivity matrices per layer (stored in results.json).
+    compute_within_layer_connectivity: bool = False
+    within_layer_red_topk: int = 20
+    within_layer_syn_topk: int = 10
+
+    # Cross-layer halo analysis parameters (vision)
+    halo_percentile: float = 90.0
+    use_activation_weight: bool = True
+
+    # Cascade/damage testing parameters (vision)
+    cascade_n_remove: int = 5
+    damage_sample_frac: float = 0.2
+
+    # Pruning-score baselines (vision)
+    taylor_samples: int = 1024
+    geometric_median_iters: int = 10
+    geometric_median_eps: float = 1e-8
+    hrank_images: int = 256
+    hrank_pool: int = 8
+    hrank_sv_eps: float = 1e-3
+
     # Cluster-aware pruning score weights (paper sweeps)
     cluster_aware_alpha: float = 1.0
     cluster_aware_beta: float = 0.5
     cluster_aware_gamma: float = 0.3
     cluster_aware_lambda_halo: float = 0.5
     cluster_aware_protect_critical_frac: float = 0.3
+    # Annealing window used by the cluster-aware (annealed) variant
+    cluster_aware_anneal_start: float = 0.70
+    cluster_aware_anneal_end: float = 0.90
 
     # Analysis control flags
     do_dropout_analysis: bool = False
