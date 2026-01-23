@@ -103,6 +103,12 @@ class ExperimentConfig:
     synergy_candidate_pool: int = 50
     synergy_pairs: int = 10
 
+    # Ablation / permutation diagnostics (vision)
+    run_metric_ablation: bool = False
+    metric_ablations: List[str] = field(default_factory=lambda: ["all", "rq_red", "rq_syn", "red_syn"])
+    run_permutation_baseline: bool = False
+    n_permutations: int = 100
+
     # Cluster-aware pruning score weights (paper sweeps)
     cluster_aware_alpha: float = 1.0
     cluster_aware_beta: float = 0.5
@@ -138,6 +144,9 @@ class ExperimentConfig:
     pruning_distribution: str = "uniform"
     pruning_min_per_layer: float = 0.0
     pruning_max_per_layer: float = 0.95
+    # Safety cap for per-layer sparsity when using global-threshold style distributions.
+    # Set to 1.0 to disable (legacy behavior).
+    pruning_max_per_layer_sparsity_cap: float = 0.90
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     # Optional cap for post-pruning fine-tuning speed (useful for ImageNet-scale runs)
     # None => use the full training loader each epoch.

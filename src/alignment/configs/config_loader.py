@@ -743,6 +743,26 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         if metric_configs:
             flat_config["metric_configs"] = metric_configs
 
+    # Map clustering ablation settings (vision diagnostics)
+    clustering_block = nested_config.get("clustering", {})
+    if isinstance(clustering_block, dict):
+        ablation_block = clustering_block.get("ablation", {})
+        if isinstance(ablation_block, dict):
+            if "enabled" in ablation_block:
+                flat_config["run_metric_ablation"] = bool(ablation_block.get("enabled"))
+            if "modes" in ablation_block and ablation_block.get("modes") is not None:
+                flat_config["metric_ablations"] = list(ablation_block.get("modes"))
+
+    # Map permutation baseline settings (halo diagnostics)
+    halo_block = nested_config.get("halo_analysis", {})
+    if isinstance(halo_block, dict):
+        perm_block = halo_block.get("permutation_baseline", {})
+        if isinstance(perm_block, dict):
+            if "enabled" in perm_block:
+                flat_config["run_permutation_baseline"] = bool(perm_block.get("enabled"))
+            if "n_permutations" in perm_block and perm_block.get("n_permutations") is not None:
+                flat_config["n_permutations"] = int(perm_block.get("n_permutations"))
+
     # Map model configuration
     if "model" in nested_config:
         model = nested_config["model"]
@@ -1022,6 +1042,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["pruning_max_per_layer"] = pruning_block.get(
         "max_per_layer", nested_config.get("pruning_max_per_layer", 0.95)
     )
+    flat_config["pruning_max_per_layer_sparsity_cap"] = pruning_block.get(
+        "max_per_layer_sparsity_cap", nested_config.get("pruning_max_per_layer_sparsity_cap", 0.90)
+    )
     # Only set fine_tune defaults if not already set from fine_tune block above
     if "fine_tune_after_pruning" not in flat_config:
         flat_config["fine_tune_after_pruning"] = pruning_block.get("fine_tune_after_pruning", nested_config.get("fine_tune_after_pruning", True))
@@ -1271,12 +1294,19 @@ def load_config_with_overrides(
             "metrics.synergy_num_pairs": "synergy_pairs",
             # Clustering
             "clustering.n_clusters": "n_clusters",
+            "clustering.ablation.enabled": "run_metric_ablation",
+            "clustering.ablation.modes": "metric_ablations",
+            # Halo permutation baselines
+            "halo_analysis.permutation_baseline.enabled": "run_permutation_baseline",
+            "halo_analysis.permutation_baseline.n_permutations": "n_permutations",
             # Cluster-aware pruning weight sweeps (paper)
             "pruning.cluster_aware.alpha": "cluster_aware_alpha",
             "pruning.cluster_aware.beta": "cluster_aware_beta",
             "pruning.cluster_aware.gamma": "cluster_aware_gamma",
             "pruning.cluster_aware.lambda_halo": "cluster_aware_lambda_halo",
             "pruning.cluster_aware.protect_critical_frac": "cluster_aware_protect_critical_frac",
+            # Pruning distribution safety caps
+            "pruning.max_per_layer_sparsity_cap": "pruning_max_per_layer_sparsity_cap",
             # Fine-tuning after pruning
             "pruning.fine_tune.enabled": "fine_tune_after_pruning",
             "pruning.fine_tune.epochs": "fine_tune_epochs",

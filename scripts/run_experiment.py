@@ -142,6 +142,11 @@ def _create_cluster_experiment(config):
         if hasattr(config, "pruning_max_per_layer")
         else (pruning_cfg.get("max_per_layer", 0.95) if isinstance(pruning_cfg, dict) else 0.95)
     )
+    pruning_max_per_layer_sparsity_cap = float(
+        getattr(config, "pruning_max_per_layer_sparsity_cap", None)
+        if hasattr(config, "pruning_max_per_layer_sparsity_cap")
+        else (pruning_cfg.get("max_per_layer_sparsity_cap", 0.90) if isinstance(pruning_cfg, dict) else 0.90)
+    )
 
     # Optional pruning layer filters (e.g., MobileNetV2 pointwise-only pruning)
     pruning_pointwise_only = bool(
@@ -229,12 +234,41 @@ def _create_cluster_experiment(config):
         seed=getattr(config, "seed", 42),
     )
 
+    # Metric ablation + permutation baseline (vision diagnostics)
+    ablation_cfg = clustering_cfg.get("ablation", {}) if isinstance(clustering_cfg, dict) else {}
+    run_metric_ablation = bool(
+        getattr(config, "run_metric_ablation", False)
+        or (ablation_cfg.get("enabled", False) if isinstance(ablation_cfg, dict) else False)
+    )
+    metric_ablations = getattr(config, "metric_ablations", None)
+    if not metric_ablations and isinstance(ablation_cfg, dict):
+        metric_ablations = ablation_cfg.get("modes")
+    if not metric_ablations:
+        metric_ablations = ["all", "rq_red", "rq_syn", "red_syn"]
+
+    perm_cfg = halo_cfg.get("permutation_baseline", {}) if isinstance(halo_cfg, dict) else {}
+    run_permutation_baseline = bool(
+        getattr(config, "run_permutation_baseline", False)
+        or (perm_cfg.get("enabled", False) if isinstance(perm_cfg, dict) else False)
+    )
+    n_permutations = getattr(config, "n_permutations", None)
+    if n_permutations is None and isinstance(perm_cfg, dict):
+        n_permutations = perm_cfg.get("n_permutations")
+    if n_permutations is None:
+        n_permutations = 100
+
+    setattr(cluster_config, "run_metric_ablation", run_metric_ablation)
+    setattr(cluster_config, "metric_ablations", list(metric_ablations))
+    setattr(cluster_config, "run_permutation_baseline", run_permutation_baseline)
+    setattr(cluster_config, "n_permutations", int(n_permutations))
+
     # Propagate pruning distribution knobs into ClusterAnalysisConfig so all pruning
     # methods (including cluster-aware) use the same allocation regime.
     setattr(cluster_config, "pruning_distribution", str(pruning_distribution))
     setattr(cluster_config, "dependency_aware_pruning", bool(dependency_aware_pruning))
     setattr(cluster_config, "pruning_min_per_layer", float(pruning_min_per_layer))
     setattr(cluster_config, "pruning_max_per_layer", float(pruning_max_per_layer))
+    setattr(cluster_config, "pruning_max_per_layer_sparsity_cap", float(pruning_max_per_layer_sparsity_cap))
     setattr(cluster_config, "pruning_pointwise_only", bool(pruning_pointwise_only))
     setattr(cluster_config, "pruning_skip_depthwise", bool(pruning_skip_depthwise))
 

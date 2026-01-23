@@ -30,6 +30,9 @@ class PruningPipelineOptions:
     dependency_aware: bool = False
     min_amount: float = 0.0
     max_amount: float = 0.95
+    # Safety cap for per-layer sparsity when using global-threshold style distributions.
+    # Set to 1.0 to disable (legacy behavior), or e.g. 0.90 to avoid pruning entire layers.
+    max_per_layer_sparsity_cap: float = 0.90
 
 
 def _ensure_tensor(scores) -> torch.Tensor:
@@ -101,6 +104,7 @@ def run_pruning_pipeline(
             target_sparsity=target_sparsity,
             min_amount=options.min_amount,
             max_amount=options.max_amount,
+            max_per_layer_sparsity_cap=getattr(options, "max_per_layer_sparsity_cap", 0.90),
         )
         per_layer_amounts = manager.compute_distribution(model, layer_names, layer_scores=tensor_scores)
 
@@ -133,6 +137,7 @@ def run_pruning_pipeline(
         target_sparsity=target_sparsity,
         min_amount=options.min_amount,
         max_amount=options.max_amount,
+        max_per_layer_sparsity_cap=getattr(options, "max_per_layer_sparsity_cap", 0.90),
     )
     per_layer_amounts = manager.compute_distribution(model, layer_names, layer_scores=tensor_scores)
     masks = {}

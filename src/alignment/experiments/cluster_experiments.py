@@ -145,6 +145,17 @@ class ClusterAnalysisConfig:
     fine_tune_lr: float = 0.0001
     fine_tune_max_batches: Optional[int] = None
     fine_tune_weight_decay: float = 0.0
+    # Pruning allocation / fairness knobs
+    dependency_aware_pruning: bool = False
+    pruning_distribution: str = "uniform"
+    pruning_min_per_layer: float = 0.0
+    pruning_max_per_layer: float = 0.95
+    # Safety cap for per-layer sparsity when using global-threshold style distributions.
+    # Set to 1.0 to disable (legacy behavior).
+    pruning_max_per_layer_sparsity_cap: float = 0.90
+    # Optional pruning layer filters (primarily for MobileNet-like nets)
+    pruning_pointwise_only: bool = False
+    pruning_skip_depthwise: bool = False
     # Output
     output_dir: str = "results/cluster_analysis"
     device: str = "cuda"
@@ -200,6 +211,10 @@ class ClusterAnalysisExperiment:
         self.pruning_cluster_distributions = {}
         # Cache for expensive pruning scores (e.g., gradient-based Taylor)
         self._pruning_score_cache: Dict[str, Dict[str, "torch.Tensor"]] = {}
+
+        # Deterministic calibration subset (saved to disk for reproducibility)
+        self._calibration_indices: Optional[List[int]] = None
+        self._calibration_loader: Optional["DataLoader"] = None
         
         # Setup output directory
         self.output_dir = Path(config.output_dir)
@@ -216,6 +231,164 @@ class ClusterAnalysisExperiment:
             if isinstance(module, nn.Conv2d) and module.out_channels >= 4:
                 layers.append((name, module))
         return layers
+
+    def _calibration_indices_path(self) -> Path:
+        return self.output_dir / "calibration_indices.json"
+
+    def _get_calibration_indices(self) -> List[int]:
+        """
+        Return a deterministic subset of dataset indices for calibration.
+
+        This avoids relying on DataLoader shuffle / worker ordering, and makes it
+        possible to exactly reproduce metrics/clusters/pruning across machines.
+        """
+        if self._calibration_indices is not None:
+            return list(self._calibration_indices)
+
+        path = self._calibration_indices_path()
+        seed = int(getattr(self.config, "seed", 42))
+        n_cal = int(getattr(self.config, "n_calibration", 5000))
+
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text())
+                idx = payload.get("indices", payload)
+                if isinstance(idx, list) and len(idx) > 0:
+                    if len(idx) != n_cal:
+                        logger.warning(
+                            "Loaded calibration indices of length %d but config.n_calibration=%d; "
+                            "using saved indices for reproducibility.",
+                            len(idx),
+                            n_cal,
+                        )
+                    self._calibration_indices = [int(i) for i in idx]
+                    return list(self._calibration_indices)
+            except Exception as exc:
+                logger.warning("Failed to load calibration indices from %s: %s", path, exc)
+
+        # Create a fresh deterministic subset and persist it.
+        dataset = getattr(self.train_loader, "dataset", None)
+        if dataset is None:
+            raise ValueError("train_loader has no dataset; cannot create calibration subset")
+
+        try:
+            n_total = int(len(dataset))
+        except Exception as exc:
+            raise ValueError(f"train_loader.dataset has no length; cannot sample indices: {exc}") from exc
+
+        n_cal = max(1, min(n_cal, n_total))
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(n_total, size=n_cal, replace=False).tolist()
+
+        payload = {"seed": seed, "n_calibration": n_cal, "indices": [int(i) for i in idx]}
+        try:
+            path.write_text(json.dumps(payload, indent=2))
+        except Exception as exc:
+            logger.warning("Failed to write calibration indices to %s: %s", path, exc)
+
+        self._calibration_indices = [int(i) for i in idx]
+        return list(self._calibration_indices)
+
+    def _get_calibration_loader(self) -> "DataLoader":
+        """Build (and cache) a deterministic calibration DataLoader from saved indices."""
+        if self._calibration_loader is not None:
+            return self._calibration_loader
+
+        if not HAS_TORCH:
+            raise RuntimeError("Torch is required to build a calibration DataLoader")
+
+        from torch.utils.data import DataLoader, Subset
+
+        dataset = getattr(self.train_loader, "dataset", None)
+        if dataset is None:
+            raise ValueError("train_loader has no dataset; cannot build calibration DataLoader")
+
+        idx = self._get_calibration_indices()
+        subset = Subset(dataset, idx)
+
+        batch_size = int(getattr(self.train_loader, "batch_size", 128) or 128)
+        pin_memory = bool(getattr(self.train_loader, "pin_memory", False))
+        collate_fn = getattr(self.train_loader, "collate_fn", None)
+        num_workers = int(getattr(self.config, "calibration_num_workers", 0))
+        num_workers = max(0, num_workers)
+
+        self._calibration_loader = DataLoader(
+            subset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            drop_last=False,
+            collate_fn=collate_fn,
+        )
+        return self._calibration_loader
+
+    def _collect_run_metadata(self) -> Dict[str, Any]:
+        """Collect lightweight metadata for reproducibility (git commit, env, etc.)."""
+        import os
+        import platform
+        import subprocess
+        import sys
+        from datetime import datetime, timezone
+
+        meta: Dict[str, Any] = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "hostname": platform.node(),
+            "pid": os.getpid(),
+            "python": sys.version,
+            "slurm": {
+                "job_id": os.environ.get("SLURM_JOB_ID"),
+                "array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
+                "array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
+                "node_list": os.environ.get("SLURM_NODELIST"),
+            },
+        }
+
+        # Key package versions
+        try:
+            import torch  # type: ignore
+
+            meta["torch"] = {
+                "version": getattr(torch, "__version__", None),
+                "cuda_available": bool(torch.cuda.is_available()),
+                "cuda_version": getattr(torch.version, "cuda", None),
+            }
+        except Exception:
+            meta["torch"] = {}
+        try:
+            import numpy as _np  # type: ignore
+
+            meta["numpy_version"] = getattr(_np, "__version__", None)
+        except Exception:
+            pass
+        try:
+            import sklearn  # type: ignore
+
+            meta["sklearn_version"] = getattr(sklearn, "__version__", None)
+        except Exception:
+            pass
+
+        # Git info (best-effort)
+        try:
+            cwd = Path(__file__).resolve().parent
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=cwd, text=True).strip()
+            branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd, text=True).strip()
+            describe = subprocess.check_output(["git", "describe", "--always", "--dirty", "--tags"], cwd=cwd, text=True).strip()
+            # Determine dirty state
+            dirty = subprocess.call(["git", "diff", "--quiet"], cwd=cwd) != 0 or subprocess.call(
+                ["git", "diff", "--quiet", "--cached"], cwd=cwd
+            ) != 0
+            meta["git"] = {"commit": commit, "branch": branch, "describe": describe, "dirty": bool(dirty)}
+        except Exception:
+            meta["git"] = {}
+
+        # Calibration reproducibility info
+        try:
+            meta["calibration_indices_file"] = str(self._calibration_indices_path())
+        except Exception:
+            pass
+
+        return meta
     
     def compute_metrics(self) -> Dict[str, Dict[str, np.ndarray]]:
         """
@@ -285,7 +458,7 @@ class ClusterAnalysisExperiment:
 
         n_seen = 0
         with torch.no_grad():
-            for x, y in self.train_loader:
+            for x, y in self._get_calibration_loader():
                 if n_seen >= self.config.n_calibration:
                     break
 
@@ -784,6 +957,13 @@ class ClusterAnalysisExperiment:
         cascade.baseline()
         
         for name, cluster_data in self.cluster_results.items():
+            # Skip non-layer entries (e.g., "_ablation" summary blocks)
+            if not isinstance(cluster_data, dict):
+                logger.debug("Skipping non-layer cluster entry %s (non-dict)", name)
+                continue
+            if "labels" not in cluster_data or "type_mapping" not in cluster_data:
+                logger.debug("Skipping non-layer cluster entry %s (missing labels/type_mapping)", name)
+                continue
             results = cascade.by_cluster(
                 name,
                 cluster_data["labels"],
@@ -849,6 +1029,7 @@ class ClusterAnalysisExperiment:
             dependency_aware=bool(getattr(self.config, "dependency_aware_pruning", False)),
             min_amount=getattr(self.config, "pruning_min_per_layer", 0.0),
             max_amount=getattr(self.config, "pruning_max_per_layer", 0.95),
+            max_per_layer_sparsity_cap=getattr(self.config, "pruning_max_per_layer_sparsity_cap", 0.90),
         )
         
         baseline_acc = self._evaluate_accuracy()
@@ -1035,7 +1216,7 @@ class ClusterAnalysisExperiment:
         model.zero_grad(set_to_none=True)
 
         n_seen = 0
-        for x, y in self.train_loader:
+        for x, y in self._get_calibration_loader():
             if n_seen >= max_samples:
                 break
 
@@ -1189,7 +1370,7 @@ class ClusterAnalysisExperiment:
 
         n_seen = 0
         with torch.no_grad():
-            for x, _y in self.train_loader:
+            for x, _y in self._get_calibration_loader():
                 if n_seen >= max_images:
                     break
 
@@ -2231,14 +2412,31 @@ class ClusterAnalysisExperiment:
             )
         
         # Save results (including centroids for visualization)
+        metadata = self._collect_run_metadata()
+        try:
+            with open(self.output_dir / "run_metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2, default=str)
+        except Exception as exc:
+            logger.debug("Could not write run_metadata.json: %s", exc)
+
         results = {
+            "metadata": metadata,
             "config": {
                 "model_name": self.config.model_name,
                 "dataset_name": self.config.dataset_name,
                 "n_clusters": self.config.n_clusters,
+                "n_calibration": int(getattr(self.config, "n_calibration", 5000)),
                 "activation_samples": getattr(self.config, "activation_samples", "flatten_spatial"),
+                "activation_point": str(getattr(self.config, "activation_point", "pre_bn")),
                 "spatial_samples_per_image": getattr(self.config, "spatial_samples_per_image", 16),
                 "seed": getattr(self.config, "seed", 42),
+                "calibration_indices_file": str(self._calibration_indices_path()),
+                "pruning_distribution": str(getattr(self.config, "pruning_distribution", "uniform")),
+                "pruning_min_per_layer": float(getattr(self.config, "pruning_min_per_layer", 0.0)),
+                "pruning_max_per_layer": float(getattr(self.config, "pruning_max_per_layer", 0.95)),
+                "pruning_max_per_layer_sparsity_cap": float(
+                    getattr(self.config, "pruning_max_per_layer_sparsity_cap", 0.90)
+                ),
             },
             "layer_metrics": self.layer_metrics,
             "cluster_results": {
