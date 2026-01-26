@@ -43,7 +43,7 @@ class AnalysisConfig:
     output_dir: str = "./analysis_output"
     
     # Visualization style
-    style: str = "seaborn-v0_8-paper"
+    style: str = "seaborn-v0_8"
     figsize: tuple = (10, 6)
     dpi: int = 300
     format: str = "png"

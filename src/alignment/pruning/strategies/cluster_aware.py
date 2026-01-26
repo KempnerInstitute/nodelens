@@ -203,6 +203,7 @@ class ClusterAwarePruning(BasePruningStrategy):
         scores: torch.Tensor,
         n_prune: int,
         layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
     ) -> List[int]:
         """
         Select channels to prune with cluster constraints.
@@ -228,7 +229,7 @@ class ClusterAwarePruning(BasePruningStrategy):
         
         # Initialize selection
         selected = set()
-        protected = set()
+        protected = set(int(i) for i in (protected_indices or []) if i is not None)
         
         # 1. Apply critical protection constraint
         if self.config.protect_critical_frac < 1.0:
@@ -546,7 +547,7 @@ class CompositePruning(ClusterAwarePruning):
     - Synergy-pair constraints
     - Halo term (lambda = 0)
     
-    This corresponds to the "Composite" baseline in the paper.
+    This corresponds to a composite-score baseline (same features, no constraints).
     """
     
     def __init__(
@@ -570,8 +571,18 @@ class CompositePruning(ClusterAwarePruning):
         scores: torch.Tensor,
         n_prune: int,
         layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
     ) -> List[int]:
         """Simple selection by score (no constraints)."""
         scores_np = scores.cpu().numpy()
         sorted_idx = np.argsort(scores_np)
-        return sorted_idx[:n_prune].tolist()
+        # Respect external protection constraints if provided.
+        protected = set(int(i) for i in (protected_indices or []) if i is not None)
+        out = []
+        for idx in sorted_idx.tolist():
+            if idx in protected:
+                continue
+            out.append(int(idx))
+            if len(out) >= int(n_prune):
+                break
+        return out

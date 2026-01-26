@@ -160,7 +160,7 @@ class PruningDistributionManager:
         # IMPORTANT: Cap per-layer sparsity to prevent complete layer removal, which can
         # cause network collapse (especially for deep networks). Expose this as a knob
         # for reproducibility / ablations; set to 1.0 to match legacy behavior.
-        max_per_layer = float(self.kwargs.get("max_per_layer_sparsity_cap", 0.90))
+        max_per_layer = float(self.kwargs.get("max_per_layer_sparsity_cap", 1.00))
         max_per_layer = max(0.0, min(1.0, max_per_layer))
         
         amounts = {}

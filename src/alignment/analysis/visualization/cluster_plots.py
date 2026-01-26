@@ -119,7 +119,8 @@ def plot_metric_scatter_3d(
     """
     Plot a 3D scatter in (log(RQ), Redundancy, Synergy) space.
 
-    This is primarily intended for the vision paper's representative "cluster_3d_scatter.png".
+    This helper is intended for producing a representative 3D cluster scatter plot
+    (e.g., "cluster_3d_scatter.png") for quick inspection.
     """
     if not HAS_MPL:
         return None

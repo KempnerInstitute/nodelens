@@ -54,7 +54,7 @@ __all__ = [
     # Adaptive sensitivity-based
     "AdaptiveSensitivityPruning",
     "LayerSensitivity",
-    # Cluster-aware (vision paper) - includes depth/sparsity adaptive options via config
+    # Cluster-aware (vision models) - includes depth/sparsity adaptive options via config
     "ClusterAwarePruning",
     "ClusterAwarePruningConfig",
     "CompositePruning",

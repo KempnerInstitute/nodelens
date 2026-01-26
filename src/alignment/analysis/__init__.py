@@ -28,7 +28,7 @@ from .clustering import MetricSpaceClustering, ClusterResult, CrossLayerHaloAnal
 # Cascade Analysis
 from .cascade_analysis import CascadeAnalysis, DamagePrediction, CascadeResult, DamageResult
 
-# Mechanism validation (general-purpose; reused beyond the paper)
+# Mechanism validation (general-purpose; reused across experiments)
 from .mechanism_validation import (
     HaloReceiverDisruptionResult,
     SynergyPairLesionResult,

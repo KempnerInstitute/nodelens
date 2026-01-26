@@ -1,5 +1,5 @@
 """
-Optional cross-layer "read-halo" analysis for transformer FFNs (LLM paper diagnostic).
+Optional cross-layer "read-halo" analysis for transformer FFNs.
 
 This module is intentionally self-contained and **not** used by default pruning.
 
@@ -39,7 +39,7 @@ class ReadHaloConfig:
     num_texts: int = 4
     max_length: int = 256
     random_seed: int = 0
-    # Optional: "bus dependence" probe (Section 4A in planning notes).
+    # Optional: "bus dependence" probe.
     # If enabled, we run a paired forward pass (baseline vs bus-ablation) and measure
     # mean |Δu_j| per next-layer FFN channel j, then relate it to ReadConn_j.
     compute_dependence: bool = False

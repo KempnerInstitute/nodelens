@@ -5,8 +5,8 @@ This module provides reusable analysis code for validating:
 1) Synergy predictions via non-additive pair lesions
 2) Halo/influence predictions via downstream receiver disruption
 
-Paper-specific plotting scripts should live under drafts/, but the core computations
-belong here so they can be reused across projects and experiments.
+Plotting/figure scripts should live outside the reusable library code, but the core
+computations belong here so they can be reused across projects and experiments.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """
 Semantic / interpretation-facing analyses that can be computed from trained models.
 
-These are intentionally model-agnostic utilities (not paper-specific) that can be
+These are intentionally model-agnostic utilities that can be
 reused for:
 - relating discovered channel clusters to semantic properties (e.g., class selectivity)
 - sanity checks about what clusters/metrics "mean" beyond pruning

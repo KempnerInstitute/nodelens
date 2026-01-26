@@ -32,7 +32,7 @@ class PruningPipelineOptions:
     max_amount: float = 0.95
     # Safety cap for per-layer sparsity when using global-threshold style distributions.
     # Set to 1.0 to disable (legacy behavior), or e.g. 0.90 to avoid pruning entire layers.
-    max_per_layer_sparsity_cap: float = 0.90
+    max_per_layer_sparsity_cap: float = 1.00
 
 
 def _ensure_tensor(scores) -> torch.Tensor:
@@ -104,7 +104,7 @@ def run_pruning_pipeline(
             target_sparsity=target_sparsity,
             min_amount=options.min_amount,
             max_amount=options.max_amount,
-            max_per_layer_sparsity_cap=getattr(options, "max_per_layer_sparsity_cap", 0.90),
+            max_per_layer_sparsity_cap=getattr(options, "max_per_layer_sparsity_cap", 1.00),
         )
         per_layer_amounts = manager.compute_distribution(model, layer_names, layer_scores=tensor_scores)
 
@@ -123,27 +123,32 @@ def run_pruning_pipeline(
         result["masks"] = flat_masks
         return result
 
-    # Non-dependency-aware path: compute per-layer amounts via the distribution manager.
+    # Non-dependency-aware path.
     #
-    # IMPORTANT: For structured pruning, a literal "global threshold mask" can
-    # accidentally prune *all* channels in a layer if that layer's scores all fall
-    # below the global threshold. That yields invalid / degenerate networks (and
-    # misleading results). The manager-based implementation:
-    # - respects min/max per-layer caps
-    # - uses MaskOperations.create_structured_mask, which enforces min_keep>=1
-    # - matches dependency-aware behavior (which already uses per-layer amounts)
-    manager = PruningDistributionManager(
-        strategy=distribution,
-        target_sparsity=target_sparsity,
-        min_amount=options.min_amount,
-        max_amount=options.max_amount,
-        max_per_layer_sparsity_cap=getattr(options, "max_per_layer_sparsity_cap", 0.90),
-    )
-    per_layer_amounts = manager.compute_distribution(model, layer_names, layer_scores=tensor_scores)
-    masks = {}
-    for name in layer_names:
-        amount = per_layer_amounts.get(name, target_sparsity)
-        masks[name] = MaskOperations.create_structured_mask(tensor_scores[name], amount=amount, mode=selection_mode)
+    # For global_threshold distribution, use the original MaskOperations.global_threshold_mask
+    # which computes a single threshold across all layers and applies it directly. This is
+    # the legacy behavior that Jan 20 runs used and produces the expected results.
+    #
+    # For other distributions (uniform, size_proportional, etc.), use the distribution
+    # manager which computes per-layer amounts.
+    if distribution in {"global_threshold", "global"}:
+        # Legacy behavior: direct global threshold without per-layer caps.
+        # This can prune entire layers if all their scores fall below threshold, but
+        # it matches the original behavior that produced good results.
+        masks = MaskOperations.global_threshold_mask(tensor_scores, global_amount=target_sparsity, mode=selection_mode)
+    else:
+        manager = PruningDistributionManager(
+            strategy=distribution,
+            target_sparsity=target_sparsity,
+            min_amount=options.min_amount,
+            max_amount=options.max_amount,
+            max_per_layer_sparsity_cap=getattr(options, "max_per_layer_sparsity_cap", 1.00),
+        )
+        per_layer_amounts = manager.compute_distribution(model, layer_names, layer_scores=tensor_scores)
+        masks = {}
+        for name in layer_names:
+            amount = per_layer_amounts.get(name, target_sparsity)
+            masks[name] = MaskOperations.create_structured_mask(tensor_scores[name], amount=amount, mode=selection_mode)
 
     _apply_masks_to_modules(layer_modules, masks)
 

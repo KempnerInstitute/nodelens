@@ -89,7 +89,7 @@ class WandaPruning(BasePruningStrategy):
         """
         logger.info(f"Calibrating Wanda with {self.num_calibration_samples} samples...")
 
-        # IMPORTANT (paper-faithful behavior + memory):
+        # IMPORTANT (faithful to canonical Wanda behavior + memory):
         # Official Wanda implementations accumulate a running statistic (per layer) instead of
         # storing all activations. The canonical update (see `external/wanda/layerwrapper.py`
         # in origin/iss117_acllm_v3) is equivalent to maintaining:
@@ -650,9 +650,9 @@ class SparseGPTPruning(BasePruningStrategy):
 
         Important:
         - This operates in the *unstructured* setting (weight-level pruning).
-        - In our paper, we also provide a separate *channel-adapted* SparseGPT baseline which
+        - Some workflows also provide a separate *channel-adapted* SparseGPT baseline which
           uses the diagonal saliency as a scoring signal for structured channel pruning. This
-          method is the paper-faithful unstructured variant.
+          method is the canonical unstructured (weight-level) variant.
         """
         if not hasattr(module, "weight"):
             raise ValueError("Module does not have weights")
@@ -1509,7 +1509,7 @@ class SlimLLMPruning(BasePruningStrategy):
     
     Reference:
         Guo et al. "SlimLLM: An Expert Mixture Approach to Structured Pruning of LLMs"
-        ICML 2025
+        (2025)
     """
     
     def __init__(

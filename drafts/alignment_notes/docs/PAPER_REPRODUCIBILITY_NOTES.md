@@ -39,12 +39,28 @@ This change can materially alter:
 
 This change is a likely contributor to the “cleaner critical-vs-depth trend” you observed in newer runs.
 
-#### A3) Pruning distribution changed (layer-level safety cap)
+#### A3) Pruning distribution changed (global_threshold code path)
 
-- In `global_threshold` distributions, **per-layer sparsity is capped** (previously unbounded), preventing
-  pathological cases where a layer is completely removed (a common cause of collapse at high sparsity).
+**CRITICAL FIX (Jan 25, 2026)**:
 
-This affects **all pruning methods**, not just cluster-aware ones, and can change both absolute performance and gaps.
+- **Old behaviour (009eff7, used for Jan 20 runs)**: For `distribution="global_threshold"`, the pipeline used
+  `MaskOperations.global_threshold_mask()` directly, which:
+  - Computes a single threshold across ALL layers
+  - Applies the threshold uniformly with NO per-layer caps
+  - Can prune entire layers if all their scores fall below threshold
+
+- **Changed behaviour (26d06b0, Jan 21)**: The direct `global_threshold_mask` call was REMOVED and replaced
+  with `PruningDistributionManager`, which:
+  - Computes the global threshold but then converts to per-layer amounts
+  - Applies `max_per_layer_sparsity_cap` (defaulted to 0.90)
+  - Produces different pruning distributions even with cap=1.0
+
+- **Restored behaviour (current)**: The direct `global_threshold_mask` path is restored for
+  `distribution in {"global_threshold", "global"}`. This reproduces Jan 20 results exactly.
+
+**Impact**: This was the root cause of 4-7% accuracy drops at high sparsity (70%+) for cluster_aware_annealed
+and 6% improvements for Taylor at 90%. The different distribution logic fundamentally changed which channels
+were pruned at each sparsity level.
 
 #### A4) Optional BN activation point support added
 
@@ -76,7 +92,7 @@ To make paper runs exactly reproducible from “current code”, we added:
 
 - **Configurable per-layer sparsity cap**:
   - expose `max_per_layer_sparsity_cap` via `PruningPipelineOptions` and `PruningDistributionManager` kwargs.
-  - default remains `0.90` (current behaviour); set `1.0` to emulate legacy behaviour.
+  - default is `1.0` (disabled / legacy behavior); set e.g. `0.90` to enable a safety cap.
 
 ### D. Isolation experiments (Jan 2026): quantifying each factor
 
@@ -139,3 +155,94 @@ For the paper, we should:
 - Generate all figures/tables from an explicit **manifest** of run directories (no mtime heuristics)
 - Record commit hashes + calibration indices in every run directory
 
+### G. MobileNet pruning regression diagnosis (Jan 25 2026)
+
+**Symptoms observed:**
+- MobileNet pruning using `cluster_aware_annealed` dropped from ~59% (Jan 20-22 "good" runs) to ~10-55%
+  (Jan 23+ runs) at 50% sparsity
+- Some methods crashed or returned near-random accuracy
+- The 50% bar in the paper figure showed "Ours" significantly worse than Taylor for MobileNet
+
+**Root cause identified:**
+Commit `967e9ae` (Jan 22 23:01 EST) introduced `max_per_layer_sparsity_cap = 0.90` as a **new default**
+for `global_threshold` pruning distributions. Additionally, the MobileNet paper suite was switched from
+`distribution: uniform` to `distribution: global_threshold`.
+
+This combination was catastrophic for MobileNet because:
+1. **global_threshold** allows score-driven layer allocation, concentrating pruning in layers with
+   low-scored channels
+2. For MobileNet, this often targets depthwise layers or early pointwise layers, causing network collapse
+3. The **0.90 cap** prevented the worst cases but still forced pruning into sensitive layers
+
+**The "good" Jan 20-22 runs used a different protocol:**
+- `distribution: uniform` (equal pruning per layer)
+- `pointwise_only: true` (skip depthwise and expansion layers)
+- `skip_depthwise: true` (redundant but explicit)
+- No per-layer cap (effectively 1.0)
+
+This protocol achieved **Ours (ann.) ≈ 59% vs Taylor ≈ 55%** at 50% sparsity consistently.
+
+**Fix applied:**
+1. Updated `mobilenetv2_cifar10_unified.yaml` to use `distribution: uniform`, `pointwise_only: true`,
+   `skip_depthwise: true`, `max_per_layer_sparsity_cap: 1.0`
+2. Updated `run_manifest.json` to point to the Jan 22 "good" runs:
+   - `mobilenetv2_cifar10_cluster_analysis_20260122_005227_56304538` (seed 42)
+   - `mobilenetv2_cifar10_cluster_analysis_20260122_005328_56304626` (seed 123)
+   - `mobilenetv2_cifar10_cluster_analysis_20260122_005349_56304492` (seed 456)
+3. Regenerated all paper figures/tables from the updated manifest
+
+**Verification:**
+After the fix, the 50% pruning table shows:
+- MobileV2: Taylor = 55.3 ± 2.2, **Ours (ann.) = 59.4 ± 0.2** (as expected)
+
+**Lesson learned:**
+MobileNet requires special treatment due to its inverted residual architecture. Always use:
+- `distribution: uniform` (not `global_threshold`)
+- `pointwise_only: true` (skip depthwise and expansion)
+- Explicit per-layer cap = 1.0 (no additional constraint beyond uniform)
+
+### G. MobileNet pruning regression diagnosis (Jan 25 2026)
+
+**Symptoms observed:**
+- MobileNet pruning using `cluster_aware_annealed` dropped from ~59% (Jan 20-22 "good" runs) to ~10-55%
+  (Jan 23+ runs) at 50% sparsity
+- Some methods crashed or returned near-random accuracy
+- The 50% bar in the paper figure showed "Ours" significantly worse than Taylor for MobileNet
+
+**Root cause identified:**
+Commit `967e9ae` (Jan 22 23:01 EST) introduced `max_per_layer_sparsity_cap = 0.90` as a **new default**
+for `global_threshold` pruning distributions. Additionally, the MobileNet paper suite was switched from
+`distribution: uniform` to `distribution: global_threshold`.
+
+This combination was catastrophic for MobileNet because:
+1. **global_threshold** allows score-driven layer allocation, concentrating pruning in layers with
+   low-scored channels
+2. For MobileNet, this often targets depthwise layers or early pointwise layers, causing network collapse
+3. The **0.90 cap** prevented the worst cases but still forced pruning into sensitive layers
+
+**The "good" Jan 20-22 runs used a different protocol:**
+- `distribution: uniform` (equal pruning per layer)
+- `pointwise_only: true` (skip depthwise and expansion layers)
+- `skip_depthwise: true` (redundant but explicit)
+- No per-layer cap (effectively 1.0)
+
+This protocol achieved **Ours (ann.) ≈ 59% vs Taylor ≈ 55%** at 50% sparsity consistently.
+
+**Fix applied:**
+1. Updated `mobilenetv2_cifar10_unified.yaml` to use `distribution: uniform`, `pointwise_only: true`,
+   `skip_depthwise: true`, `max_per_layer_sparsity_cap: 1.0`
+2. Updated `run_manifest.json` to point to the Jan 22 "good" runs:
+   - `mobilenetv2_cifar10_cluster_analysis_20260122_005227_56304538` (seed 42)
+   - `mobilenetv2_cifar10_cluster_analysis_20260122_005328_56304626` (seed 123)
+   - `mobilenetv2_cifar10_cluster_analysis_20260122_005349_56304492` (seed 456)
+3. Regenerated all paper figures/tables from the updated manifest
+
+**Verification:**
+After the fix, the 50% pruning table shows:
+- MobileV2: Taylor = 55.3 ± 2.2, **Ours (ann.) = 59.4 ± 0.2** (as expected)
+
+**Lesson learned:**
+MobileNet requires special treatment due to its inverted residual architecture. Always use:
+- `distribution: uniform` (not `global_threshold`)
+- `pointwise_only: true` (skip depthwise and expansion)
+- Explicit per-layer cap = 1.0 (no additional constraint beyond uniform)

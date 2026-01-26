@@ -941,6 +941,11 @@ def main():
     parser.add_argument("--output-dir", type=str, help="Override output directory (full path)")
     parser.add_argument("--base-output-dir", type=str, help="Override base output directory (creates job subdir)")
     parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow running with a dirty git working tree (not recommended for paper-grade artifacts).",
+    )
+    parser.add_argument(
         "--analysis-only",
         action="store_true",
         help="Load existing experiment and regenerate analysis/plots",
@@ -952,6 +957,11 @@ def main():
     )
 
     args, unknown = parser.parse_known_args()
+
+    # Determine repo root for provenance checks. This works both when running from a
+    # source checkout and when the package is importable (where the earlier fallback
+    # ImportError branch is not taken).
+    repo_root_path = Path(__file__).resolve().parent.parent
 
     # Parse overrides
     overrides = {}
@@ -966,6 +976,31 @@ def main():
     from alignment.configs.config_loader import load_config_with_overrides as proper_load_config
     cli_overrides = [x for x in (unknown or []) if isinstance(x, str) and "=" in x]
     config = proper_load_config(args.config, overrides=overrides or None, cli_args=cli_overrides or None)
+
+    # -------------------------------------------------------------------------
+    # Paper-grade reproducibility guard: require clean git state unless explicitly
+    # overridden. This prevents '...-dirty' results from being accidentally used
+    # in reports/figures.
+    # -------------------------------------------------------------------------
+    def _git_porcelain_status(cwd: str) -> str:
+        try:
+            import subprocess
+
+            return subprocess.check_output(["git", "status", "--porcelain"], cwd=cwd, text=True).strip()
+        except Exception:
+            return ""
+
+    # Only enforce for full experiment runs (not analysis-only regeneration).
+    if not bool(args.analysis_only):
+        status = _git_porcelain_status(str(repo_root_path))
+        is_dirty = bool(status)
+        if is_dirty and not bool(args.allow_dirty):
+            print("\nERROR: git working tree is dirty.")
+            print("Refusing to run because this often leads to irreproducible artifacts.")
+            print("Options:")
+            print("  - Commit/stash your changes, then rerun")
+            print("  - Or rerun with --allow-dirty (will record git diff in the run dir)\n")
+            sys.exit(2)
     
     # Override base_output_dir if provided via CLI
     if args.base_output_dir:
@@ -1024,6 +1059,22 @@ def main():
 
         config_save_path = output_dir / "experiment_config.yaml"
         config.save(config_save_path)
+
+        # If we allowed a dirty run, record the diff for exact provenance.
+        if bool(args.allow_dirty):
+            try:
+                import subprocess
+
+                status = subprocess.check_output(["git", "status", "--porcelain"], cwd=str(repo_root_path), text=True).strip()
+                if status:
+                    (output_dir / "git_status_porcelain.txt").write_text(status + "\n")
+                    diff = subprocess.check_output(["git", "diff"], cwd=str(repo_root_path), text=True)
+                    (output_dir / "git_diff.patch").write_text(diff)
+                    diff_cached = subprocess.check_output(["git", "diff", "--cached"], cwd=str(repo_root_path), text=True)
+                    if diff_cached.strip():
+                        (output_dir / "git_diff_cached.patch").write_text(diff_cached)
+            except Exception:
+                pass
 
         # Set paths - use new subdirectory structure
         config.checkpoint_dir = str(output_dir / "checkpoints")

@@ -103,6 +103,25 @@ class ExperimentConfig:
     # Number of calibration examples used for cluster metrics (RQ/Red/Syn/TaskMI, etc.)
     n_calibration: int = 5000
 
+    # ---------------------------------------------------------------------
+    # Reproducibility helper for legacy runs (vision / cluster analysis)
+    # ---------------------------------------------------------------------
+    # Some historical runs performed training before metric computation, and then
+    # computed metrics by iterating a *shuffled* DataLoader (train_loader) for the
+    # first `n_calibration` samples. In that regime, the exact calibration subset
+    # depends on the RNG state after training because DataLoader/RandomSampler
+    # consumes torch RNG when creating each epoch iterator.
+    #
+    # When loading a checkpoint (do_train=false), you can optionally advance the
+    # torch RNG state to approximate the "post-training" shuffle state before
+    # computing calibration-based metrics in calibration_mode="train_loader".
+    #
+    # Default: 0 (disabled).
+    simulate_post_train_shuffle_epochs: int = 0
+    # Whether to also simulate the RNG consumption from creating a test_loader
+    # iterator once per epoch (common in training loops).
+    simulate_post_train_include_eval: bool = True
+
     # How to form channel samples from Conv outputs Y[B,C,H,W]
     # - "flatten_spatial": treat spatial positions as samples (subsample per image)
     # - "gap": global-average-pool per image (one sample per image)
@@ -145,6 +164,13 @@ class ExperimentConfig:
     within_layer_red_topk: int = 20
     within_layer_syn_topk: int = 10
 
+    # Between-layer routing metrics (vision)
+    # These are computed from the same effective influence matrix used for halos.
+    routing_bottleneck_topk: int = 5  # top-k mass summaries for bottleneck metrics
+    outred_candidate_pool: int = 64   # candidate sources per channel when estimating outgoing overlap
+    outred_topm: int = 8              # average of top-m overlaps for OutRed
+    bottleneck_protect_percentile: float = 95.0  # used by bottleneck-protect pruning variants
+
     # Cross-layer halo analysis parameters (vision)
     halo_percentile: float = 90.0
     use_activation_weight: bool = True
@@ -161,7 +187,7 @@ class ExperimentConfig:
     hrank_pool: int = 8
     hrank_sv_eps: float = 1e-3
 
-    # Cluster-aware pruning score weights (paper sweeps)
+    # Cluster-aware pruning score weights (for sweeps / ablations)
     cluster_aware_alpha: float = 1.0
     cluster_aware_beta: float = 0.5
     cluster_aware_gamma: float = 0.3
@@ -170,6 +196,49 @@ class ExperimentConfig:
     # Annealing window used by the cluster-aware (annealed) variant
     cluster_aware_anneal_start: float = 0.70
     cluster_aware_anneal_end: float = 0.90
+    
+    # NEW: Additional cluster-aware method variants
+    # Weight for Taylor component in cluster_aware_taylor_blend method
+    cluster_aware_taylor_weight: float = 0.3
+    # Enable depth-adaptive score weights (early layers more conservative)
+    cluster_aware_depth_adaptive: bool = False
+    # Early/late layer weight profiles for depth-adaptive mode
+    cluster_aware_early_alpha: float = 1.5   # Higher RQ weight early
+    cluster_aware_early_gamma: float = 0.1   # Lower redundancy penalty early
+    cluster_aware_late_alpha: float = 0.8    # Lower RQ weight late
+    cluster_aware_late_gamma: float = 0.5    # Higher redundancy penalty late
+    # Fraction of layers considered "early"
+    cluster_aware_early_layer_frac: float = 0.3
+
+    # ---------------------------------------------------------------------
+    # Generalized Taylor pruning (vision)
+    # ---------------------------------------------------------------------
+    # These parameters control the analytically-motivated "generalized Taylor" family
+    # (see src/alignment/pruning/strategies/generalized_taylor.py). They are exposed
+    # here so they can be set in YAML and saved into experiment_config.yaml for
+    # reproducibility.
+    generalized_taylor_weight_rq: float = 1.0
+    generalized_taylor_weight_redundancy: float = 0.3
+    generalized_taylor_weight_synergy: float = 0.5
+    generalized_taylor_gradient_exponent: float = 1.0
+    generalized_taylor_activation_exponent: float = 1.0
+    generalized_taylor_redundancy_discount_beta: float = 1.0
+    generalized_taylor_synergy_boost_gamma: float = 0.5
+    generalized_taylor_critical_multiplier: float = 1.5
+    generalized_taylor_redundant_multiplier: float = 0.5
+    generalized_taylor_synergistic_multiplier: float = 1.2
+    generalized_taylor_background_multiplier: float = 0.8
+    generalized_taylor_gate_mode: str = "sigmoid"  # "linear" | "sigmoid"
+    generalized_taylor_gate_temperature: float = 6.0
+    generalized_taylor_gate_bias: float = 0.5
+    generalized_taylor_gate_eps: float = 0.05
+    generalized_taylor_gate_min: float = 0.0
+    generalized_taylor_gate_include_cluster_multiplier: bool = True
+    # Numerical stability knobs (kept explicit so they can be overridden in configs if needed)
+    generalized_taylor_structural_eps: float = 0.1
+    generalized_taylor_rq_log_eps: float = 1e-10
+    generalized_taylor_grad_over_act_eps: float = 1e-8
+    generalized_taylor_lp_optimal_l2_reg: float = 0.01
 
     # Analysis control flags
     do_dropout_analysis: bool = False
@@ -201,7 +270,7 @@ class ExperimentConfig:
     pruning_max_per_layer: float = 0.95
     # Safety cap for per-layer sparsity when using global-threshold style distributions.
     # Set to 1.0 to disable (legacy behavior).
-    pruning_max_per_layer_sparsity_cap: float = 0.90
+    pruning_max_per_layer_sparsity_cap: float = 1.00
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     # Optional cap for post-pruning fine-tuning speed (useful for ImageNet-scale runs)
     # None => use the full training loader each epoch.

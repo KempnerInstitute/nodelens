@@ -10,8 +10,8 @@
 ## Configuration
 
 - [Template](../configs/template.yaml) - Complete parameter reference
-- [Cluster Analysis](../configs/cluster_analysis/) - Cluster-based analysis configs
-- [Paper Configs](../configs/paper/) - LLM paper experiment configs
+- [Vision pruning configs](../configs/vision_prune/) - Vision pruning + clustering configs
+- [LLM pruning configs](../configs/prune_llm/) - LLM pruning + analysis configs
 - [Examples](../configs/examples/) - Example configurations
 
 ## Quick Reference
@@ -41,10 +41,10 @@
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
 # LLM analysis
-python scripts/run_experiment.py --config configs/paper/llama3_8b_full.yaml
+python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_full.yaml
 
 # Cluster-based analysis
-python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
 
 # Post-hoc analysis
 python scripts/run_analysis.py --results-dir ./results --output-dir ./plots

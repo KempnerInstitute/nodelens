@@ -1,11 +1,14 @@
 """
-Mechanism diagnostic plots for SCAR-style LLM pruning experiments.
+Mechanism diagnostic plots for LLM pruning experiments.
 
-These are intentionally lightweight and deterministic, meant to produce:
-- Loss-proxy concentration plots (supernode heavy-tail)
-- Halo structure plots (Conn vs redundancy/protection)
-- Summary plots for the mechanism evidence section
-- A simple schematic diagram of the SCAR pipeline
+These are general-purpose visualization utilities for:
+- Loss-proxy concentration plots (heavy-tail analysis)
+- Halo structure plots (connectivity vs redundancy)
+- Sparsity-performance curves
+- Schematic diagrams for FFN pruning pipelines
+
+For paper-specific styling and figure generation, see the paper
+directory (e.g., drafts/LLM_prune/paper/paper_plotting.py).
 """
 
 from __future__ import annotations
@@ -15,11 +18,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import numpy as np
 import torch
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Rectangle
 
 logger = logging.getLogger(__name__)
+
+# Default color palette for pruning methods (can be overridden)
+DEFAULT_METHOD_COLORS = {
+    "method_a": "#c0392b",
+    "method_b": "#e74c3c",
+    "method_c": "#27ae60",
+    "baseline_1": "#3498db",
+    "baseline_2": "#f39c12",
+    "baseline_3": "#9b59b6",
+    "magnitude": "#e67e22",
+    "random": "#95a5a6",
+    "unpruned": "#2c3e50",
+}
 
 
 def _to_numpy(x: Any) -> np.ndarray:
@@ -45,7 +62,7 @@ def plot_loss_proxy_concentration(
     dpi: int = 300,
 ) -> plt.Figure:
     """
-    Two-panel plot (ICML figure* friendly):
+    Two-panel plot sized for a typical two-column figure:
       (a) sorted LP values (heavy tail)
       (b) cumulative proxy mass vs fraction of channels kept
     """
@@ -116,7 +133,7 @@ def plot_halo_structure(
     max_points: int = 60000,
 ) -> plt.Figure:
     """
-    Three-panel plot (ICML figure* friendly):
+    Three-panel plot sized for a typical two-column figure:
       (a) Conn vs redundancy-to-core (halo channels)
       (b) Redundancy-to-core distribution: halo vs non-halo (sample where defined)
       (c) Protect vs Conn (all channels; halo emphasized)
@@ -395,7 +412,7 @@ def plot_sparsity_perplexity_curves(
     dpi: int = 300,
 ) -> plt.Figure:
     xs = np.asarray(list(sparsities), dtype=np.float64)
-    fig, ax = plt.subplots(figsize=(3.45, 2.6))
+    fig, ax = plt.subplots(figsize=(3.45, 2.35))
 
     for label in sorted(ppl_by_method.keys()):
         ys_raw = ppl_by_method[label]
@@ -413,11 +430,23 @@ def plot_sparsity_perplexity_curves(
         except Exception:
             pass
 
-    ax.set_xlabel("Structured FFN channel sparsity", fontsize=10)
-    ax.set_ylabel("Perplexity (WikiText-2)", fontsize=10)
-    ax.set_title("Perplexity vs sparsity", fontsize=11, fontweight="bold")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="upper left", fontsize=7.5, frameon=True)
+    ax.set_xlabel("FFN channel sparsity", fontsize=9)
+    ax.set_ylabel("PPL (WikiText-2)", fontsize=9)
+    # Titles are redundant with paper captions; keep typography compact.
+    ax.set_title("")
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.legend(
+        loc="lower left",
+        bbox_to_anchor=(0.0, 1.02, 1.0, 0.2),
+        mode="expand",
+        ncol=2,
+        fontsize=6.8,
+        frameon=True,
+        borderaxespad=0.0,
+        columnspacing=0.9,
+        handlelength=2.0,
+    )
 
     # Use log if the dynamic range is large.
     all_vals: List[float] = []
@@ -454,7 +483,7 @@ def plot_sparsity_accuracy_curves(
     dpi: int = 300,
 ) -> plt.Figure:
     xs = np.asarray(list(sparsities), dtype=np.float64)
-    fig, ax = plt.subplots(figsize=(3.45, 2.6))
+    fig, ax = plt.subplots(figsize=(3.45, 2.35))
 
     for label in sorted(acc_by_method.keys()):
         ys_raw = acc_by_method[label]
@@ -472,11 +501,23 @@ def plot_sparsity_accuracy_curves(
         except Exception:
             pass
 
-    ax.set_xlabel("Structured FFN channel sparsity", fontsize=10)
-    ax.set_ylabel(ylabel, fontsize=10)
-    ax.set_title(title, fontsize=11, fontweight="bold")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="lower left", fontsize=7.5, frameon=True)
+    ax.set_xlabel("FFN channel sparsity", fontsize=9)
+    ax.set_ylabel(ylabel, fontsize=9)
+    # Titles are redundant with paper captions; keep this small.
+    ax.set_title(title, fontsize=9, fontweight="normal")
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.legend(
+        loc="lower left",
+        bbox_to_anchor=(0.0, 1.02, 1.0, 0.2),
+        mode="expand",
+        ncol=2,
+        fontsize=6.8,
+        frameon=True,
+        borderaxespad=0.0,
+        columnspacing=0.9,
+        handlelength=2.0,
+    )
 
     plt.tight_layout()
     if save_path is not None:
@@ -509,7 +550,7 @@ def plot_scar_schematic(
             facecolor=fc,
         )
         ax.add_patch(p)
-        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=10.5)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=10.0)
 
     def arrow(x1, y1, x2, y2, color="#2c3e50"):
         a = FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="->", linewidth=1.6, color=color, mutation_scale=12)
@@ -534,7 +575,7 @@ def plot_scar_schematic(
         y_bot,
         col_w,
         h_bot,
-        r"Loss proxy\n$\mathrm{LP}_i=\frac{1}{2}\,\mathbb{E}[(u_i s_i)^2]$",
+        "Loss proxy\n$\\mathrm{LP}_i=\\frac{1}{2}\\,\\mathbb{E}[(u_i s_i)^2]$",
         fc="#fdf2e9",
         ec=C_CAL,
     )
@@ -542,18 +583,26 @@ def plot_scar_schematic(
 
     # Col 2
     x1 = x0 + col_w + gap
-    box(x1, y_top, col_w, h_top, r"Supernodes\n(top-$\rho$ by LP)\n\bf protect", fc="#fdebd0", ec=C_SUP)
+    box(x1, y_top, col_w, h_top, "Supernodes\n(top-$\\rho$ by LP)\nprotect", fc="#fdebd0", ec=C_SUP)
     box(x1, y_bot, col_w, h_bot, "FFN channels\n(sorted by LP)", fc="#f8f9f9", ec=C_STEP)
 
     # Col 3
     x2 = x1 + col_w + gap
-    box(x2, y_top, col_w, h_top, r"Halo (Conn)\n(top-$\eta$)", fc="#eaf2f8", ec="#1f77b4")
-    box(x2, y_bot, col_w, h_bot, r"Red-to-core\n$\max_{s\in\mathcal{M}}\mathrm{Red}(j,s)$", fc="#eaf2f8", ec="#1f77b4")
+    box(x2, y_top, col_w, h_top, "Halo (Conn)\n(top-$\\eta$)", fc="#eaf2f8", ec="#1f77b4")
+    box(
+        x2,
+        y_bot,
+        col_w,
+        h_bot,
+        "Red-to-core\n$\\max_{s\\in\\mathcal{M}}\\mathrm{Red}(j,s)$",
+        fc="#eaf2f8",
+        ec="#1f77b4",
+    )
 
     # Col 4
     x3 = x2 + col_w + gap
-    box(x3, y_top, col_w, h_top, r"Protect\n(rank-power)", fc="#f8f9f9", ec=C_STEP)
-    box(x3, y_bot, col_w, h_bot, r"Prune\n(redundant followers)", fc="#f8f9f9", ec=C_STEP)
+    box(x3, y_top, col_w, h_top, "Protect\n(rank-power)", fc="#f8f9f9", ec=C_STEP)
+    box(x3, y_bot, col_w, h_bot, "Prune\n(redundant followers)", fc="#f8f9f9", ec=C_STEP)
 
     # Arrows
     arrow(x0 + col_w, y_top + h_top / 2, x1, y_top + h_top / 2, color=C_STEP)
@@ -564,6 +613,339 @@ def plot_scar_schematic(
     arrow(x2 + col_w, y_bot + h_bot / 2, x3, y_bot + h_bot / 2, color=C_STEP)
 
     ax.text(0.5, 0.98, "SCAR pipeline overview", ha="center", va="top", fontsize=12, fontweight="bold", color=C_STEP)
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+
+
+def plot_main_schematic(
+    *,
+    ppl_wanda: Optional[float] = None,
+    ppl_scar: Optional[float] = None,
+    sparsity_pct: int = 50,
+    d_model: int = 4096,
+    d_mlp: int = 14336,
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """
+    Main paper schematic:
+      (A) SwiGLU FFN block with a few highlighted channels
+      (B) Supernode/halo write overlap via W_down
+      (C) Headline pruning result at a target sparsity
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.55))
+    # Give subplot titles a bit more breathing room (avoid overlap/cropping).
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.92, bottom=0.10, wspace=0.40)
+    for ax in axes:
+        ax.set_axis_off()
+
+    C_SUP = "#c0392b"
+    C_HALO = "#f39c12"
+    C_REG = "#bdc3c7"
+    C_INK = "#2c3e50"
+
+    # -------------------------
+    # (A) SwiGLU FFN block
+    # -------------------------
+    ax = axes[0]
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.text(0.00, 0.98, "(A) SwiGLU FFN", ha="left", va="top", fontsize=10.0, fontweight="bold")
+
+    ax.add_patch(Circle((0.07, 0.50), 0.06, facecolor="white", edgecolor=C_INK, linewidth=2.0))
+    ax.text(0.07, 0.50, "x", ha="center", va="center", fontsize=11, fontweight="bold")
+    ax.text(0.07, 0.33, f"Input\n({d_model})", ha="center", va="top", fontsize=8, color=C_INK)
+
+    ax.add_patch(Circle((0.93, 0.50), 0.06, facecolor="white", edgecolor=C_INK, linewidth=2.0))
+    ax.text(0.93, 0.50, "y", ha="center", va="center", fontsize=11, fontweight="bold")
+    ax.text(0.93, 0.33, f"Output\n({d_model})", ha="center", va="top", fontsize=8, color=C_INK)
+
+    def _box(x, y, w, h, label):
+        ax.add_patch(
+            FancyBboxPatch(
+                (x, y),
+                w,
+                h,
+                boxstyle="round,pad=0.02,rounding_size=0.03",
+                linewidth=1.8,
+                edgecolor=C_INK,
+                facecolor="white",
+            )
+        )
+        ax.text(x + w / 2, y + h / 2, label, ha="center", va="center", fontsize=9.5, fontweight="bold")
+
+    _box(0.22, 0.62, 0.18, 0.22, "Gate")
+    _box(0.22, 0.16, 0.18, 0.22, "Up")
+    _box(0.62, 0.39, 0.18, 0.22, "Down")
+
+    ax.add_patch(Circle((0.48, 0.50), 0.035, facecolor="white", edgecolor=C_INK, linewidth=1.6))
+    ax.text(0.48, 0.50, "⊙", ha="center", va="center", fontsize=12)
+
+    def _arrow(p1, p2, ls="-", lw=1.6, color=C_INK):
+        ax.add_patch(FancyArrowPatch(p1, p2, arrowstyle="->", linewidth=lw, linestyle=ls, color=color, mutation_scale=10))
+
+    _arrow((0.13, 0.50), (0.22, 0.73))
+    _arrow((0.13, 0.50), (0.22, 0.27))
+    _arrow((0.40, 0.73), (0.45, 0.53))
+    _arrow((0.40, 0.27), (0.45, 0.47))
+    _arrow((0.515, 0.50), (0.62, 0.50))
+    _arrow((0.80, 0.50), (0.87, 0.50))
+
+    # Stylized intermediate channels u
+    xs = np.linspace(0.40, 0.56, 14)
+    for i, xi in enumerate(xs):
+        color = C_REG
+        lw = 2.0
+        if i in (3, 10):
+            color = C_SUP
+            lw = 3.0
+        elif i in (2, 4, 9, 11):
+            color = C_HALO
+            lw = 2.6
+        ax.plot([xi, xi], [0.26, 0.74], color=color, linewidth=lw, solid_capstyle="round", alpha=0.95)
+    ax.text(0.48, 0.18, f"$u\\in\\mathbb{{R}}^{{{d_mlp}}}$", ha="center", va="center", fontsize=8.5, color="#7f8c8d")
+
+    # -------------------------
+    # (B) Supernode-halo write overlap
+    # -------------------------
+    ax = axes[1]
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.text(0.00, 0.98, "(B) Write overlap", ha="left", va="top", fontsize=10.0, fontweight="bold")
+
+    left_y = [0.75, 0.60, 0.45, 0.30]
+    left_c = [C_SUP, C_HALO, C_SUP, C_HALO]
+    right_y = [0.70, 0.50, 0.30]
+    for y, c in zip(left_y, left_c):
+        ax.add_patch(Circle((0.18, y), 0.035, facecolor=c, edgecolor="white", linewidth=1.0))
+    for y in right_y:
+        ax.add_patch(Circle((0.82, y), 0.030, facecolor="#ecf0f1", edgecolor="#95a5a6", linewidth=1.0))
+
+    for y, c in zip(left_y, left_c):
+        ls = "-" if c == C_SUP else "--"
+        lw = 2.0 if c == C_SUP else 1.6
+        for yy in right_y:
+            ax.add_patch(FancyArrowPatch((0.22, y), (0.78, yy), arrowstyle="-", linewidth=lw, linestyle=ls, color=c, alpha=0.55))
+    ax.text(0.50, 0.03, r"writes via $W_{\mathrm{down}}$", ha="center", va="center", fontsize=8, color=C_INK)
+
+    # Mini legend (placed higher to avoid overlap with caption text)
+    ax.add_patch(Circle((0.55, 0.16), 0.018, facecolor=C_SUP, edgecolor="none"))
+    ax.text(0.58, 0.16, "Supernode", ha="left", va="center", fontsize=7.5)
+    ax.add_patch(Circle((0.55, 0.08), 0.018, facecolor=C_HALO, edgecolor="none"))
+    ax.text(0.58, 0.08, "Halo", ha="left", va="center", fontsize=7.5)
+
+    # -------------------------
+    # (C) Result callout
+    # -------------------------
+    ax = axes[2]
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.text(0.00, 0.98, "(C) Pruning result", ha="left", va="top", fontsize=10.0, fontweight="bold")
+
+    ax.add_patch(
+        FancyBboxPatch(
+            (0.10, 0.22),
+            0.80,
+            0.56,
+            boxstyle="round,pad=0.03,rounding_size=0.03",
+            linewidth=2.0,
+            edgecolor="#27ae60",
+            facecolor="#ecf9f1",
+        )
+    )
+
+    def _fmt(x: Optional[float]) -> str:
+        if x is None:
+            return "--"
+        try:
+            v = float(x)
+        except Exception:
+            return "--"
+        return f"{v:.1f}" if np.isfinite(v) else "--"
+
+    ax.text(0.50, 0.71, f"At {sparsity_pct}% sparsity:", ha="center", va="center", fontsize=11)
+    ax.text(0.50, 0.55, f"Wanda PPL = {_fmt(ppl_wanda)}", ha="center", va="center", fontsize=11)
+    ax.text(0.50, 0.40, f"SCAR  PPL = {_fmt(ppl_scar)}", ha="center", va="center", fontsize=11)
+
+    # Use manual layout (subplots_adjust above) for stable spacing.
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+
+
+def plot_supernode_hit_rate_vs_ppl(
+    *,
+    labels: Sequence[str],
+    supernode_pruned_pct: Sequence[float],
+    perplexity: Sequence[float],
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+    annotate: Optional[Sequence[str]] = None,
+) -> plt.Figure:
+    """
+    Scatter diagnostic: how many supernodes a method prunes vs resulting PPL.
+
+    Intended as a compact, reviewer-friendly figure explaining catastrophic pruning failures.
+    """
+    labs = list(labels)
+    xs = np.asarray(list(supernode_pruned_pct), dtype=np.float64)
+    ys = np.asarray(list(perplexity), dtype=np.float64)
+
+    fig, ax = plt.subplots(figsize=(3.45, 2.35))
+
+    # Filter valid points
+    finite = np.isfinite(xs) & np.isfinite(ys) & (ys > 0)
+    labs_f = [l for l, ok in zip(labs, finite) if ok]
+    xs = xs[finite]
+    ys = ys[finite]
+
+    def _style(label: str) -> Tuple[str, str, float]:
+        # (color, marker, size)
+        if label.startswith("SCAR"):
+            return "#c0392b", "o", 60.0
+        if "Wanda" in label:
+            return "#e67e22", "o", 55.0
+        if "SparseGPT" in label:
+            return "#8e44ad", "o", 55.0
+        if "Act" in label:
+            return "#2980b9", "o", 55.0
+        if "Magnitude" in label:
+            return "#2c3e50", "o", 55.0
+        return "#95a5a6", "o", 35.0
+
+    # Plot in stable order: background (gray) first, then highlighted.
+    order = np.argsort(ys)
+    for i in order:
+        label = labs_f[i]
+        c, m, s = _style(label)
+        z = 3 if c != "#95a5a6" else 2
+        ax.scatter(xs[i], ys[i], s=s, marker=m, color=c, alpha=0.85, edgecolor="white", linewidth=0.8, zorder=z)
+
+    ax.set_yscale("log")
+    ax.set_xlabel("Supernodes pruned (%)", fontsize=9)
+    ax.set_ylabel("PPL (WikiText-2)", fontsize=9)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+
+    # Annotate only a small, pre-chosen subset (avoids clutter).
+    annotate = list(annotate) if annotate is not None else [
+        "SCAR-Prot",
+        "Act-L2 (channel)",
+        "Wanda (channel)",
+        "SparseGPT (channel)",
+        "Magnitude (channel)",
+    ]
+    for i, label in enumerate(labs_f):
+        if label not in annotate:
+            continue
+        # Small offset that alternates to reduce overlap.
+        dx = 1.5 if (i % 2 == 0) else -1.5
+        dy = 1.15 if (i % 3 == 0) else 0.90
+        ax.annotate(
+            label.replace(" (channel)", ""),
+            xy=(xs[i], ys[i]),
+            xytext=(xs[i] + dx, ys[i] * dy),
+            fontsize=7.5,
+            color="#2c3e50",
+            arrowprops=dict(arrowstyle="-", lw=0.6, color="#7f8c8d", alpha=0.8),
+        )
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
+
+
+def plot_lp_vs_ablation_validation(
+    *,
+    lp: Sequence[float],
+    delta_nll: Sequence[float],
+    layer_label: str = "",
+    rho: float = 0.01,
+    spearman_by_layer: Optional[Sequence[float]] = None,
+    layer_indices: Optional[Sequence[int]] = None,
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """
+    Validate LP as an instrument: compare LP to true Δloss from single-channel ablation.
+
+    Two-panel figure:
+      (a) scatter: log LP vs log ΔNLL (representative layer)
+      (b) Spearman correlations across layers (if provided)
+    """
+    lp_arr = np.asarray(list(lp), dtype=np.float64).reshape(-1)
+    dn_arr = np.asarray(list(delta_nll), dtype=np.float64).reshape(-1)
+    m = min(lp_arr.size, dn_arr.size)
+    lp_arr = lp_arr[:m]
+    dn_arr = dn_arr[:m]
+
+    # Only plot points with positive values (log-scale).
+    mask = np.isfinite(lp_arr) & np.isfinite(dn_arr) & (lp_arr > 0) & (dn_arr > 0)
+    lp_arr = lp_arr[mask]
+    dn_arr = dn_arr[mask]
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+
+    # (a) Scatter
+    ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    if lp_arr.size == 0:
+        ax.axis("off")
+    else:
+        x = np.log10(lp_arr)
+        y = np.log10(dn_arr)
+        thr = np.quantile(lp_arr, 1.0 - float(rho)) if (0.0 < float(rho) < 1.0) else np.quantile(lp_arr, 0.99)
+        super_mask = lp_arr >= thr
+
+        ax.scatter(x[~super_mask], y[~super_mask], s=10, color="#95a5a6", alpha=0.35, linewidth=0)
+        ax.scatter(x[super_mask], y[super_mask], s=16, color="#c0392b", alpha=0.85, linewidth=0)
+
+        # Spearman on log-log (rank correlation of x and y)
+        rho_s = _spearman_np(x, y)
+        ax.set_xlabel(r"$\log_{10}\,\mathrm{LP}_i$", fontsize=10)
+        ax.set_ylabel(r"$\log_{10}\,\Delta\mathrm{NLL}_i$", fontsize=10)
+        ax.set_title(f"LP vs true ablation loss {layer_label}".strip(), fontsize=10.5)
+        ax.grid(True, alpha=0.25, linewidth=0.6)
+        ax.text(
+            0.04,
+            0.06,
+            f"Spearman ρ = {rho_s:+.2f}\nN = {int(lp_arr.size)}",
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="#bdc3c7", alpha=0.9),
+        )
+
+    # (b) Across-layer correlations
+    ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    if spearman_by_layer is None or layer_indices is None:
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Across-layer\ncorrelations\n(not provided)", ha="center", va="center", fontsize=10, color="#7f8c8d")
+    else:
+        xs = np.asarray(list(layer_indices), dtype=np.float64)
+        ys = np.asarray(list(spearman_by_layer), dtype=np.float64)
+        ok = np.isfinite(xs) & np.isfinite(ys)
+        xs = xs[ok]
+        ys = ys[ok]
+        if xs.size == 0:
+            ax.axis("off")
+        else:
+            ax.plot(xs, ys, "o-", color="#2980b9", linewidth=2.0, markersize=4, alpha=0.9)
+            ax.axhline(0.0, color="#7f8c8d", linestyle="--", linewidth=1.0, alpha=0.7)
+            med = float(np.median(ys)) if ys.size else float("nan")
+            if np.isfinite(med):
+                ax.axhline(med, color="#2c3e50", linestyle=":", linewidth=1.6, alpha=0.9, label=f"Median {med:+.2f}")
+                ax.legend(loc="lower right", fontsize=8, frameon=True)
+            ax.set_xlabel("Layer index", fontsize=10)
+            ax.set_ylabel("Spearman ρ", fontsize=10)
+            ax.set_title("LP vs ΔNLL rank correlation", fontsize=10.5)
+            ax.grid(True, alpha=0.25, linewidth=0.6)
 
     plt.tight_layout()
     if save_path is not None:
@@ -583,6 +965,156 @@ def _spearman_np(a: Any, b: Any) -> float:
     denom = (np.linalg.norm(ra) * np.linalg.norm(rb)) + 1e-12
     rho = float((ra @ rb) / denom)
     return rho if np.isfinite(rho) else 0.0
+
+
+def plot_lp_retrieval_validation(
+    *,
+    lp: Sequence[float],
+    delta_nll: Sequence[float],
+    activation_power: Optional[Sequence[float]] = None,
+    layer_label: str = "",
+    k_values: Sequence[float] = (0.005, 0.01, 0.02, 0.05, 0.1),
+    save_path: Optional[Union[str, Path]] = None,
+    dpi: int = 300,
+) -> plt.Figure:
+    """
+    Validate LP as an instrument using retrieval metrics (Precision@k, Recall@k).
+
+    Three-panel figure:
+      (a) Precision@k curves: LP vs activation power vs random baseline
+      (b) Recall@k curves: LP vs activation power vs random baseline
+      (c) Summary: AUC or top-1% retrieval statistics
+
+    This is more appropriate than correlation when the goal is to identify the tail.
+    """
+    lp_arr = np.asarray(list(lp), dtype=np.float64).reshape(-1)
+    dn_arr = np.asarray(list(delta_nll), dtype=np.float64).reshape(-1)
+    n = min(lp_arr.size, dn_arr.size)
+    lp_arr = lp_arr[:n]
+    dn_arr = dn_arr[:n]
+
+    # Filter valid values
+    mask = np.isfinite(lp_arr) & np.isfinite(dn_arr) & (lp_arr > 0) & (dn_arr > 0)
+    lp_arr = lp_arr[mask]
+    dn_arr = dn_arr[mask]
+
+    ap_arr = None
+    if activation_power is not None:
+        ap_arr = np.asarray(list(activation_power), dtype=np.float64).reshape(-1)
+        ap_arr = ap_arr[:n][mask]
+
+    n = lp_arr.size
+    if n < 10:
+        fig, ax = plt.subplots(1, 1, figsize=(7.2, 2.6))
+        ax.text(0.5, 0.5, "Insufficient data for retrieval analysis", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.6))
+
+    # Define "true positives" as top k% by true ΔNLL
+    k_vals = np.asarray(list(k_values), dtype=np.float64)
+    k_vals = k_vals[(k_vals > 0) & (k_vals < 1)]
+
+    # Rankings (descending = highest first)
+    lp_rank = np.argsort(-lp_arr)  # indices sorted by LP descending
+    dn_rank = np.argsort(-dn_arr)  # indices sorted by ΔNLL descending
+
+    prec_lp = []
+    rec_lp = []
+    prec_ap = []
+    rec_ap = []
+    prec_rand = []
+    rec_rand = []
+
+    for k in k_vals:
+        top_k = max(1, int(round(k * n)))
+
+        # True positives = top k% by ΔNLL
+        true_pos_set = set(dn_rank[:top_k])
+
+        # LP predictions = top k% by LP
+        lp_pred_set = set(lp_rank[:top_k])
+        overlap_lp = len(true_pos_set & lp_pred_set)
+        prec_lp.append(overlap_lp / len(lp_pred_set) if lp_pred_set else 0)
+        rec_lp.append(overlap_lp / len(true_pos_set) if true_pos_set else 0)
+
+        # Random baseline = expected overlap
+        prec_rand.append(k)  # E[precision] = k for random
+        rec_rand.append(k)   # E[recall] = k for random
+
+        # Activation power predictions
+        if ap_arr is not None:
+            ap_rank = np.argsort(-ap_arr)
+            ap_pred_set = set(ap_rank[:top_k])
+            overlap_ap = len(true_pos_set & ap_pred_set)
+            prec_ap.append(overlap_ap / len(ap_pred_set) if ap_pred_set else 0)
+            rec_ap.append(overlap_ap / len(true_pos_set) if true_pos_set else 0)
+
+    # (a) Precision@k
+    ax = axes[0]
+    ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(k_vals * 100, prec_lp, "o-", color="#2c3e50", linewidth=2, markersize=4, label="LP")
+    if ap_arr is not None:
+        ax.plot(k_vals * 100, prec_ap, "s--", color="#e67e22", linewidth=1.8, markersize=4, label="ActPower")
+    ax.plot(k_vals * 100, prec_rand, ":", color="#95a5a6", linewidth=1.5, label="Random")
+    ax.set_xlabel("k (%)")
+    ax.set_ylabel("Precision@k")
+    ax.set_title("LP retrieves true supernodes", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="upper right", fontsize=8, frameon=True)
+    ax.set_ylim(0, 1.02)
+
+    # (b) Recall@k
+    ax = axes[1]
+    ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    ax.plot(k_vals * 100, rec_lp, "o-", color="#2c3e50", linewidth=2, markersize=4, label="LP")
+    if ap_arr is not None:
+        ax.plot(k_vals * 100, rec_ap, "s--", color="#e67e22", linewidth=1.8, markersize=4, label="ActPower")
+    ax.plot(k_vals * 100, rec_rand, ":", color="#95a5a6", linewidth=1.5, label="Random")
+    ax.set_xlabel("k (%)")
+    ax.set_ylabel("Recall@k")
+    ax.set_title("Tail recovery rate", fontsize=10.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="lower right", fontsize=8, frameon=True)
+    ax.set_ylim(0, 1.02)
+
+    # (c) Summary stats
+    ax = axes[2]
+    ax.text(0.02, 0.98, "(c)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
+    # Compute AUC-style summary: average precision across k values
+    avg_prec_lp = np.mean(prec_lp)
+    avg_prec_ap = np.mean(prec_ap) if ap_arr is not None else 0
+    avg_prec_rand = np.mean(prec_rand)
+
+    bars = [avg_prec_lp]
+    labels = ["LP"]
+    colors = ["#2c3e50"]
+    if ap_arr is not None:
+        bars.append(avg_prec_ap)
+        labels.append("ActPower")
+        colors.append("#e67e22")
+    bars.append(avg_prec_rand)
+    labels.append("Random")
+    colors.append("#95a5a6")
+
+    x_pos = np.arange(len(bars))
+    ax.bar(x_pos, bars, color=colors, alpha=0.8)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel("Mean Precision@k")
+    ax.set_title("Summary", fontsize=10.5)
+    ax.set_ylim(0, 1.0)
+    ax.grid(True, alpha=0.25, axis="y")
+
+    # Add value labels on bars
+    for i, v in enumerate(bars):
+        ax.text(i, v + 0.02, f"{v:.2f}", ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    if save_path is not None:
+        _save(fig, save_path, dpi=dpi)
+    return fig
 
 
 def plot_lp_vs_magnitude_controls(
@@ -703,11 +1235,29 @@ def plot_bus_concentration(
     deff_s = np.asarray(list(d_eff_super), dtype=np.float64)
     deff_r = None if d_eff_random is None else np.asarray(list(d_eff_random), dtype=np.float64)
 
+    has_curves = isinstance(curves, dict) and bool(curves)
+    # If we don't have cumulative curves saved, fall back to a single-panel figure
+    # focusing on effective dimension (the key reported quantity for this diagnostic).
+    if not has_curves:
+        fig, ax = plt.subplots(1, 1, figsize=(7.2, 2.6))
+        ax.plot(layers, deff_s, "o-", color="#2c3e50", linewidth=2.0, markersize=3.5, label="Supernodes")
+        if deff_r is not None and deff_r.size == deff_s.size:
+            ax.plot(layers, deff_r, "o--", color="#7f8c8d", linewidth=1.8, markersize=3.0, label="Random")
+        ax.set_xlabel("Layer index")
+        ax.set_ylabel(r"Effective dimension $d_{\mathrm{eff}}$")
+        ax.set_title("High-dimensional write support", fontsize=10.5)
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="upper right", fontsize=8, frameon=True)
+        plt.tight_layout()
+        if save_path is not None:
+            _save(fig, save_path, dpi=dpi)
+        return fig
+
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
 
     ax = axes[0]
     ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    if isinstance(curves, dict) and curves:
+    if has_curves:
         # Plot up to 3 layers for readability
         show = list(sorted(curves.keys()))
         if len(show) > 3:
@@ -727,7 +1277,7 @@ def plot_bus_concentration(
     ax.set_xlabel("Residual dims kept (sorted by write mass)")
     ax.set_ylabel("Cumulative write mass")
     ax.set_ylim(0, 1.02)
-    ax.set_title("Bus concentration (examples)", fontsize=10.5)
+    ax.set_title("Write support dispersion (examples)", fontsize=10.5)
     ax.grid(True, alpha=0.25)
     ax.legend(loc="lower right", fontsize=7.5, frameon=True)
 
@@ -738,7 +1288,7 @@ def plot_bus_concentration(
         ax.plot(layers, deff_r, "o--", color="#7f8c8d", linewidth=1.8, markersize=3.0, label="Random")
     ax.set_xlabel("Layer index")
     ax.set_ylabel(r"Effective dimension $d_{\mathrm{eff}}$")
-    ax.set_title("Low-dimensional write support", fontsize=10.5)
+    ax.set_title("High-dimensional write support", fontsize=10.5)
     ax.grid(True, alpha=0.25)
     ax.legend(loc="upper right", fontsize=8, frameon=True)
 
@@ -754,10 +1304,11 @@ def plot_read_halo_dependence_summary(
     spearman_rho: Sequence[float],
     read_halo_mean_abs_delta_u: Sequence[float],
     random_mean_abs_delta_u: Sequence[float],
+    decile_effect_sizes: Optional[Sequence[float]] = None,
     save_path: Optional[Union[str, Path]] = None,
     dpi: int = 300,
 ) -> plt.Figure:
-    """Two-panel summary of read-halo dependence across depth."""
+    """Two-panel summary of read-halo dependence across depth with decile analysis."""
     layers = np.asarray(list(layer_indices), dtype=int)
     rho = np.asarray(list(spearman_rho), dtype=np.float64)
     mh = np.asarray(list(read_halo_mean_abs_delta_u), dtype=np.float64)
@@ -769,20 +1320,41 @@ def plot_read_halo_dependence_summary(
     ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
     ax.plot(layers, rho, "o-", color="#2980b9", linewidth=2.0, markersize=3.5)
     ax.axhline(0.0, color="#7f8c8d", linestyle="--", linewidth=1.2, alpha=0.8)
+    med = np.median(rho) if rho.size > 0 else 0.0
+    ax.axhline(med, color="#2c3e50", linestyle=":", linewidth=1.6, label=f"Median ρ = {med:.2f}")
     ax.set_xlabel("Layer index (target)")
     ax.set_ylabel("Spearman ρ(ReadConn, mean|Δu|)")
-    ax.set_title("ReadConn predicts bus dependence", fontsize=10.5)
+    ax.set_title("ReadConn correlates with support dependence", fontsize=10.5)
     ax.grid(True, alpha=0.25)
+    ax.legend(loc="lower right", fontsize=8, frameon=True)
 
     ax = axes[1]
     ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    ax.plot(layers, mh, "o-", color="#f39c12", linewidth=2.0, markersize=3.5, label="Read-halo")
-    ax.plot(layers, mr, "o--", color="#95a5a6", linewidth=1.8, markersize=3.0, label="Random")
-    ax.set_xlabel("Layer index (target)")
-    ax.set_ylabel(r"Mean $|\Delta u_j|$")
-    ax.set_title("Dependence gap", fontsize=10.5)
+
+    # If decile effect sizes provided, show as bar chart; otherwise show line plot
+    if decile_effect_sizes is not None and len(decile_effect_sizes) > 0:
+        deciles = np.asarray(list(decile_effect_sizes), dtype=np.float64)
+        x = np.arange(1, len(deciles) + 1)
+        colors = plt.cm.Blues(np.linspace(0.3, 0.9, len(deciles)))
+        ax.bar(x, deciles, color=colors, edgecolor="#2c3e50", linewidth=0.5)
+        ax.set_xlabel("ReadConn decile (1=lowest, 10=highest)")
+        ax.set_ylabel(r"Mean $|\Delta u|$ under support ablation")
+        ax.set_title("Decile effect sizes", fontsize=10.5)
+        # Add ratio annotation
+        if len(deciles) >= 2:
+            ratio = deciles[-1] / deciles[0] if deciles[0] > 0 else float("inf")
+            ax.text(0.95, 0.95, f"Top/Bottom = {ratio:.1f}×",
+                    transform=ax.transAxes, ha="right", va="top", fontsize=9,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#bdc3c7"))
+    else:
+        ax.plot(layers, mh, "o-", color="#f39c12", linewidth=2.0, markersize=3.5, label="Top ReadConn decile")
+        ax.plot(layers, mr, "o--", color="#95a5a6", linewidth=1.8, markersize=3.0, label="Bottom decile")
+        ax.set_xlabel("Layer index (target)")
+        ax.set_ylabel(r"Mean $|\Delta u_j|$")
+        ax.set_title("Top vs bottom decile disruption", fontsize=10.5)
+        ax.legend(loc="upper right", fontsize=8, frameon=True)
+
     ax.grid(True, alpha=0.25)
-    ax.legend(loc="upper right", fontsize=8, frameon=True)
 
     plt.tight_layout()
     if save_path is not None:

@@ -208,7 +208,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             total_tokens = 0
 
             with torch.no_grad():
-                # Iterate blocks without overlap (standard pruning-paper protocol).
+                # Iterate blocks without overlap (standard blockwise perplexity protocol).
                 # If the last block is too short to have any targets, skip it.
                 for bi, start in enumerate(range(0, int(input_ids.size(1)), seqlen)):
                     end = min(start + seqlen, int(input_ids.size(1)))
@@ -247,7 +247,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         # ------------------------------------------------------------------
         # Legacy per-sample perplexity (kept for backwards compatibility).
-        # WARNING: this is sensitive to padding/truncation and is not paper-standard.
+        # WARNING: this is sensitive to padding/truncation and is not a standard protocol for fair perplexity reporting.
         # ------------------------------------------------------------------
         from alignment.dataops.datasets.text_datasets import load_text_dataset
 
@@ -2190,7 +2190,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             activation_power_i = E[u_i^2]
             taylor_i           = E[ | (g_u_i * u_i) | ]            (first-order saliency)
             curvature_i        = E[ (v_i^T g_y)^2 ]                (Rayleigh-style curvature along v_i)
-            loss_proxy_i       = 0.5 * E[(u_i * (v_i^T g_y))^2]     (joint second moment; matches paper Eq. loss-proxy)
+            loss_proxy_i       = 0.5 * E[(u_i * (v_i^T g_y))^2]     (joint second moment; matches the documented loss-proxy definition)
 
         Notes:
         - We also compute a factored approximation (0.5 * E[u_i^2] * E[(v_i^T g_y)^2]) for diagnostics.
@@ -2410,7 +2410,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             u2_mean = state["u_sqr_sum"] / float(count)
             R_vals = state["R_sum"] / float(count)
             T_vals = state["T_sum"] / float(count)
-            # Exact joint estimator used by the paper definition
+            # Exact joint estimator used by the default definition
             loss_proxy_joint = 0.5 * (state["loss_proxy_sum"] / float(count))
             # Diagnostic: separable approximation (can diverge if u^2 and (v^T g)^2 correlate)
             loss_proxy_factored = 0.5 * u2_mean * R_vals
@@ -2821,7 +2821,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         device = next(model.parameters()).device
         
         # ---------------------------------------------------------------------
-        # IMPORTANT: Channel/group adaptation (matches paper + structured FFN pruning)
+        # IMPORTANT: Channel/group adaptation for structured FFN pruning
         #
         # A "channel" corresponds to:
         # - row i of gate_proj and up_proj (out_features = intermediate_dim)
@@ -3202,7 +3202,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         For each MLP layer and intermediate channel i:
           score_i = ||W_gate[i,:]||_2 + ||W_up[i,:]||_2 + ||W_down[:,i]||_2
 
-        This matches the "Magnitude (channel)" baseline described in the paper.
+        This matches the "Magnitude (channel)" baseline commonly used in structured pruning comparisons.
 
         Returns:
             Dict mapping module_name -> {"weight_magnitude": score_tensor}
@@ -4969,7 +4969,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         (Legacy/diagnostic) Compute redundancy among *hidden-dimension* output neurons that are strongly
         influenced by supernodes.
         
-        Note: This is NOT the SCAR paper's "directed redundancy" (which is defined on loss-relevant
+        Note: This is NOT the SCAR definition of "directed redundancy" (which is defined on loss-relevant
         per-channel contribution signals). This helper is kept for exploratory plots and is not used
         for pruning decisions.
         
@@ -5492,7 +5492,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         plots_dir: Optional[Union[str, Path]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Compute SCAR-style halo-aware pruning scores (paper-aligned).
+        Compute SCAR-style halo-aware pruning scores.
 
         This routine computes, per FFN channel i in each layer:
         - **Supernodes**: top `supernode_fraction` by `scar_loss_proxy`
@@ -5510,7 +5510,7 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         Notes:
         - `redundancy_weight` is retained for backward compatibility but not used in the
-          paper-aligned estimator (MI already yields a redundancy scale).
+          default estimator (MI already yields a redundancy scale).
         
         Args:
             scar_scores: SCAR scores dictionary with supernode metrics
@@ -5531,7 +5531,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         results: Dict[str, Dict[str, Any]] = {}
         supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
         # Default to positive-only redundancy (anti-correlation does NOT count as redundancy),
-        # matching the paper definition; can be disabled for sensitivity analyses.
+        # matching the default definition; can be disabled for sensitivity analyses.
         positive_redundancy = bool(supernode_cfg.get("positive_redundancy", True))
         if positive_redundancy:
             logger.info("  Redundancy: using positive-only correlation (anti-correlation does NOT count as redundancy)")
@@ -6524,7 +6524,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 except Exception:
                     pass
         
-        # Add aggregate stats for paper tables (useful even when per-layer values are noisy).
+        # Add aggregate stats for summary tables (useful even when per-layer values are noisy).
         if agg_red_halo or agg_red_non_halo:
             def _stats(vals: List[float]) -> Dict[str, Any]:
                 arr = np.asarray(vals, dtype=np.float64)
@@ -6645,7 +6645,7 @@ class LLMAlignmentExperiment(BaseExperiment):
           - \(\mathrm{Red}(i,j) = -\tfrac12 \log(1-(\rho^+_{ij})^2)\)
 
         Notes:
-        - Supernodes are identified by `scar_loss_proxy` when available (paper definition).
+        - Supernodes are identified by `scar_loss_proxy` when available (default definition).
         - Halo membership is identified by Conn overlap with the aggregated supernode write pattern
           (same as `compute_supernode_connectivity_pruning_score`).
             
@@ -6655,7 +6655,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             - aggregate: aggregated stats across layers
         """
         logger.info("=" * 60)
-        logger.info("ANALYZING HALO vs NON-HALO REDUNDANCY (q-signal, paper-aligned)")
+        logger.info("ANALYZING HALO vs NON-HALO REDUNDANCY (q-signal)")
         logger.info("=" * 60)
 
         eps = 1e-8
@@ -6666,7 +6666,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # Use positive-only redundancy when configured (matches SCAR ablation)
         supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
         # Default to positive-only redundancy (anti-correlation does NOT count as redundancy),
-        # matching the paper definition; can be disabled for sensitivity analyses.
+        # matching the default definition; can be disabled for sensitivity analyses.
         positive_redundancy = bool(supernode_cfg.get("positive_redundancy", True))
         if positive_redundancy:
             logger.info("  Redundancy: using positive-only correlation (anti-correlation does NOT count as redundancy)")
@@ -6754,7 +6754,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 logger.warning(f"Halo redundancy: could not resolve module/weight for {layer_name}")
                 continue
             
-            # Identify supernodes by LP (paper definition)
+            # Identify supernodes by LP (default definition)
             num_supernodes = max(1, int(supernode_fraction * m))
             _, super_idx = torch.topk(lp_cpu, k=num_supernodes, largest=True)
             super_idx = super_idx.long()
@@ -7223,7 +7223,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             if mi.sum() == 0:
                 mi = taylor  # Taylor score relates to information content
             
-            # Identify supernodes (paper-aligned: top by loss proxy when available)
+            # Identify supernodes (default: top by loss proxy when available)
             supernode_metric = loss_proxy if loss_proxy is not None and loss_proxy.numel() == intermediate_dim else activation_power
             num_supernodes = max(1, int(supernode_fraction * intermediate_dim))
             _, supernode_indices = torch.topk(supernode_metric, num_supernodes)
@@ -7233,7 +7233,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Identify halo (high connectivity to supernodes among non-supernodes)
             non_supernode_mask = ~supernode_mask
             non_supernode_indices = non_supernode_mask.nonzero(as_tuple=True)[0]
-            # Paper-aligned Conn using overlap with aggregated supernode write pattern
+            # Conn using overlap with aggregated supernode write pattern
             abs_W = down_proj_weight.abs()
             a = abs_W[:, supernode_indices].sum(dim=1)
             a_norm = a.sum() + 1e-8
@@ -7810,14 +7810,14 @@ class LLMAlignmentExperiment(BaseExperiment):
         mode: str = "low",
     ) -> Dict[str, torch.Tensor]:
         """
-        Apply *unstructured* baseline pruning for paper-faithful reproductions.
+        Apply *unstructured* baseline pruning for faithful reproductions of common baselines.
 
         Supported metrics:
         - 'wanda_unstructured': Wanda score-based unstructured pruning.
         - 'sparsegpt_unstructured': SparseGPT-style unstructured pruning with reconstruction.
 
-        By default this prunes FFN/MLP Linear projections (gate/up/down) only, since our
-        paper focuses on FFN pruning. (We can generalize scope later if needed.)
+        By default this prunes FFN/MLP Linear projections (gate/up/down) only, since this
+        routine focuses on FFN pruning. (We can generalize scope later if needed.)
         """
         if metric not in {"wanda_unstructured", "sparsegpt_unstructured"}:
             raise ValueError(f"Unknown unstructured baseline metric: {metric}")
@@ -7915,7 +7915,7 @@ class LLMAlignmentExperiment(BaseExperiment):
     def apply_pruning(self, sparsity: float = 0.2, metric: str = "activation_l2_norm", mode: str = "low") -> Dict[str, torch.Tensor]:
         """
         Apply pruning to MLP layers.
-        - For WANDA and SparseGPT: applies unstructured (weight-level) pruning to match paper results
+        - For WANDA and SparseGPT: applies unstructured (weight-level) pruning to match canonical baseline behavior
         - For other metrics: applies structured (channel-level) pruning
 
         Args:
@@ -8679,6 +8679,29 @@ class LLMAlignmentExperiment(BaseExperiment):
                             import traceback
                             logger.error(traceback.format_exc())
                     
+                    # Optional: validate LP against true Δloss via single-channel ablations (expensive).
+                    # Enable via `supernode.lp_ablation_validation.enabled=true`.
+                    # NOTE: This probe depends only on `scar_scores` and does NOT require connectivity pruning.
+                    try:
+                        supernode_config = getattr(self.config, "supernode", {}) or getattr(
+                            self.config, "supernode_config", {}
+                        ) or {}
+                        v_cfg = supernode_config.get("lp_ablation_validation", {}) or {}
+                        if isinstance(v_cfg, dict) and bool(v_cfg.get("enabled", False)):
+                            v_res = self.compute_lp_ablation_validation(
+                                scar_scores=scar_scores,
+                                layer_stride=int(v_cfg.get("layer_stride", 8)),
+                                layer_indices=v_cfg.get("layer_indices", None),
+                                num_texts=int(v_cfg.get("num_texts", 8)),
+                                max_length=int(v_cfg.get("max_length", 256)),
+                                num_channels=int(v_cfg.get("num_channels", 128)),
+                                quantile_bins=int(v_cfg.get("quantile_bins", 8)),
+                                seed=int(v_cfg.get("seed", getattr(self.config, "seed", 0) or 0)),
+                            )
+                            results["lp_ablation_validation"] = v_res
+                    except Exception as _val_err:
+                        logger.error(f"Failed LP ablation validation: {_val_err}")
+
                     # Compute supernode-connectivity based pruning score
                     if getattr(self.config, "do_connectivity_pruning", True):
                         try:
@@ -8716,6 +8739,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                                     results["conditional_halo_ablation"] = ca_res
                             except Exception as _ca_err:
                                 logger.error(f"Failed conditional halo ablation analysis: {_ca_err}")
+
                         except Exception as conn_err:
                             logger.error(f"Failed supernode-connectivity computation: {conn_err}")
                             import traceback
@@ -8767,7 +8791,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                         robustness_config = {}
                     elif hasattr(robustness_config, '__dict__'):
                         robustness_config = vars(robustness_config)
-                    # Enable by default for paper experiments
+                    # Enable by default for LLM experiment runs (can be disabled via config).
                     logger.info(f"Supernode robustness config: enabled={robustness_config.get('enabled', True)}")
                     if robustness_config.get("enabled", True):
                         try:
@@ -8995,7 +9019,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 import traceback
                 logger.error(traceback.format_exc())
 
-        # Fast, calibration-free channel magnitude baseline (paper: "Magnitude (channel)")
+        # Fast, calibration-free channel magnitude baseline ("Magnitude (channel)")
         if "weight_magnitude" in pruning_strategies:
             try:
                 self.compute_weight_magnitude_channel_scores()
@@ -9004,7 +9028,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                 import traceback
                 logger.error(traceback.format_exc())
 
-        # Structured random baseline (paper: "Random (channel)")
+        # Structured random baseline ("Random (channel)")
         if "random" in pruning_strategies:
             try:
                 # Deterministic by default (seeded by config.seed).
@@ -9100,7 +9124,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             baseline_ppl = self.evaluate_perplexity(dataset=self.config.evaluation_dataset, num_samples=self.config.evaluation_num_samples)
             results["evaluation"]["baseline_perplexity"] = baseline_ppl
 
-        # For paper tables/plots: evaluate the unpruned model once on the full configured benchmark suite.
+        # For summary tables/plots: evaluate the unpruned model once on the full configured benchmark suite.
         # (This avoids hard-coding "Unpruned" numbers in the manuscript.)
         try:
             llm_cfg = getattr(self.config, "llm", {}) or {}
@@ -9120,7 +9144,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             logger.warning(f"Failed baseline full-metric evaluation: {e}")
 
         # Some SCAR pruning scores (e.g., `supernode_connectivity_score`) were historically computed
-        # inside the `generate_plots` block. For fast paper sweeps we often run with
+        # inside the `generate_plots` block. For fast sweeps we often run with
         # `generate_plots=false`, but we still need these scores for pruning to run.
         if scar_scores and not getattr(self.config, "generate_plots", True):
             supernode_config = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
@@ -9280,7 +9304,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Iterate over all strategy/mode combinations
             for metric in pruning_strategies:
                 # Check if we have importance scores for this metric
-                # Some strategies (paper-faithful unstructured reproductions) do not rely on
+                # Some strategies (unstructured baseline reproductions) do not rely on
                 # precomputed per-channel importance tensors in self.importance_scores.
                 unstructured_baselines = {"wanda_unstructured", "sparsegpt_unstructured"}
                 has_metric_scores = metric in unstructured_baselines or any(
@@ -9347,7 +9371,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                                 "num_pruned_layers": len(masks),
                                 "metric": metric,
                                 "mode": mode,
-                                # Extra diagnostics for paper analysis (e.g., explain why some baselines collapse)
+                                # Extra diagnostics for analysis (e.g., explain why some baselines collapse)
                                 **(getattr(self, "_last_pruning_diagnostics", {}) or {}),
                             }
                         else:
@@ -9472,7 +9496,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     logger.error(f"Failed to generate pruning visualizations: {e}")
 
         # ------------------------------------------------------------------
-        # Paper-oriented mechanism figures (supernodes + halo structure)
+        # Mechanism diagnostic figures (supernodes + halo structure)
         # ------------------------------------------------------------------
         if getattr(self.config, "generate_plots", True):
             try:
@@ -9487,8 +9511,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                 )
 
                 plots_dir = Path(getattr(self.config, "plots_dir", Path(self.config.log_dir) / "plots"))
-                paper_dir = plots_dir / "paper"
-                paper_dir.mkdir(parents=True, exist_ok=True)
+                report_dir = plots_dir / "report"
+                report_dir.mkdir(parents=True, exist_ok=True)
 
                 # 1) Loss proxy concentration for a representative layer
                 rho = float((getattr(self.config, "supernode", {}) or {}).get("core_fraction", 0.01))
@@ -9502,7 +9526,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             loss_proxy=lp,
                             rho=rho,
                             layer_label=mid_layer,
-                            save_path=paper_dir / "fig_supernode_distribution.png",
+                            save_path=report_dir / "fig_supernode_distribution.png",
                             dpi=getattr(self.config, "plot_dpi", 300),
                         )
 
@@ -9557,7 +9581,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             super_mask=super_cat,
                             halo_mask=halo_cat,
                             layer_label="All layers (aggregated)",
-                            save_path=paper_dir / "fig_halo_structure.png",
+                            save_path=report_dir / "fig_halo_structure.png",
                             dpi=getattr(self.config, "plot_dpi", 300),
                         )
 
@@ -9578,7 +9602,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             super_mask=super_mask,
                             halo_mask=halo_mask,
                             layer_label=mid_layer,
-                            save_path=paper_dir / "fig_halo_structure_layer.png",
+                            save_path=report_dir / "fig_halo_structure_layer.png",
                             dpi=getattr(self.config, "plot_dpi", 300),
                         )
 
@@ -9617,7 +9641,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             top_mass_ratios=ratios_sorted,
                             halo_aggregate=halo_agg,
                             rho=rho,
-                            save_path=paper_dir / "fig_supernode_analysis.png",
+                            save_path=report_dir / "fig_supernode_analysis.png",
                             dpi=getattr(self.config, "plot_dpi", 300),
                         )
                 except Exception as _summary_err:
@@ -9679,7 +9703,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             except Exception:
                                 gn = None
 
-                            # Store an across-layer correlation summary (small; used for paper tables/claims).
+                            # Store an across-layer correlation summary (small; used for summary tables/claims).
                             try:
                                 def _spearman_np(a: np.ndarray, b: np.ndarray) -> float:
                                     a = np.asarray(a, dtype=np.float64).reshape(-1)
@@ -9796,7 +9820,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                                 gateproj_row_norm=gn,
                                 layer_label=mid_layer,
                                 rho=rho,
-                                save_path=paper_dir / "fig_lp_vs_magnitude.png",
+                                save_path=report_dir / "fig_lp_vs_magnitude.png",
                                 dpi=getattr(self.config, "plot_dpi", 300),
                             )
                 except Exception as _lp_ctrl_err:
@@ -9899,7 +9923,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             d_eff_super=deff_super_sorted,
                             d_eff_random=deff_rand_sorted,
                             curves=curves,
-                            save_path=paper_dir / "fig_bus_concentration.png",
+                            save_path=report_dir / "fig_bus_concentration.png",
                             dpi=getattr(self.config, "plot_dpi", 300),
                         )
                 except Exception as _bus_err:
@@ -9960,7 +9984,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                             spearman_rho=rho_sorted,
                             read_halo_mean_abs_delta_u=mh_sorted,
                             random_mean_abs_delta_u=mr_sorted,
-                            save_path=paper_dir / "fig_read_halo_dependence.png",
+                            save_path=report_dir / "fig_read_halo_dependence.png",
                             dpi=getattr(self.config, "plot_dpi", 300),
                         )
                 except Exception as _rh_dep_err:
@@ -10016,14 +10040,14 @@ class LLMAlignmentExperiment(BaseExperiment):
                                 delta_nll_matched=dm_sorted,
                                 delta_nll_supernodes=ds_sorted,
                                 delta_nll_halo_plus_supernodes=db_sorted,
-                                save_path=paper_dir / "fig_halo_conditional_ablation.png",
+                                save_path=report_dir / "fig_halo_conditional_ablation.png",
                                 dpi=getattr(self.config, "plot_dpi", 300),
                             )
                 except Exception as _ca_plot_err:
                     logger.debug(f"Conditional ablation plot skipped: {_ca_plot_err}")
 
             except Exception as e:
-                logger.warning(f"Failed to generate paper mechanism figures: {e}")
+                logger.warning(f"Failed to generate mechanism figures: {e}")
 
         return results
     
@@ -10628,6 +10652,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         halo ablation is small given supernodes intact, while supernode ablation is large.
         """
         from contextlib import contextmanager
+        import math
         import re
 
         logger.info("=" * 60)
@@ -10900,7 +10925,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         layer_recs.sort(key=lambda r: int(r.get("layer_idx", 0)))
         logger.info(f"Conditional halo ablation complete for {len(layer_recs)} layers.")
 
-        # Aggregate summary stats (small; used for paper tables/claims).
+        # Aggregate summary stats (small; used for summary tables/claims).
         gaps: List[float] = []
         dn_halo: List[float] = []
         dn_matched: List[float] = []
@@ -10951,5 +10976,264 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "gap_matched_minus_halo": _summ(gaps),
                 "frac_layers_where_halo_less_than_matched": float(np.mean(np.asarray(gaps) > 0.0)) if gaps else float("nan"),
             },
+            "layers": layer_recs,
+        }
+
+    def compute_lp_ablation_validation(
+        self,
+        *,
+        scar_scores: Dict[str, Dict[str, Any]],
+        layer_stride: int = 8,
+        layer_indices: Optional[List[int]] = None,
+        num_texts: int = 8,
+        max_length: int = 256,
+        num_channels: int = 128,
+        quantile_bins: int = 8,
+        seed: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Validate the LP proxy against *true* loss change from single-channel ablation.
+
+        For each selected layer ℓ (FFN `down_proj`), sample channels spanning the LP range
+        (via LP-quantile bins), ablate each channel i by setting u_i=0, and measure ΔNLL.
+
+        This produces a direct empirical calibration of LP as a measurement instrument.
+        """
+        from contextlib import contextmanager
+        import math
+        import re
+
+        logger.info("=" * 60)
+        logger.info("LP Ablation Validation (LP vs true Δloss)")
+        logger.info("=" * 60)
+        logger.info(f"  num_texts: {int(num_texts)}, max_length: {int(max_length)}")
+        logger.info(f"  num_channels/layer: {int(num_channels)}, quantile_bins: {int(quantile_bins)}")
+
+        # ------------------------------------------------------------------
+        # Build a small held-out text set (prefer WikiText-2 test; fallback to calibration texts)
+        # ------------------------------------------------------------------
+        eval_texts: List[str] = []
+        llm_cfg = getattr(self.config, "llm", {}) or {}
+        try:
+            from datasets import load_dataset
+
+            subset = str(llm_cfg.get("wikitext_subset", "wikitext-2-raw-v1"))
+            ds = load_dataset("wikitext", subset, split="test")
+            texts = [t for t in ds["text"] if isinstance(t, str) and t.strip()]
+            rng = np.random.default_rng(int(seed))
+            rng.shuffle(texts)
+            eval_texts = texts[: max(1, int(num_texts))]
+            logger.info(f"  Using WikiText test lines: subset={subset}, n={len(eval_texts)}")
+        except Exception:
+            if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+                eval_texts = [t for t in list(self.dataset.texts) if isinstance(t, str) and t.strip()][: max(1, int(num_texts))]
+                logger.info(f"  Using calibration texts fallback: n={len(eval_texts)}")
+
+        if not eval_texts:
+            logger.warning("No evaluation texts available; skipping LP ablation validation.")
+            return {"error": "no_evaluation_texts"}
+
+        tokenized: List[Dict[str, torch.Tensor]] = []
+        for t in eval_texts:
+            toks = self.tokenizer(
+                t,
+                return_tensors="pt",
+                truncation=True,
+                max_length=int(max_length),
+                padding=False,
+            )
+            tokenized.append(toks)
+
+        device = torch.device(getattr(self.config, "device", "cuda"))
+
+        @torch.no_grad()
+        def _eval_loss() -> float:
+            total_loss = 0.0
+            total_tokens = 0
+            self.model.eval()
+            for toks in tokenized:
+                batch = {k: v.to(device) for k, v in toks.items()}
+                input_ids = batch.get("input_ids")
+                if input_ids is None:
+                    continue
+                try:
+                    out = self.model(**batch, labels=input_ids)
+                    loss = float(out.loss.item())
+                except Exception:
+                    continue
+                n = int(input_ids.numel())
+                total_loss += loss * max(1, n)
+                total_tokens += max(1, n)
+            return total_loss / max(1, total_tokens)
+
+        module_dict = dict(self.model.named_modules())
+
+        def _resolve(name: str):
+            if name in module_dict:
+                return module_dict[name]
+            if name.startswith("model.") and name[len("model.") :] in module_dict:
+                return module_dict[name[len("model.") :]]
+            alt = "model.model." + name
+            if alt in module_dict:
+                return module_dict[alt]
+            for k, v in module_dict.items():
+                if k.endswith(name):
+                    return v
+            return None
+
+        @contextmanager
+        def _ablate_downproj_inputs(layer_name: str, indices: np.ndarray):
+            mod = _resolve(layer_name)
+            if mod is None:
+                raise ValueError(f"could not resolve module: {layer_name}")
+            if indices is None or len(indices) == 0:
+                yield
+                return
+            try:
+                idx_device = mod.weight.device  # type: ignore[attr-defined]
+            except Exception:
+                idx_device = next(mod.parameters()).device
+            idx = torch.as_tensor(np.asarray(indices, dtype=np.int64), dtype=torch.long, device=idx_device)
+
+            def pre_hook(_m: nn.Module, inputs: Tuple[torch.Tensor, ...]):
+                if not inputs or inputs[0] is None:
+                    return inputs
+                u = inputs[0]
+                y = u.clone()
+                y.index_fill_(-1, idx, 0.0)
+                return (y,) + tuple(inputs[1:])
+
+            h = mod.register_forward_pre_hook(pre_hook)
+            try:
+                yield
+            finally:
+                h.remove()
+
+        baseline_loss = _eval_loss()
+        baseline_ppl = float(np.exp(baseline_loss))
+
+        # Select layers to analyze
+        down_layers = sorted([k for k in scar_scores.keys() if "mlp.down_proj" in k])
+        parsed: List[Tuple[int, str]] = []
+        for ln in down_layers:
+            m = re.search(r"layers\.(\d+)", ln)
+            if m:
+                parsed.append((int(m.group(1)), ln))
+        parsed.sort(key=lambda x: x[0])
+
+        if layer_indices is not None:
+            wanted = set(int(x) for x in layer_indices)
+            parsed = [p for p in parsed if p[0] in wanted]
+        else:
+            stride = max(1, int(layer_stride))
+            parsed = [p for p in parsed if (p[0] % stride) == 0]
+
+        def _spearman(a: np.ndarray, b: np.ndarray) -> float:
+            a = np.asarray(a, dtype=np.float64).reshape(-1)
+            b = np.asarray(b, dtype=np.float64).reshape(-1)
+            if a.size < 3 or b.size != a.size:
+                return float("nan")
+            ra = a.argsort().argsort().astype(np.float64)
+            rb = b.argsort().argsort().astype(np.float64)
+            ra -= ra.mean()
+            rb -= rb.mean()
+            denom = (np.linalg.norm(ra) * np.linalg.norm(rb)) + 1e-12
+            rho = float((ra @ rb) / denom)
+            return rho if np.isfinite(rho) else float("nan")
+
+        rng0 = np.random.default_rng(int(seed))
+        layer_recs: List[Dict[str, Any]] = []
+
+        for li, ln in parsed:
+            lp = scar_scores.get(ln, {}).get("scar_loss_proxy")
+            if lp is None or not torch.is_tensor(lp):
+                continue
+            lp_cpu = lp.detach().float().cpu().numpy().reshape(-1).astype(np.float64)
+            lp_cpu = np.where(np.isfinite(lp_cpu) & (lp_cpu > 0.0), lp_cpu, 0.0)
+            m_int = int(lp_cpu.size)
+            if m_int <= 0:
+                continue
+
+            n = int(min(max(1, int(num_channels)), m_int))
+            bins = max(2, int(quantile_bins))
+
+            nz = np.where(lp_cpu > 0.0)[0]
+            if nz.size < 3:
+                continue
+            log_lp = np.log10(lp_cpu[nz])
+            edges = np.quantile(log_lp, np.linspace(0.0, 1.0, bins + 1))
+            edges[0] -= 1e-9
+            edges[-1] += 1e-9
+            bin_id = np.clip(np.digitize(log_lp, edges[1:-1], right=True), 0, bins - 1)
+
+            per_bin = max(1, int(math.ceil(n / float(bins))))
+            chosen: List[int] = []
+            used: set = set()
+            for b in range(bins):
+                cand = nz[bin_id == b]
+                if cand.size == 0:
+                    continue
+                take = min(per_bin, int(cand.size))
+                pick = rng0.choice(cand, size=take, replace=False)
+                for x in pick.tolist():
+                    used.add(int(x))
+                chosen.extend([int(x) for x in pick.tolist()])
+            if len(chosen) < n:
+                rest = np.asarray([int(x) for x in nz.tolist() if int(x) not in used], dtype=np.int64)
+                if rest.size > 0:
+                    pick = rng0.choice(rest, size=min(n - len(chosen), int(rest.size)), replace=False)
+                    chosen.extend([int(x) for x in pick.tolist()])
+            chosen_np = np.asarray(chosen[:n], dtype=np.int64)
+
+            logger.info(f"  Layer {li}: evaluating {int(chosen_np.size)} single-channel ablations...")
+            deltas: List[float] = []
+            for k, idx in enumerate(chosen_np.tolist()):
+                with _ablate_downproj_inputs(ln, np.asarray([int(idx)], dtype=np.int64)):
+                    loss_i = _eval_loss()
+                deltas.append(float(loss_i - baseline_loss))
+                if (k + 1) % 25 == 0:
+                    logger.info(f"    progress: {k+1}/{int(chosen_np.size)}")
+
+            lp_sel = lp_cpu[chosen_np].astype(np.float64)
+            dn_sel = np.asarray(deltas, dtype=np.float64)
+
+            mask = np.isfinite(lp_sel) & np.isfinite(dn_sel) & (lp_sel > 0.0) & (dn_sel > 0.0)
+            rho_loglog = _spearman(np.log10(lp_sel[mask]), np.log10(dn_sel[mask])) if int(np.sum(mask)) >= 3 else float("nan")
+            rho_raw = _spearman(lp_sel[mask], dn_sel[mask]) if int(np.sum(mask)) >= 3 else float("nan")
+
+            layer_recs.append(
+                {
+                    "layer": ln,
+                    "layer_idx": int(li),
+                    "num_channels": int(chosen_np.size),
+                    "indices": chosen_np.tolist(),
+                    "lp": lp_sel.tolist(),
+                    "delta_nll": dn_sel.tolist(),
+                    "spearman_loglog": float(rho_loglog) if np.isfinite(rho_loglog) else float("nan"),
+                    "spearman_raw": float(rho_raw) if np.isfinite(rho_raw) else float("nan"),
+                }
+            )
+
+        layer_recs.sort(key=lambda r: int(r.get("layer_idx", 0)))
+        rhos = [float(r.get("spearman_loglog")) for r in layer_recs if isinstance(r, dict)]
+        rhos = [r for r in rhos if np.isfinite(r)]
+
+        summary = {
+            "spearman_loglog": {
+                "mean": float(np.mean(np.asarray(rhos))) if rhos else float("nan"),
+                "median": float(np.median(np.asarray(rhos))) if rhos else float("nan"),
+                "min": float(np.min(np.asarray(rhos))) if rhos else float("nan"),
+                "max": float(np.max(np.asarray(rhos))) if rhos else float("nan"),
+            }
+        }
+
+        return {
+            "baseline_loss": float(baseline_loss),
+            "baseline_ppl": float(baseline_ppl),
+            "num_texts": int(len(eval_texts)),
+            "max_length": int(max_length),
+            "num_channels": int(num_channels),
+            "quantile_bins": int(quantile_bins),
+            "summary": summary,
             "layers": layer_recs,
         }

@@ -352,6 +352,8 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             "max_per_layer",
             "pointwise_only",
             "skip_depthwise",
+            # Method-family hyperparameters
+            "generalized_taylor",
         ]:
             if key in pruning:
                 original_pruning[key] = pruning[key]
@@ -469,7 +471,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             if extra["halo_analysis"].get("enabled"):
                 original["do_halo_analysis"] = True
         
-        # Visualization (detailed paper figure settings) - MERGE with top-level
+        # Visualization (detailed figure settings) - MERGE with top-level
         if "visualization" in extra:
             if "visualization" not in original:
                 original["visualization"] = {}
@@ -1127,7 +1129,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         "max_per_layer", nested_config.get("pruning_max_per_layer", 0.95)
     )
     flat_config["pruning_max_per_layer_sparsity_cap"] = pruning_block.get(
-        "max_per_layer_sparsity_cap", nested_config.get("pruning_max_per_layer_sparsity_cap", 0.90)
+        "max_per_layer_sparsity_cap", nested_config.get("pruning_max_per_layer_sparsity_cap", 1.00)
     )
     # Only set fine_tune defaults if not already set from fine_tune block above
     if "fine_tune_after_pruning" not in flat_config:
@@ -1148,13 +1150,92 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     if "skip_depthwise" in pruning_block:
         flat_config["pruning_skip_depthwise"] = bool(pruning_block.get("skip_depthwise", False))
 
-    # Cluster-aware annealing window (optional; used by 'cluster_aware_annealed' variant)
+    # Cluster-aware method configuration (all variants)
     if isinstance(pruning_block.get("cluster_aware"), dict):
         ca = pruning_block["cluster_aware"]
+        # Score weights
+        if "alpha" in ca:
+            flat_config["cluster_aware_alpha"] = float(ca["alpha"])
+        if "beta" in ca:
+            flat_config["cluster_aware_beta"] = float(ca["beta"])
+        if "gamma" in ca:
+            flat_config["cluster_aware_gamma"] = float(ca["gamma"])
+        if "lambda_halo" in ca:
+            flat_config["cluster_aware_lambda_halo"] = float(ca["lambda_halo"])
+        if "protect_critical_frac" in ca:
+            flat_config["cluster_aware_protect_critical_frac"] = float(ca["protect_critical_frac"])
+        
+        # Annealing window (for cluster_aware_annealed)
         if "anneal_start" in ca:
-            flat_config["cluster_aware_anneal_start"] = float(ca.get("anneal_start", flat_config.get("cluster_aware_anneal_start", 0.70)))
+            flat_config["cluster_aware_anneal_start"] = float(ca["anneal_start"])
         if "anneal_end" in ca:
-            flat_config["cluster_aware_anneal_end"] = float(ca.get("anneal_end", flat_config.get("cluster_aware_anneal_end", 0.90)))
+            flat_config["cluster_aware_anneal_end"] = float(ca["anneal_end"])
+        
+        # Taylor blend weight (for cluster_aware_taylor_blend)
+        if "taylor_weight" in ca:
+            flat_config["cluster_aware_taylor_weight"] = float(ca["taylor_weight"])
+        
+        # Depth-adaptive settings (for cluster_aware_depth_adaptive)
+        if "depth_adaptive" in ca:
+            flat_config["cluster_aware_depth_adaptive"] = bool(ca["depth_adaptive"])
+        if "early_layer_frac" in ca:
+            flat_config["cluster_aware_early_layer_frac"] = float(ca["early_layer_frac"])
+        if "early_alpha" in ca:
+            flat_config["cluster_aware_early_alpha"] = float(ca["early_alpha"])
+        if "early_gamma" in ca:
+            flat_config["cluster_aware_early_gamma"] = float(ca["early_gamma"])
+        if "late_alpha" in ca:
+            flat_config["cluster_aware_late_alpha"] = float(ca["late_alpha"])
+        if "late_gamma" in ca:
+            flat_config["cluster_aware_late_gamma"] = float(ca["late_gamma"])
+
+    # Generalized Taylor pruning configuration (vision)
+    if isinstance(pruning_block.get("generalized_taylor"), dict):
+        gt = pruning_block["generalized_taylor"]
+        if "weight_rq" in gt:
+            flat_config["generalized_taylor_weight_rq"] = float(gt["weight_rq"])
+        if "weight_redundancy" in gt:
+            flat_config["generalized_taylor_weight_redundancy"] = float(gt["weight_redundancy"])
+        if "weight_synergy" in gt:
+            flat_config["generalized_taylor_weight_synergy"] = float(gt["weight_synergy"])
+        if "gradient_exponent" in gt:
+            flat_config["generalized_taylor_gradient_exponent"] = float(gt["gradient_exponent"])
+        if "activation_exponent" in gt:
+            flat_config["generalized_taylor_activation_exponent"] = float(gt["activation_exponent"])
+        if "redundancy_discount_beta" in gt:
+            flat_config["generalized_taylor_redundancy_discount_beta"] = float(gt["redundancy_discount_beta"])
+        if "synergy_boost_gamma" in gt:
+            flat_config["generalized_taylor_synergy_boost_gamma"] = float(gt["synergy_boost_gamma"])
+        if "critical_multiplier" in gt:
+            flat_config["generalized_taylor_critical_multiplier"] = float(gt["critical_multiplier"])
+        if "redundant_multiplier" in gt:
+            flat_config["generalized_taylor_redundant_multiplier"] = float(gt["redundant_multiplier"])
+        if "synergistic_multiplier" in gt:
+            flat_config["generalized_taylor_synergistic_multiplier"] = float(gt["synergistic_multiplier"])
+        if "background_multiplier" in gt:
+            flat_config["generalized_taylor_background_multiplier"] = float(gt["background_multiplier"])
+        if "gate_mode" in gt:
+            flat_config["generalized_taylor_gate_mode"] = str(gt["gate_mode"])
+        if "gate_temperature" in gt:
+            flat_config["generalized_taylor_gate_temperature"] = float(gt["gate_temperature"])
+        if "gate_bias" in gt:
+            flat_config["generalized_taylor_gate_bias"] = float(gt["gate_bias"])
+        if "gate_eps" in gt:
+            flat_config["generalized_taylor_gate_eps"] = float(gt["gate_eps"])
+        if "gate_min" in gt:
+            flat_config["generalized_taylor_gate_min"] = float(gt["gate_min"])
+        if "gate_include_cluster_multiplier" in gt:
+            flat_config["generalized_taylor_gate_include_cluster_multiplier"] = bool(gt["gate_include_cluster_multiplier"])
+
+        # Numerical stability parameters
+        if "structural_eps" in gt:
+            flat_config["generalized_taylor_structural_eps"] = float(gt["structural_eps"])
+        if "rq_log_eps" in gt:
+            flat_config["generalized_taylor_rq_log_eps"] = float(gt["rq_log_eps"])
+        if "grad_over_act_eps" in gt:
+            flat_config["generalized_taylor_grad_over_act_eps"] = float(gt["grad_over_act_eps"])
+        if "lp_optimal_l2_reg" in gt:
+            flat_config["generalized_taylor_lp_optimal_l2_reg"] = float(gt["lp_optimal_l2_reg"])
 
     # Halo-analysis direct knobs (vision)
     halo_block = nested_config.get("halo_analysis", {})
@@ -1414,7 +1495,7 @@ def load_config_with_overrides(
 
     # Apply CLI overrides
     if cli_args:
-        # Map "unified-style" dotted CLI keys used by paper SLURM scripts into the
+        # Map "unified-style" dotted CLI keys used by downstream SLURM wrappers into the
         # flat ExperimentConfig namespace produced by load_config().
         #
         # Without this mapping, overrides like `metrics.activation_samples=gap` would
@@ -1448,7 +1529,7 @@ def load_config_with_overrides(
             "halo_analysis.use_activation_weight": "use_activation_weight",
             "halo_analysis.permutation_baseline.enabled": "run_permutation_baseline",
             "halo_analysis.permutation_baseline.n_permutations": "n_permutations",
-            # Cluster-aware pruning weight sweeps (paper)
+            # Cluster-aware pruning weight sweeps
             "pruning.cluster_aware.alpha": "cluster_aware_alpha",
             "pruning.cluster_aware.beta": "cluster_aware_beta",
             "pruning.cluster_aware.gamma": "cluster_aware_gamma",
@@ -1456,6 +1537,13 @@ def load_config_with_overrides(
             "pruning.cluster_aware.protect_critical_frac": "cluster_aware_protect_critical_frac",
             "pruning.cluster_aware.anneal_start": "cluster_aware_anneal_start",
             "pruning.cluster_aware.anneal_end": "cluster_aware_anneal_end",
+            "pruning.cluster_aware.taylor_weight": "cluster_aware_taylor_weight",
+            "pruning.cluster_aware.depth_adaptive": "cluster_aware_depth_adaptive",
+            "pruning.cluster_aware.early_layer_frac": "cluster_aware_early_layer_frac",
+            "pruning.cluster_aware.early_alpha": "cluster_aware_early_alpha",
+            "pruning.cluster_aware.early_gamma": "cluster_aware_early_gamma",
+            "pruning.cluster_aware.late_alpha": "cluster_aware_late_alpha",
+            "pruning.cluster_aware.late_gamma": "cluster_aware_late_gamma",
             # Pruning distribution safety caps
             "pruning.distribution": "pruning_distribution",
             "pruning.dependency_aware": "dependency_aware_pruning",
@@ -1471,6 +1559,28 @@ def load_config_with_overrides(
             # Optional: restrict which conv layers are prunable
             "pruning.pointwise_only": "pruning_pointwise_only",
             "pruning.skip_depthwise": "pruning_skip_depthwise",
+            # Generalized Taylor hyperparameters
+            "pruning.generalized_taylor.weight_rq": "generalized_taylor_weight_rq",
+            "pruning.generalized_taylor.weight_redundancy": "generalized_taylor_weight_redundancy",
+            "pruning.generalized_taylor.weight_synergy": "generalized_taylor_weight_synergy",
+            "pruning.generalized_taylor.gradient_exponent": "generalized_taylor_gradient_exponent",
+            "pruning.generalized_taylor.activation_exponent": "generalized_taylor_activation_exponent",
+            "pruning.generalized_taylor.redundancy_discount_beta": "generalized_taylor_redundancy_discount_beta",
+            "pruning.generalized_taylor.synergy_boost_gamma": "generalized_taylor_synergy_boost_gamma",
+            "pruning.generalized_taylor.critical_multiplier": "generalized_taylor_critical_multiplier",
+            "pruning.generalized_taylor.redundant_multiplier": "generalized_taylor_redundant_multiplier",
+            "pruning.generalized_taylor.synergistic_multiplier": "generalized_taylor_synergistic_multiplier",
+            "pruning.generalized_taylor.background_multiplier": "generalized_taylor_background_multiplier",
+            "pruning.generalized_taylor.gate_mode": "generalized_taylor_gate_mode",
+            "pruning.generalized_taylor.gate_temperature": "generalized_taylor_gate_temperature",
+            "pruning.generalized_taylor.gate_bias": "generalized_taylor_gate_bias",
+            "pruning.generalized_taylor.gate_eps": "generalized_taylor_gate_eps",
+            "pruning.generalized_taylor.gate_min": "generalized_taylor_gate_min",
+            "pruning.generalized_taylor.gate_include_cluster_multiplier": "generalized_taylor_gate_include_cluster_multiplier",
+            "pruning.generalized_taylor.structural_eps": "generalized_taylor_structural_eps",
+            "pruning.generalized_taylor.rq_log_eps": "generalized_taylor_rq_log_eps",
+            "pruning.generalized_taylor.grad_over_act_eps": "generalized_taylor_grad_over_act_eps",
+            "pruning.generalized_taylor.lp_optimal_l2_reg": "generalized_taylor_lp_optimal_l2_reg",
         }
 
         for arg in cli_args:

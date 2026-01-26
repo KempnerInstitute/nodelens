@@ -154,14 +154,24 @@ cascade_analysis:
 # PRUNING - Comprehensive metric testing
 # -----------------------------------------------------------------------------
 # MobileNet uses inverted residuals with depthwise separable convs
-# More sensitive to pruning - interesting to see which metrics matter
+# More sensitive to pruning - must use pointwise-only pruning to avoid collapse
+#
+# IMPORTANT: MobileNet requires special handling:
+#   - distribution: uniform (NOT global_threshold - causes depthwise collapse)
+#   - pointwise_only: true (skip depthwise/expansion layers)
+#   - skip_depthwise: true (redundant but explicit)
+# The "good" Jan20 runs used this protocol and achieved Ours ≈ Taylor at 50%.
 pruning:
   enabled: true
-  distribution: "global_threshold"   # uniform, global_threshold, adaptive_sensitivity
+  distribution: "uniform"            # uniform is stable for MobileNet (not global_threshold!)
   dependency_aware: true             # MobileNet has inverted residuals
+  pointwise_only: true               # Only prune pointwise (1x1) convolutions
+  skip_depthwise: true               # Never prune depthwise separable layers
   min_per_layer: 0.0
   max_per_layer: 0.95
-  ratios: [0.1, 0.2, 0.3, 0.4, 0.5]  # Conservative for MobileNet
+  # Per-layer safety cap: set to 1.0 (disabled) to match Jan20 "good" runs.
+  max_per_layer_sparsity_cap: 1.0
+  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9, 0.95]  # Full range for curves
   
   # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:

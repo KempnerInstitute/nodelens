@@ -104,7 +104,7 @@ class CascadeAnalysis:
 
         Notes:
         - We sample channels *within* each cluster type to make the comparison fair.
-        - We use a fixed RNG seed by default for reproducible paper tables.
+        - We use a fixed RNG seed by default for reproducible summaries.
         """
         results = {}
         rng = np.random.default_rng(int(seed))
@@ -166,7 +166,7 @@ class DamagePrediction:
         if mask.sum() < 5:
             return DamageResult(self.layer, method, 0., {})
         d, s = self._damages[mask], scores[mask]
-        # In the paper scripts we treat `scores` as a *prune score* where higher
+        # In some pruning workflows we treat `scores` as a *prune score* where higher
         # means "safer to remove". A good prune score should correlate with
         # *lower* damage; we therefore correlate against -d so higher rho is better.
         rho, _ = stats.spearmanr(s, -d)

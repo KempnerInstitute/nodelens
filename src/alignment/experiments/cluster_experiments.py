@@ -327,6 +327,83 @@ class ClusterAnalysisExperiment:
         )
         return self._calibration_loader
 
+    def _maybe_advance_rng_for_legacy_calibration(self) -> None:
+        """
+        Optionally advance torch RNG state to approximate the RNG consumption that would
+        have occurred during training before computing calibration-based metrics.
+
+        This is ONLY applied when calibration_mode="train_loader" and
+        simulate_post_train_shuffle_epochs > 0.
+
+        Motivation: when a historical run trained for E epochs and then computed metrics
+        by iterating the shuffled training DataLoader, the resulting calibration subset
+        depends on the torch RNG state after those E epochs (DataLoader iterator creation
+        draws random seeds; RandomSampler draws a permutation).
+        """
+        try:
+            import torch  # type: ignore
+            from torch.utils.data import RandomSampler  # type: ignore
+        except Exception:
+            return
+
+        cal_mode = str(getattr(self.config, "calibration_mode", "indices")).lower()
+        if cal_mode not in {"train_loader", "train", "legacy", "dataloader"}:
+            return
+
+        n_epochs = int(getattr(self.config, "simulate_post_train_shuffle_epochs", 0) or 0)
+        if n_epochs <= 0:
+            return
+
+        include_eval = bool(getattr(self.config, "simulate_post_train_include_eval", True))
+
+        # Best-effort dataset size
+        dataset = getattr(self.train_loader, "dataset", None)
+        if dataset is None:
+            return
+        try:
+            n_train = int(len(dataset))
+        except Exception:
+            return
+        if n_train <= 0:
+            return
+
+        # Detect whether the training loader is shuffled (RandomSampler).
+        # NOTE: for DataLoader(shuffle=True, generator=None), RandomSampler does NOT
+        # draw permutations from the global RNG directly; instead it draws a single
+        # 64-bit seed from the global RNG and then uses a private Generator to
+        # create the epoch permutation. So the global RNG consumption per epoch is:
+        #   - 1 draw for DataLoader base_seed (when num_workers>0)
+        #   - 1 draw for RandomSampler epoch seed (when shuffle=True, generator=None)
+        # We mimic that here.
+        is_shuffled = isinstance(getattr(self.train_loader, "sampler", None), RandomSampler)
+        has_generator = getattr(self.train_loader, "generator", None) is not None
+        train_num_workers = int(getattr(self.train_loader, "num_workers", 0) or 0)
+        test_num_workers = int(getattr(self.test_loader, "num_workers", 0) or 0) if self.test_loader is not None else 0
+
+        logger.info(
+            "Advancing torch RNG for %d simulated epochs (legacy calibration): shuffled=%s, "
+            "train_workers=%d, include_eval=%s, test_workers=%d, has_generator=%s",
+            n_epochs,
+            is_shuffled,
+            train_num_workers,
+            include_eval,
+            test_num_workers,
+            has_generator,
+        )
+
+        # Mimic the torch RNG draws done during each epoch's DataLoader iterator creation.
+        # For multi-worker loaders, DataLoader draws a base_seed via torch.empty(...).random_().
+        # For shuffled training loaders with generator=None, RandomSampler draws an epoch
+        # seed via torch.empty(...).random_(). (Permutation is generated from a *private*
+        # generator seeded by that value, so we should NOT call torch.randperm here.)
+        for _ in range(n_epochs):
+            if train_num_workers > 0:
+                _ = torch.empty((), dtype=torch.int64).random_().item()
+            if is_shuffled and not has_generator:
+                _ = torch.empty((), dtype=torch.int64).random_().item()
+            if include_eval and test_num_workers > 0:
+                _ = torch.empty((), dtype=torch.int64).random_().item()
+
     def _collect_run_metadata(self) -> Dict[str, Any]:
         """Collect lightweight metadata for reproducibility (git commit, env, etc.)."""
         import os
@@ -403,6 +480,10 @@ class ClusterAnalysisExperiment:
         """
         logger.info("Computing per-channel metrics (streaming)...")
         self.model.eval()
+
+        # Optional: advance RNG state to emulate "post-training" loader shuffle behavior
+        # when using calibration_mode="train_loader" for legacy comparisons.
+        self._maybe_advance_rng_for_legacy_calibration()
 
         # Per-layer accumulators (filled lazily once we see a batch for the layer)
         #
@@ -1168,6 +1249,62 @@ class ClusterAnalysisExperiment:
                         n_store = min(src_out, ent.shape[0])
                     self.layer_metrics[src_name]["fanout_entropy"] = ent[:n_store].astype(np.float64)
                     self.layer_metrics[src_name]["fanout_effective"] = eff[:n_store].astype(np.float64)
+
+                    # ----------------------------------------------------------
+                    # Between-layer routing metrics (tail/bottleneck + propagation)
+                    # ----------------------------------------------------------
+                    topk = int(getattr(self.config, "routing_bottleneck_topk", 5) or 5)
+                    topk = max(1, min(topk, int(p.shape[0])))
+
+                    # Outgoing concentration (normalized over receivers for each source)
+                    bottleneck_out_max = p.max(axis=0)  # [in]
+                    bottleneck_out_topk_mass = np.sort(p, axis=0)[-topk:, :].sum(axis=0)  # [in]
+
+                    # Receiver-normalized influence r_{j<-i} (normalized over sources for each receiver)
+                    row_sum = influence.sum(axis=1) + 1e-12  # [out]
+                    r = influence / row_sum[:, None]  # [out, in]
+                    bottleneck_in_max = r.max(axis=0)  # [in]
+                    bottleneck_in_topk_mass = np.sort(r, axis=0)[-topk:, :].sum(axis=0)  # [in]
+
+                    self.layer_metrics[src_name]["bottleneck_out_max"] = bottleneck_out_max[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["bottleneck_out_topk_mass"] = bottleneck_out_topk_mass[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["bottleneck_in_max"] = bottleneck_in_max[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["bottleneck_in_topk_mass"] = bottleneck_in_topk_mass[:n_store].astype(np.float64)
+
+                    # HaloLP: importance propagation into important receivers (if LP is available for the target layer)
+                    try:
+                        lp_tgt = tgt_metrics.get("loss_proxy", None)
+                        if lp_tgt is not None:
+                            lp_tgt = np.asarray(lp_tgt, dtype=np.float64).reshape(-1)[: r.shape[0]]
+                            halo_lp = (r[: lp_tgt.shape[0], :] * lp_tgt[:, None]).sum(axis=0)  # [in]
+                            self.layer_metrics[src_name]["halo_lp"] = halo_lp[:n_store].astype(np.float64)
+                    except Exception:
+                        pass
+
+                    # Outgoing overlap-based substitutability (OutRed): mean top-m overlap with other sources.
+                    try:
+                        n_in_ch = int(p.shape[1])
+                        if n_in_ch > 1:
+                            cand_k = int(getattr(self.config, "outred_candidate_pool", 64) or 64)
+                            topm = int(getattr(self.config, "outred_topm", 8) or 8)
+                            cand_k = max(1, min(cand_k, n_in_ch - 1))
+                            topm = max(1, min(topm, cand_k))
+
+                            rng = np.random.default_rng(int(self.config.seed) + 10000 * int(i))
+                            outred = np.zeros(n_in_ch, dtype=np.float64)
+                            for ii in range(n_in_ch):
+                                # Sample candidates from [0..n_in_ch-2], then shift to skip self.
+                                cand = rng.choice(n_in_ch - 1, size=cand_k, replace=False)
+                                cand = np.where(cand >= ii, cand + 1, cand)
+                                v = p[:, ii]  # [out]
+                                # overlap(i,i') = 1 - 0.5 * ||p_i - p_{i'}||_1
+                                l1 = np.abs(v[:, None] - p[:, cand]).sum(axis=0)
+                                overlap = np.clip(1.0 - 0.5 * l1, 0.0, 1.0)
+                                outred[ii] = float(np.mean(np.sort(overlap)[-topm:]))
+
+                            self.layer_metrics[src_name]["outred"] = outred[:n_store].astype(np.float64)
+                    except Exception:
+                        pass
             except Exception:
                 pass
             
@@ -1345,6 +1482,13 @@ class ClusterAnalysisExperiment:
                             ratio=ratio,
                             method=method,
                         )
+                    elif method in {"lp_with_constraints", "type_quota_taylor", "outred_with_constraints"}:
+                        pipeline_result = self._run_type_constrained_pruning(
+                            model_copy,
+                            layer_modules=layer_modules,
+                            ratio=ratio,
+                            method=method,
+                        )
                     else:
                         layer_scores = self._compute_layer_scores_for_method(method, model_copy)
                         # If we filtered prunable layers (e.g., pointwise-only for MobileNet),
@@ -1365,6 +1509,12 @@ class ClusterAnalysisExperiment:
                         )
                     
                     self._zero_batchnorm_from_masks(model_copy, pipeline_result.get("masks", {}))
+
+                    # Diagnostics about *what* was pruned (independent of fine-tuning)
+                    diagnostics = self._compute_pruning_diagnostics(
+                        masks=pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else {},
+                        mask_stats=pipeline_result.get("stats", {}) if isinstance(pipeline_result, dict) else {},
+                    )
                     
                     acc_before = self._evaluate_accuracy(model_copy)
                     acc_after = acc_before
@@ -1386,6 +1536,7 @@ class ClusterAnalysisExperiment:
                         "accuracy_recovery": acc_after - acc_before if fine_tune_epochs > 0 else 0.0,
                         "selection_mode": selection_mode,
                         "mask_stats": pipeline_result.get("stats", {}),
+                        "diagnostics": diagnostics,
                     }
                     
                     logger.info("    Result: %.2f%% (drop %.2f%%)", acc_after * 100, (baseline_acc - acc_after) * 100)
@@ -1403,6 +1554,220 @@ class ClusterAnalysisExperiment:
         with open(self.output_dir / "pruning_results.json", "w") as f:
             json.dump(results, f, indent=2, default=_json_default)
         return results
+
+    def _compute_pruning_diagnostics(self, *, masks: Dict[str, "torch.Tensor"], mask_stats: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Summarize what a pruning mask removed.
+
+        Primary goal: make pruning curves interpretable and sanity-checkable.
+        We intentionally keep these diagnostics lightweight and model-agnostic.
+
+        Reported:
+        - LP directionality (mean LP pruned vs kept, fraction of LP mass removed)
+        - Type composition (critical/redundant/synergistic/background pruned counts)
+        - Layerwise sparsity summary
+        """
+        import numpy as _np
+
+        diag: Dict[str, Any] = {"global": {}, "by_type": {}, "by_layer": {}}
+
+        # ----------------------------
+        # Layerwise sparsity summary
+        # ----------------------------
+        try:
+            sparsities = []
+            for _layer, st in (mask_stats or {}).items():
+                if isinstance(st, dict) and "sparsity" in st:
+                    sparsities.append(float(st["sparsity"]))
+            if sparsities:
+                diag["global"]["layer_sparsity_min"] = float(min(sparsities))
+                diag["global"]["layer_sparsity_max"] = float(max(sparsities))
+                diag["global"]["layer_sparsity_mean"] = float(_np.mean(sparsities))
+        except Exception:
+            pass
+
+        # ----------------------------
+        # LP diagnostics (if present)
+        # ----------------------------
+        lp_total = 0.0
+        lp_pruned = 0.0
+        lp_kept = 0.0
+        lp_pruned_vals: List[float] = []
+        lp_kept_vals: List[float] = []
+
+        # ----------------------------
+        # Optional routing diagnostics (if present)
+        # ----------------------------
+        # Each entry: (metric_name, summarize_as_mass)
+        # - summarize_as_mass=True => also compute removed fraction via sum(metric)
+        routing_metrics = [
+            ("halo_lp", True),
+            ("bottleneck_in_max", False),
+            ("bottleneck_in_topk_mass", False),
+            ("bottleneck_out_max", False),
+            ("bottleneck_out_topk_mass", False),
+            ("outred", False),
+        ]
+        routing_sums_total: Dict[str, float] = {}
+        routing_sums_pruned: Dict[str, float] = {}
+        routing_vals_pruned: Dict[str, List[float]] = {k: [] for (k, _mass) in routing_metrics}
+        routing_vals_kept: Dict[str, List[float]] = {k: [] for (k, _mass) in routing_metrics}
+
+        # ----------------------------
+        # Type diagnostics (if present)
+        # ----------------------------
+        type_total_counts: Dict[str, int] = {}
+        type_pruned_counts: Dict[str, int] = {}
+
+        def _type_from_cluster(layer_name: str, idx: _np.ndarray) -> List[str]:
+            cr = self.cluster_results.get(layer_name, {}) if hasattr(self, "cluster_results") else {}
+            labels = cr.get("labels", None)
+            type_mapping = cr.get("type_mapping", None)
+            if labels is None or type_mapping is None:
+                return []
+            labels = _np.asarray(labels).astype(int)
+            if labels.size == 0:
+                return []
+            # Normalize mapping keys to int->str
+            tm: Dict[int, str] = {}
+            if isinstance(type_mapping, dict):
+                for k, v in type_mapping.items():
+                    try:
+                        tm[int(k)] = str(v)
+                    except Exception:
+                        continue
+            out = []
+            for i in idx.tolist():
+                if 0 <= int(i) < int(labels.size):
+                    out.append(tm.get(int(labels[int(i)]), "unknown"))
+            return out
+
+        for layer_name, mask in (masks or {}).items():
+            if mask is None:
+                continue
+            try:
+                m = mask.detach().cpu().numpy().astype(float).reshape(-1)
+            except Exception:
+                continue
+            if m.size == 0:
+                continue
+
+            kept = m > 0.0
+            pruned = ~kept
+            pruned_idx = _np.where(pruned)[0]
+            kept_idx = _np.where(kept)[0]
+
+            layer_out: Dict[str, Any] = {
+                "n_total": int(m.size),
+                "n_pruned": int(pruned.sum()),
+                "n_kept": int(kept.sum()),
+                "pruned_frac": float(pruned.mean()),
+            }
+
+            lm = self.layer_metrics.get(layer_name, {}) if hasattr(self, "layer_metrics") else {}
+            lp = lm.get("loss_proxy", None)
+            if lp is not None:
+                try:
+                    lp_arr = _np.asarray(lp, dtype=_np.float64).reshape(-1)[: m.size]
+                    lp_layer_total = float(lp_arr.sum())
+                    lp_layer_pruned = float(lp_arr[pruned].sum())
+                    lp_layer_kept = float(lp_arr[kept].sum())
+                    lp_total += lp_layer_total
+                    lp_pruned += lp_layer_pruned
+                    lp_kept += lp_layer_kept
+                    if pruned.any():
+                        lp_pruned_vals.extend([float(x) for x in lp_arr[pruned].tolist()])
+                    if kept.any():
+                        lp_kept_vals.extend([float(x) for x in lp_arr[kept].tolist()])
+
+                    layer_out["lp_total"] = lp_layer_total
+                    layer_out["lp_pruned"] = lp_layer_pruned
+                    layer_out["lp_kept"] = lp_layer_kept
+                    layer_out["lp_mass_removed_frac"] = float(lp_layer_pruned / (lp_layer_total + 1e-12))
+                    layer_out["lp_mean_pruned"] = float(_np.mean(lp_arr[pruned])) if pruned.any() else None
+                    layer_out["lp_mean_kept"] = float(_np.mean(lp_arr[kept])) if kept.any() else None
+                except Exception:
+                    pass
+
+            # Routing metrics (if available): report pruned vs kept means, and (for halo_lp) removed mass fraction.
+            try:
+                for metric_name, as_mass in routing_metrics:
+                    v = lm.get(metric_name, None)
+                    if v is None:
+                        continue
+                    arr = _np.asarray(v, dtype=_np.float64).reshape(-1)[: m.size]
+                    if arr.size <= 0:
+                        continue
+                    if pruned.any():
+                        routing_vals_pruned[metric_name].extend([float(x) for x in arr[pruned].tolist()])
+                    if kept.any():
+                        routing_vals_kept[metric_name].extend([float(x) for x in arr[kept].tolist()])
+                    layer_out[f"{metric_name}_mean_pruned"] = float(_np.mean(arr[pruned])) if pruned.any() else None
+                    layer_out[f"{metric_name}_mean_kept"] = float(_np.mean(arr[kept])) if kept.any() else None
+                    if as_mass:
+                        tot = float(arr.sum())
+                        pr = float(arr[pruned].sum())
+                        routing_sums_total[metric_name] = routing_sums_total.get(metric_name, 0.0) + tot
+                        routing_sums_pruned[metric_name] = routing_sums_pruned.get(metric_name, 0.0) + pr
+                        layer_out[f"{metric_name}_mass_removed_frac"] = float(pr / (tot + 1e-12))
+            except Exception:
+                pass
+
+            # Type composition (overall + per layer)
+            types_pruned = _type_from_cluster(layer_name, pruned_idx)
+            types_all = _type_from_cluster(layer_name, _np.arange(int(m.size)))
+            if types_all:
+                ttot: Dict[str, int] = {}
+                for t in types_all:
+                    ttot[t] = ttot.get(t, 0) + 1
+                tpr: Dict[str, int] = {}
+                for t in types_pruned:
+                    tpr[t] = tpr.get(t, 0) + 1
+
+                layer_out["type_total_counts"] = ttot
+                layer_out["type_pruned_counts"] = tpr
+                # convenience scalar
+                crit_tot = int(ttot.get("critical", 0))
+                crit_pr = int(tpr.get("critical", 0))
+                layer_out["critical_pruned_frac"] = float(crit_pr / max(1, crit_tot))
+
+                for k, v in ttot.items():
+                    type_total_counts[k] = type_total_counts.get(k, 0) + int(v)
+                for k, v in tpr.items():
+                    type_pruned_counts[k] = type_pruned_counts.get(k, 0) + int(v)
+
+            diag["by_layer"][layer_name] = layer_out
+
+        if lp_total > 0:
+            diag["global"]["lp_mass_removed_frac"] = float(lp_pruned / (lp_total + 1e-12))
+            diag["global"]["lp_mean_pruned"] = float(_np.mean(lp_pruned_vals)) if lp_pruned_vals else None
+            diag["global"]["lp_mean_kept"] = float(_np.mean(lp_kept_vals)) if lp_kept_vals else None
+
+        # Global routing summaries (when present)
+        try:
+            for metric_name, as_mass in routing_metrics:
+                pv = routing_vals_pruned.get(metric_name) or []
+                kv = routing_vals_kept.get(metric_name) or []
+                if pv:
+                    diag["global"][f"{metric_name}_mean_pruned"] = float(_np.mean(pv))
+                if kv:
+                    diag["global"][f"{metric_name}_mean_kept"] = float(_np.mean(kv))
+                if as_mass and routing_sums_total.get(metric_name, 0.0) > 0.0:
+                    diag["global"][f"{metric_name}_mass_removed_frac"] = float(
+                        routing_sums_pruned.get(metric_name, 0.0) / (routing_sums_total.get(metric_name, 0.0) + 1e-12)
+                    )
+        except Exception:
+            pass
+
+        if type_total_counts:
+            diag["by_type"]["total_counts"] = {k: int(v) for k, v in type_total_counts.items()}
+            diag["by_type"]["pruned_counts"] = {k: int(v) for k, v in type_pruned_counts.items()}
+            diag["by_type"]["pruned_frac"] = {
+                k: float(type_pruned_counts.get(k, 0) / max(1, type_total_counts.get(k, 0)))
+                for k in type_total_counts.keys()
+            }
+
+        return diag
 
     def _get_layer_module_map(self, model: nn.Module) -> Dict[str, nn.Module]:
         modules = dict(model.named_modules())
@@ -1474,9 +1839,12 @@ class ClusterAnalysisExperiment:
     def _selection_mode_for_method(self, method: str) -> str:
         if method == "random":
             return "random"
-        high_methods = {"rq_high", "redundancy_high", "synergy_high", "magnitude_high", "activation_l2_norm_high"}
-        if method in high_methods:
+        # Convention: methods ending in `_high` prune HIGH-scoring channels; `_low` prune LOW-scoring channels.
+        # This avoids brittle per-method allowlists and keeps naming consistent across all metrics.
+        if method.endswith("_high"):
             return "high"
+        if method.endswith("_low"):
+            return "low"
         return "low"
 
     def _compute_taylor_channel_scores(self, model: nn.Module) -> Dict[str, "torch.Tensor"]:
@@ -1693,6 +2061,12 @@ class ClusterAnalysisExperiment:
             "redundancy_high": "redundancy",
             "synergy_low": "synergy",
             "synergy_high": "synergy",
+            # MI = 0.5 * log(1 + RQ * ||w||^2) - already computed as mi_in_proxy
+            "mi_low": "mi_in_proxy",
+            "mi_high": "mi_in_proxy",
+            # Loss proxy (Fisher importance)
+            "lp_low": "loss_proxy",
+            "lp_high": "loss_proxy",
         }
         for name, layer in modules.items():
             if layer is None or not hasattr(layer, "weight"):
@@ -1793,6 +2167,113 @@ class ClusterAnalysisExperiment:
                 comp = self._compute_composite_metric(method, metrics, layer)
                 if comp is not None:
                     layer_scores[name] = comp.to(device)
+            # ------------------------------------------------------------------
+            # METRIC-BASED METHODS (single metrics, Taylor-weighted, LP-optimal)
+            # ------------------------------------------------------------------
+            elif method.startswith("taylor_") and method not in {
+                "taylor_rq_weighted", "taylor_redundancy_discounted", "taylor_synergy_boosted",
+                "taylor_structural", "taylor_mi", "taylor_cluster_type", "taylor_optimal_combo"
+            } or method in {"lp_optimal", "cluster_structure"}:
+                from ..pruning.strategies.metric_based import create_metric_pruning_strategy
+                
+                # Get Taylor scores if needed
+                taylor = None
+                if method.startswith("taylor_"):
+                    if "taylor" not in self._pruning_score_cache:
+                        try:
+                            self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(model)
+                        except Exception:
+                            self._pruning_score_cache["taylor"] = {}
+                    taylor = self._pruning_score_cache.get("taylor", {}).get(name)
+                    if taylor is not None:
+                        taylor = taylor.cpu().numpy()
+                
+                # Get LP scores if needed
+                lp = None
+                if method == "lp_optimal":
+                    lp = metrics.get("loss_proxy", metrics.get("lp", metrics.get("fisher")))
+                
+                # Get cluster info
+                clusters = self.cluster_results.get(name, {})
+                
+                strategy = create_metric_pruning_strategy(
+                    method=method,
+                    precomputed_metrics=metrics,
+                    precomputed_clusters=clusters,
+                    taylor_scores=taylor,
+                    lp_scores=lp,
+                )
+                scores = strategy.compute_importance_scores(layer, layer_name=name)
+                layer_scores[name] = scores.to(device)
+            # ------------------------------------------------------------------
+            # GENERALIZED TAYLOR METHODS
+            # ------------------------------------------------------------------
+            elif method in {
+                "taylor_rq_weighted", "taylor_redundancy_discounted", "taylor_synergy_boosted",
+                "taylor_structural", "taylor_mi", "taylor_cluster_type", "taylor_optimal_combo",
+                "rq_weighted_taylor", "redundancy_discounted_taylor", "synergy_boosted_taylor",
+                "structural_taylor", "metric_gated_taylor", "mi_taylor", "cluster_type_taylor",
+            }:
+                from ..pruning.strategies.generalized_taylor import create_generalized_taylor
+                
+                # Map method name to variant
+                variant_map = {
+                    "taylor_rq_weighted": "rq_weighted_taylor",
+                    "taylor_redundancy_discounted": "redundancy_discounted_taylor",
+                    "taylor_synergy_boosted": "synergy_boosted_taylor",
+                    "taylor_structural": "structural_taylor",
+                    "taylor_mi": "mi_taylor",
+                    "taylor_cluster_type": "cluster_type_taylor",
+                    "taylor_optimal_combo": "taylor_optimal_combo",
+                }
+                variant = variant_map.get(method, method)
+                
+                # Get Taylor scores
+                if "taylor" not in self._pruning_score_cache:
+                    try:
+                        self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(model)
+                    except Exception:
+                        self._pruning_score_cache["taylor"] = {}
+                taylor_cpu = self._pruning_score_cache.get("taylor", {}).get(name)
+                taylor_np = taylor_cpu.cpu().numpy() if taylor_cpu is not None else None
+                
+                # Get cluster info
+                clusters = self.cluster_results.get(name, {})
+                
+                strategy = create_generalized_taylor(
+                    variant=variant,
+                    precomputed_metrics=metrics,
+                    precomputed_clusters=clusters,
+                    taylor_scores=taylor_np,
+                    # Configurable hyperparameters (YAML-driven; saved in experiment_config.yaml)
+                    weight_rq=float(getattr(self.config, "generalized_taylor_weight_rq", 1.0)),
+                    weight_redundancy=float(getattr(self.config, "generalized_taylor_weight_redundancy", 0.3)),
+                    weight_synergy=float(getattr(self.config, "generalized_taylor_weight_synergy", 0.5)),
+                    gradient_exponent=float(getattr(self.config, "generalized_taylor_gradient_exponent", 1.0)),
+                    activation_exponent=float(getattr(self.config, "generalized_taylor_activation_exponent", 1.0)),
+                    redundancy_discount_beta=float(
+                        getattr(self.config, "generalized_taylor_redundancy_discount_beta", 1.0)
+                    ),
+                    synergy_boost_gamma=float(getattr(self.config, "generalized_taylor_synergy_boost_gamma", 0.5)),
+                    critical_multiplier=float(getattr(self.config, "generalized_taylor_critical_multiplier", 1.5)),
+                    redundant_multiplier=float(getattr(self.config, "generalized_taylor_redundant_multiplier", 0.5)),
+                    synergistic_multiplier=float(getattr(self.config, "generalized_taylor_synergistic_multiplier", 1.2)),
+                    background_multiplier=float(getattr(self.config, "generalized_taylor_background_multiplier", 0.8)),
+                    gate_mode=str(getattr(self.config, "generalized_taylor_gate_mode", "sigmoid")),
+                    gate_temperature=float(getattr(self.config, "generalized_taylor_gate_temperature", 6.0)),
+                    gate_bias=float(getattr(self.config, "generalized_taylor_gate_bias", 0.5)),
+                    gate_eps=float(getattr(self.config, "generalized_taylor_gate_eps", 0.05)),
+                    gate_min=float(getattr(self.config, "generalized_taylor_gate_min", 0.0)),
+                    gate_include_cluster_multiplier=bool(
+                        getattr(self.config, "generalized_taylor_gate_include_cluster_multiplier", True)
+                    ),
+                    structural_eps=float(getattr(self.config, "generalized_taylor_structural_eps", 0.1)),
+                    rq_log_eps=float(getattr(self.config, "generalized_taylor_rq_log_eps", 1e-10)),
+                    grad_over_act_eps=float(getattr(self.config, "generalized_taylor_grad_over_act_eps", 1e-8)),
+                    lp_optimal_l2_reg=float(getattr(self.config, "generalized_taylor_lp_optimal_l2_reg", 0.01)),
+                )
+                scores = strategy.compute_importance_scores(layer, layer_name=name)
+                layer_scores[name] = scores.to(device)
             else:
                 logger.warning("Unknown pruning method '%s'; skipping layer scores", method)
                 return {}
@@ -1919,7 +2400,7 @@ class ClusterAnalysisExperiment:
         method: str,
     ) -> Dict[str, Any]:
         """
-        Apply cluster-aware pruning using the paper strategy (halo score + constraints).
+        Apply cluster-aware pruning using a halo-augmented score plus structured constraints.
 
         Returns a pipeline-like dict with:
           - masks: {layer_name: [C] mask}
@@ -1932,7 +2413,19 @@ class ClusterAnalysisExperiment:
         # Base config
         cfg = ClusterAwarePruningConfig(amount=float(ratio), structured=True)
 
-        # Variants for ablations / controls
+        # Allow external workflows (e.g., hyperparameter sweeps) to override score weights via config.
+        cfg.alpha = float(self.config.cluster_aware_alpha)
+        cfg.beta = float(self.config.cluster_aware_beta)
+        cfg.gamma = float(self.config.cluster_aware_gamma)
+        cfg.lambda_halo = float(self.config.cluster_aware_lambda_halo)
+        cfg.protect_critical_frac = float(self.config.cluster_aware_protect_critical_frac)
+
+        # Keep halo settings consistent with experiment config unless overridden
+        cfg.halo_percentile = float(self.config.halo_percentile)
+        cfg.use_activation_weight = bool(self.config.use_activation_weight)
+        cfg.n_clusters = int(self.config.n_clusters)
+
+        # Variants for ablations / controls (applied *after* config overrides)
         if method == "cluster_aware_no_halo":
             cfg.lambda_halo = 0.0
         elif method == "cluster_aware_no_constraints":
@@ -1965,18 +2458,6 @@ class ClusterAnalysisExperiment:
             cfg.protect_critical_frac = 1.0 - w_anneal * (1.0 - base_protect)
             cfg.target_redundant = bool(w_anneal >= 0.5)
             cfg.synergy_pair_constraint = bool(w_anneal >= 0.5)
-
-        # Allow paper scripts / SLURM jobs to sweep score weights via config overrides
-        cfg.alpha = float(self.config.cluster_aware_alpha)
-        cfg.beta = float(self.config.cluster_aware_beta)
-        cfg.gamma = float(self.config.cluster_aware_gamma)
-        cfg.lambda_halo = float(self.config.cluster_aware_lambda_halo)
-        cfg.protect_critical_frac = float(self.config.cluster_aware_protect_critical_frac)
-
-        # Keep halo settings consistent with experiment config unless overridden
-        cfg.halo_percentile = float(self.config.halo_percentile)
-        cfg.use_activation_weight = bool(self.config.use_activation_weight)
-        cfg.n_clusters = int(self.config.n_clusters)
 
         masks: Dict[str, torch.Tensor] = {}
         stats: Dict[str, Any] = {}
@@ -2053,6 +2534,17 @@ class ClusterAnalysisExperiment:
                 halo_percentile=cfg.halo_percentile,
                 use_activation_weight=cfg.use_activation_weight,
             )
+            # Variant: use HaloLP (propagated LP) as the halo term instead of HaloSyn.
+            # HaloLP is computed during `run_halo_analysis` and stored in layer_metrics[layer]["halo_lp"].
+            if method == "cluster_aware_halo_lp":
+                try:
+                    halo_lp = pre_metrics.get("halo_lp", None)
+                    if halo_lp is not None:
+                        halo_lp = np.asarray(halo_lp, dtype=np.float64).reshape(-1)[:n_channels]
+                        if halo_lp.size > 0:
+                            halo_syn = halo_lp
+                except Exception:
+                    pass
 
             pruner = ClusterAwarePruning(
                 cfg,
@@ -2069,34 +2561,46 @@ class ClusterAnalysisExperiment:
                 layer_name=layer_name,
             )
 
-            # Optional annealed mixing: blend cluster-aware score with Taylor at low sparsity.
-            if method == "cluster_aware_annealed":
-                # Ensure Taylor cache exists (computed once; reused across ratios/methods).
+            # ------------------------------------------------------------------
+            # METHOD VARIANTS: Different ways to combine cluster-aware with Taylor
+            # ------------------------------------------------------------------
+            
+            # Helper: normalize tensor to [0,1]
+            def _minmax(x: "torch.Tensor") -> "torch.Tensor":
+                x = x.float()
+                if x.numel() == 0:
+                    return x
+                mn = float(x.min().item())
+                mx = float(x.max().item())
+                if mx - mn < 1e-12:
+                    return torch.zeros_like(x)
+                return (x - mn) / (mx - mn)
+            
+            # Helper: get Taylor scores for this layer
+            def _get_taylor_scores() -> "torch.Tensor":
                 if "taylor" not in self._pruning_score_cache:
                     try:
                         self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(self.model)
                     except Exception:
                         self._pruning_score_cache["taylor"] = {}
-
                 t_cpu = (self._pruning_score_cache.get("taylor", {}) or {}).get(layer_name)
                 if t_cpu is None or (hasattr(t_cpu, "numel") and int(t_cpu.numel()) != int(n_channels)):
-                    # Fallback to weight magnitude if Taylor is unavailable/mismatched
                     w_flat = layer.weight.detach().view(n_channels, -1)
-                    t = w_flat.norm(p=2, dim=1).detach().cpu()
-                else:
-                    t = t_cpu.detach().cpu()
-
-                # Normalize both to [0,1] per-layer for stable mixing
-                def _minmax(x: "torch.Tensor") -> "torch.Tensor":
-                    x = x.float()
-                    if x.numel() == 0:
-                        return x
-                    mn = float(x.min().item())
-                    mx = float(x.max().item())
-                    if mx - mn < 1e-12:
-                        return torch.zeros_like(x)
-                    return (x - mn) / (mx - mn)
-
+                    return w_flat.norm(p=2, dim=1).detach().cpu()
+                return t_cpu.detach().cpu()
+            
+            # Compute depth fraction for depth-adaptive methods
+            depth_frac = float(idx) / max(1, len(layer_names_all) - 1)
+            
+            # ------------------------------------------------------------------
+            # OPTION 1: cluster_aware (pure) - no modification needed, use scores as-is
+            # ------------------------------------------------------------------
+            
+            # ------------------------------------------------------------------
+            # OPTION 2: cluster_aware_annealed - blend with Taylor based on sparsity
+            # ------------------------------------------------------------------
+            if method == "cluster_aware_annealed":
+                t = _get_taylor_scores()
                 s_ca = _minmax(scores.detach().cpu())
                 s_t = _minmax(t)
 
@@ -2113,6 +2617,95 @@ class ClusterAnalysisExperiment:
 
                 mixed = (1.0 - w_anneal) * s_t + w_anneal * s_ca
                 scores = mixed.to(device=scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 3: cluster_aware_taylor_blend - add Taylor as weighted component
+            # score = (1-w)*cluster_aware + w*taylor (constant weight, not sparsity-dependent)
+            # ------------------------------------------------------------------
+            elif method == "cluster_aware_taylor_blend":
+                t = _get_taylor_scores()
+                s_ca = _minmax(scores.detach().cpu())
+                s_t = _minmax(t)
+                
+                w_taylor = float(self.config.cluster_aware_taylor_weight)
+                mixed = (1.0 - w_taylor) * s_ca + w_taylor * s_t
+                scores = mixed.to(device=scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 4: cluster_aware_depth_adaptive - per-layer score weight adjustment
+            # Early layers: more conservative (protect more)
+            # Late layers: more aggressive (target redundancy more)
+            # ------------------------------------------------------------------
+            elif method == "cluster_aware_depth_adaptive":
+                early_frac = float(self.config.cluster_aware_early_layer_frac)
+                
+                if depth_frac < early_frac:
+                    # Early layers: use early-layer weights
+                    alpha_adj = float(self.config.cluster_aware_early_alpha)
+                    gamma_adj = float(self.config.cluster_aware_early_gamma)
+                else:
+                    # Late layers: interpolate toward late-layer weights
+                    t_interp = (depth_frac - early_frac) / (1.0 - early_frac + 1e-6)
+                    alpha_adj = (1 - t_interp) * float(self.config.cluster_aware_early_alpha) + \
+                                t_interp * float(self.config.cluster_aware_late_alpha)
+                    gamma_adj = (1 - t_interp) * float(self.config.cluster_aware_early_gamma) + \
+                                t_interp * float(self.config.cluster_aware_late_gamma)
+                
+                # Recompute scores with adjusted weights
+                # Get raw metrics
+                lm = pre_metrics
+                rq = np.asarray(lm.get("rq", lm.get("rayleigh_quotient", [])), dtype=np.float64).reshape(-1)
+                red = np.asarray(lm.get("redundancy", []), dtype=np.float64).reshape(-1)
+                syn = np.asarray(lm.get("synergy", []), dtype=np.float64).reshape(-1)
+                
+                n = min(n_channels, len(rq), len(red), len(syn))
+                if n > 0:
+                    rq = rq[:n]
+                    red = red[:n]
+                    syn = syn[:n]
+                    
+                    def _norm(x):
+                        x = np.asarray(x, dtype=np.float64)
+                        mn, mx = x.min(), x.max()
+                        if mx - mn < 1e-12:
+                            return np.zeros_like(x)
+                        return (x - mn) / (mx - mn)
+                    
+                    log_rq = np.log(np.clip(rq, 1e-10, None))
+                    score_np = (alpha_adj * _norm(log_rq) +
+                                float(cfg.beta) * _norm(syn) -
+                                gamma_adj * _norm(red) +
+                                float(cfg.lambda_halo) * _norm(halo_syn[:n]))
+                    
+                    scores = torch.from_numpy(score_np).float().to(scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 5: cluster_aware_gradient_weighted - generalized Taylor
+            # Compute gradient of loss w.r.t. our cluster-aware score, then weight by it
+            # This is: importance = |∂L/∂score| * score (like Taylor but for our score)
+            # ------------------------------------------------------------------
+            elif method == "cluster_aware_gradient_weighted":
+                # Get Taylor-like sensitivity (gradient * activation) for each channel
+                t = _get_taylor_scores()
+                
+                # The idea: Taylor measures |grad * activation|
+                # We measure: |grad * activation| * (cluster_aware_score / activation)
+                # = |grad| * cluster_aware_score
+                # This weights our structural score by the loss sensitivity
+                
+                s_ca = scores.detach().cpu().float()
+                t_scores = t.float()
+                
+                # Normalize both
+                s_ca_norm = _minmax(s_ca)
+                t_norm = _minmax(t_scores)
+                
+                # Gradient-weighted score: combine Taylor sensitivity with cluster-aware structure
+                # Higher Taylor = more loss-sensitive, higher CA = more structurally important
+                # Product gives channels that are both loss-sensitive AND structurally important
+                gradient_weighted = torch.sqrt(t_norm * s_ca_norm + 1e-8)  # Geometric mean
+                
+                scores = gradient_weighted.to(device=scores.device)
 
             layer_scores[layer_name] = scores.detach()
             layer_pruners[layer_name] = pruner
@@ -2126,6 +2719,7 @@ class ClusterAnalysisExperiment:
                 target_sparsity=float(ratio),
                 min_amount=float(min_amount),
                 max_amount=float(max_amount),
+                max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
             )
             # Only include layers we actually scored
             scored_names = [nm for nm in layer_names_all if nm in layer_scores]
@@ -2163,7 +2757,24 @@ class ClusterAnalysisExperiment:
 
             pruner = layer_pruners[layer_name]
             scores = layer_scores[layer_name].to(device=layer.weight.device)
-            prune_idx = pruner.select_channels_to_prune(scores, n_prune, layer_name=layer_name)
+            protected_idx = None
+            if method == "cluster_aware_bottleneck_protect":
+                try:
+                    b = self.layer_metrics.get(layer_name, {}).get("bottleneck_in_max", None)
+                    if b is not None:
+                        b = np.asarray(b, dtype=np.float64).reshape(-1)[:n_channels]
+                        pct = float(getattr(self.config, "bottleneck_protect_percentile", 95.0))
+                        thr = float(np.percentile(b, pct))
+                        protected_idx = np.where(b >= thr)[0].astype(int).tolist()
+                except Exception:
+                    protected_idx = None
+
+            prune_idx = pruner.select_channels_to_prune(
+                scores,
+                n_prune,
+                layer_name=layer_name,
+                protected_indices=protected_idx,
+            )
 
             mask = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
             if prune_idx:
@@ -2188,13 +2799,198 @@ class ClusterAnalysisExperiment:
                     pruned = int((~mask.detach().cpu().numpy().astype(bool))[idxs].sum())
                     by_type_pruned[ctype] = by_type_pruned.get(ctype, 0) + pruned
 
-        # Store summary for paper figures
+        # Store summary for downstream plots/reports
         self.pruning_cluster_distributions.setdefault(method, {})
         self.pruning_cluster_distributions[method][float(ratio)] = {
             "pruned": by_type_pruned,
             "total": by_type_total,
         }
 
+        return {"masks": masks, "stats": stats}
+
+    def _run_type_constrained_pruning(
+        self,
+        model: "nn.Module",
+        *,
+        layer_modules: Dict[str, "nn.Module"],
+        ratio: float,
+        method: str,
+    ) -> Dict[str, Any]:
+        """
+        Hybrid pruning: select channels using the cluster-aware *constraints* (type protection + optional
+        redundancy prioritization), but rank channels using an external score.
+
+        Implemented methods:
+        - "lp_with_constraints": rank by loss_proxy (LP), but protect critical types.
+        - "type_quota_taylor": rank by Taylor, but protect critical types.
+
+        Note: this intentionally avoids "scalar blending" tricks; it is a stable division of labor:
+          - structure decides *how many/which types* are safe to prune
+          - a strong scalar decides *which channels* within those types
+        """
+        import torch
+        import numpy as np
+
+        from ..pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig
+        from ..services.mask_ops import MaskOperations
+
+        # Build a constraint-only cluster-aware config.
+        cfg = ClusterAwarePruningConfig(amount=float(ratio), structured=True)
+        cfg.protect_critical_frac = float(self.config.cluster_aware_protect_critical_frac)
+        cfg.target_redundant = True  # prioritize pruning redundant/background first
+        cfg.synergy_pair_constraint = False
+        cfg.lambda_halo = 0.0  # score itself comes from the external signal
+
+        # Score source
+        score_kind = str(method)
+        if score_kind not in {"lp_with_constraints", "type_quota_taylor", "outred_with_constraints"}:
+            raise ValueError(f"Unknown type-constrained method: {method}")
+
+        # Which layers are prunable (respect MobileNet pointwise-only / skip-depthwise filters)
+        prunable_set = set(layer_modules.keys())
+        module_map = dict(model.named_modules())
+        layer_names_all = [nm for nm, _ in self.layers]
+
+        # Precompute per-layer scores on CPU for distribution allocation
+        layer_scores: Dict[str, torch.Tensor] = {}
+        layer_num_channels: Dict[str, int] = {}
+
+        # Taylor cache (computed once on the unpruned base model)
+        taylor_scores_by_layer: Dict[str, torch.Tensor] = {}
+        if score_kind == "type_quota_taylor":
+            if "taylor" not in self._pruning_score_cache:
+                try:
+                    self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(self.model)
+                except Exception:
+                    self._pruning_score_cache["taylor"] = {}
+            taylor_scores_by_layer = self._pruning_score_cache.get("taylor", {}) or {}
+
+        for layer_name in layer_names_all:
+            if prunable_set and (layer_name not in prunable_set):
+                continue
+            layer = module_map.get(layer_name)
+            if layer is None or not hasattr(layer, "weight") or layer.weight is None:
+                continue
+            n_channels = int(layer.weight.shape[0])
+            layer_num_channels[layer_name] = n_channels
+
+            if score_kind == "lp_with_constraints":
+                lm = self.layer_metrics.get(layer_name, {})
+                lp = lm.get("loss_proxy", None)
+                if lp is None:
+                    raise ValueError("lp_with_constraints requires loss_proxy; set compute_loss_proxy=true")
+                s = np.asarray(lp, dtype=np.float64).reshape(-1)[:n_channels]
+                scores = torch.as_tensor(s, dtype=torch.float32)
+            elif score_kind == "outred_with_constraints":
+                lm = self.layer_metrics.get(layer_name, {})
+                outred = lm.get("outred", None)
+                if outred is None:
+                    raise ValueError("outred_with_constraints requires outred; run halo analysis with routing metrics enabled")
+                s = np.asarray(outred, dtype=np.float64).reshape(-1)[:n_channels]
+                # We want to prune HIGH outred (more substitutable). Since ClusterAwarePruning prunes LOW scores,
+                # use the negative overlap as the score.
+                scores = torch.as_tensor(-s, dtype=torch.float32)
+            else:
+                t = taylor_scores_by_layer.get(layer_name)
+                if t is None or (hasattr(t, "numel") and int(t.numel()) != int(n_channels)):
+                    # Fallback to weight magnitude if Taylor unavailable
+                    w_flat = layer.weight.detach().view(n_channels, -1)
+                    scores = w_flat.norm(p=2, dim=1).detach().cpu().float()
+                else:
+                    scores = t.detach().cpu().float()
+
+            layer_scores[layer_name] = scores
+
+        # Allocate per-layer amounts (same logic as cluster-aware; use score-dependent distributions if configured)
+        distribution = str(self.config.pruning_distribution)
+        min_amount = float(self.config.pruning_min_per_layer)
+        max_amount = float(self.config.pruning_max_per_layer)
+
+        try:
+            from ..pruning.distribution import PruningDistributionManager
+
+            manager = PruningDistributionManager(
+                strategy=str(distribution),
+                target_sparsity=float(ratio),
+                min_amount=float(min_amount),
+                max_amount=float(max_amount),
+                max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
+            )
+            scored_names = [nm for nm in layer_names_all if nm in layer_scores]
+            per_layer_amounts = manager.compute_distribution(model, scored_names, layer_scores=layer_scores)
+        except Exception as exc:
+            logger.warning(
+                "Type-constrained pruning: failed to compute distribution '%s' (%s); falling back to uniform",
+                distribution,
+                exc,
+            )
+            clipped = max(min_amount, min(max_amount, float(ratio)))
+            per_layer_amounts = {nm: clipped for nm in layer_scores.keys()}
+
+        masks: Dict[str, torch.Tensor] = {}
+        stats: Dict[str, Any] = {}
+
+        by_type_pruned: Dict[str, int] = {}
+        by_type_total: Dict[str, int] = {}
+
+        # Apply pruning layer-by-layer
+        for layer_name in layer_names_all:
+            layer = module_map.get(layer_name)
+            if layer is None or not hasattr(layer, "weight") or layer.weight is None:
+                continue
+            if layer_name not in layer_scores:
+                continue
+
+            n_channels = int(layer_num_channels.get(layer_name, layer.weight.shape[0]))
+            amount = float(per_layer_amounts.get(layer_name, float(ratio)))
+            n_prune = int(n_channels * amount)
+            if n_prune <= 0:
+                mask = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
+                masks[layer_name] = mask
+                stats[layer_name] = MaskOperations.get_mask_statistics(mask)
+                continue
+
+            pre_clusters = self.cluster_results.get(layer_name, {})
+            labels = np.asarray(pre_clusters.get("labels", np.zeros(n_channels, dtype=int))).astype(int)
+            type_mapping = pre_clusters.get("type_mapping", {})
+
+            pruner = ClusterAwarePruning(
+                cfg,
+                precomputed_metrics=self.layer_metrics.get(layer_name, {}),
+                precomputed_clusters={"labels": labels, "type_mapping": type_mapping},
+                precomputed_halos={"halo_syn": np.zeros(n_channels, dtype=np.float64)},
+            )
+            # Ensure caches are populated for constraint logic
+            pruner._cluster_cache[layer_name] = {"labels": labels, "type_mapping": type_mapping}
+            pruner._metrics_cache[layer_name] = self.layer_metrics.get(layer_name, {})
+
+            scores = layer_scores[layer_name].to(device=layer.weight.device)
+            prune_idx = pruner.select_channels_to_prune(scores, n_prune, layer_name=layer_name)
+
+            mask = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
+            if prune_idx:
+                mask[torch.as_tensor(prune_idx, device=layer.weight.device)] = False
+                with torch.no_grad():
+                    layer.weight.data[~mask] = 0.0
+                    if getattr(layer, "bias", None) is not None and layer.bias.data.numel() == n_channels:
+                        layer.bias.data[~mask] = 0.0
+
+            masks[layer_name] = mask
+            stats[layer_name] = MaskOperations.get_mask_statistics(mask)
+
+            # By-type summaries (for reports/diagnostics)
+            labels = labels[: min(len(labels), n_channels)]
+            if isinstance(type_mapping, dict):
+                for cid, ctype in type_mapping.items():
+                    cid_int = int(cid)
+                    idxs = np.where(labels == cid_int)[0]
+                    by_type_total[ctype] = by_type_total.get(ctype, 0) + int(len(idxs))
+                    if len(idxs) > 0:
+                        pruned = int((~mask.detach().cpu().numpy().astype(bool))[idxs].sum())
+                        by_type_pruned[ctype] = by_type_pruned.get(ctype, 0) + pruned
+
+        self.pruning_cluster_distributions.setdefault(method, {})
+        self.pruning_cluster_distributions[method][float(ratio)] = {"pruned": by_type_pruned, "total": by_type_total}
         return {"masks": masks, "stats": stats}
 
     def _zero_batchnorm_from_masks(self, model: nn.Module, masks: Dict[str, torch.Tensor]) -> None:
@@ -2361,6 +3157,16 @@ class ClusterAnalysisExperiment:
                         scores = red_norm  # Low redundancy → prune
                     elif method == 'synergy_low':
                         scores = syn_norm  # Low synergy → prune
+                    elif method == 'mi_low':
+                        # MI = 0.5 * log(1 + RQ * ||w||^2) - get from mi_in_proxy
+                        mi = metrics.get('mi_in_proxy', np.zeros(n_ch))
+                        mi_norm = (mi - mi.min()) / (mi.max() - mi.min() + 1e-12)
+                        scores = mi_norm  # Low MI → prune
+                    elif method == 'lp_low':
+                        # Loss proxy (Fisher importance) - get from loss_proxy
+                        lp = metrics.get('loss_proxy', np.zeros(n_ch))
+                        lp_norm = (lp - lp.min()) / (lp.max() - lp.min() + 1e-12)
+                        scores = lp_norm  # Low LP → prune
                     
                     # SINGLE METRICS - prune HIGH
                     elif method == 'rq_high':
@@ -2369,6 +3175,14 @@ class ClusterAnalysisExperiment:
                         scores = -red_norm  # High redundancy → prune
                     elif method == 'synergy_high':
                         scores = -syn_norm  # High synergy → prune
+                    elif method == 'mi_high':
+                        mi = metrics.get('mi_in_proxy', np.zeros(n_ch))
+                        mi_norm = (mi - mi.min()) / (mi.max() - mi.min() + 1e-12)
+                        scores = -mi_norm  # High MI → prune
+                    elif method == 'lp_high':
+                        lp = metrics.get('loss_proxy', np.zeros(n_ch))
+                        lp_norm = (lp - lp.min()) / (lp.max() - lp.min() + 1e-12)
+                        scores = -lp_norm  # High LP → prune
                     elif method == 'magnitude_high':
                         scores = -mag_norm  # High magnitude → prune
                     
@@ -2834,7 +3648,7 @@ class ClusterAnalysisExperiment:
             fig_dir = self.output_dir / "figures"
         fig_dir.mkdir(exist_ok=True, parents=True)
 
-        # Helper: keep backward-compatible root-level copies for paper scripts
+        # Helper: keep backward-compatible root-level copies for legacy consumers
         # while also writing into organized subfolders.
         try:
             import shutil
@@ -2949,7 +3763,7 @@ class ClusterAnalysisExperiment:
             )
             _copy_legacy(_p, fig_dir / "layer_metric_trends.png")
             
-            # NEW: Statistics table for paper/report
+            # NEW: Statistics table for report/summary
             _p = summary_dir / "metric_statistics_table.png"
             plot_metric_statistics_table(
                 layer_metrics=self.layer_metrics,
@@ -2979,7 +3793,7 @@ class ClusterAnalysisExperiment:
                 fig_dir / f"cluster_scatter_{name.replace('.', '_')}.png",
             )
 
-        # Representative 3D scatter for the paper (best-effort)
+        # Representative 3D scatter for quick inspection (best-effort)
         try:
             if self.cluster_results and self.layer_metrics:
                 rep_layer = None
@@ -3040,7 +3854,7 @@ class ClusterAnalysisExperiment:
                 }
                 _p = cascade_dir / f"cascade_{name.replace('.', '_')}.png"
                 plot_cascade_test(results, _p)
-                # Paper scripts glob fig_dir/"cascade_*.png" (non-recursive)
+                # Some downstream tooling globs fig_dir/"cascade_*.png" (non-recursive)
                 _copy_legacy(_p, fig_dir / f"cascade_{name.replace('.', '_')}.png")
         
         # ==================================================================
@@ -3071,7 +3885,7 @@ class ClusterAnalysisExperiment:
                     for ct, v in by_type.items()
                 ]
                 # Save into the organized halo subfolder, but also keep a
-                # root-level copy for backward compatibility (paper scripts expect it).
+                # root-level copy for backward compatibility (some external consumers expect it).
                 halo_props_path = halo_dir / "halo_properties.png"
                 plot_halo_properties(avg_halo, halo_props_path)
                 try:
@@ -3079,7 +3893,7 @@ class ClusterAnalysisExperiment:
                 except Exception:
                     pass
 
-        # Representative cluster-to-cluster influence matrix for the paper (best-effort)
+        # Representative cluster-to-cluster influence matrix for quick inspection (best-effort)
         try:
             if self.halo_flow_results:
                 rep_transition = None

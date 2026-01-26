@@ -156,6 +156,9 @@ pruning:
   dependency_aware: false            # VGG has no skip connections
   min_per_layer: 0.0
   max_per_layer: 0.95
+  # Optional: per-layer safety cap for global-threshold style distributions.
+  # Set to 1.0 to disable (legacy behavior); set to e.g. 0.90 to limit per-layer sparsity.
+  max_per_layer_sparsity_cap: 1.0
   ratios: [0.1, 0.3, 0.4, 0.5, 0.7, 0.8]  # Add 40% point for paper curves
   
   # COMPREHENSIVE ALGORITHM LIST for exploration
