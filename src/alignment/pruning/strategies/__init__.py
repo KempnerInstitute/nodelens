@@ -22,7 +22,27 @@ from .magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, Magnit
 from .parallel import AsyncParallelPruning, ParallelModePruning, TensorizedPruning
 from .parallel_batch import ParallelBatchPruning
 from .random import BernoulliPruning, LayerwiseRandomPruning, RandomPruning
-from .chip import CHIPPruning, compute_chip_scores, chip_score_channels
+
+# Optional strategy: CHIP (may not be vendored in all repos).
+try:
+    from .chip import CHIPPruning, compute_chip_scores, chip_score_channels  # type: ignore
+except Exception:  # pragma: no cover
+    # Provide import-time stability for users who don't have CHIP code vendored.
+    class CHIPPruning:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "CHIPPruning is unavailable: missing `alignment.pruning.strategies.chip`."
+            )
+
+    def compute_chip_scores(*args, **kwargs):  # type: ignore
+        raise ImportError(
+            "compute_chip_scores is unavailable: missing `alignment.pruning.strategies.chip`."
+        )
+
+    def chip_score_channels(*args, **kwargs):  # type: ignore
+        raise ImportError(
+            "chip_score_channels is unavailable: missing `alignment.pruning.strategies.chip`."
+        )
 
 __all__ = [
     # Magnitude
