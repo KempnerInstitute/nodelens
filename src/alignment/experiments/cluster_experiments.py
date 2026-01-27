@@ -1462,6 +1462,22 @@ class ClusterAnalysisExperiment:
             logger.warning("Baseline accuracy is low; pruning comparisons may be noisy.")
         
         results = {"baseline": baseline_acc, "methods": {}}
+
+        def _checkpoint_pruning_results() -> None:
+            """
+            Best-effort incremental save.
+
+            Some sweeps (e.g., ImageNet methods × sparsity) can exceed typical walltimes.
+            We therefore periodically write `pruning_results.json` so partial progress is
+            recoverable and artifact-generation can still consume whatever finished.
+            """
+            try:
+                tmp = self.output_dir / "pruning_results.json.tmp"
+                with open(tmp, "w") as f:
+                    json.dump(results, f, indent=2, default=_json_default)
+                tmp.replace(self.output_dir / "pruning_results.json")
+            except Exception as exc:
+                logger.debug("Failed to checkpoint pruning_results.json: %s", exc)
         
         for method in methods:
             logger.info(f"Running pruning method: {method}")
@@ -1549,6 +1565,7 @@ class ClusterAnalysisExperiment:
                     del model_copy
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                    _checkpoint_pruning_results()
         
         self.pruning_results = results
         with open(self.output_dir / "pruning_results.json", "w") as f:

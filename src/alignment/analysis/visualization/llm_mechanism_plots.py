@@ -810,14 +810,12 @@ def plot_main_schematic(
     dpi: int = 300,
 ) -> plt.Figure:
     """
-    Main schematic:
-      (A) SwiGLU FFN block with a few highlighted channels
-      (B) Supernode/halo write overlap via W_down
-      (C) Headline pruning result at a target sparsity
+    Main schematic (2 panels, no summary):
+      (A) SwiGLU FFN block with one supernode and grouped halos
+      (B) Cross-layer bus structure with layer labels and grouped halos
     """
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.55))
-    # Give subplot titles a bit more breathing room (avoid overlap/cropping).
-    fig.subplots_adjust(left=0.02, right=0.98, top=0.92, bottom=0.10, wspace=0.40)
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.90, bottom=0.08, wspace=0.25)
     for ax in axes:
         ax.set_axis_off()
 
@@ -825,6 +823,7 @@ def plot_main_schematic(
     C_HALO = "#f39c12"
     C_REG = "#bdc3c7"
     C_INK = "#2c3e50"
+    C_READ = "#3498db"
 
     # -------------------------
     # (A) SwiGLU FFN block
@@ -834,13 +833,13 @@ def plot_main_schematic(
     ax.set_ylim(0, 1)
     ax.text(0.00, 0.98, "(A) SwiGLU FFN", ha="left", va="top", fontsize=10.0, fontweight="bold")
 
-    ax.add_patch(Circle((0.07, 0.50), 0.06, facecolor="white", edgecolor=C_INK, linewidth=2.0))
+    ax.add_patch(Circle((0.07, 0.50), 0.055, facecolor="white", edgecolor=C_INK, linewidth=2.0))
     ax.text(0.07, 0.50, "x", ha="center", va="center", fontsize=11, fontweight="bold")
-    ax.text(0.07, 0.33, f"Input\n({d_model})", ha="center", va="top", fontsize=8, color=C_INK)
+    ax.text(0.07, 0.35, f"Input\n({d_model})", ha="center", va="top", fontsize=7.5, color=C_INK)
 
-    ax.add_patch(Circle((0.93, 0.50), 0.06, facecolor="white", edgecolor=C_INK, linewidth=2.0))
+    ax.add_patch(Circle((0.93, 0.50), 0.055, facecolor="white", edgecolor=C_INK, linewidth=2.0))
     ax.text(0.93, 0.50, "y", ha="center", va="center", fontsize=11, fontweight="bold")
-    ax.text(0.93, 0.33, f"Output\n({d_model})", ha="center", va="top", fontsize=8, color=C_INK)
+    ax.text(0.93, 0.35, f"Output\n({d_model})", ha="center", va="top", fontsize=7.5, color=C_INK)
 
     def _box(x, y, w, h, label):
         ax.add_patch(
@@ -856,162 +855,179 @@ def plot_main_schematic(
         )
         ax.text(x + w / 2, y + h / 2, label, ha="center", va="center", fontsize=9.5, fontweight="bold")
 
-    _box(0.22, 0.62, 0.18, 0.22, "Gate")
-    _box(0.22, 0.16, 0.18, 0.22, "Up")
-    _box(0.62, 0.39, 0.18, 0.22, "Down")
+    _box(0.22, 0.62, 0.16, 0.20, "Gate")
+    _box(0.22, 0.18, 0.16, 0.20, "Up")
+    _box(0.64, 0.40, 0.16, 0.20, "Down")
 
-    ax.add_patch(Circle((0.48, 0.50), 0.035, facecolor="white", edgecolor=C_INK, linewidth=1.6))
-    ax.text(0.48, 0.50, "⊙", ha="center", va="center", fontsize=12)
+    ax.add_patch(Circle((0.48, 0.50), 0.032, facecolor="white", edgecolor=C_INK, linewidth=1.6))
+    ax.text(0.48, 0.50, "⊙", ha="center", va="center", fontsize=11)
 
     def _arrow(p1, p2, ls="-", lw=1.6, color=C_INK):
         ax.add_patch(FancyArrowPatch(p1, p2, arrowstyle="->", linewidth=lw, linestyle=ls, color=color, mutation_scale=10))
 
-    _arrow((0.13, 0.50), (0.22, 0.73))
-    _arrow((0.13, 0.50), (0.22, 0.27))
-    _arrow((0.40, 0.73), (0.45, 0.53))
-    _arrow((0.40, 0.27), (0.45, 0.47))
-    _arrow((0.515, 0.50), (0.62, 0.50))
-    _arrow((0.80, 0.50), (0.87, 0.50))
+    _arrow((0.125, 0.50), (0.22, 0.72))
+    _arrow((0.125, 0.50), (0.22, 0.28))
+    _arrow((0.38, 0.72), (0.45, 0.53))
+    _arrow((0.38, 0.28), (0.45, 0.47))
+    _arrow((0.512, 0.50), (0.64, 0.50))
+    _arrow((0.80, 0.50), (0.875, 0.50))
 
-    # Stylized intermediate channels u
-    xs = np.linspace(0.40, 0.56, 14)
+    # Stylized intermediate channels u with ONE supernode and grouped halos
+    xs = np.linspace(0.41, 0.56, 12)
+    # Channel types: supernode at index 5, halos at 3,4,6,7 (grouped around supernode)
     for i, xi in enumerate(xs):
-        color = C_REG
-        lw = 2.0
-        if i in (3, 10):
+        if i == 5:  # Single supernode
             color = C_SUP
-            lw = 3.0
-        elif i in (2, 4, 9, 11):
+            lw = 3.5
+        elif i in (3, 4, 6, 7):  # Write halo (grouped around supernode)
             color = C_HALO
             lw = 2.6
-        ax.plot([xi, xi], [0.26, 0.74], color=color, linewidth=lw, solid_capstyle="round", alpha=0.95)
-    ax.text(0.48, 0.18, f"$u\\in\\mathbb{{R}}^{{{d_mlp}}}$", ha="center", va="center", fontsize=8.5, color="#7f8c8d")
+        else:  # Regular channels
+            color = C_REG
+            lw = 2.0
+        ax.plot([xi, xi], [0.28, 0.72], color=color, linewidth=lw, solid_capstyle="round", alpha=0.95)
+    
+    # Add subtle grouping rectangle around halo channels
+    halo_x_min = xs[3] - 0.012
+    halo_x_max = xs[7] + 0.012
+    ax.add_patch(
+        FancyBboxPatch(
+            (halo_x_min, 0.25),
+            halo_x_max - halo_x_min,
+            0.50,
+            boxstyle="round,pad=0.01,rounding_size=0.02",
+            linewidth=1.2,
+            edgecolor=C_HALO,
+            facecolor="none",
+            linestyle="--",
+            alpha=0.7,
+        )
+    )
+    ax.text(0.485, 0.19, f"$u\\in\\mathbb{{R}}^{{{d_mlp}}}$", ha="center", va="center", fontsize=8, color="#7f8c8d")
+
+    # Mini legend for panel A
+    ax.add_patch(Circle((0.20, 0.06), 0.012, facecolor=C_SUP, edgecolor="none"))
+    ax.text(0.22, 0.06, "Supernode", ha="left", va="center", fontsize=6.5)
+    ax.add_patch(Circle((0.48, 0.06), 0.012, facecolor=C_HALO, edgecolor="none"))
+    ax.text(0.50, 0.06, "Write halo", ha="left", va="center", fontsize=6.5)
+    ax.add_patch(Circle((0.76, 0.06), 0.012, facecolor=C_REG, edgecolor="none"))
+    ax.text(0.78, 0.06, "Regular", ha="left", va="center", fontsize=6.5)
 
     # -------------------------
-    # (B) Supernode bus structure: write halo + read halo
+    # (B) Cross-layer bus structure with layer labels
     # -------------------------
     ax = axes[1]
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.text(0.00, 0.98, "(B) Bus structure", ha="left", va="top", fontsize=10.0, fontweight="bold")
+    ax.text(0.00, 0.98, "(B) Cross-layer structure", ha="left", va="top", fontsize=10.0, fontweight="bold")
 
-    C_READ = "#3498db"  # Blue for read halo
-
-    # Layer L: supernodes and write halo (left side)
-    left_y = [0.80, 0.65, 0.50, 0.35]
-    left_c = [C_SUP, C_HALO, C_SUP, C_HALO]
-    left_labels = ["S", "W", "S", "W"]
+    # Layer ℓ (left): 1 supernode + 2 write halos (grouped) + 2 regular
+    left_x = 0.12
+    # From top: regular, halo, supernode, halo, regular
+    left_y = [0.85, 0.72, 0.58, 0.44, 0.30]
+    left_c = [C_REG, C_HALO, C_SUP, C_HALO, C_REG]
+    left_labels = ["", "W", "S", "W", ""]
     
     # Shared support / residual stream (center)
-    center_y = [0.72, 0.52, 0.32]
+    center_x = 0.50
+    center_y = [0.70, 0.55, 0.40]
     
-    # Layer L+1: read halo (right side)
-    right_y = [0.75, 0.55, 0.35]
+    # Layer ℓ+1 (right): read halos + regular
+    right_x = 0.88
+    right_y = [0.78, 0.58, 0.38]
     right_c = [C_READ, C_REG, C_READ]
     right_labels = ["R", "", "R"]
 
-    # Draw Layer L channels
-    for y, c, lbl in zip(left_y, left_c, left_labels):
-        ax.add_patch(Circle((0.12, y), 0.032, facecolor=c, edgecolor="white", linewidth=1.0))
-        if lbl:
-            ax.text(0.12, y, lbl, ha="center", va="center", fontsize=6.5, fontweight="bold", color="white")
-
-    # Draw shared write support (residual stream)
-    for y in center_y:
-        ax.add_patch(Circle((0.50, y), 0.025, facecolor="#ecf0f1", edgecolor="#95a5a6", linewidth=1.0))
-    for y, c, lbl in zip(right_y, right_c, right_labels):
-        ax.add_patch(Circle((0.88, y), 0.032, facecolor=c, edgecolor="white" if c != C_REG else "#95a5a6", linewidth=1.0))
-        if lbl:
-            ax.text(0.88, y, lbl, ha="center", va="center", fontsize=6.5, fontweight="bold", color="white")
-
-    # Draw write connections (left to center)
-    for y, c in zip(left_y, left_c):
-        ls = "-" if c == C_SUP else "--"
-        lw = 1.8 if c == C_SUP else 1.3
-        for yy in center_y:
-            ax.add_patch(FancyArrowPatch((0.16, y), (0.47, yy), arrowstyle="->", linewidth=lw, linestyle=ls, color=c, alpha=0.5, mutation_scale=8))
-
-    # Draw read connections (center to right)
-    for y, c in zip(right_y, right_c):
-        if c == C_READ:
-            for yy in center_y:
-                ax.add_patch(FancyArrowPatch((0.53, yy), (0.84, y), arrowstyle="->", linewidth=1.3, linestyle="-", color=c, alpha=0.5, mutation_scale=8))
-
-    # Labels
-    ax.text(0.31, 0.18, r"$W_{\mathrm{down}}$", ha="center", va="center", fontsize=7.5, color=C_INK)
-    ax.text(0.69, 0.18, r"$W_{\mathrm{up/gate}}$", ha="center", va="center", fontsize=7.5, color=C_INK)
-
-    # Mini legend
-    ax.add_patch(Circle((0.12, 0.12), 0.015, facecolor=C_SUP, edgecolor="none"))
-    ax.text(0.15, 0.12, "Supernode", ha="left", va="center", fontsize=6.5)
-    ax.add_patch(Circle((0.12, 0.05), 0.015, facecolor=C_HALO, edgecolor="none"))
-    ax.text(0.15, 0.05, "Write halo", ha="left", va="center", fontsize=6.5)
-    ax.add_patch(Circle((0.55, 0.12), 0.015, facecolor=C_READ, edgecolor="none"))
-    ax.text(0.58, 0.12, "Read halo", ha="left", va="center", fontsize=6.5)
-
-    # -------------------------
-    # (C) Result callout
-    # -------------------------
-    ax = axes[2]
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.text(0.00, 0.98, "(C) Pruning result", ha="left", va="top", fontsize=10.0, fontweight="bold")
-
+    # Draw grouping rectangle for write halo in Layer ℓ
     ax.add_patch(
         FancyBboxPatch(
-            (0.10, 0.22),
-            0.80,
-            0.56,
-            boxstyle="round,pad=0.03,rounding_size=0.03",
-            linewidth=2.0,
-            edgecolor="#27ae60",
-            facecolor="#ecf9f1",
+            (left_x - 0.055, left_y[3] - 0.06),
+            0.11,
+            left_y[1] - left_y[3] + 0.12,
+            boxstyle="round,pad=0.01,rounding_size=0.02",
+            linewidth=1.5,
+            edgecolor=C_HALO,
+            facecolor=C_HALO,
+            alpha=0.12,
         )
     )
 
-    def _fmt(x: Optional[float]) -> str:
-        if x is None:
-            return "--"
-        try:
-            v = float(x)
-        except Exception:
-            return "--"
-        return f"{v:.1f}" if np.isfinite(v) else "--"
+    # Draw Layer ℓ channels
+    for y, c, lbl in zip(left_y, left_c, left_labels):
+        ax.add_patch(Circle((left_x, y), 0.035, facecolor=c, edgecolor="white" if c != C_REG else "#95a5a6", linewidth=1.2))
+        if lbl:
+            ax.text(left_x, y, lbl, ha="center", va="center", fontsize=7, fontweight="bold", color="white")
+    
+    # Layer ℓ label
+    ax.text(left_x, 0.16, r"Layer $\ell$", ha="center", va="center", fontsize=9, fontweight="bold", color=C_INK)
 
-    def _fmt_pct(x: Optional[float]) -> str:
-        if x is None:
-            return "--"
-        try:
-            v = float(x)
-        except Exception:
-            return "--"
-        return f"{v:.1f}%" if np.isfinite(v) else "--"
-
-    ax.text(0.50, 0.71, f"At {sparsity_pct}% sparsity:", ha="center", va="center", fontsize=11)
-    ax.text(0.50, 0.55, f"Wanda PPL = {_fmt(ppl_wanda)}", ha="center", va="center", fontsize=11)
-    ax.text(0.50, 0.40, f"SCAR  PPL = {_fmt(ppl_scar)}", ha="center", va="center", fontsize=11)
-    if supernode_pruned_pct_wanda is not None or supernode_pruned_pct_scar is not None:
-        def _fmt_pct_num(x: Optional[float]) -> str:
-            if x is None:
-                return "--"
-            try:
-                v = float(x)
-            except Exception:
-                return "--"
-            return f"{v:.1f}" if np.isfinite(v) else "--"
-
-        txt = f"SN pruned (W/S): {_fmt_pct_num(supernode_pruned_pct_wanda)} / {_fmt_pct_num(supernode_pruned_pct_scar)}"
-        ax.text(
-            0.50,
-            0.28,
-            txt,
-            ha="center",
-            va="center",
-            fontsize=8.6,
-            color=C_INK,
+    # Draw shared write support (residual stream)
+    ax.add_patch(
+        FancyBboxPatch(
+            (center_x - 0.04, center_y[2] - 0.05),
+            0.08,
+            center_y[0] - center_y[2] + 0.10,
+            boxstyle="round,pad=0.01,rounding_size=0.02",
+            linewidth=1.0,
+            edgecolor="#95a5a6",
+            facecolor="#ecf0f1",
+            alpha=0.6,
         )
+    )
+    for y in center_y:
+        ax.add_patch(Circle((center_x, y), 0.022, facecolor="#bdc3c7", edgecolor="#95a5a6", linewidth=0.8))
+    ax.text(center_x, 0.16, "Support\n" + r"$\mathcal{S}$", ha="center", va="center", fontsize=8, color="#7f8c8d")
 
-    # Use manual layout (subplots_adjust above) for stable spacing.
+    # Draw grouping rectangle for read halo in Layer ℓ+1
+    ax.add_patch(
+        FancyBboxPatch(
+            (right_x - 0.055, right_y[2] - 0.06),
+            0.11,
+            right_y[0] - right_y[2] + 0.12,
+            boxstyle="round,pad=0.01,rounding_size=0.02",
+            linewidth=1.5,
+            edgecolor=C_READ,
+            facecolor=C_READ,
+            alpha=0.12,
+        )
+    )
+
+    # Draw Layer ℓ+1 channels
+    for y, c, lbl in zip(right_y, right_c, right_labels):
+        ax.add_patch(Circle((right_x, y), 0.035, facecolor=c, edgecolor="white" if c != C_REG else "#95a5a6", linewidth=1.2))
+        if lbl:
+            ax.text(right_x, y, lbl, ha="center", va="center", fontsize=7, fontweight="bold", color="white")
+    
+    # Layer ℓ+1 label
+    ax.text(right_x, 0.16, r"Layer $\ell{+}1$", ha="center", va="center", fontsize=9, fontweight="bold", color=C_INK)
+
+    # Draw write connections (left to center) - only from supernode and halos
+    for y, c in zip(left_y, left_c):
+        if c == C_REG:
+            continue  # Regular channels don't emphasize write to support
+        ls = "-" if c == C_SUP else "--"
+        lw = 1.8 if c == C_SUP else 1.2
+        for yy in center_y:
+            ax.add_patch(FancyArrowPatch((left_x + 0.04, y), (center_x - 0.03, yy), arrowstyle="->", linewidth=lw, linestyle=ls, color=c, alpha=0.45, mutation_scale=7))
+
+    # Draw read connections (center to right) - only to read halos
+    for y, c in zip(right_y, right_c):
+        if c == C_READ:
+            for yy in center_y:
+                ax.add_patch(FancyArrowPatch((center_x + 0.03, yy), (right_x - 0.04, y), arrowstyle="->", linewidth=1.2, linestyle="-", color=c, alpha=0.45, mutation_scale=7))
+
+    # Weight labels
+    ax.text(0.31, 0.88, r"$W_{\mathrm{down}}$", ha="center", va="center", fontsize=8, color=C_INK)
+    ax.text(0.69, 0.88, r"$W_{\mathrm{up/gate}}$", ha="center", va="center", fontsize=8, color=C_INK)
+
+    # Mini legend for panel B
+    ax.add_patch(Circle((0.20, 0.04), 0.012, facecolor=C_SUP, edgecolor="none"))
+    ax.text(0.22, 0.04, "Supernode", ha="left", va="center", fontsize=6.5)
+    ax.add_patch(Circle((0.46, 0.04), 0.012, facecolor=C_HALO, edgecolor="none"))
+    ax.text(0.48, 0.04, "Write halo", ha="left", va="center", fontsize=6.5)
+    ax.add_patch(Circle((0.72, 0.04), 0.012, facecolor=C_READ, edgecolor="none"))
+    ax.text(0.74, 0.04, "Read halo", ha="left", va="center", fontsize=6.5)
+
     if save_path is not None:
         _save(fig, save_path, dpi=dpi)
     return fig
@@ -1608,39 +1624,50 @@ def plot_lp_vs_magnitude_controls(
     ax.grid(True, alpha=0.25)
     ax.legend(loc="lower right", fontsize=8, frameon=True)
 
-    # (b) correlation summary (Spearman on log space)
+    # (b) correlation summary as bar chart (Spearman on log space)
     ax = axes[1]
     ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    rows: List[Tuple[str, float]] = []
-    rows.append(("ρ(LP, ActPower)", _spearman_np(y, x)))
+    
+    labels: List[str] = []
+    values: List[float] = []
+    
+    labels.append("ActPower")
+    values.append(_spearman_np(y, x))
 
     if downproj_col_norm is not None:
         dn = _to_numpy(downproj_col_norm).astype(np.float64).reshape(-1)[:n]
         dn = np.log10(np.maximum(dn, 0.0) + eps)
-        rows.append(("ρ(LP, ||v_i||)", _spearman_np(y, dn)))
+        labels.append(r"$\|v_i\|$")
+        values.append(_spearman_np(y, dn))
     if upproj_row_norm is not None:
         un = _to_numpy(upproj_row_norm).astype(np.float64).reshape(-1)[:n]
         un = np.log10(np.maximum(un, 0.0) + eps)
-        rows.append(("ρ(LP, ||W_up[i]||)", _spearman_np(y, un)))
+        labels.append(r"$\|W_{\mathrm{up}}[i]\|$")
+        values.append(_spearman_np(y, un))
     if gateproj_row_norm is not None:
         gn = _to_numpy(gateproj_row_norm).astype(np.float64).reshape(-1)[:n]
         gn = np.log10(np.maximum(gn, 0.0) + eps)
-        rows.append(("ρ(LP, ||W_gate[i]||)", _spearman_np(y, gn)))
-
-    ax.axis("off")
-    txt = "\n".join([f"{name}: {val:+.3f}" for name, val in rows])
-    ax.text(
-        0.02,
-        0.90,
-        txt,
-        ha="left",
-        va="top",
-        transform=ax.transAxes,
-        fontsize=9.5,
-        family="monospace",
-        bbox=dict(boxstyle="round,pad=0.4", facecolor="#ecf0f1", edgecolor="#2c3e50", alpha=0.9),
-    )
-    ax.set_title("Rank correlation controls", fontsize=10.5)
+        labels.append(r"$\|W_{\mathrm{gate}}[i]\|$")
+        values.append(_spearman_np(y, gn))
+    
+    # Create bar chart
+    x_pos = np.arange(len(labels))
+    colors = ["#27ae60" if v > 0.15 else "#3498db" if v > 0 else "#e74c3c" for v in values]
+    bars = ax.bar(x_pos, values, color=colors, edgecolor="#2c3e50", linewidth=0.8, alpha=0.85)
+    
+    # Add value labels on bars
+    for i, (bar, val) in enumerate(zip(bars, values)):
+        y_pos = val + 0.02 if val >= 0 else val - 0.05
+        ax.text(bar.get_x() + bar.get_width()/2, y_pos, f"{val:+.2f}", 
+                ha="center", va="bottom" if val >= 0 else "top", fontsize=8, fontweight="bold")
+    
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(labels, fontsize=8.5, rotation=15, ha="right")
+    ax.set_ylabel(r"Spearman $\rho$ with LP", fontsize=9)
+    ax.axhline(0, color="#2c3e50", linewidth=0.8, linestyle="-")
+    ax.set_ylim(-0.15, max(0.5, max(values) + 0.1))
+    ax.set_title("LP vs magnitude controls", fontsize=10.5)
+    ax.grid(True, axis="y", alpha=0.3)
 
     plt.tight_layout()
     if save_path is not None:
