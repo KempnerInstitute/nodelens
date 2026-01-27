@@ -186,6 +186,8 @@ class ExperimentConfig:
     hrank_images: int = 256
     hrank_pool: int = 8
     hrank_sv_eps: float = 1e-3
+    # CHIP (Channel Independence-based Pruning, Sui et al. NeurIPS 2021)
+    chip_images: int = 256
 
     # Cluster-aware pruning score weights (for sweeps / ablations)
     cluster_aware_alpha: float = 1.0

@@ -22,6 +22,7 @@ from .magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, Magnit
 from .parallel import AsyncParallelPruning, ParallelModePruning, TensorizedPruning
 from .parallel_batch import ParallelBatchPruning
 from .random import BernoulliPruning, LayerwiseRandomPruning, RandomPruning
+from .chip import CHIPPruning, compute_chip_scores, chip_score_channels
 
 __all__ = [
     # Magnitude
@@ -66,4 +67,8 @@ __all__ = [
     "FLAPPruning",
     "RIAPruning",
     "SlimLLMPruning",
+    # CHIP (Sui et al. NeurIPS 2021) - inter-channel correlation pruning
+    "CHIPPruning",
+    "compute_chip_scores",
+    "chip_score_channels",
 ]

@@ -2068,6 +2068,108 @@ class ClusterAnalysisExperiment:
 
         return out_scores
 
+    def _compute_chip_channel_scores(self, model: nn.Module) -> Dict[str, np.ndarray]:
+        """
+        CHIP: Channel Independence-based Pruning (Sui et al. NeurIPS 2021).
+
+        Computes per-channel "independence score" based on inter-channel correlations.
+        Channels with LOW independence (high correlation with others) are pruned first.
+
+        Independence_i = 1 / (1 + sum_j |corr(Y_i, Y_j)|)
+
+        This is conceptually similar to our "redundancy_high" pruning but uses
+        activation correlations directly rather than Gaussian MI.
+
+        Reference: https://arxiv.org/abs/2110.13981
+        """
+        if not HAS_TORCH:
+            return {}
+
+        max_images = int(getattr(self.config, "chip_images", 256))
+        max_images = max(1, max_images)
+
+        model = model.to(self.device)
+        model.eval()
+
+        modules = dict(model.named_modules())
+
+        # Collect activations per layer
+        activations: Dict[str, List[torch.Tensor]] = {}
+
+        def hook_fn(layer_name: str):
+            def fn(_m, _inp, out):
+                if out is None:
+                    return
+                if isinstance(out, tuple):
+                    out = out[0]
+                if out.ndim < 2:
+                    return
+                # Keep on CPU to avoid memory issues
+                activations.setdefault(layer_name, []).append(out.detach().cpu())
+            return fn
+
+        handles = []
+        for name, _layer in self.layers:
+            m = modules.get(name)
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                handles.append(m.register_forward_hook(hook_fn(name)))
+
+        n_seen = 0
+        with torch.no_grad():
+            for x, _y in self._get_calibration_loader():
+                if n_seen >= max_images:
+                    break
+                remaining = max_images - n_seen
+                if x.size(0) > remaining:
+                    x = x[:remaining]
+                x = x.to(self.device)
+                _ = model(x)
+                n_seen += int(x.size(0))
+
+        for h in handles:
+            h.remove()
+
+        # Compute independence scores per layer
+        out_scores: Dict[str, np.ndarray] = {}
+        for layer_name, acts_list in activations.items():
+            if not acts_list:
+                continue
+            try:
+                acts = torch.cat(acts_list, dim=0)  # [N, C, ...] or [N, C]
+                # Flatten spatial dims if present
+                if acts.ndim == 4:
+                    N, C, H, W = acts.shape
+                    acts = acts.permute(1, 0, 2, 3).reshape(C, -1)  # [C, N*H*W]
+                elif acts.ndim == 3:
+                    N, C, D = acts.shape
+                    acts = acts.permute(1, 0, 2).reshape(C, -1)  # [C, N*D]
+                elif acts.ndim == 2:
+                    acts = acts.T  # [C, N]
+                else:
+                    continue
+
+                acts = acts.float()
+                C = acts.shape[0]
+
+                # Compute correlation matrix
+                acts_centered = acts - acts.mean(dim=1, keepdim=True)
+                stds = acts_centered.std(dim=1, keepdim=True).clamp(min=1e-8)
+                acts_normed = acts_centered / stds
+                corr = (acts_normed @ acts_normed.T) / acts.shape[1]
+                corr = corr.clamp(-1, 1)
+
+                # Independence: I_i = 1 / (1 + sum_{j!=i} |corr(i,j)|)
+                abs_corr = torch.abs(corr)
+                abs_corr.fill_diagonal_(0)
+                sum_abs_corr = abs_corr.sum(dim=1)
+                independence = 1.0 / (1.0 + sum_abs_corr)
+
+                out_scores[layer_name] = independence.cpu().numpy()
+            except Exception as exc:
+                logger.debug("CHIP score computation failed for %s: %s", layer_name, exc)
+
+        return out_scores
+
     def _compute_layer_scores_for_method(self, method: str, model: nn.Module) -> Dict[str, torch.Tensor]:
         layer_scores: Dict[str, torch.Tensor] = {}
         modules = self._get_layer_module_map(model)
@@ -2167,6 +2269,26 @@ class ClusterAnalysisExperiment:
                     layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
                 else:
                     layer_scores[name] = cpu_scores.to(device=device, dtype=torch.float32)
+            # ------------------------------------------------------------------
+            # CHIP: Channel Independence-based Pruning (Sui et al. NeurIPS 2021)
+            # Prunes channels with low independence (high inter-channel correlation).
+            # Conceptually similar to "redundancy_high" but uses correlation directly.
+            # ------------------------------------------------------------------
+            elif method == "chip":
+                cache_key = "chip"
+                if cache_key not in self._pruning_score_cache:
+                    try:
+                        self._pruning_score_cache[cache_key] = self._compute_chip_channel_scores(model)
+                    except Exception as exc:
+                        logger.warning("CHIP score computation failed (%s); falling back to magnitude", exc)
+                        self._pruning_score_cache[cache_key] = {}
+                cpu_scores = self._pruning_score_cache.get(cache_key, {}).get(name)
+                if cpu_scores is None or (hasattr(cpu_scores, "numel") and cpu_scores.numel() != n_channels):
+                    # Fallback to magnitude
+                    w_flat = weight.view(n_channels, -1)
+                    layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
+                else:
+                    layer_scores[name] = torch.as_tensor(cpu_scores, device=device, dtype=torch.float32)
             elif method in metric_map:
                 values = metrics.get(metric_map[method])
                 if values is None:
