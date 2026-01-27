@@ -319,20 +319,26 @@ def _create_cluster_experiment(config):
     weights_arg = weights_name if pretrained else None
 
     if "resnet18" in model_name:
-        model = torchvision.models.resnet18(weights=weights_arg or 'IMAGENET1K_V1')
-        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        model = torchvision.models.resnet18(weights=weights_arg or "IMAGENET1K_V1")
+        # Only replace the classifier head when adapting to a non-ImageNet-1k label space.
+        if int(num_classes) != 1000:
+            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
     elif "resnet50" in model_name:
-        model = torchvision.models.resnet50(weights=weights_arg or 'IMAGENET1K_V1')
-        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        model = torchvision.models.resnet50(weights=weights_arg or "IMAGENET1K_V1")
+        if int(num_classes) != 1000:
+            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
     elif "vgg16" in model_name:
-        model = torchvision.models.vgg16_bn(weights=weights_arg or 'IMAGENET1K_V1')
-        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+        model = torchvision.models.vgg16_bn(weights=weights_arg or "IMAGENET1K_V1")
+        if int(num_classes) != 1000:
+            model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
     elif "mobilenet" in model_name:
-        model = torchvision.models.mobilenet_v2(weights=weights_arg or 'IMAGENET1K_V1')
-        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+        model = torchvision.models.mobilenet_v2(weights=weights_arg or "IMAGENET1K_V1")
+        if int(num_classes) != 1000:
+            model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
     elif "alexnet" in model_name:
-        model = torchvision.models.alexnet(weights=weights_arg or 'IMAGENET1K_V1')
-        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+        model = torchvision.models.alexnet(weights=weights_arg or "IMAGENET1K_V1")
+        if int(num_classes) != 1000:
+            model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
@@ -355,8 +361,14 @@ def _create_cluster_experiment(config):
         model.load_state_dict(state_dict)
         needs_training = False
     else:
-        logger.warning(f"No checkpoint found - model needs to be trained on {cluster_config.dataset_name}")
-        needs_training = True
+        # If we're evaluating the native pretrained ImageNet-1K label space (1000-way),
+        # allow a no-training analysis without requiring an explicit checkpoint.
+        if bool(pretrained) and int(num_classes) == 1000:
+            logger.info("No checkpoint provided; using pretrained ImageNet-1K head (no training).")
+            needs_training = False
+        else:
+            logger.warning(f"No checkpoint found - model needs to be trained on {cluster_config.dataset_name}")
+            needs_training = True
     
     # Load dataset
     # NOTE: "cifar100" contains "cifar10" as a substring; check cifar100 first.
@@ -424,6 +436,42 @@ def _create_cluster_experiment(config):
             transforms.ToTensor(),
             transforms.Normalize(imagenet_mean, imagenet_std),
         ])
+        train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
+        test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
+    elif "imagenet" in dataset_name:
+        # ImageNet-1K (full) support: expects ImageFolder at {root}/{train,val}.
+        root = (
+            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
+            or os.environ.get("IMAGENET1K_ROOT", None)
+            or "./data/imagenet_1k"
+        )
+        train_dir = Path(root) / "train"
+        val_dir = Path(root) / "val"
+        if not train_dir.exists() or not val_dir.exists():
+            raise FileNotFoundError(
+                f"ImageNet-1K not found. Expected ImageFolder dirs at: {train_dir} and {val_dir}. "
+                "Set dataset.root in the config or export IMAGENET1K_ROOT."
+            )
+
+        imagenet_mean = (0.485, 0.456, 0.406)
+        imagenet_std = (0.229, 0.224, 0.225)
+        image_size = int(dataset_cfg.get("image_size", 224)) if isinstance(dataset_cfg, dict) else 224
+        train_transform = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(image_size),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(imagenet_mean, imagenet_std),
+            ]
+        )
+        val_transform = transforms.Compose(
+            [
+                transforms.Resize(int(image_size * 256 / 224)),
+                transforms.CenterCrop(image_size),
+                transforms.ToTensor(),
+                transforms.Normalize(imagenet_mean, imagenet_std),
+            ]
+        )
         train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
         test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
     else:

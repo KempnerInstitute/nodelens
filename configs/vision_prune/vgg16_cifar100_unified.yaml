@@ -1,0 +1,166 @@
+# =============================================================================
+# VGG-16-BN on CIFAR-100 - UNIFIED FORMAT (paper-ready)
+# =============================================================================
+# Goal: extend the CIFAR-100 (harder) pruning story beyond ResNet-18 by running
+# VGG-16-BN under the same analysis pipeline (metrics → clustering → halos → pruning).
+#
+# Usage:
+#   python scripts/run_experiment.py --config configs/vision_prune/vgg16_cifar100_unified.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXPERIMENT
+# -----------------------------------------------------------------------------
+experiment:
+  name: "vgg16_cifar100_cluster_analysis"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision/vgg16_cifar100"
+
+# -----------------------------------------------------------------------------
+# MODEL
+# -----------------------------------------------------------------------------
+model:
+  name: "vgg16_bn"
+  pretrained: true
+  num_classes: 100
+
+# -----------------------------------------------------------------------------
+# DATASET
+# -----------------------------------------------------------------------------
+dataset:
+  name: "cifar100"
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+# -----------------------------------------------------------------------------
+# TRAINING
+# -----------------------------------------------------------------------------
+training:
+  enabled: true
+  epochs: 100
+  # VGG is a bit more LR-sensitive than ResNet in our pipeline; 0.05 is stable.
+  learning_rate: 0.05
+  optimizer: "sgd"
+  scheduler: "cosine"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+# -----------------------------------------------------------------------------
+# CALIBRATION
+# -----------------------------------------------------------------------------
+calibration:
+  num_samples: 5000
+
+# -----------------------------------------------------------------------------
+# METRICS
+# -----------------------------------------------------------------------------
+metrics:
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
+  activation_samples: "flatten_spatial"
+  spatial_samples_per_image: 16
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 1024
+  within_layer_connectivity: true
+  within_layer_red_topk: 20
+  within_layer_syn_topk: 10
+
+  rayleigh_quotient:
+    enabled: true
+    relative: false
+    shrinkage: true
+
+  redundancy:
+    enabled: true
+    sampling: "all"
+
+  synergy:
+    enabled: true
+    target: "logit_margin"
+    num_pairs: 10
+    sampling: "top_k"
+
+  taylor:
+    enabled: true
+    criterion: "gradient_weight"
+
+# -----------------------------------------------------------------------------
+# CLUSTERING
+# -----------------------------------------------------------------------------
+clustering:
+  enabled: true
+  n_clusters: 4
+  type_names: ["critical", "redundant", "synergistic", "background"]
+  normalize_features: true
+  features: ["rayleigh_quotient", "redundancy", "synergy"]
+
+  stability_enabled: true
+  n_bootstrap: 50
+
+  ablation:
+    enabled: false
+    modes: ["all", "rq_red", "rq_syn", "red_syn"]
+
+# -----------------------------------------------------------------------------
+# HALO ANALYSIS
+# -----------------------------------------------------------------------------
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  use_activation_weight: true
+  compute_influence_matrix: true
+
+  permutation_baseline:
+    enabled: false
+    n_permutations: 100
+
+# -----------------------------------------------------------------------------
+# CASCADE ANALYSIS
+# -----------------------------------------------------------------------------
+cascade_analysis:
+  enabled: true
+  n_remove_per_group: 5
+  damage_sample_fraction: 0.2
+
+# -----------------------------------------------------------------------------
+# PRUNING (stress test)
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  distribution: "global_threshold"
+  dependency_aware: false
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  ratios: [0.1, 0.3, 0.5, 0.7, 0.9]
+  algorithms:
+    - "random"
+    - "magnitude"
+    - "activation_mean"
+    - "taylor"
+    - "network_slimming"
+    - "geometric_median"
+    - "hrank"
+    - "composite"
+    - "cluster_aware"
+    - "cluster_aware_annealed"
+
+  fine_tune:
+    enabled: true
+    epochs: 5
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+    max_batches: 200
+
+# -----------------------------------------------------------------------------
+# EVALUATION
+# -----------------------------------------------------------------------------
+evaluation:
+  enabled: true
+  accuracy: true
+  loss: true
+  per_class_accuracy: true
+
+

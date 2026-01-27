@@ -3482,6 +3482,11 @@ class LLMAlignmentExperiment(BaseExperiment):
         if isinstance(metric, str) and metric.startswith("random_supernode_ablation_"):
             return False
 
+        # Hit-rate sweep metrics intentionally control how many supernodes are pruned.
+        # Applying protection would defeat the purpose of the experiment.
+        if isinstance(metric, str) and metric.startswith("supernode_hit_rate_sweep_"):
+            return False
+
         protect_metrics = cfg.get("protect_core_metrics", None)
         if protect_metrics is None:
             return True
@@ -9218,6 +9223,30 @@ class LLMAlignmentExperiment(BaseExperiment):
                     import traceback
                     logger.error(traceback.format_exc())
 
+            # Supernode hit-rate sweep: random masks conditioned on pruning a target fraction of supernodes.
+            if getattr(self.config, "do_supernode_hit_rate_sweep", False):
+                try:
+                    cfg = getattr(self.config, "supernode_hit_rate_sweep", {}) or {}
+                    hit_rates = cfg.get("hit_rates", None)
+                    num_trials = int(cfg.get("num_trials", 3))
+                    sweep_sparsity = float(cfg.get("sparsity", 0.5))
+                    sweep_seed = cfg.get("seed", getattr(self.config, "seed", 0))
+                    logger.info("Running supernode hit-rate sweep...")
+                    sweep_results = self.compute_supernode_hit_rate_sweep(
+                        scar_scores=scar_scores,
+                        supernode_fraction=supernode_config.get("core_fraction", 0.01),
+                        sparsity=sweep_sparsity,
+                        hit_rates=hit_rates,
+                        num_trials=num_trials,
+                        seed=int(sweep_seed) if sweep_seed is not None else None,
+                    )
+                    results["supernode_hit_rate_sweep"] = sweep_results
+                    logger.info("Supernode hit-rate sweep complete")
+                except Exception as sweep_err:
+                    logger.error(f"Failed supernode hit-rate sweep: {sweep_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
         if self.config.do_pruning_experiments:
             sparsity_levels = self.config.pruning_amounts
             
@@ -9238,6 +9267,13 @@ class LLMAlignmentExperiment(BaseExperiment):
             extra_ablation_metrics = (random_ablation_cfg or {}).get("pruning_metrics") if isinstance(random_ablation_cfg, dict) else None
             if isinstance(extra_ablation_metrics, list):
                 for m in extra_ablation_metrics:
+                    if isinstance(m, str) and m not in pruning_strategies:
+                        pruning_strategies.append(m)
+
+            hit_rate_cfg = results.get("supernode_hit_rate_sweep") if isinstance(results, dict) else None
+            extra_hit_rate_metrics = (hit_rate_cfg or {}).get("pruning_metrics") if isinstance(hit_rate_cfg, dict) else None
+            if isinstance(extra_hit_rate_metrics, list):
+                for m in extra_hit_rate_metrics:
                     if isinstance(m, str) and m not in pruning_strategies:
                         pruning_strategies.append(m)
             
@@ -10620,6 +10656,168 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         logger.info("Random supernode ablation metrics injected into importance_scores.")
         logger.info(f"Injected pruning metrics: {pruning_metrics}")
+
+        return results
+
+    def compute_supernode_hit_rate_sweep(
+        self,
+        scar_scores: Dict[str, Dict[str, Any]],
+        *,
+        supernode_fraction: float = 0.01,
+        sparsity: float = 0.5,
+        hit_rates: Optional[List[float]] = None,
+        num_trials: int = 3,
+        seed: Optional[int] = None,
+        prefix: str = "supernode_hit_rate_sweep",
+    ) -> Dict[str, Any]:
+        """
+        Dose–response control: random FFN channel pruning masks conditioned on a target
+        *supernode hit-rate* (fraction of LP supernodes pruned).
+
+        This constructs synthetic per-channel pruning scores (stored in `self.importance_scores`)
+        such that structured pruning at `sparsity` prunes:
+          - ~hit_rate * (num_supernodes) channels from the supernode set, and
+          - the remaining pruned channels from non-supernodes, per layer.
+
+        The standard pruning loop can then evaluate perplexity/benchmarks for each synthetic
+        metric name, producing a clean causal curve (hit-rate → degradation) without confounds
+        from comparing only named baselines.
+
+        Notes:
+          - This is *per-layer* conditioning (same target hit-rate in each FFN layer).
+          - The synthetic metric names are prefixed so `_should_protect_supernodes_for_metric`
+            will not apply core protection, even if enabled globally.
+        """
+        import re
+
+        if hit_rates is None:
+            hit_rates = [0.0, 0.05, 0.10, 0.20, 0.30]
+        # Sanitize hit rates
+        hit_rates = [float(max(0.0, min(1.0, hr))) for hr in hit_rates]
+
+        layer_names = [ln for ln in scar_scores.keys() if "mlp.down_proj" in ln]
+        if not layer_names:
+            return {}
+
+        # Map layer index -> projection module keys in importance_scores (so pruning can see the metric everywhere).
+        layer_to_proj_keys: Dict[int, List[str]] = {}
+        for k in self.importance_scores.keys():
+            m = re.search(r"layers\.(\d+)\.mlp\.(gate_proj|up_proj|down_proj)", k)
+            if m:
+                layer_to_proj_keys.setdefault(int(m.group(1)), []).append(k)
+
+        # Parse LP tensors per layer (used for supernode identification)
+        lp_tensors: Dict[str, torch.Tensor] = {}
+        for layer_name in layer_names:
+            layer_metrics = scar_scores.get(layer_name) or {}
+            lp = layer_metrics.get("scar_loss_proxy")
+            if isinstance(lp, dict) and "scores" in lp:
+                lp_tensor = torch.tensor(lp["scores"], dtype=torch.float32)
+            elif torch.is_tensor(lp):
+                lp_tensor = lp.float().detach().cpu()
+            else:
+                continue
+            if lp_tensor.numel() > 0:
+                lp_tensors[layer_name] = lp_tensor
+
+        if not lp_tensors:
+            logger.warning("Hit-rate sweep: no LP scores found; cannot identify supernodes")
+            return {}
+
+        base_seed = int(seed if seed is not None else getattr(self.config, "seed", 0) or 0)
+
+        results: Dict[str, Any] = {
+            "target_sparsity": float(sparsity),
+            "supernode_fraction": float(supernode_fraction),
+            "hit_rates": hit_rates,
+            "num_trials": int(num_trials),
+            "seed": int(base_seed),
+            "prefix": str(prefix),
+            "pruning_metrics": [],
+            "targets": [],  # one entry per generated metric
+        }
+
+        def _store_metric(layer_idx: int, metric_name: str, scores: torch.Tensor) -> None:
+            keys = layer_to_proj_keys.get(layer_idx) or []
+            for k in keys:
+                if k not in self.importance_scores:
+                    self.importance_scores[k] = {}
+                self.importance_scores[k][metric_name] = scores
+
+        # Precompute supernode indices per layer (top by LP)
+        super_idx_by_layer: Dict[str, torch.Tensor] = {}
+        non_super_idx_by_layer: Dict[str, torch.Tensor] = {}
+        num_super_by_layer: Dict[str, int] = {}
+        for layer_name, lp_tensor in lp_tensors.items():
+            m = lp_tensor.numel()
+            num_super = max(1, int(round(supernode_fraction * m)))
+            _, top_idx = torch.topk(lp_tensor, num_super)
+            super_idx_by_layer[layer_name] = top_idx
+            num_super_by_layer[layer_name] = int(num_super)
+
+            super_mask = torch.zeros(m, dtype=torch.bool)
+            super_mask[top_idx] = True
+            non_idx = (~super_mask).nonzero(as_tuple=True)[0]
+            non_super_idx_by_layer[layer_name] = non_idx
+
+        # Generate metrics
+        for hr in hit_rates:
+            hr_tag = int(round(100.0 * hr))
+            for trial in range(int(num_trials)):
+                metric_name = f"{prefix}_hr{hr_tag:02d}_t{trial}"
+                results["pruning_metrics"].append(metric_name)
+                results["targets"].append({"metric": metric_name, "hit_rate": float(hr), "trial": int(trial)})
+
+                for layer_name, lp_tensor in lp_tensors.items():
+                    m = re.search(r"layers\.(\d+)\.mlp", layer_name)
+                    if not m:
+                        continue
+                    layer_idx = int(m.group(1))
+
+                    dim = int(lp_tensor.numel())
+                    num_to_prune = int(round(float(sparsity) * float(dim)))
+                    num_to_prune = max(0, min(num_to_prune, dim - 1))  # keep at least 1 channel
+
+                    super_idx = super_idx_by_layer[layer_name]
+                    non_idx = non_super_idx_by_layer[layer_name]
+                    num_super = int(num_super_by_layer[layer_name])
+
+                    n_super_prune = int(round(float(hr) * float(num_super)))
+                    n_super_prune = max(0, min(n_super_prune, num_super, num_to_prune))
+                    n_non_prune = max(0, num_to_prune - n_super_prune)
+                    if n_non_prune > int(non_idx.numel()):
+                        # Should not happen for small supernode_fraction, but keep robust.
+                        n_non_prune = int(non_idx.numel())
+                        n_super_prune = max(0, num_to_prune - n_non_prune)
+
+                    # Deterministic RNG per (hit-rate, trial, layer_idx)
+                    g = torch.Generator(device="cpu")
+                    g.manual_seed(base_seed + 1000000 * (hr_tag + 1) + 10000 * (trial + 1) + layer_idx)
+
+                    # Sample pruned indices without replacement
+                    pruned_super = (
+                        super_idx[torch.randperm(num_super, generator=g)[:n_super_prune]] if n_super_prune > 0 else None
+                    )
+                    pruned_non = (
+                        non_idx[torch.randperm(int(non_idx.numel()), generator=g)[:n_non_prune]] if n_non_prune > 0 else None
+                    )
+                    if pruned_super is None and pruned_non is None:
+                        prune_idx = torch.empty(0, dtype=torch.long)
+                    elif pruned_super is None:
+                        prune_idx = pruned_non
+                    elif pruned_non is None:
+                        prune_idx = pruned_super
+                    else:
+                        prune_idx = torch.cat([pruned_super, pruned_non], dim=0)
+
+                    # Construct synthetic pruning scores: pruned channels get low scores.
+                    scores = torch.ones(dim, dtype=torch.float32)
+                    if prune_idx.numel() > 0:
+                        scores[prune_idx] = 0.0
+                    # Tiny noise to avoid tie-edge cases in topk selection
+                    scores = scores + (1e-6 * torch.rand(dim, generator=g, dtype=torch.float32))
+
+                    _store_metric(layer_idx, metric_name, scores)
 
         return results
 
