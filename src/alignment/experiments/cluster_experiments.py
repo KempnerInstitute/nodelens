@@ -3067,6 +3067,83 @@ class ClusterAnalysisExperiment:
                 gradient_weighted = torch.sqrt(t_norm * s_ca_norm + 1e-8)  # Geometric mean
                 
                 scores = gradient_weighted.to(device=scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 6: cluster_aware_adaptive - automatic hyperparameter tuning
+            # Adapts protection and weights based on cluster distribution and layer depth
+            # ------------------------------------------------------------------
+            elif method == "cluster_aware_adaptive":
+                # Compute cluster distribution for this network
+                total_by_type = {'critical': 0, 'synergistic': 0, 'redundant': 0, 'background': 0}
+                for ln in layer_names_all:
+                    cr = self.cluster_results.get(ln, {})
+                    type_counts = cr.get('type_counts', {})
+                    for t_name in total_by_type:
+                        total_by_type[t_name] += type_counts.get(t_name, 0)
+                
+                total_channels = sum(total_by_type.values())
+                if total_channels > 0:
+                    safe_frac = (total_by_type['redundant'] + total_by_type['background']) / total_channels
+                else:
+                    safe_frac = 0.5
+                
+                # Adaptive protection based on target sparsity
+                if ratio <= safe_frac:
+                    adaptive_protect = 0.0  # Can prune without touching critical
+                else:
+                    overshoot = (ratio - safe_frac) / (1.0 - safe_frac + 1e-6)
+                    adaptive_protect = 0.5 * (1.0 - overshoot)
+                    adaptive_protect = max(0.0, min(0.7, adaptive_protect))
+                
+                # Override protection for this layer
+                cfg.protect_critical_frac = adaptive_protect
+                
+                # Adaptive weights based on layer depth (smooth interpolation)
+                if depth_frac < 0.3:
+                    t = depth_frac / 0.3
+                    alpha_adj = 0.6 + 0.2 * t
+                    beta_adj = 0.2 + 0.2 * t
+                    gamma_adj = 0.2 + 0.1 * t
+                elif depth_frac < 0.7:
+                    t = (depth_frac - 0.3) / 0.4
+                    alpha_adj = 0.8 + 0.2 * t
+                    beta_adj = 0.4 + 0.3 * t
+                    gamma_adj = 0.3 + 0.1 * t
+                else:
+                    t = (depth_frac - 0.7) / 0.3
+                    alpha_adj = 1.0 + 0.3 * t
+                    beta_adj = 0.7 + 0.3 * t
+                    gamma_adj = 0.4 + 0.2 * t
+                
+                # Recompute scores with adaptive weights
+                lm = pre_metrics
+                rq = np.asarray(lm.get("rq", lm.get("rayleigh_quotient", [])), dtype=np.float64).reshape(-1)
+                red = np.asarray(lm.get("redundancy", []), dtype=np.float64).reshape(-1)
+                syn = np.asarray(lm.get("synergy", []), dtype=np.float64).reshape(-1)
+                
+                n = min(n_channels, len(rq), len(red), len(syn))
+                if n > 0:
+                    rq = rq[:n]
+                    red = red[:n]
+                    syn = syn[:n]
+                    
+                    def _norm(x):
+                        x = np.asarray(x, dtype=np.float64)
+                        mn, mx = x.min(), x.max()
+                        if mx - mn < 1e-12:
+                            return np.zeros_like(x)
+                        return (x - mn) / (mx - mn)
+                    
+                    log_rq = np.log(np.clip(rq, 1e-10, None))
+                    # Adaptive lambda_halo based on depth (more halo influence in late layers)
+                    lambda_h = 0.1 + 0.7 * depth_frac
+                    
+                    score_np = (alpha_adj * _norm(log_rq) +
+                                beta_adj * _norm(syn) -
+                                gamma_adj * _norm(red) +
+                                lambda_h * _norm(halo_syn[:n]))
+                    
+                    scores = torch.from_numpy(score_np).float().to(scores.device)
 
             layer_scores[layer_name] = scores.detach()
             layer_pruners[layer_name] = pruner
@@ -3662,6 +3739,59 @@ class ClusterAnalysisExperiment:
                 # Verify pruning: count zeroed channels
                 n_zeroed = (layer.weight.data.view(n_channels, -1).abs().sum(dim=1) == 0).sum().item()
                 logger.debug(f"    {name}: pruned {n_prune} channels, verified {n_zeroed} are zeroed")
+                
+                # ================================================================
+                # TRACK CLUSTER DISTRIBUTION AND METRICS OF PRUNED CHANNELS
+                # ================================================================
+                if clusters is not None and 'types' in clusters:
+                    cluster_types = clusters['types']  # [n_channels] array of type labels
+                    type_names = ['critical', 'synergistic', 'redundant', 'background']
+                    
+                    # Initialize tracking if needed
+                    if method not in self.pruning_cluster_distributions:
+                        self.pruning_cluster_distributions[method] = {}
+                    if str(ratio) not in self.pruning_cluster_distributions[method]:
+                        self.pruning_cluster_distributions[method][str(ratio)] = {
+                            'pruned': {t: 0 for t in type_names},
+                            'total': {t: 0 for t in type_names},
+                            # Track metric values of pruned vs kept channels
+                            'pruned_metrics': {'rq': [], 'redundancy': [], 'synergy': []},
+                            'kept_metrics': {'rq': [], 'redundancy': [], 'synergy': []},
+                        }
+                    
+                    pcd = self.pruning_cluster_distributions[method][str(ratio)]
+                    
+                    # Count total and pruned by type for this layer
+                    for ti, tname in enumerate(type_names):
+                        type_mask = (cluster_types == ti)
+                        n_type_total = int(type_mask.sum()) if hasattr(type_mask, 'sum') else sum(type_mask)
+                        pcd['total'][tname] = pcd['total'].get(tname, 0) + n_type_total
+                        
+                        # Count pruned channels of this type
+                        n_type_pruned = sum(1 for idx in prune_idx if idx < len(cluster_types) and cluster_types[idx] == ti)
+                        pcd['pruned'][tname] = pcd['pruned'].get(tname, 0) + n_type_pruned
+                    
+                    # Track RQ, Redundancy, Synergy values of pruned vs kept
+                    if metrics is not None:
+                        rq_vals = np.array(metrics.get('rq', []))
+                        red_vals = np.array(metrics.get('redundancy', []))
+                        syn_vals = np.array(metrics.get('synergy', []))
+                        
+                        if len(rq_vals) == n_channels:
+                            prune_set = set(prune_idx)
+                            for idx in range(n_channels):
+                                if idx in prune_set:
+                                    pcd['pruned_metrics']['rq'].append(float(rq_vals[idx]))
+                                    if len(red_vals) == n_channels:
+                                        pcd['pruned_metrics']['redundancy'].append(float(red_vals[idx]))
+                                    if len(syn_vals) == n_channels:
+                                        pcd['pruned_metrics']['synergy'].append(float(syn_vals[idx]))
+                                else:
+                                    pcd['kept_metrics']['rq'].append(float(rq_vals[idx]))
+                                    if len(red_vals) == n_channels:
+                                        pcd['kept_metrics']['redundancy'].append(float(red_vals[idx]))
+                                    if len(syn_vals) == n_channels:
+                                        pcd['kept_metrics']['synergy'].append(float(syn_vals[idx]))
                         
             except Exception as e:
                 logger.debug(f"Pruning {name} with {method} failed: {e}")

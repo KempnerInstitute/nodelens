@@ -146,9 +146,13 @@ pruning:
     - "network_slimming"
     - "geometric_median"
     - "hrank"
+    - "chip"
     - "composite"
     - "cluster_aware"
     - "cluster_aware_annealed"
+    - "cluster_aware_depth_adaptive"
+    - "cluster_aware_taylor_blend"
+    - "cluster_aware_adaptive"
 
   fine_tune:
     enabled: true

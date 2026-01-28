@@ -139,14 +139,14 @@ pruning:
     - composite
     - cluster_aware
     - cluster_aware_annealed
-  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
   distribution: "uniform"
   dependency_aware: false  # AlexNet has simple sequential structure
   min_per_layer: 0.0
   max_per_layer: 0.90
   fine_tuning:
     enabled: true
-    epochs: 10
+    epochs: 5  # Reduced for faster iteration
     learning_rate: 0.001
     optimizer: "adam"
     scheduler: "cosine"

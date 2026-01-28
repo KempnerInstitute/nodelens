@@ -586,3 +586,205 @@ class CompositePruning(ClusterAwarePruning):
             if len(out) >= int(n_prune):
                 break
         return out
+
+
+class ClusterAwareAdaptive(ClusterAwarePruning):
+    """
+    Cluster-aware pruning with AUTOMATIC hyperparameter adaptation.
+    
+    Key innovations:
+    1. Protection threshold adapts to cluster distribution (no hardcoded 0.3)
+    2. Per-layer weights based on layer depth ratio
+    3. Sparsity-aware protection scaling
+    
+    This removes the flat region problem by smoothly transitioning constraints.
+    """
+    
+    def __init__(
+        self,
+        config: Optional[ClusterAwarePruningConfig] = None,
+        **kwargs,
+    ):
+        if config is None:
+            config = ClusterAwarePruningConfig()
+        
+        # Enable all adaptive features
+        config.depth_adaptive = True
+        config.sparsity_adaptive_protection = True
+        
+        super().__init__(config, **kwargs)
+        
+        # Cache for cluster distribution analysis
+        self._cluster_distribution: Dict[str, Dict[str, int]] = {}
+        self._layer_depths: Dict[str, float] = {}
+        self._n_layers: int = 0
+    
+    def _analyze_cluster_distribution(self) -> Dict[str, float]:
+        """
+        Compute global cluster distribution from cached clusters.
+        Returns fraction of each cluster type.
+        """
+        if not self._clusters_cache:
+            return {'critical': 0.25, 'synergistic': 0.25, 
+                    'redundant': 0.25, 'background': 0.25}
+        
+        total_by_type = {'critical': 0, 'synergistic': 0, 
+                         'redundant': 0, 'background': 0}
+        
+        for layer_name, clusters in self._clusters_cache.items():
+            types = clusters.get('types', [])
+            for t in range(len(types)):
+                type_name = ['critical', 'synergistic', 'redundant', 'background'][types[t] % 4]
+                total_by_type[type_name] += 1
+        
+        total = sum(total_by_type.values())
+        if total == 0:
+            return {'critical': 0.25, 'synergistic': 0.25, 
+                    'redundant': 0.25, 'background': 0.25}
+        
+        return {k: v / total for k, v in total_by_type.items()}
+    
+    def _compute_adaptive_protection(self, target_sparsity: float) -> float:
+        """
+        Compute protection fraction based on cluster distribution and target sparsity.
+        
+        Logic:
+        - If we can achieve target by pruning only redundant+background, no protection needed
+        - Otherwise, scale protection to preserve critical channels proportionally
+        """
+        dist = self._analyze_cluster_distribution()
+        safe_frac = dist['redundant'] + dist['background']
+        
+        if target_sparsity <= safe_frac:
+            # Can achieve target without touching critical
+            return 0.0  # No protection needed
+        else:
+            # Need to prune some critical/synergistic
+            # Linear scaling: more protection as we exceed safe zone
+            overshoot = (target_sparsity - safe_frac) / (1.0 - safe_frac + 1e-6)
+            # Protection decreases as we approach 100% (nothing to protect)
+            # At safe_frac: protect 50% of critical
+            # At 100%: protect 0% (must prune everything)
+            protection = 0.5 * (1.0 - overshoot)
+            return max(0.0, min(0.7, protection))  # Clamp to [0, 0.7]
+    
+    def _get_layer_depth_ratio(self, layer_name: str) -> float:
+        """Get normalized depth (0=first layer, 1=last layer)."""
+        if layer_name in self._layer_depths:
+            return self._layer_depths[layer_name]
+        
+        # Estimate from layer name patterns
+        import re
+        
+        # Extract numeric indices
+        nums = re.findall(r'\d+', layer_name)
+        if nums:
+            # Use first number as rough depth indicator
+            idx = int(nums[0])
+            # Assume max ~20 layers for normalization
+            depth = min(1.0, idx / 20.0)
+        else:
+            depth = 0.5  # Default to middle
+        
+        self._layer_depths[layer_name] = depth
+        return depth
+    
+    def _get_adaptive_weights(self, layer_name: str) -> Tuple[float, float, float, float]:
+        """
+        Get (alpha, beta, gamma, lambda_halo) adapted to layer depth.
+        
+        Early layers: preserve features (high RQ weight, low synergy)
+        Late layers: task-specific (high synergy weight, high halo)
+        """
+        depth = self._get_layer_depth_ratio(layer_name)
+        
+        # Smooth interpolation between early and late weights
+        if depth < 0.3:
+            # Early: feature extraction layers
+            t = depth / 0.3  # 0 to 1 within early region
+            alpha = 0.6 + 0.2 * t      # 0.6 -> 0.8
+            beta = 0.2 + 0.2 * t       # 0.2 -> 0.4
+            gamma = 0.2 + 0.1 * t      # 0.2 -> 0.3
+            lambda_h = 0.1 + 0.2 * t   # 0.1 -> 0.3
+        elif depth < 0.7:
+            # Mid: transition layers
+            t = (depth - 0.3) / 0.4  # 0 to 1 within mid region
+            alpha = 0.8 + 0.2 * t      # 0.8 -> 1.0
+            beta = 0.4 + 0.3 * t       # 0.4 -> 0.7
+            gamma = 0.3 + 0.1 * t      # 0.3 -> 0.4
+            lambda_h = 0.3 + 0.3 * t   # 0.3 -> 0.6
+        else:
+            # Late: task-specific layers
+            t = (depth - 0.7) / 0.3  # 0 to 1 within late region
+            alpha = 1.0 + 0.3 * t      # 1.0 -> 1.3
+            beta = 0.7 + 0.3 * t       # 0.7 -> 1.0
+            gamma = 0.4 + 0.2 * t      # 0.4 -> 0.6
+            lambda_h = 0.6 + 0.2 * t   # 0.6 -> 0.8
+        
+        return alpha, beta, gamma, lambda_h
+    
+    def compute_importance_scores(
+        self,
+        module: nn.Module,
+        inputs: Optional[torch.Tensor] = None,
+        layer_name: str = "",
+        **kwargs,
+    ) -> torch.Tensor:
+        """
+        Compute scores with adaptive weights based on layer depth.
+        """
+        # Get adaptive weights for this layer
+        alpha, beta, gamma, lambda_h = self._get_adaptive_weights(layer_name)
+        
+        # Temporarily override config weights
+        orig_alpha = self.config.alpha
+        orig_beta = self.config.beta
+        orig_gamma = self.config.gamma
+        orig_lambda = self.config.lambda_halo
+        
+        self.config.alpha = alpha
+        self.config.beta = beta
+        self.config.gamma = gamma
+        self.config.lambda_halo = lambda_h
+        
+        try:
+            scores = super().compute_importance_scores(
+                module, inputs=inputs, layer_name=layer_name, **kwargs
+            )
+        finally:
+            # Restore original weights
+            self.config.alpha = orig_alpha
+            self.config.beta = orig_beta
+            self.config.gamma = orig_gamma
+            self.config.lambda_halo = orig_lambda
+        
+        return scores
+    
+    def select_channels_to_prune(
+        self,
+        scores: torch.Tensor,
+        n_prune: int,
+        layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
+    ) -> List[int]:
+        """
+        Select channels with adaptive protection based on sparsity.
+        """
+        n_channels = len(scores)
+        target_sparsity = n_prune / n_channels if n_channels > 0 else 0.0
+        
+        # Compute adaptive protection
+        adaptive_protection = self._compute_adaptive_protection(target_sparsity)
+        
+        # Temporarily override protection
+        orig_protect = self.config.protect_critical_frac
+        self.config.protect_critical_frac = adaptive_protection
+        
+        try:
+            result = super().select_channels_to_prune(
+                scores, n_prune, layer_name, protected_indices
+            )
+        finally:
+            self.config.protect_critical_frac = orig_protect
+        
+        return result
