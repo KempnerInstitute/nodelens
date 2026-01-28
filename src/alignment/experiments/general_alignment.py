@@ -1761,6 +1761,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                                 sn_scores = scores.detach().clone()
                                             else:
                                                 from alignment.pruning.strategies import AlignmentPruning
+                                                from alignment.pruning.base import PruningConfig
                                                 metric_kwargs = {}
                                                 try:
                                                     metric_kwargs = (getattr(self.config, "metric_configs", {}) or {}).get(sn_score_metric, {}) or {}
