@@ -142,9 +142,10 @@ class ExperimentConfig:
     synergy_pairs: int = 10
 
     # Cluster type mapping mode:
-    # - "global": permutation-based one-to-one assignment (stable; default).
-    # - "greedy": greedy sequential assignment (can be more label-swap prone).
-    type_mapping_mode: str = "global"
+    # - "greedy": greedy sequential assignment (semantically interpretable; default).
+    #   "critical" = highest (RQ - Red), "redundant" = highest Red, etc.
+    # - "global": permutation-based one-to-one assignment (stable across layers).
+    type_mapping_mode: str = "greedy"
 
     # Ablation / permutation diagnostics (vision)
     run_metric_ablation: bool = False

@@ -70,16 +70,16 @@ class MetricSpaceClustering:
         n_clusters: int = 4,
         seed: int = 42,
         *,
-        type_mapping_mode: str = "global",
+        type_mapping_mode: str = "greedy",
     ):
         self.n_clusters = n_clusters
         self.seed = seed
-        mode = str(type_mapping_mode or "global").lower()
+        mode = str(type_mapping_mode or "greedy").lower()
         # Backward-compatibility: accept older config values but normalize them.
-        if mode in {"greedy", "greedy_legacy", "greedy_sequential"}:
-            mode = "greedy"
-        else:
+        if mode in {"global", "global_permutation"}:
             mode = "global"
+        else:
+            mode = "greedy"
         self.type_mapping_mode: Literal["global", "greedy"] = mode  # type: ignore[assignment]
 
     def fit(
