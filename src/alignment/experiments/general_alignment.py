@@ -1395,13 +1395,18 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         # experiment loop, so we use the standard AlignmentPruning wrapper (which
                         # forwards outputs/targets kwargs to the metric implementation).
                         from alignment.pruning.strategies import AlignmentPruning, GlobalAlignmentPruning
+                        metric_kwargs = {}
+                        try:
+                            metric_kwargs = (getattr(self.config, "metric_configs", {}) or {}).get(strategy_name, {}) or {}
+                        except Exception:
+                            metric_kwargs = {}
 
                         if self.config.pruning_scope == "global":
-                            strategy = GlobalAlignmentPruning(metric=strategy_name, config=pruning_config)
+                            strategy = GlobalAlignmentPruning(metric=strategy_name, config=pruning_config, **metric_kwargs)
                         else:
                             if self.config.pruning_scope == "cascading":
                                 pruning_config.structured = True
-                            strategy = AlignmentPruning(metric=strategy_name, config=pruning_config)
+                            strategy = AlignmentPruning(metric=strategy_name, config=pruning_config, **metric_kwargs)
                     elif strategy_name == "cascading_alignment":
                         # Legacy cascading_alignment handling
                         logger.warning("'cascading_alignment' algorithm is deprecated. Use algorithms=['alignment'] with scope='cascading'")
@@ -1437,13 +1442,42 @@ class GeneralAlignmentExperiment(BaseExperiment):
                     # Inputs/outputs/targets used by metric-based pruning and (optionally) gradient-based pruning.
                     layer_inputs_dict = {}
                     layer_outputs_dict = {}
+                    layer_output_grads_dict = {}
                     sample_targets = None
                     sample_inputs = None
 
-                    needs_gradients = strategy_name in {"gradient", "fisher"}
+                    # Weight-gradient-based pruning strategies (populate module.weight.grad).
+                    needs_weight_grads = strategy_name in {"gradient", "fisher"}
                     needs_layer_inputs = (strategy_name == "alignment") or (strategy_name == "hybrid") or (strategy_name in metric_based_strategies)
                     needs_layer_outputs = needs_layer_inputs  # capture outputs alongside inputs
-                    needs_sample_batch = needs_layer_inputs or needs_gradients
+                    needs_sample_batch = needs_layer_inputs or needs_weight_grads
+
+                    # Some metric-based pruning criteria (e.g., taylor_saliency) require per-layer
+                    # output gradients dL/d(output). We capture those via tensor hooks.
+                    needs_output_grads = False
+                    if strategy_name in metric_based_strategies:
+                        try:
+                            needs_output_grads = bool(getattr(getattr(strategy, "metric", None), "requires_gradients", False))
+                        except Exception:
+                            needs_output_grads = False
+
+                    # Supernode protection can require gradients too if the *supernode score metric*
+                    # is gradient-based.
+                    supernode_cfg = getattr(self.config, "supernode_config", {}) or {}
+                    supernode_metric = None
+                    if isinstance(supernode_cfg, dict):
+                        supernode_metric = supernode_cfg.get("score_metric", None)
+                    if isinstance(supernode_metric, str) and supernode_metric:
+                        try:
+                            from alignment.core.registry import get_metric
+
+                            m = get_metric(supernode_metric)
+                            if m is not None:
+                                needs_output_grads = needs_output_grads or bool(getattr(m, "requires_gradients", False))
+                        except Exception:
+                            pass
+
+                    did_backward = False
 
                     if needs_sample_batch:
                         data_iter = iter(self.data_loader)
@@ -1457,8 +1491,30 @@ class GeneralAlignmentExperiment(BaseExperiment):
 
                         def capture_input_output(name):
                             def hook(module, input, output):
-                                layer_inputs_dict[name] = input[0].detach()
-                                layer_outputs_dict[name] = output.detach() if hasattr(output, "detach") else output
+                                # Capture inputs (used by most alignment / MI / RQ metrics).
+                                try:
+                                    layer_inputs_dict[name] = input[0].detach()
+                                except Exception:
+                                    layer_inputs_dict[name] = input
+
+                                # Capture outputs (used by activation-based metrics), and optionally
+                                # register a gradient hook (used by Taylor-style saliency).
+                                out = output
+                                if isinstance(out, (tuple, list)):
+                                    for item in out:
+                                        if torch.is_tensor(item):
+                                            out = item
+                                            break
+
+                                if torch.is_tensor(out):
+                                    if needs_output_grads and out.requires_grad:
+                                        def _save_grad(grad, lname=name):
+                                            layer_output_grads_dict[lname] = grad.detach()
+
+                                        out.register_hook(_save_grad)
+                                    layer_outputs_dict[name] = out.detach()
+                                else:
+                                    layer_outputs_dict[name] = out
 
                             return hook
 
@@ -1468,9 +1524,25 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                 hook = module.register_forward_hook(capture_input_output(name))
                                 hooks.append(hook)
 
-                        # Forward pass to capture inputs and outputs
-                        with torch.no_grad():
-                            _ = self.model(sample_inputs)
+                        # Forward pass to capture inputs/outputs. If we need output gradients
+                        # (e.g., Taylor saliency), run a real forward+backward so hooks can
+                        # record dL/d(output) tensors.
+                        if needs_output_grads:
+                            was_training = self.model.training
+                            self.model.eval()
+                            self.model.zero_grad(set_to_none=True)
+                            try:
+                                outputs = self.model(sample_inputs)
+                                logits = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
+                                loss = nn.CrossEntropyLoss()(logits, sample_targets)
+                                loss.backward()
+                                did_backward = True
+                            finally:
+                                if was_training:
+                                    self.model.train()
+                        else:
+                            with torch.no_grad():
+                                _ = self.model(sample_inputs)
 
                         # Remove hooks
                         for hook in hooks:
@@ -1481,7 +1553,7 @@ class GeneralAlignmentExperiment(BaseExperiment):
                         # Preprocess CNN inputs using unfold for proper RQ computation
                         layer_inputs_dict = self._preprocess_pruning_inputs(layer_inputs_dict)
 
-                    if needs_gradients and self.config.pruning_scope != "cascading":
+                    if needs_weight_grads and self.config.pruning_scope != "cascading" and not did_backward:
                         # Gradient-based pruning requires a backward pass to populate .grad tensors.
                         was_training = self.model.training
                         self.model.eval()
@@ -1642,13 +1714,101 @@ class GeneralAlignmentExperiment(BaseExperiment):
                                     try:
                                         # Get outputs for this layer (needed for activation-based metrics)
                                         layer_outputs = layer_outputs_dict.get(name)
-                                        strategy.prune(
-                                            module,
-                                            inputs=layer_inputs,
-                                            outputs=layer_outputs,
-                                            targets=sample_targets,
-                                            module_name=name,
-                                        )
+                                        layer_grads = layer_output_grads_dict.get(name) if needs_output_grads else None
+
+                                        # Optional: protect a supernode core during pruning.
+                                        sn_cfg = getattr(self.config, "supernode_config", {}) or {}
+                                        sn_enabled = bool(sn_cfg.get("enabled", False)) if isinstance(sn_cfg, dict) else False
+                                        sn_score_metric = sn_cfg.get("score_metric") if isinstance(sn_cfg, dict) else None
+                                        sn_core_fraction = float(sn_cfg.get("core_fraction", 0.01)) if isinstance(sn_cfg, dict) else 0.01
+                                        sn_protect_metrics = sn_cfg.get("protect_metrics") if isinstance(sn_cfg, dict) else None
+
+                                        def _should_protect() -> bool:
+                                            if not sn_enabled:
+                                                return False
+                                            if sn_protect_metrics is None:
+                                                return True
+                                            if isinstance(sn_protect_metrics, str):
+                                                token = sn_protect_metrics.strip().lower()
+                                                if token in {"all", "true", "yes", "1"}:
+                                                    return True
+                                                if token in {"none", "false", "no", "0", ""}:
+                                                    return False
+                                                sn_list = [x.strip() for x in sn_protect_metrics.split(",") if x.strip()]
+                                                return strategy_name in set(sn_list)
+                                            try:
+                                                return strategy_name in set(sn_protect_metrics)
+                                            except Exception:
+                                                return False
+
+                                        if _should_protect() and isinstance(sn_score_metric, str) and sn_score_metric:
+                                            # Compute pruning scores (neuron/channel-wise), apply hard protection to the
+                                            # top core_fraction by sn_score_metric, then prune normally by amount.
+                                            raw_scores = strategy.compute_importance_scores(
+                                                module,
+                                                inputs=layer_inputs,
+                                                outputs=layer_outputs,
+                                                gradients=layer_grads,
+                                                targets=sample_targets,
+                                                module_name=name,
+                                            )
+                                            scores = self._reduce_scores_to_output_neurons(module, raw_scores)
+                                            if scores is None:
+                                                raise ValueError("Failed to reduce pruning scores to output-neuron scores")
+
+                                            # Compute supernode scores (if different from pruning metric).
+                                            if sn_score_metric == strategy_name:
+                                                sn_scores = scores.detach().clone()
+                                            else:
+                                                from alignment.pruning.strategies import AlignmentPruning
+                                                metric_kwargs = {}
+                                                try:
+                                                    metric_kwargs = (getattr(self.config, "metric_configs", {}) or {}).get(sn_score_metric, {}) or {}
+                                                except Exception:
+                                                    metric_kwargs = {}
+
+                                                sn_strategy = AlignmentPruning(
+                                                    metric=sn_score_metric,
+                                                    config=PruningConfig(amount=0.0, structured=True, pruning_mode=selection_mode),
+                                                    **metric_kwargs,
+                                                )
+                                                sn_raw = sn_strategy.compute_importance_scores(
+                                                    module,
+                                                    inputs=layer_inputs,
+                                                    outputs=layer_outputs,
+                                                    gradients=layer_grads,
+                                                    targets=sample_targets,
+                                                    module_name=name,
+                                                )
+                                                sn_scores = self._reduce_scores_to_output_neurons(module, sn_raw)
+                                                if sn_scores is None:
+                                                    raise ValueError("Failed to reduce supernode scores to output-neuron scores")
+
+                                            n = int(scores.numel())
+                                            k = max(1, int(round(sn_core_fraction * n)))
+                                            # Protect TOP-k by supernode metric.
+                                            _, top_idx = torch.topk(sn_scores, k, largest=True)
+                                            core_mask = torch.zeros_like(scores, dtype=torch.bool)
+                                            core_mask[top_idx] = True
+
+                                            margin = torch.abs(scores).max().detach().item() + 1.0
+                                            if selection_mode == "low":
+                                                scores[core_mask] = scores.max() + margin
+                                            elif selection_mode == "high":
+                                                scores[core_mask] = scores.min() - margin
+
+                                            mask = strategy.create_pruning_mask(scores, amount=amount, structured=True, pruning_mode=selection_mode)
+                                            strategy.apply_pruning(module, mask)
+                                        else:
+                                            # Default path (no supernode protection): let the strategy handle pruning.
+                                            strategy.prune(
+                                                module,
+                                                inputs=layer_inputs,
+                                                outputs=layer_outputs,
+                                                gradients=layer_grads,
+                                                targets=sample_targets,
+                                                module_name=name,
+                                            )
                                         sparsity = strategy.get_sparsity(module)
                                         layer_sparsities[name] = sparsity
                                     except Exception as e:

@@ -185,9 +185,19 @@ class BasePruningStrategy(ABC):
                         f"for module {module.__class__.__name__}"
                     )
             if dim == "output":
-                mask_applied = mask[:, None]  # broadcast along input dim
+                # Linear: [out, in] -> mask[:, None]
+                # ConvNd: [out, in, k...,] -> mask.view(out, 1, 1, 1, ...)
+                if weight.dim() == 2:
+                    mask_applied = mask[:, None]
+                else:
+                    mask_applied = mask.view(-1, *([1] * (weight.dim() - 1)))
             elif dim == "input":
-                mask_applied = mask[None, :]  # broadcast along output dim
+                # Linear: [out, in] -> mask[None, :]
+                # ConvNd: [out, in, k...,] -> mask.view(1, in, 1, 1, ...)
+                if weight.dim() == 2:
+                    mask_applied = mask[None, :]
+                else:
+                    mask_applied = mask.view(1, -1, *([1] * (weight.dim() - 2)))
             else:
                 raise ValueError(f"Invalid dim='{dim}', must be 'input', 'output', or 'auto'")
         elif mask.shape == weight.shape:
