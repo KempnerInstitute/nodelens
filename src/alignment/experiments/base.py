@@ -184,6 +184,8 @@ class ExperimentConfig:
     # Activation-based Taylor (Molchanov-style) uses the same calibration loader, but is
     # heavier (stores activation grads). By default we reuse taylor_samples unless overridden.
     taylor_act_samples: int = 1024
+    # Cap per-batch size for activation-based Taylor to bound peak memory when retaining grads.
+    taylor_act_batch_size: int = 16
     geometric_median_iters: int = 10
     geometric_median_eps: float = 1e-8
     hrank_images: int = 256

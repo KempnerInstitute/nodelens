@@ -170,6 +170,7 @@ pruning:
     - "magnitude"           # Standard magnitude pruning (prune low)
     - "activation_mean"     # Mean |activation| baseline
     - "taylor"              # Gradient-based importance
+    - "taylor_act"          # Activation-based Taylor: E[|a * dL/da|]
     - "network_slimming"    # Network Slimming (BN gamma) baseline
     - "geometric_median"    # FPGM-style geometric median baseline
     - "hrank"               # HRank feature-rank baseline

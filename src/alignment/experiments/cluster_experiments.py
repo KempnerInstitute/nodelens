@@ -1418,6 +1418,9 @@ class ClusterAnalysisExperiment:
         fine_tune_lr: float = 0.0001,
         fine_tune_max_batches: Optional[int] = None,
         fine_tune_weight_decay: float = 0.0,
+        *,
+        resume: bool = True,
+        overwrite: bool = False,
     ) -> Dict[str, Any]:
         """
         Run pruning experiments comparing different methods.
@@ -1427,11 +1430,15 @@ class ClusterAnalysisExperiment:
             methods: Pruning methods to compare (default: all)
             fine_tune_epochs: Number of fine-tuning epochs after pruning
             fine_tune_lr: Learning rate for fine-tuning (unused when fine_tune_epochs=0)
+            resume: If True and `pruning_results.json` exists, load it and skip already-computed
+                (method, ratio) entries unless overwrite=True.
+            overwrite: If True, recompute entries even if they exist in `pruning_results.json`.
             
         Returns:
             Dict mapping (method, ratio) to accuracy results
         """
         import copy
+        import json as _json
         
         ratios = ratios or list(self.config.pruning_amounts)
         if not ratios:
@@ -1455,13 +1462,29 @@ class ClusterAnalysisExperiment:
             max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
         )
         
+        # Optional: resume from an existing pruning_results.json (common for long sweeps).
+        pr_path = self.output_dir / "pruning_results.json"
+        results: Dict[str, Any] = {"baseline": None, "methods": {}}
+        if bool(resume) and pr_path.exists():
+            try:
+                loaded = _json.loads(pr_path.read_text())
+                if isinstance(loaded, dict):
+                    results = loaded
+            except Exception:
+                pass
+        if not isinstance(results, dict):
+            results = {"baseline": None, "methods": {}}
+        if not isinstance(results.get("methods", None), dict):
+            results["methods"] = {}
+
         baseline_acc = self._evaluate_accuracy()
         logger.info(f"Baseline accuracy: {baseline_acc:.2%}")
         
         if baseline_acc < 0.7:
             logger.warning("Baseline accuracy is low; pruning comparisons may be noisy.")
         
-        results = {"baseline": baseline_acc, "methods": {}}
+        # Always update baseline (cheap, and keeps the file self-consistent).
+        results["baseline"] = baseline_acc
 
         def _checkpoint_pruning_results() -> None:
             """
@@ -1481,11 +1504,39 @@ class ClusterAnalysisExperiment:
         
         for method in methods:
             logger.info(f"Running pruning method: {method}")
-            method_results = {}
+            method_results = results["methods"].get(method, {})
+            if not isinstance(method_results, dict):
+                method_results = {}
             results["methods"][method] = method_results
             
             for ratio in ratios:
                 logger.info(f"  Target sparsity: {ratio:.0%}")
+
+                # Use a stable string key for JSON (avoids float-key mismatch on reload).
+                try:
+                    ratio_f = float(ratio)
+                except Exception:
+                    ratio_f = float(str(ratio))
+                ratio_key = str(ratio_f)
+
+                # Find an existing ratio key numerically (handles minor string formatting diffs).
+                existing_key: Optional[str] = None
+                for k in list(method_results.keys()):
+                    try:
+                        if abs(float(k) - ratio_f) < 1e-12:
+                            existing_key = str(k)
+                            break
+                    except Exception:
+                        continue
+                store_key = existing_key or ratio_key
+
+                if bool(resume) and (not bool(overwrite)) and existing_key is not None:
+                    existing = method_results.get(store_key, None)
+                    if isinstance(existing, dict) and not existing.get("error", None):
+                        if (existing.get("accuracy_after_ft") is not None) or (existing.get("accuracy_before_ft") is not None):
+                            logger.info("    Skipping (already computed)")
+                            continue
+
                 model_copy = copy.deepcopy(self.model)
                 layer_modules = self._filter_pruning_layer_modules(self._get_layer_module_map(model_copy))
                 selection_mode = self._selection_mode_for_method(method)
@@ -1545,7 +1596,7 @@ class ClusterAnalysisExperiment:
                         )
                         acc_after = self._evaluate_accuracy(model_copy)
                     
-                    method_results[ratio] = {
+                    method_results[store_key] = {
                         "accuracy_before_ft": acc_before,
                         "accuracy_after_ft": acc_after,
                         "accuracy_drop": baseline_acc - acc_before,
@@ -1560,7 +1611,7 @@ class ClusterAnalysisExperiment:
                     import traceback
                     logger.warning("    Pruning failed for %s @ %.0f%%: %s", method, ratio * 100, exc)
                     logger.warning("    Traceback:\n%s", traceback.format_exc())
-                    method_results[ratio] = {"error": str(exc)}
+                    method_results[store_key] = {"error": str(exc)}
                 finally:
                     del model_copy
                     if torch.cuda.is_available():
@@ -1985,6 +2036,15 @@ class ClusterAnalysisExperiment:
                 if x.size(0) > remaining:
                     x = x[:remaining]
                     y = y[:remaining]
+
+                # Activation-Taylor can be memory-heavy if we retain grads for all conv outputs.
+                # Cap the effective batch size to keep peak memory bounded, independent of the
+                # main training/eval loader batch size.
+                act_bsz = int(getattr(self.config, "taylor_act_batch_size", 16) or 16)
+                act_bsz = max(1, act_bsz)
+                if x.size(0) > act_bsz:
+                    x = x[:act_bsz]
+                    y = y[:act_bsz]
 
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -3320,7 +3380,8 @@ class ClusterAnalysisExperiment:
         BASELINE:
         - 'random': Random channel selection
         - 'magnitude': Prune lowest activation magnitude (standard baseline)
-        - 'taylor': Prune by gradient-based importance
+        - 'taylor': Prune by weight-based grad×weight saliency (legacy Taylor baseline)
+        - 'taylor_act': Prune by activation-based Taylor saliency E[|a·dL/da|] (recommended)
         
         SINGLE METRICS (prune LOW values = assume low is unimportant):
         - 'rq_low': Prune channels with lowest Rayleigh Quotient

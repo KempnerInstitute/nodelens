@@ -208,6 +208,7 @@ pruning:
     - "magnitude"           # Standard magnitude pruning (prune low)
     - "activation_mean"     # Mean |activation| baseline
     - "taylor"              # Gradient-based importance
+    - "taylor_act"          # Activation-based Taylor: E[|a * dL/da|]
     - "network_slimming"    # Network Slimming (BN gamma) baseline
     - "geometric_median"    # FPGM-style geometric median baseline
     - "hrank"               # HRank feature-rank baseline
@@ -254,6 +255,9 @@ pruning:
     - "taylor_rq"                   # sqrt(Taylor * RQ) - unique AND loss-sensitive
     - "taylor_redundancy"           # sqrt(Taylor * -redundancy) - non-redundant AND loss-sensitive
     - "taylor_synergy"              # sqrt(Taylor * synergy) - synergistic AND loss-sensitive
+    - "taylor_act_rq"               # sqrt(TaylorAct * RQ) - canonical Taylor(act) hybrid
+    - "taylor_act_redundancy"       # sqrt(TaylorAct * -redundancy)
+    - "taylor_act_synergy"          # sqrt(TaylorAct * synergy)
     
     # =========================================================================
     # GENERALIZED TAYLOR (analytically-motivated combinations)

@@ -118,6 +118,7 @@ pruning:
     - "magnitude"
     - "activation_mean"
     - "taylor"
+    - "taylor_act"
     - "network_slimming"
     - "geometric_median"
     - "hrank"
