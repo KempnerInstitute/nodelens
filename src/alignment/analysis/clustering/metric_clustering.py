@@ -12,6 +12,8 @@ except ImportError:
 
 
 # Ablation modes: which metrics to include in clustering
+# Format: (use_first_metric, use_red, use_syn)
+# The first metric can be RQ or IXY depending on what's passed to fit()
 METRIC_ABLATIONS = {
     "all": (True, True, True),      # RQ, Red, Syn
     "rq_red": (True, True, False),  # RQ + Redundancy only
@@ -20,6 +22,11 @@ METRIC_ABLATIONS = {
     "rq_only": (True, False, False),
     "red_only": (False, True, False),
     "syn_only": (False, False, True),
+    # IXY variants: when used, the first argument to fit() should be I(X;Y) instead of RQ
+    "ixy_all": (True, True, True),      # I(X;Y), Red, Syn
+    "ixy_red": (True, True, False),     # I(X;Y) + Redundancy only
+    "ixy_syn": (True, False, True),     # I(X;Y) + Synergy only
+    "ixy_only": (True, False, False),   # I(X;Y) only
 }
 
 

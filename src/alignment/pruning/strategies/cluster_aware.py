@@ -181,12 +181,18 @@ class ClusterAwarePruning(BasePruningStrategy):
         )
         
         # 4. Compute composite scores
-        log_rq = np.log(np.clip(metrics['rq'], 1e-10, None))
+        # Convert lists to arrays (from JSON deserialization)
+        rq = np.asarray(metrics['rq'])
+        syn = np.asarray(metrics['synergy'])
+        red = np.asarray(metrics['redundancy'])
+        halo_syn = np.asarray(halo_syn)
+        
+        log_rq = np.log(np.clip(rq, 1e-10, None))
         
         # Normalize each component to [0, 1] for stable weighting
         log_rq_norm = self._normalize(log_rq)
-        syn_norm = self._normalize(metrics['synergy'])
-        red_norm = self._normalize(metrics['redundancy'])
+        syn_norm = self._normalize(syn)
+        red_norm = self._normalize(red)
         halo_syn_norm = self._normalize(halo_syn)
         
         scores = (
@@ -222,10 +228,12 @@ class ClusterAwarePruning(BasePruningStrategy):
         # Get cluster info
         clusters = self._cluster_cache.get(layer_name, {})
         labels = clusters.get('labels', np.zeros(n_channels, dtype=int))
+        if isinstance(labels, list):
+            labels = np.array(labels, dtype=int)
         type_mapping = clusters.get('type_mapping', {0: 'unknown'})
         
-        # Invert type_mapping for lookup
-        type_to_id = {v: k for k, v in type_mapping.items()}
+        # Invert type_mapping for lookup (convert keys to int for JSON compatibility)
+        type_to_id = {v: int(k) for k, v in type_mapping.items()}
         
         # Initialize selection
         selected = set()
@@ -408,10 +416,11 @@ class ClusterAwarePruning(BasePruningStrategy):
             n_clusters=self.config.n_clusters,
             seed=42,
         )
+        # Convert lists to arrays (from JSON deserialization)
         result = clusterer.fit(
-            metrics['rq'],
-            metrics['redundancy'],
-            metrics['synergy'],
+            np.asarray(metrics['rq']),
+            np.asarray(metrics['redundancy']),
+            np.asarray(metrics['synergy']),
             layer_name,
         )
         
@@ -476,8 +485,10 @@ class ClusterAwarePruning(BasePruningStrategy):
             n_in = min(influence.shape[1], len(std))
             influence[:, :n_in] = influence[:, :n_in] * std[:n_in]
         
-        # Get next layer synergy
+        # Get next layer synergy (convert list to array for JSON compatibility)
         next_syn = next_layer_metrics.get('synergy', np.zeros(influence.shape[0]))
+        if isinstance(next_syn, list):
+            next_syn = np.array(next_syn)
         
         # Per-channel halo synergy
         halo_syn = np.zeros(n_channels)
@@ -501,6 +512,9 @@ class ClusterAwarePruning(BasePruningStrategy):
     ) -> List[Tuple[int, int]]:
         """Get top synergy pairs for constraint."""
         synergy = metrics.get('synergy', np.array([]))
+        # Convert list to array (from JSON deserialization)
+        if isinstance(synergy, list):
+            synergy = np.array(synergy)
         n = len(synergy)
         if n < 2:
             return []
@@ -514,6 +528,9 @@ class ClusterAwarePruning(BasePruningStrategy):
     
     def _normalize(self, x: np.ndarray) -> np.ndarray:
         """Normalize array to [0, 1]."""
+        # Handle list inputs (e.g., from JSON deserialization)
+        if isinstance(x, list):
+            x = np.array(x)
         x_min, x_max = x.min(), x.max()
         if x_max > x_min:
             return (x - x_min) / (x_max - x_min)

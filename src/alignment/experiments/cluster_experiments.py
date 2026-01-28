@@ -951,18 +951,33 @@ class ClusterAnalysisExperiment:
             return 0.0
         return max(0.0, 0.5 * float(np.log(var_t * det_y / det_all)))
     
-    def run_clustering(self, run_ablation: Optional[bool] = None) -> Dict[str, Any]:
+    def run_clustering(self, run_ablation: Optional[bool] = None, first_metric: Optional[str] = None) -> Dict[str, Any]:
         """
         Cluster channels in each layer.
         
         Args:
             run_ablation: If True, also run ablation study with metric subsets.
                          Uses config.run_metric_ablation if not specified.
+            first_metric: Override for first clustering metric. One of:
+                         - "rq": Use Rayleigh Quotient (default)
+                         - "ixy": Use I(X;Y) mutual information (mi_in_proxy)
+                         Uses config.clustering_first_metric if not specified.
         
         Returns:
             Dict with cluster results (and ablation results if enabled)
         """
-        logger.info("Clustering channels...")
+        # Determine first metric to use
+        first_metric = first_metric or getattr(self.config, "clustering_first_metric", "rq")
+        first_metric = str(first_metric).lower()
+        
+        if first_metric == "ixy":
+            metric_key = "mi_in_proxy"
+            metric_label = "I(X;Y)"
+        else:
+            metric_key = "rq"
+            metric_label = "RQ"
+        
+        logger.info(f"Clustering channels using {metric_label} as first metric...")
         
         run_ablation = run_ablation if run_ablation is not None else bool(self.config.run_metric_ablation)
         
@@ -975,8 +990,16 @@ class ClusterAnalysisExperiment:
         ablation_results = {}
         
         for name, metrics in self.layer_metrics.items():
+            # Get the first metric (RQ or I(X;Y))
+            first_values = metrics.get(metric_key)
+            if first_values is None:
+                # Fallback to RQ if mi_in_proxy not available
+                first_values = metrics.get("rq", np.ones(1))
+                if first_metric == "ixy":
+                    logger.warning(f"  {name}: mi_in_proxy not available, falling back to RQ")
+            
             result = clusterer.fit(
-                metrics["rq"],
+                first_values,
                 metrics["redundancy"],
                 metrics["synergy"],
                 name,
@@ -989,6 +1012,7 @@ class ClusterAnalysisExperiment:
                 "type_counts": result.type_counts,
                 "layer_name": name,
                 "ablation_mode": "all",
+                "first_metric": first_metric,  # Track which metric was used
             }
             logger.info(f"  {name}: silhouette={result.silhouette:.3f}, types={result.type_counts}")
             
@@ -996,7 +1020,7 @@ class ClusterAnalysisExperiment:
             if run_ablation:
                 ablations = list(self.config.metric_ablations)
                 abl_results = clusterer.run_ablation_study(
-                    metrics["rq"],
+                    first_values,
                     metrics["redundancy"],
                     metrics["synergy"],
                     name,
@@ -1016,7 +1040,106 @@ class ClusterAnalysisExperiment:
         if run_ablation:
             self.cluster_results["_ablation"] = ablation_results
         
+        # Store metadata about clustering config
+        self.cluster_results["_config"] = {
+            "first_metric": first_metric,
+            "n_clusters": self.config.n_clusters,
+        }
+        
         return self.cluster_results
+    
+    def run_clustering_comparison(self) -> Dict[str, Any]:
+        """
+        Run clustering with both RQ and I(X;Y) as first metric and compare results.
+        
+        This is useful for comparing clustering quality between the two approaches.
+        
+        Returns:
+            Dict with comparison results including silhouette scores and cluster agreement
+        """
+        logger.info("Running clustering comparison: RQ vs I(X;Y)...")
+        
+        clusterer = MetricSpaceClustering(
+            n_clusters=self.config.n_clusters,
+            seed=self.config.seed,
+            type_mapping_mode=str(self.config.type_mapping_mode).lower(),
+        )
+        
+        comparison_results = {}
+        
+        for name, metrics in self.layer_metrics.items():
+            rq_values = metrics.get("rq", np.ones(1))
+            ixy_values = metrics.get("mi_in_proxy")
+            
+            if ixy_values is None:
+                logger.warning(f"  {name}: mi_in_proxy not available, skipping comparison")
+                continue
+            
+            red_values = metrics["redundancy"]
+            syn_values = metrics["synergy"]
+            
+            # Cluster with RQ
+            result_rq = clusterer.fit(rq_values, red_values, syn_values, name, ablation="all")
+            
+            # Cluster with I(X;Y)
+            result_ixy = clusterer.fit(ixy_values, red_values, syn_values, name, ablation="all")
+            
+            # Compute agreement between the two clustering approaches
+            try:
+                from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
+                ari = adjusted_rand_score(result_rq.labels, result_ixy.labels)
+                ami = adjusted_mutual_info_score(result_rq.labels, result_ixy.labels)
+            except ImportError:
+                ari = 0.0
+                ami = 0.0
+            
+            comparison_results[name] = {
+                "rq": {
+                    "silhouette": result_rq.silhouette,
+                    "type_counts": result_rq.type_counts,
+                    "labels": result_rq.labels.tolist(),
+                },
+                "ixy": {
+                    "silhouette": result_ixy.silhouette,
+                    "type_counts": result_ixy.type_counts,
+                    "labels": result_ixy.labels.tolist(),
+                },
+                "agreement": {
+                    "ari": ari,
+                    "ami": ami,
+                },
+                "silhouette_diff": result_ixy.silhouette - result_rq.silhouette,
+            }
+            
+            logger.info(
+                f"  {name}: RQ sil={result_rq.silhouette:.3f}, "
+                f"I(X;Y) sil={result_ixy.silhouette:.3f}, "
+                f"ARI={ari:.3f}, diff={result_ixy.silhouette - result_rq.silhouette:+.3f}"
+            )
+        
+        # Compute summary statistics
+        if comparison_results:
+            layer_names = [n for n in comparison_results.keys() if not n.startswith("_")]
+            avg_sil_rq = np.mean([comparison_results[n]["rq"]["silhouette"] for n in layer_names])
+            avg_sil_ixy = np.mean([comparison_results[n]["ixy"]["silhouette"] for n in layer_names])
+            avg_ari = np.mean([comparison_results[n]["agreement"]["ari"] for n in layer_names])
+            avg_diff = np.mean([comparison_results[n]["silhouette_diff"] for n in layer_names])
+            
+            comparison_results["_summary"] = {
+                "avg_silhouette_rq": avg_sil_rq,
+                "avg_silhouette_ixy": avg_sil_ixy,
+                "avg_ari": avg_ari,
+                "avg_silhouette_diff": avg_diff,
+                "n_layers": len(layer_names),
+            }
+            
+            logger.info(
+                f"Summary: Avg RQ sil={avg_sil_rq:.3f}, "
+                f"Avg I(X;Y) sil={avg_sil_ixy:.3f}, "
+                f"Avg ARI={avg_ari:.3f}, Avg diff={avg_diff:+.3f}"
+            )
+        
+        return comparison_results
 
     def run_within_layer_connectivity(self) -> Dict[str, Any]:
         """
@@ -1542,7 +1665,7 @@ class ClusterAnalysisExperiment:
                 selection_mode = self._selection_mode_for_method(method)
                 
                 try:
-                    if method.startswith("cluster_aware"):
+                    if method.startswith("cluster_aware") or method in ("cap_ixy", "composite_ixy"):
                         pipeline_result = self._run_cluster_aware_pruning(
                             model_copy,
                             layer_modules=layer_modules,
@@ -2644,6 +2767,8 @@ class ClusterAnalysisExperiment:
         rq = np.log(np.clip(metrics.get("rq", np.ones(layer.weight.shape[0])), 1e-10, None))
         redundancy = metrics.get("redundancy", np.zeros_like(rq))
         synergy = metrics.get("synergy", np.zeros_like(rq))
+        # I(X;Y) - mutual information proxy (already in log scale from computation)
+        ixy = metrics.get("mi_in_proxy", rq)  # fallback to rq if not available
 
         def normalize(arr: np.ndarray) -> np.ndarray:
             if arr.size == 0:
@@ -2655,6 +2780,7 @@ class ClusterAnalysisExperiment:
             return (arr - min_v) / (max_v - min_v)
 
         rq_norm = normalize(rq)
+        ixy_norm = normalize(ixy)
         red_norm = normalize(redundancy)
         syn_norm = normalize(synergy)
 
@@ -2662,6 +2788,16 @@ class ClusterAnalysisExperiment:
             scores = rq_norm + 0.5 * syn_norm - 0.3 * red_norm
         elif method == "composite_pos_red":
             scores = rq_norm + 0.5 * syn_norm + 0.3 * red_norm
+        # I(X;Y)-based composite variants
+        elif method == "composite_ixy":
+            # Use I(X;Y) instead of RQ: Score = I(X;Y) + 0.5*Syn - 0.3*Red
+            scores = ixy_norm + 0.5 * syn_norm - 0.3 * red_norm
+        elif method == "composite_ixy_pos_red":
+            scores = ixy_norm + 0.5 * syn_norm + 0.3 * red_norm
+        elif method == "ixy_minus_red":
+            scores = ixy_norm - 0.5 * red_norm
+        elif method == "ixy_plus_red":
+            scores = ixy_norm + 0.5 * red_norm
         elif method == "rq_minus_red":
             scores = rq_norm - 0.5 * red_norm
         elif method == "rq_plus_red":
@@ -2670,6 +2806,10 @@ class ClusterAnalysisExperiment:
             w = layer.weight.detach().view(layer.weight.shape[0], -1)
             mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
             scores = mag + 0.5 * rq_norm
+        elif method == "magnitude_plus_ixy":
+            w = layer.weight.detach().view(layer.weight.shape[0], -1)
+            mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
+            scores = mag + 0.5 * ixy_norm
         elif method == "magnitude_minus_red":
             w = layer.weight.detach().view(layer.weight.shape[0], -1)
             mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
@@ -2786,6 +2926,9 @@ class ClusterAnalysisExperiment:
         cfg.use_activation_weight = bool(self.config.use_activation_weight)
         cfg.n_clusters = int(self.config.n_clusters)
 
+        # Flag to track whether we should use I(X;Y) instead of RQ
+        use_ixy_metric = method.endswith("_ixy") or "_ixy_" in method
+        
         # Variants for ablations / controls (applied *after* config overrides)
         if method == "cluster_aware_no_halo":
             cfg.lambda_halo = 0.0
@@ -2796,6 +2939,10 @@ class ClusterAnalysisExperiment:
         elif method == "cluster_aware_protect_redundant":
             # Inverted priority (rough proxy): do not preferentially prune redundant/background
             cfg.target_redundant = False
+        elif method in ("cluster_aware_ixy", "cap_ixy"):
+            # Use I(X;Y) instead of RQ in the CAP score
+            # Score_i = α·log(I(X;Y)_i) + β·Syn_i - γ·Red_i + λ·HaloSyn_i
+            use_ixy_metric = True
         elif method == "cluster_aware_annealed":
             # Anneal constraints + mix in a strong low-sparsity baseline (Taylor) so we
             # behave like Taylor/Magnitude at low sparsity and like Cluster-aware at high sparsity.
@@ -2907,9 +3054,21 @@ class ClusterAnalysisExperiment:
                 except Exception:
                     pass
 
+            # Prepare metrics for the pruner - optionally use I(X;Y) instead of RQ
+            pruner_metrics = pre_metrics.copy() if hasattr(pre_metrics, 'copy') else dict(pre_metrics)
+            if use_ixy_metric:
+                # Replace RQ with I(X;Y) (mi_in_proxy) for the CAP score
+                ixy_values = pre_metrics.get("mi_in_proxy")
+                if ixy_values is not None:
+                    pruner_metrics = dict(pre_metrics)
+                    pruner_metrics["rq"] = ixy_values  # ClusterAwarePruning uses "rq" key internally
+                    logger.debug(f"  {layer_name}: Using I(X;Y) instead of RQ for CAP score")
+                else:
+                    logger.warning(f"  {layer_name}: mi_in_proxy not available, using RQ")
+
             pruner = ClusterAwarePruning(
                 cfg,
-                precomputed_metrics=pre_metrics,
+                precomputed_metrics=pruner_metrics,
                 precomputed_clusters={"labels": labels, "type_mapping": type_mapping},
                 precomputed_halos={"halo_syn": halo_syn},
             )

@@ -151,6 +151,10 @@ class ExperimentConfig:
     metric_ablations: List[str] = field(default_factory=lambda: ["all", "rq_red", "rq_syn", "red_syn"])
     run_permutation_baseline: bool = False
     n_permutations: int = 100
+    
+    # Clustering first metric: "rq" (default) or "ixy" (mutual information I(X;Y))
+    # When set to "ixy", clustering uses mi_in_proxy instead of rq as the first dimension
+    clustering_first_metric: str = "rq"
 
     # Optional: compute per-channel loss proxy (Fisher/GN-style) on calibration data.
     compute_loss_proxy: bool = False
