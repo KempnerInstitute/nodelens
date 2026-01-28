@@ -1921,6 +1921,125 @@ class ClusterAnalysisExperiment:
         model.zero_grad(set_to_none=True)
         return out
 
+    def _compute_taylor_act_channel_scores(self, model: nn.Module) -> Dict[str, "torch.Tensor"]:
+        """
+        Compute per-output-channel Taylor saliency scores using activations:
+
+          score_i = E[ | a_i * dL/da_i | ]
+
+        where a_i is the (pre-nonlinearity) conv output channel activation and dL/da_i is
+        its gradient. For Conv2d outputs, we reduce over batch + spatial dims to get a
+        single score per output channel.
+
+        Notes:
+        - This is the canonical "Taylor channel pruning" baseline (Molchanov-style).
+        - We compute it over a small calibration subset from the (deterministic) calibration loader.
+        """
+        if not HAS_TORCH:
+            return {}
+
+        max_samples = int(getattr(self.config, "taylor_act_samples", self.config.taylor_samples))
+        max_samples = max(1, max_samples)
+
+        model = model.to(self.device)
+        model.eval()
+
+        criterion = nn.CrossEntropyLoss()
+
+        modules = dict(model.named_modules())
+
+        # Accumulators on CPU (float64 for stability)
+        sum_scores: Dict[str, "torch.Tensor"] = {}
+        count_scores: Dict[str, int] = {}
+
+        # Capture activations for the current forward pass. We retain grads so we can read dL/da.
+        acts: Dict[str, "torch.Tensor"] = {}
+
+        def hook_fn(layer_name: str):
+            def fn(_m, _inp, out):
+                try:
+                    if out is None or not hasattr(out, "retain_grad"):
+                        return
+                    # Conv outputs are typically [B, C, H, W].
+                    out.retain_grad()
+                    acts[layer_name] = out
+                except Exception:
+                    # Best-effort; if retain_grad fails we skip that layer for this batch.
+                    return
+
+            return fn
+
+        handles = []
+        try:
+            for name, _layer in self.layers:
+                m = modules.get(name)
+                if isinstance(m, nn.Conv2d):
+                    handles.append(m.register_forward_hook(hook_fn(name)))
+
+            n_seen = 0
+            for x, y in self._get_calibration_loader():
+                if n_seen >= max_samples:
+                    break
+
+                remaining = max_samples - n_seen
+                if x.size(0) > remaining:
+                    x = x[:remaining]
+                    y = y[:remaining]
+
+                x = x.to(self.device)
+                y = y.to(self.device)
+
+                # Fresh graph per batch.
+                model.zero_grad(set_to_none=True)
+                acts.clear()
+
+                logits = model(x)
+                loss = criterion(logits, y)
+                loss.backward()
+
+                bsz = int(x.size(0))
+                n_seen += bsz
+
+                for lname, out in list(acts.items()):
+                    try:
+                        g = getattr(out, "grad", None)
+                        if g is None:
+                            continue
+                        # Reduce to [C_out] via mean over batch+spatial dims.
+                        if out.ndim == 4:
+                            prod = (out.detach() * g.detach()).abs()
+                            score = prod.mean(dim=(0, 2, 3)).detach().cpu().double()  # [C]
+                        else:
+                            # Fallback: flatten all but last dim as "samples"
+                            o2 = out.detach().reshape(-1, out.shape[-1])
+                            g2 = g.detach().reshape(-1, g.shape[-1])
+                            score = (o2 * g2).abs().mean(dim=0).detach().cpu().double()
+
+                        if lname not in sum_scores:
+                            sum_scores[lname] = torch.zeros_like(score, dtype=torch.float64)
+                            count_scores[lname] = 0
+                        # Weight by batch size for a proper sample-weighted average across batches.
+                        sum_scores[lname] += score * float(bsz)
+                        count_scores[lname] += bsz
+                    except Exception:
+                        continue
+
+        finally:
+            for h in handles:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+            model.zero_grad(set_to_none=True)
+
+        out: Dict[str, "torch.Tensor"] = {}
+        for lname, s in sum_scores.items():
+            n = int(count_scores.get(lname, 0))
+            if n <= 0:
+                continue
+            out[lname] = (s / float(n)).detach().cpu()
+        return out
+
     def _compute_geometric_median_channel_scores(self, model: nn.Module) -> Dict[str, "torch.Tensor"]:
         """
         Geometric-median (FPGM-style) per-channel importance for Conv layers.
@@ -2241,6 +2360,23 @@ class ClusterAnalysisExperiment:
                     layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
                 else:
                     layer_scores[name] = cpu_scores.to(device=device, dtype=torch.float32)
+            elif method == "taylor_act":
+                # Canonical activation-based Taylor: E[|a * dL/da|] per output channel.
+                # Compute once per experiment and cache on CPU.
+                cache_key = "taylor_act"
+                if cache_key not in self._pruning_score_cache:
+                    try:
+                        self._pruning_score_cache[cache_key] = self._compute_taylor_act_channel_scores(model)
+                    except Exception as exc:
+                        logger.warning("Taylor-act score computation failed (%s); falling back to magnitude", exc)
+                        self._pruning_score_cache[cache_key] = {}
+                cpu_scores = (self._pruning_score_cache.get(cache_key, {}) or {}).get(name)
+                if cpu_scores is None or (hasattr(cpu_scores, "numel") and cpu_scores.numel() != n_channels):
+                    # Fallback: weight magnitude if we couldn't compute gradients or mismatch
+                    w_flat = weight.view(n_channels, -1)
+                    layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
+                else:
+                    layer_scores[name] = torch.as_tensor(cpu_scores, device=device, dtype=torch.float32)
             elif method in {"geometric_median", "fpgm"}:
                 cache_key = "geometric_median"
                 if cache_key not in self._pruning_score_cache:
@@ -2309,23 +2445,34 @@ class ClusterAnalysisExperiment:
             # ------------------------------------------------------------------
             # METRIC-BASED METHODS (single metrics, Taylor-weighted, LP-optimal)
             # ------------------------------------------------------------------
-            elif method.startswith("taylor_") and method not in {
+            elif (method.startswith("taylor_") or method.startswith("taylor_act_")) and method not in {
                 "taylor_rq_weighted", "taylor_redundancy_discounted", "taylor_synergy_boosted",
-                "taylor_structural", "taylor_mi", "taylor_cluster_type", "taylor_optimal_combo"
+                "taylor_structural", "taylor_mi", "taylor_cluster_type", "taylor_optimal_combo",
+                # Activation-Taylor generalized variants (handled below)
+                "taylor_act_rq_weighted", "taylor_act_redundancy_discounted", "taylor_act_synergy_boosted",
+                "taylor_act_structural", "taylor_act_mi", "taylor_act_cluster_type", "taylor_act_optimal_combo",
             } or method in {"lp_optimal", "cluster_structure"}:
                 from ..pruning.strategies.metric_based import create_metric_pruning_strategy
                 
                 # Get Taylor scores if needed
                 taylor = None
-                if method.startswith("taylor_"):
-                    if "taylor" not in self._pruning_score_cache:
+                if method.startswith("taylor_") or method.startswith("taylor_act_"):
+                    cache_key = "taylor_act" if method.startswith("taylor_act_") else "taylor"
+                    if cache_key not in self._pruning_score_cache:
                         try:
-                            self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(model)
+                            if cache_key == "taylor_act":
+                                self._pruning_score_cache[cache_key] = self._compute_taylor_act_channel_scores(model)
+                            else:
+                                self._pruning_score_cache[cache_key] = self._compute_taylor_channel_scores(model)
                         except Exception:
-                            self._pruning_score_cache["taylor"] = {}
-                    taylor = self._pruning_score_cache.get("taylor", {}).get(name)
+                            self._pruning_score_cache[cache_key] = {}
+                    taylor = (self._pruning_score_cache.get(cache_key, {}) or {}).get(name)
                     if taylor is not None:
-                        taylor = taylor.cpu().numpy()
+                        # tensor or numpy; normalize downstream
+                        try:
+                            taylor = taylor.cpu().numpy()
+                        except Exception:
+                            pass
                 
                 # Get LP scores if needed
                 lp = None
@@ -2352,6 +2499,9 @@ class ClusterAnalysisExperiment:
                 "taylor_structural", "taylor_mi", "taylor_cluster_type", "taylor_optimal_combo",
                 "rq_weighted_taylor", "redundancy_discounted_taylor", "synergy_boosted_taylor",
                 "structural_taylor", "metric_gated_taylor", "mi_taylor", "cluster_type_taylor",
+                # Activation-Taylor variants (same variants, different Taylor source)
+                "taylor_act_rq_weighted", "taylor_act_redundancy_discounted", "taylor_act_synergy_boosted",
+                "taylor_act_structural", "taylor_act_mi", "taylor_act_cluster_type", "taylor_act_optimal_combo",
             }:
                 from ..pruning.strategies.generalized_taylor import create_generalized_taylor
                 
@@ -2364,16 +2514,28 @@ class ClusterAnalysisExperiment:
                     "taylor_mi": "mi_taylor",
                     "taylor_cluster_type": "cluster_type_taylor",
                     "taylor_optimal_combo": "taylor_optimal_combo",
+                    # Activation-Taylor aliases (use same underlying variant)
+                    "taylor_act_rq_weighted": "rq_weighted_taylor",
+                    "taylor_act_redundancy_discounted": "redundancy_discounted_taylor",
+                    "taylor_act_synergy_boosted": "synergy_boosted_taylor",
+                    "taylor_act_structural": "structural_taylor",
+                    "taylor_act_mi": "mi_taylor",
+                    "taylor_act_cluster_type": "cluster_type_taylor",
+                    "taylor_act_optimal_combo": "taylor_optimal_combo",
                 }
                 variant = variant_map.get(method, method)
                 
                 # Get Taylor scores
-                if "taylor" not in self._pruning_score_cache:
+                cache_key = "taylor_act" if method.startswith("taylor_act_") else "taylor"
+                if cache_key not in self._pruning_score_cache:
                     try:
-                        self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(model)
+                        if cache_key == "taylor_act":
+                            self._pruning_score_cache[cache_key] = self._compute_taylor_act_channel_scores(model)
+                        else:
+                            self._pruning_score_cache[cache_key] = self._compute_taylor_channel_scores(model)
                     except Exception:
-                        self._pruning_score_cache["taylor"] = {}
-                taylor_cpu = self._pruning_score_cache.get("taylor", {}).get(name)
+                        self._pruning_score_cache[cache_key] = {}
+                taylor_cpu = (self._pruning_score_cache.get(cache_key, {}) or {}).get(name)
                 taylor_np = taylor_cpu.cpu().numpy() if taylor_cpu is not None else None
                 
                 # Get cluster info

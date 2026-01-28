@@ -181,6 +181,9 @@ class ExperimentConfig:
 
     # Pruning-score baselines (vision)
     taylor_samples: int = 1024
+    # Activation-based Taylor (Molchanov-style) uses the same calibration loader, but is
+    # heavier (stores activation grads). By default we reuse taylor_samples unless overridden.
+    taylor_act_samples: int = 1024
     geometric_median_iters: int = 10
     geometric_median_eps: float = 1e-8
     hrank_images: int = 256

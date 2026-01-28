@@ -495,6 +495,7 @@ def create_metric_pruning_strategy(
     Method names:
     - Single metric: 'rq', 'redundancy', 'synergy', 'mi', 'magnitude'
     - Taylor-weighted: 'taylor_rq', 'taylor_redundancy', 'taylor_synergy', etc.
+    - Taylor-act-weighted: 'taylor_act_rq', 'taylor_act_redundancy', ... (same blends; different Taylor source)
     - LP-optimal: 'lp_optimal'
     - Cluster-structure: 'cluster_structure'
     - Composite: 'composite' (default linear combination)
@@ -508,6 +509,19 @@ def create_metric_pruning_strategy(
         config = MetricPruningConfig(metric=method, **config_kwargs)
         return SingleMetricPruning(config, precomputed_metrics)
     
+    # Taylor-act-weighted methods (identical logic; expects taylor_scores to be activation-based)
+    if method.startswith('taylor_act_'):
+        base_metric = method[len('taylor_act_'):]  # Remove 'taylor_act_' prefix
+        if base_metric not in single_metrics:
+            base_metric = 'rq'
+        config = MetricPruningConfig(
+            metric=base_metric,
+            taylor_weight=config_kwargs.pop('taylor_weight', 0.5),
+            taylor_blend_mode=config_kwargs.pop('taylor_blend_mode', 'geometric'),
+            **config_kwargs,
+        )
+        return TaylorWeightedMetricPruning(config, precomputed_metrics, taylor_scores)
+
     # Taylor-weighted methods
     if method.startswith('taylor_'):
         base_metric = method[7:]  # Remove 'taylor_' prefix
