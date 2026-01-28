@@ -10659,6 +10659,420 @@ class LLMAlignmentExperiment(BaseExperiment):
 
         return results
 
+    def compute_mean_replacement_control(
+        self,
+        scar_scores: Dict[str, Dict[str, Any]],
+        *,
+        supernode_fraction: float = 0.01,
+        num_eval_texts: int = 64,
+        max_length: int = 512,
+        num_random_trials: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        Mean-replacement control experiment.
+
+        Tests whether supernodes are functionally important by replacing their activations
+        with per-channel mean values and measuring the loss impact.
+
+        Interventions:
+        1. Baseline: no replacement
+        2. LP supernodes replaced with mean
+        3. Activation supernodes replaced with mean
+        4. Random channels (same size) replaced with mean (control)
+
+        Args:
+            scar_scores: Pre-computed SCAR scores with 'scar_loss_proxy' and 'scar_activation_power'
+            supernode_fraction: Fraction of channels to treat as supernodes (default 1%)
+            num_eval_texts: Number of evaluation texts
+            max_length: Maximum sequence length
+            num_random_trials: Number of random replacement trials
+
+        Returns:
+            Dict with baseline loss, LP supernode loss, activation supernode loss,
+            random replacement mean/std, per-layer statistics
+        """
+        logger.info("=" * 60)
+        logger.info("Mean-Replacement Control Experiment")
+        logger.info("=" * 60)
+
+        device = torch.device(self.config.device)
+        model_dtype = getattr(torch, self.config.model_config.get("torch_dtype", "float32"))
+
+        # Get evaluation texts
+        eval_texts: List[str] = []
+        if hasattr(self, "dataset") and hasattr(self.dataset, "texts"):
+            eval_texts = list(self.dataset.texts)[:num_eval_texts]
+        else:
+            try:
+                from datasets import load_dataset
+                ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+                eval_texts = [t for t in ds["text"] if t.strip()][:num_eval_texts]
+            except Exception as e:
+                logger.error(f"Failed to load evaluation texts: {e}")
+                return {}
+
+        if not eval_texts:
+            logger.error("No evaluation texts available for mean-replacement control")
+            return {}
+
+        # Extract LP and activation supernodes per layer
+        layer_supernodes: Dict[str, Dict[str, np.ndarray]] = {}
+        for layer_name, layer_data in scar_scores.items():
+            if "mlp.down_proj" not in layer_name:
+                continue
+
+            lp = layer_data.get("scar_loss_proxy")
+            act = layer_data.get("scar_activation_power")
+
+            if lp is None or act is None:
+                continue
+
+            if torch.is_tensor(lp):
+                lp = lp.cpu().numpy()
+            if torch.is_tensor(act):
+                act = act.cpu().numpy()
+
+            n = len(lp)
+            k = max(1, int(supernode_fraction * n))
+
+            lp_indices = np.argsort(lp)[-k:]
+            act_indices = np.argsort(act)[-k:]
+
+            layer_supernodes[layer_name] = {
+                "lp": lp_indices,
+                "act": act_indices,
+                "n_channels": n,
+                "k": k,
+            }
+
+        if not layer_supernodes:
+            logger.error("No supernode data found in scar_scores")
+            return {}
+
+        logger.info(f"Found {len(layer_supernodes)} layers with supernodes")
+        sample_layer = next(iter(layer_supernodes.values()))
+        logger.info(f"Channels per layer: {sample_layer['n_channels']}, supernodes: {sample_layer['k']}")
+
+        # Get underlying HF model
+        hf_model: nn.Module = self.model
+        if hasattr(hf_model, "model"):
+            hf_model = getattr(hf_model, "model")
+
+        def compute_loss_with_replacement(
+            replacement_indices: Optional[Dict[str, np.ndarray]],
+            mean_values: Dict[str, torch.Tensor],
+        ) -> float:
+            """Compute mean loss when replacing specified channels with their means."""
+            hooks = []
+            
+            if replacement_indices is not None:
+                for layer_name, module in hf_model.named_modules():
+                    if layer_name not in replacement_indices:
+                        continue
+                    indices = replacement_indices[layer_name]
+                    means = mean_values.get(layer_name)
+                    if means is None:
+                        continue
+
+                    def make_hook(idx: np.ndarray, mv: torch.Tensor):
+                        def hook(mod, inp, out):
+                            if not inp or inp[0] is None:
+                                return
+                            u = inp[0]
+                            # Replace selected channels with mean
+                            u_modified = u.clone()
+                            u_modified[..., idx] = mv[idx].to(u.device, u.dtype)
+                            return (u_modified,) + inp[1:] if len(inp) > 1 else (u_modified,)
+                        return hook
+
+                    h = module.register_forward_pre_hook(make_hook(indices, means))
+                    hooks.append(h)
+
+            total_loss = 0.0
+            total_tokens = 0
+
+            try:
+                self.model.eval()
+                with torch.no_grad():
+                    for text in eval_texts:
+                        enc = self.tokenizer(
+                            text, return_tensors="pt", truncation=True, max_length=max_length
+                        )
+                        input_ids = enc["input_ids"].to(device)
+                        if input_ids.size(1) < 2:
+                            continue
+
+                        labels = input_ids.clone()
+                        labels[:, 0] = -100
+                        n_valid = int((labels != -100).sum().item())
+                        if n_valid <= 0:
+                            continue
+
+                        with torch.autocast(device_type=str(device).split(":")[0], dtype=model_dtype):
+                            outputs = self.model(input_ids, labels=labels)
+                            loss = outputs.loss
+
+                        total_loss += loss.item() * n_valid
+                        total_tokens += n_valid
+            finally:
+                for h in hooks:
+                    h.remove()
+
+            return total_loss / total_tokens if total_tokens > 0 else float("inf")
+
+        # Step 1: Compute per-channel means from calibration
+        logger.info("Computing per-channel activation means...")
+        mean_values: Dict[str, torch.Tensor] = {}
+        count_values: Dict[str, int] = {}
+        hooks = []
+
+        for layer_name, module in hf_model.named_modules():
+            if layer_name not in layer_supernodes:
+                continue
+            n_ch = layer_supernodes[layer_name]["n_channels"]
+            mean_values[layer_name] = torch.zeros(n_ch, device="cpu", dtype=torch.float32)
+            count_values[layer_name] = 0
+
+            def make_mean_hook(name: str, n: int):
+                def hook(mod, inp, out):
+                    if not inp or inp[0] is None:
+                        return
+                    u = inp[0].detach().float()
+                    if u.ndim > 2:
+                        u = u.reshape(-1, u.shape[-1])
+                    mean_values[name] += u.sum(dim=0).cpu()
+                    count_values[name] += u.shape[0]
+                return hook
+
+            h = module.register_forward_hook(make_mean_hook(layer_name, n_ch))
+            hooks.append(h)
+
+        # Forward pass to accumulate means
+        self.model.eval()
+        with torch.no_grad():
+            for text in eval_texts[:32]:  # Use subset for mean computation
+                enc = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
+                input_ids = enc["input_ids"].to(device)
+                if input_ids.size(1) < 2:
+                    continue
+                with torch.autocast(device_type=str(device).split(":")[0], dtype=model_dtype):
+                    _ = self.model(input_ids)
+
+        for h in hooks:
+            h.remove()
+
+        # Finalize means
+        for name in mean_values:
+            if count_values[name] > 0:
+                mean_values[name] /= count_values[name]
+
+        # Step 2: Baseline (no replacement)
+        logger.info("Computing baseline loss...")
+        baseline_loss = compute_loss_with_replacement(None, mean_values)
+        logger.info(f"Baseline loss: {baseline_loss:.4f}")
+
+        # Step 3: LP supernode replacement
+        logger.info("Computing LP supernode replacement loss...")
+        lp_indices = {name: data["lp"] for name, data in layer_supernodes.items()}
+        lp_loss = compute_loss_with_replacement(lp_indices, mean_values)
+        logger.info(f"LP supernode replacement loss: {lp_loss:.4f}")
+
+        # Step 4: Activation supernode replacement
+        logger.info("Computing activation supernode replacement loss...")
+        act_indices = {name: data["act"] for name, data in layer_supernodes.items()}
+        act_loss = compute_loss_with_replacement(act_indices, mean_values)
+        logger.info(f"Activation supernode replacement loss: {act_loss:.4f}")
+
+        # Step 5: Random replacement trials
+        logger.info(f"Computing {num_random_trials} random replacement trials...")
+        random_losses = []
+        base_seed = int(getattr(self.config, "seed", 42) or 42)
+
+        for trial in range(num_random_trials):
+            random_indices = {}
+            for name, data in layer_supernodes.items():
+                g = torch.Generator()
+                g.manual_seed(base_seed + trial * 1000 + hash(name) % 10000)
+                n_ch = data["n_channels"]
+                k = data["k"]
+                random_indices[name] = torch.randperm(n_ch, generator=g)[:k].numpy()
+
+            trial_loss = compute_loss_with_replacement(random_indices, mean_values)
+            random_losses.append(trial_loss)
+            logger.info(f"  Trial {trial + 1}: {trial_loss:.4f}")
+
+        random_mean = float(np.mean(random_losses))
+        random_std = float(np.std(random_losses))
+        logger.info(f"Random replacement mean: {random_mean:.4f} +/- {random_std:.4f}")
+
+        results = {
+            "supernode_fraction": float(supernode_fraction),
+            "num_eval_texts": int(num_eval_texts),
+            "max_length": int(max_length),
+            "num_random_trials": int(num_random_trials),
+            "baseline_loss": float(baseline_loss),
+            "lp_supernode_loss": float(lp_loss),
+            "activation_supernode_loss": float(act_loss),
+            "random_replacement": {
+                "mean": float(random_mean),
+                "std": float(random_std),
+                "trials": [float(x) for x in random_losses],
+            },
+            "lp_vs_baseline_increase": float(lp_loss - baseline_loss),
+            "act_vs_baseline_increase": float(act_loss - baseline_loss),
+            "random_vs_baseline_increase": float(random_mean - baseline_loss),
+        }
+
+        logger.info("=" * 60)
+        logger.info("Mean-Replacement Control Results Summary")
+        logger.info("=" * 60)
+        logger.info(f"Baseline: {baseline_loss:.4f}")
+        logger.info(f"LP supernodes: {lp_loss:.4f} (+{lp_loss - baseline_loss:.4f})")
+        logger.info(f"Act supernodes: {act_loss:.4f} (+{act_loss - baseline_loss:.4f})")
+        logger.info(f"Random: {random_mean:.4f} +/- {random_std:.4f} (+{random_mean - baseline_loss:.4f})")
+
+        return results
+
+    def compute_lp_activation_analysis(
+        self,
+        scar_scores: Dict[str, Dict[str, Any]],
+        *,
+        supernode_fraction: float = 0.01,
+        percentiles: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute LP vs Activation analysis: correlation by percentile and supernode overlap.
+
+        This analyzes the relationship between LP (loss proxy) and activation power:
+        1. Spearman correlation between log(LP) and log(activation) per layer
+        2. Correlation restricted to top X% by activation power
+        3. Jaccard overlap between LP-defined and activation-defined supernodes
+
+        Args:
+            scar_scores: Pre-computed SCAR scores with 'scar_loss_proxy' and 'scar_activation_power'
+            supernode_fraction: Fraction for supernode definition (default 1%)
+            percentiles: Percentiles to compute correlation for (default [100, 99, 95, 90, 75, 50, 25, 10, 5, 1])
+
+        Returns:
+            Dict with per-layer and summary statistics
+        """
+        from scipy.stats import spearmanr
+
+        logger.info("=" * 60)
+        logger.info("LP vs Activation Analysis")
+        logger.info("=" * 60)
+
+        if percentiles is None:
+            percentiles = [100, 99, 95, 90, 75, 50, 25, 10, 5, 1]
+
+        results: Dict[str, Any] = {
+            "supernode_fraction": float(supernode_fraction),
+            "percentiles": percentiles,
+            "per_layer": {},
+            "summary": {},
+        }
+
+        all_correlations: Dict[int, List[float]] = {p: [] for p in percentiles}
+        all_jaccard: List[float] = []
+
+        for layer_name, layer_data in scar_scores.items():
+            if "mlp.down_proj" not in layer_name:
+                continue
+
+            lp = layer_data.get("scar_loss_proxy")
+            act = layer_data.get("scar_activation_power")
+
+            if lp is None or act is None:
+                continue
+
+            if torch.is_tensor(lp):
+                lp = lp.cpu().numpy().astype(np.float64)
+            else:
+                lp = np.array(lp, dtype=np.float64)
+
+            if torch.is_tensor(act):
+                act = act.cpu().numpy().astype(np.float64)
+            else:
+                act = np.array(act, dtype=np.float64)
+
+            n = len(lp)
+            if n < 10:
+                continue
+
+            # Log transform (handle zeros)
+            eps = 1e-12
+            log_lp = np.log(np.maximum(lp, eps))
+            log_act = np.log(np.maximum(act, eps))
+
+            # Correlation by percentile (top X% by activation)
+            layer_corr: Dict[int, float] = {}
+            for pct in percentiles:
+                if pct >= 100:
+                    subset_mask = np.ones(n, dtype=bool)
+                else:
+                    threshold = np.percentile(act, 100 - pct)
+                    subset_mask = act >= threshold
+
+                if subset_mask.sum() < 3:
+                    layer_corr[pct] = float("nan")
+                    continue
+
+                try:
+                    rho, _ = spearmanr(log_lp[subset_mask], log_act[subset_mask])
+                    layer_corr[pct] = float(rho) if rho is not None else float("nan")
+                except Exception:
+                    layer_corr[pct] = float("nan")
+
+                if not np.isnan(layer_corr[pct]):
+                    all_correlations[pct].append(layer_corr[pct])
+
+            # Supernode overlap (Jaccard)
+            k = max(1, int(supernode_fraction * n))
+            lp_supernodes = set(np.argsort(lp)[-k:].tolist())
+            act_supernodes = set(np.argsort(act)[-k:].tolist())
+
+            intersection = len(lp_supernodes & act_supernodes)
+            union = len(lp_supernodes | act_supernodes)
+            jaccard = intersection / union if union > 0 else 0.0
+            all_jaccard.append(jaccard)
+
+            results["per_layer"][layer_name] = {
+                "n_channels": int(n),
+                "correlation_by_percentile": layer_corr,
+                "jaccard_supernodes": float(jaccard),
+            }
+
+        # Summary statistics
+        summary_corr: Dict[str, Dict[str, float]] = {}
+        for pct in percentiles:
+            vals = all_correlations[pct]
+            if vals:
+                summary_corr[str(pct)] = {
+                    "mean": float(np.mean(vals)),
+                    "std": float(np.std(vals)),
+                }
+            else:
+                summary_corr[str(pct)] = {"mean": float("nan"), "std": float("nan")}
+
+        results["summary"] = {
+            "correlation_by_percentile": summary_corr,
+            "jaccard_supernodes": {
+                "mean": float(np.mean(all_jaccard)) if all_jaccard else float("nan"),
+                "std": float(np.std(all_jaccard)) if all_jaccard else float("nan"),
+            },
+        }
+
+        # Log summary
+        logger.info(f"Analyzed {len(results['per_layer'])} layers")
+        if "100" in summary_corr:
+            logger.info(f"Full correlation (log LP vs log Act): {summary_corr['100']['mean']:.3f} +/- {summary_corr['100']['std']:.3f}")
+        if "90" in summary_corr:
+            logger.info(f"Top 90% by activation: {summary_corr['90']['mean']:.3f} +/- {summary_corr['90']['std']:.3f}")
+        if all_jaccard:
+            logger.info(f"Supernode Jaccard overlap: {np.mean(all_jaccard)*100:.1f}% +/- {np.std(all_jaccard)*100:.1f}%")
+
+        return results
+
     def compute_supernode_hit_rate_sweep(
         self,
         scar_scores: Dict[str, Dict[str, Any]],
