@@ -140,6 +140,11 @@ class ExperimentConfig:
     synergy_target: str = "logit_margin"  # logit_margin, correct_logit, logit_pc1
     synergy_candidate_pool: int = 50
     synergy_pairs: int = 10
+    # RQ estimator used in cluster-analysis metrics:
+    # - "equivalent_streaming": Eq. (Var(Y_i) / ||w_i||^2) from streamed output moments
+    # - "covariance_exact": explicit Eq. (w^T Σ_X w / ||w||^2) on sampled conv inputs
+    # - "both": compute both; use covariance_exact for downstream "rq" and store diagnostics
+    rq_definition: str = "both"
 
     # Cluster type mapping mode:
     # - "greedy": greedy sequential assignment (semantically interpretable; default).

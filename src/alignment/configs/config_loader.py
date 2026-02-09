@@ -747,6 +747,18 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["num_workers"] = nested_config.get("num_workers", 4)
         flat_config["dataset_config"] = nested_config.get("dataset_config", {})
 
+    # Preserve already-flat metric fields when present (common in locked configs).
+    if isinstance(nested_config.get("metrics"), list):
+        flat_config["metrics"] = list(nested_config.get("metrics", []))
+    if isinstance(nested_config.get("metric_configs"), dict):
+        flat_config["metric_configs"] = dict(nested_config.get("metric_configs", {}))
+        rq_cfg_flat = flat_config["metric_configs"].get("rayleigh_quotient", {})
+        if isinstance(rq_cfg_flat, dict):
+            if "definition" in rq_cfg_flat:
+                flat_config["rq_definition"] = str(rq_cfg_flat.get("definition"))
+            elif "estimator" in rq_cfg_flat:
+                flat_config["rq_definition"] = str(rq_cfg_flat.get("estimator"))
+
     # Map metric configuration block (optional nested structure)
     metric_block = nested_config.get("metrics")
     if isinstance(metric_block, dict):
@@ -772,6 +784,11 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
                 # Merge optimization options into each metric config
                 merged_cfg = {**global_optimization_opts, **metric_cfg}
                 metric_configs[metric_name] = merged_cfg
+                if metric_name == "rayleigh_quotient":
+                    if "definition" in metric_cfg:
+                        flat_config["rq_definition"] = str(metric_cfg.get("definition"))
+                    elif "estimator" in metric_cfg:
+                        flat_config["rq_definition"] = str(metric_cfg.get("estimator"))
         if metric_configs:
             flat_config["metric_configs"] = metric_configs
 
@@ -1508,6 +1525,9 @@ def load_config_with_overrides(
             "metrics.activation_samples": "activation_samples",
             "metrics.task_activation_samples": "task_activation_samples",
             "metrics.spatial_samples_per_image": "spatial_samples_per_image",
+            "metrics.rq_definition": "rq_definition",
+            "metrics.rayleigh_quotient.definition": "rq_definition",
+            "metrics.rayleigh_quotient.estimator": "rq_definition",
             "metrics.synergy_target": "synergy_target",
             "metrics.synergy_candidate_pool": "synergy_candidate_pool",
             "metrics.synergy_num_pairs": "synergy_pairs",

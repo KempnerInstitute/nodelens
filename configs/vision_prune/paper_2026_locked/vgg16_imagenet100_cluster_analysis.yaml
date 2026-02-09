@@ -38,6 +38,7 @@
       "force_cpu_for_large_ops": true,
       "cpu_threshold": 100000000,
       "relative": false,
+      "definition": "both",
       "shrinkage": true
     },
     "gaussian_mi_analytic": {
@@ -123,7 +124,7 @@
   "synergy_target": "logit_margin",
   "synergy_candidate_pool": 50,
   "synergy_pairs": 10,
-  "type_mapping_mode": "greedy",
+  "type_mapping_mode": "global",
   "run_metric_ablation": false,
   "metric_ablations": [
     "all",

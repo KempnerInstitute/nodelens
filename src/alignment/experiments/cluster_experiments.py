@@ -24,6 +24,7 @@ import numpy as np
 try:
     import torch
     import torch.nn as nn
+    import torch.nn.functional as F
     from torch.utils.data import DataLoader
 
     HAS_TORCH = True
@@ -140,6 +141,38 @@ class _CovAccumulator:
 
         cov_ty = (self.sum_ty - n * mean_t * mean_y) / (n - 1.0)
         return var_t, var_y, cov_yy, cov_ty
+
+
+class _VarAccumulator:
+    """
+    Streaming per-channel variance accumulator.
+
+    Used for explicit Eq. (w^T Σ_X w / ||w||^2) RQ computation via sampled
+    input-patch projections (without storing the full covariance matrix).
+    """
+
+    def __init__(self, n_channels: int):
+        self.n = 0
+        self.sum_y = np.zeros(n_channels, dtype=np.float64)
+        self.sum_y2 = np.zeros(n_channels, dtype=np.float64)
+
+    def update(self, y: np.ndarray) -> None:
+        y = np.asarray(y, dtype=np.float64)
+        if y.ndim != 2:
+            raise ValueError(f"Expected y as [N,C], got shape {y.shape}")
+        if y.size == 0:
+            return
+        self.n += int(y.shape[0])
+        self.sum_y += y.sum(axis=0)
+        self.sum_y2 += np.square(y).sum(axis=0)
+
+    def variance(self) -> np.ndarray:
+        if self.n < 2:
+            return np.zeros_like(self.sum_y, dtype=np.float64)
+        n = float(self.n)
+        mean_y = self.sum_y / n
+        var = (self.sum_y2 - n * np.square(mean_y)) / (n - 1.0)
+        return np.clip(var, 1e-12, None)
 
 
 from .base import ExperimentConfig
@@ -478,12 +511,71 @@ class ClusterAnalysisExperiment:
         Returns:
             Dict mapping layer_name to dict of metric arrays
         """
-        logger.info("Computing per-channel metrics (streaming)...")
+        logger.info("Computing per-channel metrics...")
         self.model.eval()
 
         # Optional: advance RNG state to emulate "post-training" loader shuffle behavior
         # when using calibration_mode="train_loader" for legacy comparisons.
         self._maybe_advance_rng_for_legacy_calibration()
+
+        # RQ estimator configuration.
+        # Default stays backward-compatible (streaming Eq. 2 form).
+        rq_cfg = {}
+        try:
+            rq_cfg = dict(getattr(self.config, "metric_configs", {}).get("rayleigh_quotient", {}) or {})
+        except Exception:
+            rq_cfg = {}
+        rq_definition = str(
+            getattr(
+                self.config,
+                "rq_definition",
+                rq_cfg.get("definition", rq_cfg.get("estimator", "equivalent_streaming")),
+            )
+        ).lower()
+        rq_definition_aliases = {
+            "streaming": "equivalent_streaming",
+            "equivalent": "equivalent_streaming",
+            "var": "equivalent_streaming",
+            "proxy": "equivalent_streaming",
+            "exact": "covariance_exact",
+            "covariance": "covariance_exact",
+            "cov_exact": "covariance_exact",
+        }
+        rq_definition = rq_definition_aliases.get(rq_definition, rq_definition)
+        if rq_definition not in {"equivalent_streaming", "covariance_exact", "both"}:
+            logger.warning(f"Unknown rq_definition='{rq_definition}', using equivalent_streaming.")
+            rq_definition = "equivalent_streaming"
+
+        activation_point = str(self.config.activation_point).lower()
+        activation_mode = str(self.config.activation_samples).lower()
+
+        rq_exact_requested = rq_definition in {"covariance_exact", "both"}
+        rq_exact_active = rq_exact_requested
+        if rq_exact_active and activation_point not in {"pre_bn", "prebn", "pre"}:
+            logger.warning(
+                "rq_definition=%s requested but activation_point=%s. "
+                "Exact covariance RQ currently supports pre-BN hooks; falling back to equivalent_streaming.",
+                rq_definition,
+                activation_point,
+            )
+            rq_exact_active = False
+        if rq_exact_active and activation_mode in {"gap", "global", "global_avg", "global_average"}:
+            logger.warning(
+                "rq_definition=%s requested with activation_samples=%s. "
+                "Exact covariance RQ currently supports spatial samples; falling back to equivalent_streaming.",
+                rq_definition,
+                activation_mode,
+            )
+            rq_exact_active = False
+
+        if rq_definition == "both":
+            logger.info(
+                "RQ mode: both (use covariance_exact for pruning/clustering, also store equivalent_streaming diagnostics)."
+            )
+        elif rq_definition == "covariance_exact":
+            logger.info("RQ mode: covariance_exact (Eq. 1 explicit on sampled conv inputs).")
+        else:
+            logger.info("RQ mode: equivalent_streaming (Eq. 2, Var(Y)/||w||^2).")
 
         # Per-layer accumulators (filled lazily once we see a batch for the layer)
         #
@@ -495,14 +587,84 @@ class ClusterAnalysisExperiment:
         # of how we sample for within-layer redundancy.
         accs_local: Dict[str, _CovAccumulator] = {}
         accs_task: Dict[str, _CovAccumulator] = {}
+        accs_rq_exact: Dict[str, _VarAccumulator] = {}
 
         # Temporary per-batch activations captured by hooks
         batch_acts: Dict[str, "torch.Tensor"] = {}
+        batch_inputs: Dict[str, "torch.Tensor"] = {}
+
+        def _project_conv_outputs_from_input(
+            layer: "nn.Conv2d",
+            inp_cpu: "torch.Tensor",
+            sample_idx: Optional[np.ndarray],
+            expected_hw: int,
+        ) -> Optional[np.ndarray]:
+            """
+            Explicit Eq. (w^T Σ_X w) projections on sampled conv input patches.
+            Returns sampled pre-activation outputs [N, C_out] aligned with y_local.
+            """
+            try:
+                if inp_cpu.ndim != 4:
+                    return None
+                if not isinstance(layer, nn.Conv2d):
+                    return None
+
+                # [B, C_in*k*k, L] where L = H_out * W_out
+                patches = F.unfold(
+                    inp_cpu,
+                    kernel_size=layer.kernel_size,
+                    dilation=layer.dilation,
+                    padding=layer.padding,
+                    stride=layer.stride,
+                )
+                bsz, d_full, n_pos = patches.shape
+                if expected_hw > 0 and n_pos != expected_hw:
+                    return None
+
+                if sample_idx is None:
+                    # [B*L, D]
+                    x_flat = patches.permute(0, 2, 1).reshape(bsz * n_pos, d_full)
+                else:
+                    idx_t = torch.as_tensor(sample_idx, dtype=torch.long, device=patches.device)
+                    if idx_t.ndim != 2 or idx_t.shape[0] != bsz:
+                        return None
+                    idx_t = torch.clamp(idx_t, 0, max(0, n_pos - 1))
+                    gather_idx = idx_t.unsqueeze(1).expand(bsz, d_full, idx_t.shape[1])
+                    # [B, D, p] -> [B*p, D]
+                    x_flat = torch.gather(patches, dim=2, index=gather_idx).permute(0, 2, 1).reshape(-1, d_full)
+
+                weight = layer.weight.detach().cpu()
+                c_out = int(weight.shape[0])
+                groups = int(getattr(layer, "groups", 1))
+
+                if groups == 1:
+                    w_mat = weight.reshape(c_out, -1).t().to(x_flat.dtype)
+                    proj = x_flat @ w_mat  # [N, C_out]
+                else:
+                    c_in_total = int(inp_cpu.shape[1])
+                    k_elems = int(weight.shape[2] * weight.shape[3])
+                    c_in_per_group = c_in_total // groups
+                    c_out_per_group = c_out // groups
+                    x3 = x_flat.reshape(x_flat.shape[0], c_in_total, k_elems)
+                    proj = x_flat.new_zeros((x_flat.shape[0], c_out))
+                    for g in range(groups):
+                        xs = x3[:, g * c_in_per_group : (g + 1) * c_in_per_group, :].reshape(x_flat.shape[0], -1)
+                        ws = weight[g * c_out_per_group : (g + 1) * c_out_per_group].reshape(c_out_per_group, -1).t().to(xs.dtype)
+                        proj[:, g * c_out_per_group : (g + 1) * c_out_per_group] = xs @ ws
+
+                if layer.bias is not None:
+                    proj = proj + layer.bias.detach().cpu().reshape(1, -1).to(proj.dtype)
+
+                return proj.numpy().astype(np.float64, copy=False)
+            except Exception:
+                return None
 
         def hook_fn(name: str):
             def fn(_m, _inp, out):
                 # Store only for this batch; processed after logits are computed
                 batch_acts[name] = out.detach()
+                if rq_exact_active and isinstance(_inp, (tuple, list)) and len(_inp) > 0 and torch.is_tensor(_inp[0]):
+                    batch_inputs[name] = _inp[0].detach()
             return fn
 
         # Register hooks.
@@ -563,6 +725,7 @@ class ClusterAnalysisExperiment:
                 y = y.to(self.device)
 
                 batch_acts.clear()
+                batch_inputs.clear()
                 logits = self.model(x)
 
                 # Continuous target T (logit margin)
@@ -587,6 +750,7 @@ class ClusterAnalysisExperiment:
                     # ---------------------------
                     # Local sampling (redundancy/RQ): configurable
                     # ---------------------------
+                    sample_idx = None
                     if activation_mode in {"gap", "global", "global_avg", "global_average"}:
                         y_local = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
                         t_local = T_img
@@ -601,13 +765,30 @@ class ClusterAnalysisExperiment:
                             row = np.arange(b)[:, None]
                             y_local = y_hw_np[row, idx, :].reshape(b * p, c)
                             t_local = np.repeat(T_img, p)
+                            sample_idx = idx
                         else:
                             y_local = y_hw_np.reshape(b * hw, c)
                             t_local = np.repeat(T_img, hw)
+                            sample_idx = None
 
                     if name not in accs_local:
                         accs_local[name] = _CovAccumulator(n_channels=c)
                     accs_local[name].update(y_local, t_local)
+
+                    # Optional: explicit Eq. (w^T Σ_X w / ||w||^2) path from sampled inputs.
+                    if rq_exact_active:
+                        inp = batch_inputs.get(name)
+                        if inp is not None:
+                            proj_local = _project_conv_outputs_from_input(
+                                layer=layer,
+                                inp_cpu=inp.detach().cpu(),
+                                sample_idx=sample_idx,
+                                expected_hw=int(h * w),
+                            )
+                            if proj_local is not None and proj_local.shape[1] == c:
+                                if name not in accs_rq_exact:
+                                    accs_rq_exact[name] = _VarAccumulator(n_channels=c)
+                                accs_rq_exact[name].update(proj_local)
 
                     # ---------------------------
                     # Task-level sampling (TaskMI/synergy)
@@ -655,10 +836,12 @@ class ClusterAnalysisExperiment:
                 y2 = np.clip(np.diag(acc.sum_yy) / float(acc.n), 0.0, None)
                 metrics["activation_rms"] = np.sqrt(y2)[:n_channels].astype(np.float64)
 
-            # 1) Rayleigh Quotient proxy: Var(Y_i) / ||w_i||^2
+            # 1) Rayleigh Quotient
             weight = layer.weight.data.cpu()  # [C_out, C_in, k, k]
             weight_flat = weight.view(weight.size(0), -1)  # [C_out, ...]
             weight_norm = weight_flat.norm(dim=1).numpy().astype(np.float64) ** 2
+            rq_equiv = None
+            rq_exact = None
             # If we used post-BN activations as Y, fold the BN scale into the denominator so
             # RQ remains comparable to the pre-BN definition (since Var(BN(y)) scales by gamma^2/rv).
             if activation_point in {"post_bn", "postbn", "bn"}:
@@ -670,20 +853,44 @@ class ClusterAnalysisExperiment:
                         eps = float(getattr(bn, "eps", 1e-5))
                         scale_sq = (gamma[:n_channels] ** 2) / (rv[:n_channels] + eps)
                         denom = (weight_norm[:n_channels] * scale_sq) + 1e-10
-                        rq = var_y / denom
+                        rq_equiv = var_y / denom
                     except Exception:
-                        rq = var_y / (weight_norm[:n_channels] + 1e-10)
+                        denom = (weight_norm[:n_channels] + 1e-10)
+                        rq_equiv = var_y / denom
                 else:
-                    rq = var_y / (weight_norm[:n_channels] + 1e-10)
+                    denom = (weight_norm[:n_channels] + 1e-10)
+                    rq_equiv = var_y / denom
             else:
-                rq = var_y / (weight_norm[:n_channels] + 1e-10)
-            metrics["rq"] = rq.astype(np.float64)
+                denom = (weight_norm[:n_channels] + 1e-10)
+                rq_equiv = var_y / denom
+
+            # Optional explicit Eq. 1 path (covariance_exact): use projected sampled inputs.
+            if rq_exact_active:
+                acc_exact = accs_rq_exact.get(name)
+                if acc_exact is not None and acc_exact.n >= 2:
+                    var_y_exact = acc_exact.variance()[:n_channels]
+                    rq_exact = (var_y_exact / denom).astype(np.float64)
+
+            rq_to_use = rq_equiv
+            if rq_definition in {"covariance_exact", "both"} and rq_exact is not None:
+                rq_to_use = rq_exact
+            elif rq_definition in {"covariance_exact", "both"} and rq_exact is None:
+                logger.warning(
+                    "Layer %s: covariance_exact RQ unavailable; falling back to equivalent_streaming for this layer.",
+                    name,
+                )
+
+            metrics["rq"] = np.asarray(rq_to_use, dtype=np.float64)
+            metrics["rq_equivalent"] = np.asarray(rq_equiv, dtype=np.float64)
+            if rq_exact is not None:
+                metrics["rq_exact"] = np.asarray(rq_exact, dtype=np.float64)
+                metrics["rq_abs_diff"] = np.abs(metrics["rq_exact"] - metrics["rq_equivalent"]).astype(np.float64)
             metrics["weight_norm_sq"] = weight_norm[:n_channels].astype(np.float64)
             metrics["activation_var"] = var_y[:n_channels].astype(np.float64)
 
             # 1b) Input MI proxy (scale-sensitive): 0.5 * log(1 + RQ * ||w||^2 / sigma0^2)
             # We use a per-layer reference sigma0^2 to make the proxy comparable across depth.
-            signal_power = (rq * weight_norm[:n_channels]).astype(np.float64)
+            signal_power = (metrics["rq"] * weight_norm[:n_channels]).astype(np.float64)
             sigma0_sq = float(np.median(signal_power)) + 1e-12
             metrics["mi_in_proxy"] = (0.5 * np.log1p(signal_power / sigma0_sq)).astype(np.float64)
 
@@ -783,6 +990,12 @@ class ClusterAnalysisExperiment:
                 }
 
             self.layer_metrics[name] = metrics
+            if "rq_exact" in metrics:
+                try:
+                    mae = float(np.mean(np.abs(metrics["rq_exact"] - metrics["rq_equivalent"])))
+                    logger.info("    %s: RQ exact/equivalent mean abs diff = %.3e", name, mae)
+                except Exception:
+                    pass
             logger.info(
                 "  %s: %d channels (mode=%s, n_samples=%d)",
                 name,

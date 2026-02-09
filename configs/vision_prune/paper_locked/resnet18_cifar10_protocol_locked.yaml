@@ -95,6 +95,7 @@ metrics:
   rayleigh_quotient:
     enabled: true
     relative: false  # Standard Rayleigh quotient (no trace-normalization)
+    definition: both
     shrinkage: true
   
   redundancy:

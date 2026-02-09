@@ -67,6 +67,7 @@ metrics:
   rayleigh_quotient:
     enabled: true
     relative: false
+    definition: both
     shrinkage: true
 
   redundancy:

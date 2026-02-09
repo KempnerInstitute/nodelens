@@ -75,12 +75,23 @@ class MetricSpaceClustering:
         self.n_clusters = n_clusters
         self.seed = seed
         mode = str(type_mapping_mode or "greedy").lower()
-        # Backward-compatibility: accept older config values but normalize them.
+        # Backward-compatibility:
+        #   - "global" keeps historical penalized global assignment
+        #   - "global_permutation" aliases to "global_penalized"
         if mode in {"global", "global_permutation"}:
-            mode = "global"
+            mode = "global_penalized"
+        elif mode in {"global_simple", "simple"}:
+            mode = "global_simple"
+        elif mode in {"global_prototype", "prototype"}:
+            mode = "global_prototype"
         else:
             mode = "greedy"
-        self.type_mapping_mode: Literal["global", "greedy"] = mode  # type: ignore[assignment]
+        self.type_mapping_mode: Literal[
+            "greedy",
+            "global_penalized",
+            "global_simple",
+            "global_prototype",
+        ] = mode  # type: ignore[assignment]
 
     def fit(
         self, 
@@ -267,57 +278,21 @@ class MetricSpaceClustering:
                 m[j] = "background"
         return m
 
-    def _types(self, c, metrics_used: Tuple[bool, bool, bool] = (True, True, True)):
+    def _solve_global_assignment(self, scores: np.ndarray) -> Dict[int, str]:
         """
-        Assign cluster types based on centroids.
-        
+        Solve one-to-one cluster->type assignment by maximizing total score.
+
         Args:
-            c: Cluster centroids [n_clusters, 3] (columns: log_rq, red, syn)
-            metrics_used: Which metrics are available (rq, red, syn)
-        
-        Returns:
-            Dict mapping cluster_id to type name
+            scores: [n_clusters, 4] score matrix for
+                [critical, redundant, synergistic, background].
         """
-        if self.type_mapping_mode == "greedy":
-            return self._types_greedy(c)
-
-        use_rq, use_red, use_syn = metrics_used
-        
-        if len(c) < 4:
-            return {i: "unknown" for i in range(len(c))}
-
-        # Global, one-to-one assignment to avoid "label swapping" artifacts:
-        # pick the assignment of cluster->type that maximizes total score over 4 types.
-        #
-        # `c` is in the *standardized* feature space used for clustering, so linear
-        # scoring is meaningful and scale-stable.
         import itertools
 
-        w_rq = 1.0 if use_rq else 0.0
-        w_red = 1.0 if use_red else 0.0
-        w_syn = 1.0 if use_syn else 0.0
-
-        # Score each cluster for each semantic type.
-        # Types are intended to be "extremes" along the (rq, red, syn) axes.
-        scores = np.zeros((len(c), 4), dtype=np.float64)
-        # critical: high rq, low red (syn is not part of the definition)
-        scores[:, 0] = (w_rq * c[:, 0]) - (w_red * c[:, 1])
-        # redundant: high redundancy (mild penalty for also being high-rq)
-        scores[:, 1] = (w_red * c[:, 1]) - (0.25 * w_rq * c[:, 0])
-        # synergistic: high synergy (mild penalty for also being high-red)
-        scores[:, 2] = (w_syn * c[:, 2]) - (0.25 * w_red * c[:, 1])
-        # background: close-to-origin / low-magnitude across used metrics
-        scores[:, 3] = -(
-            (w_rq * np.abs(c[:, 0]))
-            + (w_red * np.abs(c[:, 1]))
-            + (w_syn * np.abs(c[:, 2]))
-        )
-
         type_names = ["critical", "redundant", "synergistic", "background"]
-
+        n = int(scores.shape[0])
         best = None
         best_score = -1e30
-        n = int(len(c))
+
         # Enumerate nP4 assignments (n is small in practice; defaults to 4).
         for perm in itertools.permutations(range(n), 4):
             s = (
@@ -339,5 +314,127 @@ class MetricSpaceClustering:
         for j in range(n):
             if int(j) not in mapping:
                 mapping[int(j)] = "background"
-
         return mapping
+
+    def _scores_global_penalized(
+        self,
+        c: np.ndarray,
+        metrics_used: Tuple[bool, bool, bool],
+    ) -> np.ndarray:
+        """
+        Historical global scoring with mild cross-metric penalties.
+        Kept for backward-compatible paper reproduction.
+        """
+        use_rq, use_red, use_syn = metrics_used
+        w_rq = 1.0 if use_rq else 0.0
+        w_red = 1.0 if use_red else 0.0
+        w_syn = 1.0 if use_syn else 0.0
+
+        scores = np.zeros((len(c), 4), dtype=np.float64)
+        # critical: high rq, low red
+        scores[:, 0] = (w_rq * c[:, 0]) - (w_red * c[:, 1])
+        # redundant: high red (with mild penalty for high rq)
+        scores[:, 1] = (w_red * c[:, 1]) - (0.25 * w_rq * c[:, 0])
+        # synergistic: high syn (with mild penalty for high red)
+        scores[:, 2] = (w_syn * c[:, 2]) - (0.25 * w_red * c[:, 1])
+        # background: close to origin
+        scores[:, 3] = -(
+            (w_rq * np.abs(c[:, 0]))
+            + (w_red * np.abs(c[:, 1]))
+            + (w_syn * np.abs(c[:, 2]))
+        )
+        return scores
+
+    def _scores_global_simple(
+        self,
+        c: np.ndarray,
+        metrics_used: Tuple[bool, bool, bool],
+    ) -> np.ndarray:
+        """
+        Definition-aligned simple scoring (no cross-metric penalty weights).
+        """
+        use_rq, use_red, use_syn = metrics_used
+        w_rq = 1.0 if use_rq else 0.0
+        w_red = 1.0 if use_red else 0.0
+        w_syn = 1.0 if use_syn else 0.0
+
+        scores = np.zeros((len(c), 4), dtype=np.float64)
+        # critical: high rq, low red
+        scores[:, 0] = (w_rq * c[:, 0]) - (w_red * c[:, 1])
+        # redundant: maximize redundancy
+        scores[:, 1] = w_red * c[:, 1]
+        # synergistic: maximize synergy
+        scores[:, 2] = w_syn * c[:, 2]
+        # background: low magnitude in active metric dimensions
+        scores[:, 3] = -(
+            (w_rq * np.abs(c[:, 0]))
+            + (w_red * np.abs(c[:, 1]))
+            + (w_syn * np.abs(c[:, 2]))
+        )
+        return scores
+
+    def _scores_global_prototype(
+        self,
+        c: np.ndarray,
+        metrics_used: Tuple[bool, bool, bool],
+    ) -> np.ndarray:
+        """
+        Parameter-free prototype matching in (log_rq, red, syn) space using cosine similarity.
+        """
+        use_rq, use_red, use_syn = metrics_used
+        mask = np.array(
+            [
+                1.0 if use_rq else 0.0,
+                1.0 if use_red else 0.0,
+                1.0 if use_syn else 0.0,
+            ],
+            dtype=np.float64,
+        )
+
+        # [critical, redundant, synergistic, background]
+        prototypes = np.array(
+            [
+                [1.0, -1.0, 0.0],   # high rq, low red
+                [0.0, 1.0, -1.0],   # high red, low syn
+                [0.0, -1.0, 1.0],   # high syn, low red
+                [-1.0, -1.0, -1.0], # low on all
+            ],
+            dtype=np.float64,
+        )
+        prototypes = prototypes * mask[None, :]
+        proto_norm = np.linalg.norm(prototypes, axis=1, keepdims=True) + 1e-8
+        prototypes = prototypes / proto_norm
+
+        cent = np.asarray(c, dtype=np.float64) * mask[None, :]
+        cent_norm = np.linalg.norm(cent, axis=1, keepdims=True) + 1e-8
+        cent = cent / cent_norm
+
+        # Maximize cosine similarity.
+        return cent @ prototypes.T
+
+    def _types(self, c, metrics_used: Tuple[bool, bool, bool] = (True, True, True)):
+        """
+        Assign cluster types based on centroids.
+
+        Args:
+            c: Cluster centroids [n_clusters, 3] (columns: log_rq, red, syn)
+            metrics_used: Which metrics are available (rq, red, syn)
+
+        Returns:
+            Dict mapping cluster_id to type name
+        """
+        if self.type_mapping_mode == "greedy":
+            return self._types_greedy(c)
+
+        if len(c) < 4:
+            return {i: "unknown" for i in range(len(c))}
+
+        if self.type_mapping_mode == "global_simple":
+            scores = self._scores_global_simple(c, metrics_used)
+        elif self.type_mapping_mode == "global_prototype":
+            scores = self._scores_global_prototype(c, metrics_used)
+        else:
+            # Includes backward-compatible alias "global" normalized to "global_penalized".
+            scores = self._scores_global_penalized(c, metrics_used)
+
+        return self._solve_global_assignment(scores)
