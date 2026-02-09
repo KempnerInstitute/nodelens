@@ -1,0 +1,612 @@
+# =============================================================================
+# ResNet-18 on CIFAR-10 - UNIFIED FORMAT (ENHANCED)
+# =============================================================================
+# Full cluster analysis pipeline for ResNet-18 on CIFAR-10 with comprehensive
+# evaluation, benchmarks, and analysis sections for vision pruning research.
+#
+# Key features:
+# - Uses unified metric naming (rayleigh_quotient, redundancy, synergy, magnitude)
+# - Comprehensive evaluation metrics (accuracy, efficiency, per-class)
+# - Full visualization pipeline for paper figures
+# - Layer-wise sensitivity analysis
+#
+# Usage: python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_unified.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXPERIMENT
+# -----------------------------------------------------------------------------
+experiment:
+  name: "resnet18_cifar10_cluster_analysis"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision/resnet18_cifar10"
+
+# -----------------------------------------------------------------------------
+# MODEL
+# -----------------------------------------------------------------------------
+model:
+  name: "resnet18"
+  pretrained: true
+  num_classes: 10
+
+# -----------------------------------------------------------------------------
+# DATASET
+# -----------------------------------------------------------------------------
+dataset:
+  name: "cifar10"
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+# -----------------------------------------------------------------------------
+# TRAINING (paper-quality CIFAR baselines)
+# -----------------------------------------------------------------------------
+# NOTE: This trains/fine-tunes the model on CIFAR-10 before running the metric/cluster/pruning analyses.
+training:
+  enabled: true
+  epochs: 50
+  learning_rate: 0.05
+  optimizer: "sgd"
+  scheduler: "cosine"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+# -----------------------------------------------------------------------------
+# CALIBRATION
+# -----------------------------------------------------------------------------
+calibration:
+  num_samples: 5000
+
+# -----------------------------------------------------------------------------
+# METRICS
+# -----------------------------------------------------------------------------
+# Unified naming convention:
+#   rayleigh_quotient (alias: rq, compute_rq)
+#   redundancy (alias: gaussian_mi_analytic, average_redundancy, pairwise_redundancy)
+#   synergy (alias: synergy_gaussian_mmi)
+#   magnitude (alias: activation_l2_norm)
+# -----------------------------------------------------------------------------
+metrics:
+  # Where to read activations for within-layer statistics:
+  # - pre_bn: Conv output before BatchNorm (matches Jan-20 behaviour, best pruning performance)
+  # - post_bn: BatchNorm output before ReLU (matches what downstream layers consume, but worse pruning)
+  activation_point: "pre_bn"
+  # How to sample activations for task-level metrics (TaskMI, synergy):
+  # - match: use same spatial samples as local metrics (matches Jan-20 behaviour)
+  # - gap: use global-average-pooled per-image samples (avoids pseudo-replication, slightly worse pruning)
+  task_activation_samples: "match"
+  # Optional: compute per-channel Fisher/Gauss-Newton loss proxy on calibration data.
+  # This is used for the "importance prediction" analysis blocks in the paper.
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 1024
+  # Optional: within-layer connectivity summaries (for within-layer organization analyses)
+  within_layer_connectivity: true
+  within_layer_red_topk: 20
+  within_layer_syn_topk: 10
+  # Optimization options for faster metric computation
+  optimization:
+    use_jit: false                 # Enable JIT-compiled computations (20-50% faster)
+    use_gpu_acceleration: false    # Enable GPU-accelerated functions
+    force_cpu_for_large_ops: true  # Prevent OOM for large covariance matrices
+    cpu_threshold: 100000000       # 1e8 elements threshold
+  
+  rayleigh_quotient:
+    enabled: true
+    relative: false  # Standard Rayleigh quotient (no trace-normalization)
+    shrinkage: true
+  
+  redundancy:
+    enabled: true
+    sampling: "all"  # all, random, top_k
+  
+  synergy:
+    enabled: true
+    target: "logit_margin"  # logit_margin, correct_logit, logit_pc1
+    num_pairs: 10
+    sampling: "top_k"
+  
+  magnitude:
+    enabled: true
+  
+  taylor:
+    enabled: true
+    criterion: "gradient_weight"  # gradient_weight, gradient_activation
+  
+  activation_sparsity:
+    enabled: true
+    threshold: 0.01
+  
+  # Composite weights for combined scoring
+  composite_weights:
+    rayleigh_quotient: 0.33
+    redundancy: -0.33  # Negative = penalize redundancy
+    synergy: 0.33
+
+# -----------------------------------------------------------------------------
+# CLUSTERING
+# -----------------------------------------------------------------------------
+clustering:
+  enabled: true
+  n_clusters: 4
+  type_names: ["critical", "redundant", "synergistic", "background"]
+  normalize_features: true
+  features: ["rayleigh_quotient", "redundancy", "synergy"]
+  
+  stability_enabled: true
+  n_bootstrap: 50
+  
+  # Metric ablation study: validate each metric's contribution
+  # Clusters using subsets of metrics and compares to full 3-metric clustering
+  ablation:
+    enabled: true
+    # Which ablation modes to run (all = full 3 metrics, rq_red = RQ+Redundancy, etc.)
+    modes: ["all", "rq_red", "rq_syn", "red_syn"]
+
+# -----------------------------------------------------------------------------
+# HALO ANALYSIS (Cross-layer dependencies)
+# -----------------------------------------------------------------------------
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  use_activation_weight: true
+  compute_influence_matrix: true
+  
+  # Permutation baseline: shuffle cluster labels to establish null distribution
+  # Tests whether observed halo effects are statistically significant
+  permutation_baseline:
+    enabled: true
+    n_permutations: 100  # Number of random permutations
+
+# -----------------------------------------------------------------------------
+# CASCADE ANALYSIS (Damage testing)
+# -----------------------------------------------------------------------------
+cascade_analysis:
+  enabled: true
+  n_remove_per_group: 5
+  damage_sample_fraction: 0.2
+
+# -----------------------------------------------------------------------------
+# MULTI-SEED EXPERIMENT
+# -----------------------------------------------------------------------------
+# Run experiment with multiple random seeds for robust statistics (mean ± std)
+multi_seed:
+  enabled: true
+  seeds: [42, 123, 456, 789, 1000]  # 5 seeds for good statistics
+
+# -----------------------------------------------------------------------------
+# PRUNING - Comprehensive testing of all metrics
+# -----------------------------------------------------------------------------
+# This tests individual metrics and combinations to validate basic assumptions
+# about what makes channels important in CNNs vs what works for LLMs.
+#
+# Key questions to answer:
+# 1. Do low-RQ channels safely prune? (rq_low)
+# 2. Is high redundancy bad (redundancy_high) or good (redundancy_low)?
+# 3. Does synergy matter for CNNs?
+# 4. What combinations work best?
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  distribution: "global_threshold"   # uniform, global_threshold, size_proportional, importance_weighted
+  dependency_aware: true             # Propagate masks through BN/skip connections
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  # Optional: per-layer safety cap for global-threshold style distributions.
+  # Set to 1.0 to disable (legacy behavior); set to e.g. 0.90 to limit per-layer sparsity.
+  max_per_layer_sparsity_cap: 1.0
+  # Include high sparsity (80%, 90%) to clearly see degradation
+  ratios: [0.1, 0.3, 0.4, 0.5, 0.7, 0.8, 0.9, 0.95]
+  
+  # COMPREHENSIVE ALGORITHM LIST for exploration
+  algorithms:
+    # =========================================================================
+    # BASELINES
+    # =========================================================================
+    - "random"              # Random baseline
+    - "magnitude"           # Standard magnitude pruning (prune low)
+    - "activation_mean"     # Mean |activation| baseline
+    - "taylor"              # Gradient-based importance
+    - "network_slimming"    # Network Slimming (BN gamma) baseline
+    - "geometric_median"    # FPGM-style geometric median baseline
+    - "hrank"               # HRank feature-rank baseline
+    
+    # =========================================================================
+    # SINGLE METRICS - Prune LOW (assumes low = unimportant)
+    # =========================================================================
+    - "rq_low"              # Prune low Rayleigh Quotient
+    - "mi_low"              # Prune low MI = 0.5*log(1 + RQ*||w||^2) 
+    - "redundancy_low"      # Prune low redundancy
+    - "synergy_low"         # Prune low synergy
+    - "lp_low"              # Prune low loss-proxy (Fisher importance)
+    # Controls: prune HIGH (opposite direction)
+    - "rq_high"             # Prune high RQ (keep low RQ)
+    - "mi_high"             # Prune high MI
+    - "redundancy_high"     # Prune high redundancy (standard approach)
+    - "synergy_high"        # Prune high synergy
+    - "lp_high"             # Prune high loss-proxy (should be catastrophically bad; sanity check)
+    
+    # =========================================================================
+    # COMPOSITE COMBINATIONS
+    # =========================================================================
+    - "composite"           # Original: score = RQ + syn - red (prune low)
+    - "composite_pos_red"   # Flipped: score = RQ + syn + red (prune low)
+    - "rq_minus_red"        # score = RQ - redundancy
+    - "rq_plus_red"         # score = RQ + redundancy
+    - "magnitude_plus_rq"   # score = magnitude + RQ
+    - "magnitude_minus_red" # score = magnitude - redundancy
+    - "magnitude_plus_red"  # score = magnitude + redundancy
+    
+    # =========================================================================
+    # CLUSTER-AWARE
+    # =========================================================================
+    - "cluster_aware"               # Pure cluster-aware (no Taylor blending)
+    - "cluster_aware_annealed"      # Annealed: Taylor at low sparsity, CA at high
+    - "cluster_aware_taylor_blend"  # Constant Taylor blend (not sparsity-dependent)
+    - "cluster_aware_depth_adaptive" # Per-layer adaptive weights (early=conservative)
+    - "cluster_aware_gradient_weighted"  # Generalized Taylor: gradient-weight the CA score
+    - "cluster_aware_protect_redundant"  # Ablation: inverted priority
+    
+    # =========================================================================
+    # TAYLOR-WEIGHTED METRICS (simple combinations)
+    # =========================================================================
+    - "taylor_rq"                   # sqrt(Taylor * RQ) - unique AND loss-sensitive
+    - "taylor_redundancy"           # sqrt(Taylor * -redundancy) - non-redundant AND loss-sensitive
+    - "taylor_synergy"              # sqrt(Taylor * synergy) - synergistic AND loss-sensitive
+    
+    # =========================================================================
+    # GENERALIZED TAYLOR (analytically-motivated combinations)
+    # =========================================================================
+    - "rq_weighted_taylor"          # Taylor × log(RQ): loss-sensitive AND unique
+    - "redundancy_discounted_taylor" # Taylor / (1 + β·redundancy): discount redundant
+    - "synergy_boosted_taylor"      # Taylor × (1 + γ·synergy): boost cooperative
+    - "structural_taylor"           # |∂L/∂a| × structural_score: gradient × structure
+    - "metric_gated_taylor"         # Taylor × gate(structural_score[, cluster_type])
+    - "mi_taylor"                   # Taylor × MI(channel, task): loss-sensitive AND informative
+    - "cluster_type_taylor"         # Taylor × type_multiplier: cluster-weighted gradient
+    - "taylor_optimal_combo"        # Learn: w_t·Taylor + w_rq·RQ + w_r·(-red) + w_s·syn
+    
+    # =========================================================================
+    # ADVANCED METHODS
+    # =========================================================================
+    - "lp_with_constraints"        # Rank by LP, but enforce type-based protection/constraints
+    - "type_quota_taylor"          # Rank by Taylor, but enforce type-based protection/constraints
+    - "outred_with_constraints"    # Prune high outgoing-overlap (replaceable routing) with type constraints
+    - "cluster_aware_halo_lp"      # Cluster-aware, but use HaloLP (importance propagation) as halo term
+    - "cluster_aware_bottleneck_protect" # Cluster-aware + protect high-bottleneck channels (routing tail)
+    - "lp_optimal"                  # Learn optimal weights from LP correlation
+    - "cluster_structure"           # Use cluster membership in scoring (not just selection)
+  
+  scoring_methods:
+    - "random"
+    - "magnitude"
+    - "network_slimming"
+    - "geometric_median"
+    - "hrank"
+    - "rq_low"
+    - "rq_high"
+    - "redundancy_low"
+    - "redundancy_high"
+    - "synergy_low"
+    - "composite"
+    - "composite_pos_red"
+  
+  # =========================================================================
+  # CLUSTER-AWARE METHOD CONFIGURATION
+  # All cluster_aware* methods share these base settings
+  # =========================================================================
+  cluster_aware:
+    # --- Base score weights (for pure cluster_aware) ---
+    alpha: 1.0              # Weight for log(RQ) - channel uniqueness
+    beta: 0.5               # Weight for synergy - task cooperation
+    gamma: 0.3              # Weight for redundancy penalty
+    lambda_halo: 0.5        # Weight for halo-synergy (cross-layer importance)
+    protect_critical_frac: 0.3  # Fraction of critical channels to protect absolutely
+    
+    # --- Annealing settings (for cluster_aware_annealed) ---
+    # At sparsity < anneal_start: use pure Taylor
+    # At sparsity > anneal_end: use pure cluster-aware
+    # In between: linear blend
+    anneal_start: 0.50      # Default: start blending at 50% sparsity
+    anneal_end: 0.80        # Default: full CA at 80% sparsity
+    
+    # --- Taylor blend (for cluster_aware_taylor_blend) ---
+    # Constant blend: score = (1-w)*CA + w*Taylor
+    taylor_weight: 0.3      # 30% Taylor, 70% cluster-aware (constant across sparsities)
+    
+    # --- Depth-adaptive settings (for cluster_aware_depth_adaptive) ---
+    # Early layers are typically more sensitive; use more conservative weights
+    depth_adaptive: true    # Enable depth-adaptive weight adjustment
+    early_layer_frac: 0.3   # First 30% of layers = "early"
+    early_alpha: 1.5        # Higher RQ weight in early layers (protect unique more)
+    early_gamma: 0.1        # Lower redundancy penalty in early layers (less aggressive)
+    late_alpha: 0.8         # Lower RQ weight in late layers (can be more aggressive)
+    late_gamma: 0.5         # Higher redundancy penalty in late layers
+
+  # =========================================================================
+  # GENERALIZED TAYLOR METHOD CONFIGURATION
+  # Controls rq_weighted_taylor / structural_taylor / metric_gated_taylor / etc.
+  # Exposed here so runs are fully config-driven and reproducible.
+  # =========================================================================
+  generalized_taylor:
+    weight_rq: 1.0
+    weight_redundancy: 0.3
+    weight_synergy: 0.5
+    gradient_exponent: 1.0
+    activation_exponent: 1.0
+    redundancy_discount_beta: 1.0
+    synergy_boost_gamma: 0.5
+    critical_multiplier: 1.5
+    redundant_multiplier: 0.5
+    synergistic_multiplier: 1.2
+    background_multiplier: 0.8
+    gate_mode: "sigmoid"
+    gate_temperature: 6.0
+    gate_bias: 0.5
+    gate_eps: 0.05
+    gate_min: 0.0
+    gate_include_cluster_multiplier: true
+    # Numerical stability
+    rq_log_eps: 1.0e-10
+    structural_eps: 0.1
+    grad_over_act_eps: 1.0e-8
+    lp_optimal_l2_reg: 0.01
+
+  fine_tune:
+    enabled: true  # Enable recovery fine-tuning after pruning (standard for reporting)
+    epochs: 5
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+    # Safety cap: limits fine-tune compute so the full method×ratio grid stays feasible on 1 GPU
+    max_batches: 200
+
+# -----------------------------------------------------------------------------
+# EVALUATION (Enhanced for Vision)
+# -----------------------------------------------------------------------------
+evaluation:
+  enabled: true
+  
+  # Classification metrics
+  accuracy: true
+  top1_accuracy: true
+  top5_accuracy: true
+  loss: true
+  
+  # Per-class analysis
+  per_class_accuracy: true
+  confusion_matrix: true
+  
+  # Calibration metrics
+  calibration_enabled: true
+  expected_calibration_error: true
+  reliability_diagram: true
+  
+  # Efficiency metrics
+  compute_flops: true
+  compute_params: true
+  compute_memory: true
+  measure_latency: true
+  latency_batch_sizes: [1, 8, 32, 128]
+  
+  # Robustness (optional - requires corruption data)
+  robustness_enabled: false
+  corruption_types: ["gaussian_noise", "shot_noise", "impulse_noise", "gaussian_blur", "contrast", "brightness"]
+  corruption_severities: [1, 3, 5]
+  
+  # Transfer evaluation (optional)
+  transfer_enabled: false
+  transfer_datasets: ["cifar100", "svhn"]
+
+# -----------------------------------------------------------------------------
+# BENCHMARKS (Vision-specific)
+# -----------------------------------------------------------------------------
+benchmarks:
+  enabled: true
+  
+  # Standard test benchmarks
+  tasks:
+    - name: "cifar10_test"
+      dataset: "cifar10"
+      split: "test"
+      enabled: true
+    
+    - name: "cifar100_transfer"
+      dataset: "cifar100"
+      split: "test"
+      enabled: false
+  
+  # Inference benchmarks
+  inference:
+    warmup_iterations: 10
+    benchmark_iterations: 100
+    batch_sizes: [1, 8, 32, 128]
+    devices: ["cuda"]
+  
+  # Adversarial robustness (optional)
+  adversarial:
+    enabled: false
+    attacks: ["fgsm", "pgd"]
+    epsilons: [0.01, 0.03, 0.1]
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION (Enhanced)
+# -----------------------------------------------------------------------------
+visualization:
+  enabled: true
+  format: "pdf"  # pdf for paper quality
+  dpi: 300
+  style: "seaborn-v0_8-paper"
+  
+  # Basic plots
+  histograms: true
+  violin_plots: true
+  correlation_heatmap: true
+  cluster_scatter: true
+  cluster_evolution: true
+  influence_matrix: true
+  halo_properties: true
+  pruning_comparison: true
+  pruning_recovery: true
+  cascade_test: true
+  
+  # Additional analysis plots
+  metric_distributions: true
+  layer_importance_heatmap: true
+  sensitivity_curves: true
+  efficiency_tradeoffs: true
+  
+  # Scatter plot pairs (unified naming)
+  scatter_pairs:
+    - ["rayleigh_quotient", "redundancy"]
+    - ["rayleigh_quotient", "synergy"]
+    - ["redundancy", "synergy"]
+    - ["magnitude", "rayleigh_quotient"]
+    - ["magnitude", "taylor"]
+    - ["taylor", "rayleigh_quotient"]
+
+# -----------------------------------------------------------------------------
+# OUTPUT
+# -----------------------------------------------------------------------------
+# Uses job directory structure: creates unique folders for each run
+# Directory format: {base_dir}/{experiment_name}_{timestamp}_{job_id}/
+output:
+  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+  dir: "./results/vision/resnet18_cifar10"
+  save_metrics: true
+  save_clusters: true
+  save_figures: true
+  save_checkpoints: true
+  save_per_layer: true
+
+# -----------------------------------------------------------------------------
+# EXTRA (Vision-specific detailed settings)
+# -----------------------------------------------------------------------------
+extra:
+  # Pre-training for ImageNet pretrained models on CIFAR
+  # Train until model achieves ~90% accuracy on CIFAR-10
+  pretrain_epochs: 30
+  pretrain_lr: 0.001
+  
+  # Baselines to compare against
+  baselines:
+    - "magnitude"
+    - "taylor"
+    - "network_slimming"
+    - "geometric_median"
+  
+  # Layer-wise analysis
+  analysis:
+    layer_indices: "all"  # or specific: [0, 2, 4, 6, 8]
+    save_scores: true
+    generate_plots: true
+    
+    # Metrics to compute per layer
+    metrics:
+      - "rayleigh_quotient"
+      - "redundancy"
+      - "synergy"
+      - "magnitude"
+      - "taylor"
+      - "activation_sparsity"
+    
+    # Plots to generate
+    plots:
+      histograms: true
+      scatter_plots: true
+      pruning_curves: true
+      layer_comparison: true
+      filter_correlation: true
+    
+    scatter_pairs:
+      - ["rayleigh_quotient", "redundancy"]
+      - ["rayleigh_quotient", "synergy"]
+      - ["magnitude", "taylor"]
+      - ["redundancy", "synergy"]
+  
+  # Pruning sensitivity analysis
+  sensitivity_analysis:
+    enabled: true
+    per_layer: true
+    ratios: [0.1, 0.2, 0.3, 0.4, 0.5]
+    metric: "accuracy"
+    output_dir: "sensitivity"
+  
+  # Structured pruning options
+  structured_pruning:
+    enabled: true
+    granularity: "filter"  # filter, channel, block
+    importance_criteria:
+      - "l1_norm"
+      - "l2_norm"
+      - "taylor"
+      - "alignment"
+  
+  # Feature analysis
+  feature_analysis:
+    enabled: true
+    compute_feature_rank: true
+    compute_channel_redundancy: true
+    visualize_filters: false  # Set true for filter visualization (slow)
+    num_samples_to_visualize: 10
+  
+  # Efficiency tracking
+  efficiency:
+    track_flops: true
+    track_params: true
+    track_memory: true
+    track_latency: true
+    baseline_comparison: true
+  
+  # Paper figure generation
+  visualization:
+    save_plots: true
+    format: "pdf"
+    dpi: 300
+    style: "seaborn-v0_8-paper"
+    
+    # Figure 1: Metric distributions by layer
+    metric_distributions:
+      enabled: true
+      by_layer: true
+      by_cluster: true
+      
+    # Figure 2: Cluster analysis
+    cluster_analysis:
+      enabled: true
+      scatter_3d: true
+      cluster_evolution_by_layer: true
+      cluster_purity: true
+      
+    # Figure 3: Pruning comparison
+    pruning_comparison:
+      enabled: true
+      accuracy_vs_sparsity: true
+      accuracy_vs_flops: true
+      accuracy_vs_params: true
+      methods_to_compare:
+        - "random"
+        - "magnitude"
+        - "taylor"
+        - "composite"
+        - "cluster_aware"
+        - "network_slimming"
+      
+    # Figure 4: Layer-wise importance
+    layer_importance:
+      enabled: true
+      heatmap: true
+      bar_chart: true
+      
+    # Figure 5: Recovery after fine-tuning
+    fine_tuning_recovery:
+      enabled: true
+      by_method: true
+      by_sparsity: true
+      
+    # Figure 6: Efficiency vs Accuracy tradeoffs
+    efficiency_tradeoffs:
+      enabled: true
+      accuracy_vs_flops: true
+      accuracy_vs_latency: true
+      accuracy_vs_params: true

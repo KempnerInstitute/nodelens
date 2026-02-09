@@ -1,0 +1,156 @@
+# =============================================================================
+# AlexNet on ImageNet-100 - UNIFIED FORMAT (FAST PRUNING SWEEP)
+# =============================================================================
+# This config is identical to alexnet_imagenet100_unified.yaml except:
+# - Pruning fine-tuning is capped per epoch via `max_batches` to ensure the full
+#   (methods × sparsity) sweep completes within typical 4h SLURM walltimes.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXPERIMENT
+# -----------------------------------------------------------------------------
+experiment:
+  name: "alexnet_imagenet100_cluster_analysis"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision/alexnet_imagenet100"
+
+# -----------------------------------------------------------------------------
+# MODEL
+# -----------------------------------------------------------------------------
+model:
+  name: "alexnet"
+  pretrained: true
+  num_classes: 100
+
+# -----------------------------------------------------------------------------
+# DATASET
+# -----------------------------------------------------------------------------
+dataset:
+  name: "imagenet100"
+  root: "./data/imagenet100"
+  batch_size: 128
+  num_workers: 8
+  image_size: 224
+  normalize: true
+
+# -----------------------------------------------------------------------------
+# TRAINING (classifier head is replaced for ImageNet-100)
+# -----------------------------------------------------------------------------
+training:
+  enabled: true
+  epochs: 20
+  learning_rate: 0.001
+  optimizer: "adam"
+  scheduler: "cosine"
+  weight_decay: 0.0001
+
+# -----------------------------------------------------------------------------
+# CALIBRATION
+# -----------------------------------------------------------------------------
+calibration:
+  num_samples: 5000
+
+# -----------------------------------------------------------------------------
+# METRICS
+# -----------------------------------------------------------------------------
+metrics:
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
+  optimization:
+    use_jit: false
+    use_gpu_acceleration: false
+    force_cpu_for_large_ops: true
+    cpu_threshold: 100000000
+
+  rayleigh_quotient:
+    enabled: true
+    relative: false
+    shrinkage: true
+
+  redundancy:
+    enabled: true
+    sampling: "all"
+
+  synergy:
+    enabled: true
+    target: "logit_margin"
+    num_pairs: 10
+    sampling: "top_k"
+
+  magnitude:
+    enabled: true
+
+  taylor:
+    enabled: true
+    criterion: "gradient_weight"
+
+# -----------------------------------------------------------------------------
+# CLUSTERING
+# -----------------------------------------------------------------------------
+clustering:
+  n_clusters: 4
+  method: "kmeans"
+  features:
+    - "log_rq"
+    - "redundancy"
+    - "synergy"
+  standardize: true
+  assign_types: true
+  type_mapping_strategy: "centroid_ranking"
+
+# -----------------------------------------------------------------------------
+# HALO ANALYSIS
+# -----------------------------------------------------------------------------
+halo_analysis:
+  enabled: true
+  threshold_percentile: 90
+  influence_type: "activation_weighted"
+  skip_residual_edges: false
+
+# -----------------------------------------------------------------------------
+# PRUNING
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  methods:
+    - random
+    - magnitude
+    - activation_mean
+    - taylor
+    - network_slimming
+    - geometric_median
+    - hrank
+    - composite
+    - cluster_aware
+    - cluster_aware_annealed
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
+  distribution: "uniform"
+  dependency_aware: false
+  min_per_layer: 0.0
+  max_per_layer: 0.90
+  fine_tuning:
+    enabled: true
+    # Key speed knob: limit per-epoch batches so the sweep finishes within walltime.
+    max_batches: 200
+    epochs: 5
+    learning_rate: 0.001
+    optimizer: "adam"
+    scheduler: "cosine"
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION
+# -----------------------------------------------------------------------------
+visualization:
+  enabled: true
+  save_format: "png"
+  dpi: 150
+  generate:
+    - metric_distributions
+    - cluster_scatter
+    - cluster_evolution
+    - halo_influence_matrix
+    - pruning_curves
+    - cascade_damage
+
