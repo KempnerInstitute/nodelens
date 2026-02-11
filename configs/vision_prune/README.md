@@ -83,6 +83,25 @@ pruning:
     - cluster_aware             # Full cluster + halo aware
 ```
 
+### Type-aware fine-tuning (optional)
+```yaml
+pruning:
+  methods:
+    - cluster_aware
+    - cluster_aware_typeft      # Same pruning, enables type-aware FT alias
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0001
+    track_epoch_accuracy: true
+    type_aware:
+      enabled: true
+      methods: ["cluster_aware", "cluster_aware_typeft"]
+      lr_multipliers: {critical: 0.5, synergistic: 1.0, redundant: 1.5, background: 1.5}
+      wd_multipliers: {critical: 0.5, synergistic: 1.0, redundant: 1.25, background: 1.5}
+      scale_batchnorm: true
+```
+
 ## Output Structure
 
 ```

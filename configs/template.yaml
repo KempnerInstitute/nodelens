@@ -329,6 +329,27 @@ pruning:
     enabled: true
     epochs: 20
     learning_rate: 0.0001
+    weight_decay: 0.0
+    max_batches: null
+    track_epoch_accuracy: false
+    type_aware:
+      enabled: false
+      # Optional allow-list. Empty = apply to all pruning strategies when enabled.
+      methods: []
+      # Per-channel gradient multipliers by cluster type.
+      lr_multipliers:
+        critical: 0.5
+        synergistic: 1.0
+        redundant: 1.5
+        background: 1.5
+      # Relative weight-decay multipliers by cluster type.
+      wd_multipliers:
+        critical: 0.5
+        synergistic: 1.0
+        redundant: 1.25
+        background: 1.5
+      scale_batchnorm: true
+      scale_classifier: false
 
 # -----------------------------------------------------------------------------
 # LLM-SPECIFIC (only for experiment.type: "llm_alignment")

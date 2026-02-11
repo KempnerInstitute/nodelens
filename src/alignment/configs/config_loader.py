@@ -1111,6 +1111,45 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["fine_tune_max_batches"] = fine_tune_block["max_batches"]
         if "weight_decay" in fine_tune_block:
             flat_config["fine_tune_weight_decay"] = fine_tune_block["weight_decay"]
+        if "track_epoch_accuracy" in fine_tune_block:
+            flat_config["fine_tune_track_epoch_accuracy"] = bool(fine_tune_block["track_epoch_accuracy"])
+
+        type_aware_block = fine_tune_block.get("type_aware")
+        if isinstance(type_aware_block, dict):
+            if "enabled" in type_aware_block:
+                flat_config["fine_tune_type_aware_enabled"] = bool(type_aware_block["enabled"])
+            if "methods" in type_aware_block and isinstance(type_aware_block["methods"], (list, tuple)):
+                flat_config["fine_tune_type_aware_methods"] = [str(x) for x in type_aware_block["methods"]]
+            if "lr_multipliers" in type_aware_block and isinstance(type_aware_block["lr_multipliers"], dict):
+                flat_config["fine_tune_type_aware_lr_multipliers"] = {
+                    str(k): float(v) for k, v in type_aware_block["lr_multipliers"].items()
+                }
+            if "wd_multipliers" in type_aware_block and isinstance(type_aware_block["wd_multipliers"], dict):
+                flat_config["fine_tune_type_aware_wd_multipliers"] = {
+                    str(k): float(v) for k, v in type_aware_block["wd_multipliers"].items()
+                }
+            if "scale_batchnorm" in type_aware_block:
+                flat_config["fine_tune_type_aware_scale_batchnorm"] = bool(type_aware_block["scale_batchnorm"])
+            if "scale_classifier" in type_aware_block:
+                flat_config["fine_tune_type_aware_scale_classifier"] = bool(type_aware_block["scale_classifier"])
+
+        # Flat keys inside pruning.fine_tune for convenience.
+        if "type_aware_enabled" in fine_tune_block:
+            flat_config["fine_tune_type_aware_enabled"] = bool(fine_tune_block["type_aware_enabled"])
+        if "type_aware_methods" in fine_tune_block and isinstance(fine_tune_block["type_aware_methods"], (list, tuple)):
+            flat_config["fine_tune_type_aware_methods"] = [str(x) for x in fine_tune_block["type_aware_methods"]]
+        if "type_aware_lr_multipliers" in fine_tune_block and isinstance(fine_tune_block["type_aware_lr_multipliers"], dict):
+            flat_config["fine_tune_type_aware_lr_multipliers"] = {
+                str(k): float(v) for k, v in fine_tune_block["type_aware_lr_multipliers"].items()
+            }
+        if "type_aware_wd_multipliers" in fine_tune_block and isinstance(fine_tune_block["type_aware_wd_multipliers"], dict):
+            flat_config["fine_tune_type_aware_wd_multipliers"] = {
+                str(k): float(v) for k, v in fine_tune_block["type_aware_wd_multipliers"].items()
+            }
+        if "type_aware_scale_batchnorm" in fine_tune_block:
+            flat_config["fine_tune_type_aware_scale_batchnorm"] = bool(fine_tune_block["type_aware_scale_batchnorm"])
+        if "type_aware_scale_classifier" in fine_tune_block:
+            flat_config["fine_tune_type_aware_scale_classifier"] = bool(fine_tune_block["type_aware_scale_classifier"])
 
     # Map top-level analysis flags
     flat_config["do_pruning_experiments"] = pruning_block.get("enabled", nested_config.get("do_pruning_experiments", False))
@@ -1576,6 +1615,13 @@ def load_config_with_overrides(
             "pruning.fine_tune.learning_rate": "fine_tune_learning_rate",
             "pruning.fine_tune.max_batches": "fine_tune_max_batches",
             "pruning.fine_tune.weight_decay": "fine_tune_weight_decay",
+            "pruning.fine_tune.track_epoch_accuracy": "fine_tune_track_epoch_accuracy",
+            "pruning.fine_tune.type_aware.enabled": "fine_tune_type_aware_enabled",
+            "pruning.fine_tune.type_aware.methods": "fine_tune_type_aware_methods",
+            "pruning.fine_tune.type_aware.lr_multipliers": "fine_tune_type_aware_lr_multipliers",
+            "pruning.fine_tune.type_aware.wd_multipliers": "fine_tune_type_aware_wd_multipliers",
+            "pruning.fine_tune.type_aware.scale_batchnorm": "fine_tune_type_aware_scale_batchnorm",
+            "pruning.fine_tune.type_aware.scale_classifier": "fine_tune_type_aware_scale_classifier",
             # Optional: restrict which conv layers are prunable
             "pruning.pointwise_only": "pruning_pointwise_only",
             "pruning.skip_depthwise": "pruning_skip_depthwise",

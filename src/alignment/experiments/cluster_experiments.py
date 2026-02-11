@@ -1838,12 +1838,28 @@ class ClusterAnalysisExperiment:
             except Exception as exc:
                 logger.debug("Failed to checkpoint pruning_results.json: %s", exc)
         
+        configured_type_aware_methods = {
+            str(m) for m in (getattr(self.config, "fine_tune_type_aware_methods", []) or [])
+        }
+
         for method in methods:
-            logger.info(f"Running pruning method: {method}")
-            method_results = results["methods"].get(method, {})
+            method_name = str(method)
+            prune_method = method_name
+            force_type_aware_ft = False
+            if prune_method.endswith("_typeft"):
+                prune_method = prune_method[:-7]
+                force_type_aware_ft = True
+
+            logger.info(
+                "Running pruning method: %s (base=%s, type-aware-ft=%s)",
+                method_name,
+                prune_method,
+                force_type_aware_ft,
+            )
+            method_results = results["methods"].get(method_name, {})
             if not isinstance(method_results, dict):
                 method_results = {}
-            results["methods"][method] = method_results
+            results["methods"][method_name] = method_results
             
             for ratio in ratios:
                 logger.info(f"  Target sparsity: {ratio:.0%}")
@@ -1875,25 +1891,25 @@ class ClusterAnalysisExperiment:
 
                 model_copy = copy.deepcopy(self.model)
                 layer_modules = self._filter_pruning_layer_modules(self._get_layer_module_map(model_copy))
-                selection_mode = self._selection_mode_for_method(method)
+                selection_mode = self._selection_mode_for_method(prune_method)
                 
                 try:
-                    if method.startswith("cluster_aware") or method in ("cap_ixy", "composite_ixy"):
+                    if prune_method.startswith("cluster_aware") or prune_method in ("cap_ixy", "composite_ixy"):
                         pipeline_result = self._run_cluster_aware_pruning(
                             model_copy,
                             layer_modules=layer_modules,
                             ratio=ratio,
-                            method=method,
+                            method=prune_method,
                         )
-                    elif method in {"lp_with_constraints", "type_quota_taylor", "outred_with_constraints"}:
+                    elif prune_method in {"lp_with_constraints", "type_quota_taylor", "outred_with_constraints"}:
                         pipeline_result = self._run_type_constrained_pruning(
                             model_copy,
                             layer_modules=layer_modules,
                             ratio=ratio,
-                            method=method,
+                            method=prune_method,
                         )
                     else:
-                        layer_scores = self._compute_layer_scores_for_method(method, model_copy)
+                        layer_scores = self._compute_layer_scores_for_method(prune_method, model_copy)
                         # If we filtered prunable layers (e.g., pointwise-only for MobileNet),
                         # restrict pruning scores to the same subset for *all* methods so the
                         # comparison stays fair.
@@ -1921,22 +1937,46 @@ class ClusterAnalysisExperiment:
                     
                     acc_before = self._evaluate_accuracy(model_copy)
                     acc_after = acc_before
+                    fine_tune_curve: List[Dict[str, float]] = []
                     if fine_tune_epochs > 0:
-                        model_copy = self._fine_tune(
+                        use_type_aware_ft = bool(getattr(self.config, "fine_tune_type_aware_enabled", False))
+                        if configured_type_aware_methods:
+                            use_type_aware_ft = (
+                                use_type_aware_ft
+                                and (method_name in configured_type_aware_methods or prune_method in configured_type_aware_methods)
+                            )
+                        if force_type_aware_ft:
+                            use_type_aware_ft = True
+
+                        model_copy, fine_tune_curve = self._fine_tune(
                             model_copy,
                             epochs=fine_tune_epochs,
                             lr=fine_tune_lr,
                             max_batches=fine_tune_max_batches,
                             weight_decay=fine_tune_weight_decay,
                             masks=pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else None,
+                            type_aware=use_type_aware_ft,
+                            track_epoch_accuracy=bool(getattr(self.config, "fine_tune_track_epoch_accuracy", False)),
                         )
                         acc_after = self._evaluate_accuracy(model_copy)
+                    else:
+                        use_type_aware_ft = False
                     
                     method_results[store_key] = {
+                        "pruning_method": prune_method,
                         "accuracy_before_ft": acc_before,
                         "accuracy_after_ft": acc_after,
                         "accuracy_drop": baseline_acc - acc_before,
                         "accuracy_recovery": acc_after - acc_before if fine_tune_epochs > 0 else 0.0,
+                        "fine_tune_type_aware": bool(use_type_aware_ft),
+                        "fine_tune_track_epoch_accuracy": bool(getattr(self.config, "fine_tune_track_epoch_accuracy", False)),
+                        "fine_tune_type_aware_lr_multipliers": dict(
+                            getattr(self.config, "fine_tune_type_aware_lr_multipliers", {}) or {}
+                        ),
+                        "fine_tune_type_aware_wd_multipliers": dict(
+                            getattr(self.config, "fine_tune_type_aware_wd_multipliers", {}) or {}
+                        ),
+                        "fine_tune_curve": fine_tune_curve,
                         "selection_mode": selection_mode,
                         "mask_stats": pipeline_result.get("stats", {}),
                         "diagnostics": diagnostics,
@@ -1945,7 +1985,7 @@ class ClusterAnalysisExperiment:
                     logger.info("    Result: %.2f%% (drop %.2f%%)", acc_after * 100, (baseline_acc - acc_after) * 100)
                 except Exception as exc:
                     import traceback
-                    logger.warning("    Pruning failed for %s @ %.0f%%: %s", method, ratio * 100, exc)
+                    logger.warning("    Pruning failed for %s @ %.0f%%: %s", method_name, ratio * 100, exc)
                     logger.warning("    Traceback:\n%s", traceback.format_exc())
                     method_results[store_key] = {"error": str(exc)}
                 finally:
@@ -4218,6 +4258,53 @@ class ClusterAnalysisExperiment:
         
         return None
     
+    def _type_multiplier_for_layer(
+        self,
+        *,
+        layer_name: str,
+        n_channels: int,
+        multipliers: Dict[str, float],
+        device: "torch.device",
+    ) -> "torch.Tensor":
+        """
+        Build per-output-channel multipliers from this run's cluster assignments.
+
+        Missing layers/channels default to 1.0 so the feature degrades gracefully.
+        """
+        alias = {
+            "critical": "critical",
+            "crit": "critical",
+            "synergistic": "synergistic",
+            "syn": "synergistic",
+            "redundant": "redundant",
+            "red": "redundant",
+            "background": "background",
+            "bg": "background",
+        }
+        safe_mult = {str(k).strip().lower(): float(v) for k, v in (multipliers or {}).items()}
+
+        out = np.ones(int(n_channels), dtype=np.float32)
+        cr = self.cluster_results.get(layer_name, {}) if hasattr(self, "cluster_results") else {}
+        labels = np.asarray(cr.get("labels", []), dtype=np.int64).reshape(-1)
+        type_mapping = cr.get("type_mapping", {}) if isinstance(cr, dict) else {}
+
+        cid_to_type: Dict[int, str] = {}
+        if isinstance(type_mapping, dict):
+            for cid, ctype in type_mapping.items():
+                try:
+                    cid_int = int(cid)
+                except Exception:
+                    continue
+                ctype_norm = alias.get(str(ctype).strip().lower(), str(ctype).strip().lower())
+                cid_to_type[cid_int] = ctype_norm
+
+        n = int(min(out.size, labels.size))
+        for idx in range(n):
+            ctype = cid_to_type.get(int(labels[idx]), "background")
+            out[idx] = float(safe_mult.get(ctype, 1.0))
+
+        return torch.as_tensor(out, dtype=torch.float32, device=device)
+
     def _fine_tune(
         self,
         model: nn.Module,
@@ -4226,15 +4313,13 @@ class ClusterAnalysisExperiment:
         max_batches: Optional[int] = None,
         weight_decay: float = 0.0,
         masks: Optional[Dict[str, torch.Tensor]] = None,
-    ) -> nn.Module:
-        """Fine-tune a pruned model.
-
-        Important: when fine-tuning after structured pruning, we must keep pruned
-        channels pruned. We do this by re-applying channel masks after each
-        optimizer step (and keeping the corresponding BatchNorm params zeroed).
-        """
+        *,
+        type_aware: bool = False,
+        track_epoch_accuracy: bool = False,
+    ) -> Tuple[nn.Module, List[Dict[str, float]]]:
+        """Fine-tune a pruned model, optionally with type-aware gradient scaling."""
         import torch.optim as optim
-        
+
         model.train()
         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay or 0.0))
         criterion = nn.CrossEntropyLoss()
@@ -4242,6 +4327,7 @@ class ClusterAnalysisExperiment:
         module_map: Dict[str, nn.Module] = dict(model.named_modules())
         masks_dev: Dict[str, torch.Tensor] = {}
         bn_map: Dict[str, nn.Module] = {}
+        ft_curve: List[Dict[str, float]] = []
 
         if masks:
             for layer_name, mask in masks.items():
@@ -4259,6 +4345,92 @@ class ClusterAnalysisExperiment:
                 except Exception:
                     continue
 
+        lr_mult_cfg = getattr(self.config, "fine_tune_type_aware_lr_multipliers", {}) or {}
+        wd_mult_cfg = getattr(self.config, "fine_tune_type_aware_wd_multipliers", {}) or {}
+        scale_bn = bool(getattr(self.config, "fine_tune_type_aware_scale_batchnorm", True))
+        scale_classifier = bool(getattr(self.config, "fine_tune_type_aware_scale_classifier", False))
+
+        type_lr_mult: Dict[str, torch.Tensor] = {}
+        type_wd_mult: Dict[str, torch.Tensor] = {}
+        if bool(type_aware):
+            target_layers = set(masks_dev.keys())
+            if scale_classifier:
+                for layer_name, module in module_map.items():
+                    if not isinstance(module, nn.Linear):
+                        continue
+                    if not hasattr(module, "weight") or getattr(module, "weight", None) is None:
+                        continue
+                    if layer_name in self.cluster_results:
+                        target_layers.add(layer_name)
+
+            for layer_name in sorted(target_layers):
+                module = module_map.get(layer_name)
+                if module is None or not hasattr(module, "weight") or getattr(module, "weight", None) is None:
+                    continue
+                n_out = int(module.weight.shape[0])
+                if n_out <= 0:
+                    continue
+                type_lr_mult[layer_name] = self._type_multiplier_for_layer(
+                    layer_name=layer_name,
+                    n_channels=n_out,
+                    multipliers=lr_mult_cfg,
+                    device=module.weight.device,
+                )
+                type_wd_mult[layer_name] = self._type_multiplier_for_layer(
+                    layer_name=layer_name,
+                    n_channels=n_out,
+                    multipliers=wd_mult_cfg,
+                    device=module.weight.device,
+                )
+
+        def _scale_param_grad_by_channels(param: Optional["torch.Tensor"], scale_vec: Optional["torch.Tensor"]) -> None:
+            if param is None or param.grad is None or scale_vec is None:
+                return
+            if param.grad.ndim < 1 or int(param.grad.shape[0]) != int(scale_vec.numel()):
+                return
+            vec = scale_vec.to(device=param.grad.device, dtype=param.grad.dtype)
+            view_shape = [int(vec.numel())] + [1] * int(param.grad.ndim - 1)
+            param.grad.mul_(vec.view(*view_shape))
+
+        def _apply_wd_delta(param: Optional["torch.Tensor"], wd_vec: Optional["torch.Tensor"]) -> None:
+            if param is None or param.grad is None or wd_vec is None:
+                return
+            wd = float(weight_decay or 0.0)
+            if wd <= 0.0:
+                return
+            if param.grad.ndim < 1 or int(param.grad.shape[0]) != int(wd_vec.numel()):
+                return
+            delta = wd_vec.to(device=param.grad.device, dtype=param.grad.dtype) - 1.0
+            if float(delta.abs().max().item()) < 1e-12:
+                return
+            view_shape = [int(delta.numel())] + [1] * int(param.grad.ndim - 1)
+            param.grad.add_(param.detach() * (wd * delta.view(*view_shape)))
+
+        def _apply_type_aware_updates() -> None:
+            if not type_lr_mult:
+                return
+            for layer_name, scale_vec in type_lr_mult.items():
+                m = module_map.get(layer_name)
+                if m is None or not hasattr(m, "weight"):
+                    continue
+                wd_vec = type_wd_mult.get(layer_name)
+                _scale_param_grad_by_channels(getattr(m, "weight", None), scale_vec)
+                _scale_param_grad_by_channels(getattr(m, "bias", None), scale_vec)
+                _apply_wd_delta(getattr(m, "weight", None), wd_vec)
+                _apply_wd_delta(getattr(m, "bias", None), wd_vec)
+
+                if not scale_bn:
+                    continue
+                bn = bn_map.get(layer_name)
+                if bn is None:
+                    continue
+                if hasattr(bn, "weight"):
+                    _scale_param_grad_by_channels(getattr(bn, "weight", None), scale_vec)
+                    _apply_wd_delta(getattr(bn, "weight", None), wd_vec)
+                if hasattr(bn, "bias"):
+                    _scale_param_grad_by_channels(getattr(bn, "bias", None), scale_vec)
+                    _apply_wd_delta(getattr(bn, "bias", None), wd_vec)
+
         def _reapply_masks() -> None:
             if not masks_dev:
                 return
@@ -4270,12 +4442,10 @@ class ClusterAnalysisExperiment:
                     if mb.numel() != int(m.weight.shape[0]):
                         continue
 
-                    # Zero pruned output channels
                     m.weight.data[~mb] = 0.0
                     if getattr(m, "bias", None) is not None and m.bias.data.numel() == mb.numel():
                         m.bias.data[~mb] = 0.0
 
-                    # Keep matched BatchNorm channels zeroed too (when present)
                     bn = bn_map.get(layer_name)
                     if bn is None or not hasattr(bn, "weight") or getattr(bn, "weight", None) is None:
                         continue
@@ -4288,32 +4458,40 @@ class ClusterAnalysisExperiment:
                         bn.running_mean.data[~mb] = 0.0
                     if hasattr(bn, "running_var"):
                         bn.running_var.data[~mb] = 1.0
-        
+
         for epoch in range(epochs):
-            total_loss = 0
+            total_loss = 0.0
             n_batches = 0
-            
+
             for x, y in self.train_loader:
                 x, y = x.to(self.device), y.to(self.device)
-                
+
                 optimizer.zero_grad()
                 out = model(x)
                 loss = criterion(out, y)
                 loss.backward()
+                if bool(type_aware):
+                    _apply_type_aware_updates()
                 optimizer.step()
                 _reapply_masks()
-                
-                total_loss += loss.item()
+
+                total_loss += float(loss.item())
                 n_batches += 1
                 if max_batches is not None and n_batches >= int(max_batches):
                     break
-            
+
             if epoch == 0 or (epoch + 1) % 5 == 0:
                 avg_loss = total_loss / max(n_batches, 1)
-                logger.debug(f"    FT epoch {epoch+1}/{epochs}: loss={avg_loss:.4f}")
-        
+                logger.debug("    FT epoch %d/%d: loss=%.4f", epoch + 1, epochs, avg_loss)
+
+            if bool(track_epoch_accuracy):
+                model.eval()
+                acc = float(self._evaluate_accuracy(model))
+                ft_curve.append({"epoch": int(epoch + 1), "accuracy": acc})
+                model.train()
+
         model.eval()
-        return model
+        return model, ft_curve
     
     def _evaluate_accuracy(self, model: Optional[nn.Module] = None) -> float:
         """Evaluate model accuracy on test set."""
@@ -4427,6 +4605,21 @@ class ClusterAnalysisExperiment:
                 "pruning_min_per_layer": float(self.config.pruning_min_per_layer),
                 "pruning_max_per_layer": float(self.config.pruning_max_per_layer),
                 "pruning_max_per_layer_sparsity_cap": float(self.config.pruning_max_per_layer_sparsity_cap),
+                "fine_tune_type_aware_enabled": bool(getattr(self.config, "fine_tune_type_aware_enabled", False)),
+                "fine_tune_type_aware_methods": list(getattr(self.config, "fine_tune_type_aware_methods", []) or []),
+                "fine_tune_type_aware_lr_multipliers": dict(
+                    getattr(self.config, "fine_tune_type_aware_lr_multipliers", {}) or {}
+                ),
+                "fine_tune_type_aware_wd_multipliers": dict(
+                    getattr(self.config, "fine_tune_type_aware_wd_multipliers", {}) or {}
+                ),
+                "fine_tune_type_aware_scale_batchnorm": bool(
+                    getattr(self.config, "fine_tune_type_aware_scale_batchnorm", True)
+                ),
+                "fine_tune_type_aware_scale_classifier": bool(
+                    getattr(self.config, "fine_tune_type_aware_scale_classifier", False)
+                ),
+                "fine_tune_track_epoch_accuracy": bool(getattr(self.config, "fine_tune_track_epoch_accuracy", False)),
             },
             "layer_metrics": self.layer_metrics,
             "cluster_results": {

@@ -293,6 +293,32 @@ class ExperimentConfig:
     # None => use the full training loader each epoch.
     fine_tune_max_batches: Optional[int] = None
     fine_tune_weight_decay: float = 0.0
+    # Optional type-aware post-pruning fine-tuning.
+    # When enabled, channel gradients can be scaled per cluster type.
+    fine_tune_type_aware_enabled: bool = False
+    # If non-empty, only these methods use type-aware fine-tuning. Method names may
+    # include explicit aliases such as "cluster_aware_typeft".
+    fine_tune_type_aware_methods: List[str] = field(default_factory=list)
+    fine_tune_type_aware_lr_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "critical": 0.5,
+            "synergistic": 1.0,
+            "redundant": 1.5,
+            "background": 1.5,
+        }
+    )
+    fine_tune_type_aware_wd_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "critical": 0.5,
+            "synergistic": 1.0,
+            "redundant": 1.25,
+            "background": 1.5,
+        }
+    )
+    fine_tune_type_aware_scale_batchnorm: bool = True
+    fine_tune_type_aware_scale_classifier: bool = False
+    # Record per-epoch test accuracy during post-pruning fine-tuning.
+    fine_tune_track_epoch_accuracy: bool = False
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
     dependency_aware_pruning: bool = False  # Propagate masks across dependent layers
