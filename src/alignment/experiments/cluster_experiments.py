@@ -3179,24 +3179,44 @@ class ClusterAnalysisExperiment:
         cfg.use_activation_weight = bool(self.config.use_activation_weight)
         cfg.n_clusters = int(self.config.n_clusters)
 
+        method_name = str(method).lower()
+        # Normalize CAP aliases so variant logic below can be shared between
+        # RQ-first and I(X;Y)-first versions (e.g., *_ixy methods).
+        base_method = method_name
+        if base_method in ("cap_ixy",):
+            base_method = "cluster_aware"
+        if base_method.endswith("_ixy"):
+            base_method = base_method[:-4]
+        if "_ixy_" in base_method:
+            base_method = base_method.replace("_ixy_", "_")
+
         # Flag to track whether we should use I(X;Y) instead of RQ
-        use_ixy_metric = method.endswith("_ixy") or "_ixy_" in method
+        use_ixy_metric = method_name.endswith("_ixy") or "_ixy_" in method_name
         
         # Variants for ablations / controls (applied *after* config overrides)
-        if method == "cluster_aware_no_halo":
+        if base_method == "cluster_aware_no_halo":
             cfg.lambda_halo = 0.0
-        elif method == "cluster_aware_no_constraints":
+        elif base_method == "cluster_aware_no_constraints":
             cfg.protect_critical_frac = 1.0
             cfg.target_redundant = False
             cfg.synergy_pair_constraint = False
-        elif method == "cluster_aware_protect_redundant":
+        elif base_method == "cluster_aware_protect_redundant":
             # Inverted priority (rough proxy): do not preferentially prune redundant/background
             cfg.target_redundant = False
-        elif method in ("cluster_aware_ixy", "cap_ixy"):
+        elif method_name in ("cluster_aware_ixy", "cap_ixy"):
             # Use I(X;Y) instead of RQ in the CAP score
             # Score_i = α·log(I(X;Y)_i) + β·Syn_i - γ·Red_i + λ·HaloSyn_i
             use_ixy_metric = True
-        elif method == "cluster_aware_annealed":
+        elif base_method == "composite":
+            # Score-only baseline (no halo term, no type constraints).
+            # This branch is primarily used by "composite_ixy" so the
+            # first metric can be switched to I(X;Y) while keeping the
+            # same score-only selection semantics.
+            cfg.lambda_halo = 0.0
+            cfg.protect_critical_frac = 1.0
+            cfg.target_redundant = False
+            cfg.synergy_pair_constraint = False
+        elif base_method == "cluster_aware_annealed":
             # Anneal constraints + mix in a strong low-sparsity baseline (Taylor) so we
             # behave like Taylor/Magnitude at low sparsity and like Cluster-aware at high sparsity.
             #
@@ -3297,7 +3317,7 @@ class ClusterAnalysisExperiment:
             )
             # Variant: use HaloLP (propagated LP) as the halo term instead of HaloSyn.
             # HaloLP is computed during `run_halo_analysis` and stored in layer_metrics[layer]["halo_lp"].
-            if method == "cluster_aware_halo_lp":
+            if base_method == "cluster_aware_halo_lp":
                 try:
                     halo_lp = pre_metrics.get("halo_lp", None)
                     if halo_lp is not None:
@@ -3372,7 +3392,7 @@ class ClusterAnalysisExperiment:
             # ------------------------------------------------------------------
             # OPTION 2: cluster_aware_annealed - blend with Taylor based on sparsity
             # ------------------------------------------------------------------
-            if method == "cluster_aware_annealed":
+            if base_method == "cluster_aware_annealed":
                 t = _get_taylor_scores()
                 s_ca = _minmax(scores.detach().cpu())
                 s_t = _minmax(t)
@@ -3395,7 +3415,7 @@ class ClusterAnalysisExperiment:
             # OPTION 3: cluster_aware_taylor_blend - add Taylor as weighted component
             # score = (1-w)*cluster_aware + w*taylor (constant weight, not sparsity-dependent)
             # ------------------------------------------------------------------
-            elif method == "cluster_aware_taylor_blend":
+            elif base_method == "cluster_aware_taylor_blend":
                 t = _get_taylor_scores()
                 s_ca = _minmax(scores.detach().cpu())
                 s_t = _minmax(t)
@@ -3409,7 +3429,7 @@ class ClusterAnalysisExperiment:
             # Early layers: more conservative (protect more)
             # Late layers: more aggressive (target redundancy more)
             # ------------------------------------------------------------------
-            elif method == "cluster_aware_depth_adaptive":
+            elif base_method == "cluster_aware_depth_adaptive":
                 early_frac = float(self.config.cluster_aware_early_layer_frac)
                 
                 if depth_frac < early_frac:
@@ -3426,7 +3446,7 @@ class ClusterAnalysisExperiment:
                 
                 # Recompute scores with adjusted weights
                 # Get raw metrics
-                lm = pre_metrics
+                lm = pruner_metrics
                 rq = np.asarray(lm.get("rq", lm.get("rayleigh_quotient", [])), dtype=np.float64).reshape(-1)
                 red = np.asarray(lm.get("redundancy", []), dtype=np.float64).reshape(-1)
                 syn = np.asarray(lm.get("synergy", []), dtype=np.float64).reshape(-1)
@@ -3457,7 +3477,7 @@ class ClusterAnalysisExperiment:
             # Compute gradient of loss w.r.t. our cluster-aware score, then weight by it
             # This is: importance = |∂L/∂score| * score (like Taylor but for our score)
             # ------------------------------------------------------------------
-            elif method == "cluster_aware_gradient_weighted":
+            elif base_method == "cluster_aware_gradient_weighted":
                 # Get Taylor-like sensitivity (gradient * activation) for each channel
                 t = _get_taylor_scores()
                 
@@ -3484,7 +3504,7 @@ class ClusterAnalysisExperiment:
             # OPTION 6: cluster_aware_adaptive - automatic hyperparameter tuning
             # Adapts protection and weights based on cluster distribution and layer depth
             # ------------------------------------------------------------------
-            elif method == "cluster_aware_adaptive":
+            elif base_method == "cluster_aware_adaptive":
                 # Compute cluster distribution for this network
                 total_by_type = {'critical': 0, 'synergistic': 0, 'redundant': 0, 'background': 0}
                 for ln in layer_names_all:
@@ -3528,7 +3548,7 @@ class ClusterAnalysisExperiment:
                     gamma_adj = 0.4 + 0.2 * t
                 
                 # Recompute scores with adaptive weights
-                lm = pre_metrics
+                lm = pruner_metrics
                 rq = np.asarray(lm.get("rq", lm.get("rayleigh_quotient", [])), dtype=np.float64).reshape(-1)
                 red = np.asarray(lm.get("redundancy", []), dtype=np.float64).reshape(-1)
                 syn = np.asarray(lm.get("synergy", []), dtype=np.float64).reshape(-1)
@@ -3608,7 +3628,7 @@ class ClusterAnalysisExperiment:
             pruner = layer_pruners[layer_name]
             scores = layer_scores[layer_name].to(device=layer.weight.device)
             protected_idx = None
-            if method == "cluster_aware_bottleneck_protect":
+            if base_method == "cluster_aware_bottleneck_protect":
                 try:
                     b = self.layer_metrics.get(layer_name, {}).get("bottleneck_in_max", None)
                     if b is not None:
