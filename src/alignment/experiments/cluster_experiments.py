@@ -1962,8 +1962,48 @@ class ClusterAnalysisExperiment:
                     else:
                         use_type_aware_ft = False
                     
+                    mask_stats_out = pipeline_result.get("stats", {}) if isinstance(pipeline_result, dict) else {}
+                    # Explicit target-vs-achieved sparsity bookkeeping for reproducibility
+                    # and fair cross-method comparisons.
+                    ach_layer = []
+                    pruned_total = 0.0
+                    channel_total = 0.0
+                    if isinstance(mask_stats_out, dict):
+                        for _ln, st in mask_stats_out.items():
+                            if not isinstance(st, dict):
+                                continue
+                            if "sparsity" in st:
+                                try:
+                                    ach_layer.append(float(st["sparsity"]))
+                                except Exception:
+                                    pass
+                            n_pr = st.get("num_pruned")
+                            n_tot = st.get("total_params")
+                            if n_pr is not None and n_tot is not None:
+                                try:
+                                    pruned_total += float(n_pr)
+                                    channel_total += float(n_tot)
+                                except Exception:
+                                    pass
+                    achieved_sparsity_mean_layer = float(np.mean(ach_layer)) if ach_layer else None
+                    achieved_sparsity_global = float(pruned_total / channel_total) if channel_total > 0 else None
+                    target_sparsity = float(ratio_f)
+
                     method_results[store_key] = {
                         "pruning_method": prune_method,
+                        "target_sparsity": target_sparsity,
+                        "achieved_sparsity_mean_layer": achieved_sparsity_mean_layer,
+                        "achieved_sparsity_global": achieved_sparsity_global,
+                        "achieved_sparsity_error_mean_layer": (
+                            float(achieved_sparsity_mean_layer - target_sparsity)
+                            if achieved_sparsity_mean_layer is not None
+                            else None
+                        ),
+                        "achieved_sparsity_error_global": (
+                            float(achieved_sparsity_global - target_sparsity)
+                            if achieved_sparsity_global is not None
+                            else None
+                        ),
                         "accuracy_before_ft": acc_before,
                         "accuracy_after_ft": acc_after,
                         "accuracy_drop": baseline_acc - acc_before,
@@ -1978,7 +2018,7 @@ class ClusterAnalysisExperiment:
                         ),
                         "fine_tune_curve": fine_tune_curve,
                         "selection_mode": selection_mode,
-                        "mask_stats": pipeline_result.get("stats", {}),
+                        "mask_stats": mask_stats_out,
                         "diagnostics": diagnostics,
                     }
                     

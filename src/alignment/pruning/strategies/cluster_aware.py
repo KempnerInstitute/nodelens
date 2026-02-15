@@ -41,6 +41,9 @@ class ClusterAwarePruningConfig(PruningConfig):
     # Synergy-pair constraint
     synergy_pair_constraint: bool = True
     top_synergy_pairs: int = 10          # Number of top synergy pairs to protect
+    # If constraints block too many candidates, relax them to hit the requested
+    # prune count exactly (prevents target/achieved sparsity drift at high ratios).
+    enforce_exact_prune_budget: bool = True
     
     # Halo parameters
     halo_percentile: float = 90.0
@@ -223,6 +226,7 @@ class ClusterAwarePruning(BasePruningStrategy):
             List of channel indices to prune
         """
         n_channels = len(scores)
+        n_prune = int(max(0, min(int(n_prune), int(n_channels))))
         scores_np = scores.cpu().numpy()
         
         # Get cluster info
@@ -305,8 +309,54 @@ class ClusterAwarePruning(BasePruningStrategy):
                     continue
             
             selected.add(idx)
-        
-        return list(selected)
+
+        # 5. Budget enforcement: if constraints prevented enough selections,
+        #    relax constraints in a deterministic order to match target sparsity.
+        if len(selected) < n_prune and bool(getattr(self.config, "enforce_exact_prune_budget", True)):
+            deficit_initial = int(n_prune - len(selected))
+
+            # Phase A: ignore synergy-pair constraint, still honor protected set.
+            for idx in sorted_idx:
+                if len(selected) >= n_prune:
+                    break
+                if idx in selected or idx in protected:
+                    continue
+                selected.add(int(idx))
+
+            # Phase B: if still short, allow protected channels (lowest score first).
+            if len(selected) < n_prune:
+                protected_sorted = sorted((int(i) for i in protected), key=lambda i: float(scores_np[i]))
+                for idx in protected_sorted:
+                    if len(selected) >= n_prune:
+                        break
+                    if idx in selected:
+                        continue
+                    selected.add(int(idx))
+
+            if len(selected) < n_prune:
+                # Final safety fallback (should be unreachable): fill with any remaining index.
+                for idx in sorted_idx:
+                    if len(selected) >= n_prune:
+                        break
+                    if idx in selected:
+                        continue
+                    selected.add(int(idx))
+
+            deficit_final = int(n_prune - len(selected))
+            logger.warning(
+                "ClusterAware budget enforcement on layer %s: initial deficit=%d, final deficit=%d "
+                "(target=%d, selected=%d, protected=%d, pair_constraint=%s)",
+                layer_name,
+                deficit_initial,
+                deficit_final,
+                n_prune,
+                len(selected),
+                len(protected),
+                bool(self.config.synergy_pair_constraint),
+            )
+
+        # Keep deterministic order for reproducibility.
+        return sorted((int(i) for i in selected), key=lambda i: float(scores_np[i]))
     
     def _get_metrics(
         self,
