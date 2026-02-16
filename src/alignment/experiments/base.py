@@ -288,6 +288,10 @@ class ExperimentConfig:
     # Safety cap for per-layer sparsity when using global-threshold style distributions.
     # Set to 1.0 to disable (legacy behavior).
     pruning_max_per_layer_sparsity_cap: float = 1.00
+    # Optional strict global budget enforcement for structured channel pruning.
+    # When enabled, per-layer prune counts are adjusted so the total number of
+    # pruned channels matches round(target_sparsity * total_prunable_channels).
+    pruning_enforce_exact_global_channel_budget: bool = False
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     # Optional cap for post-pruning fine-tuning speed (useful for ImageNet-scale runs)
     # None => use the full training loader each epoch.

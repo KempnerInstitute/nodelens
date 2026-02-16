@@ -1969,7 +1969,8 @@ class ClusterAnalysisExperiment:
                     pruned_total = 0.0
                     channel_total = 0.0
                     if isinstance(mask_stats_out, dict):
-                        for _ln, st in mask_stats_out.items():
+                        layer_stats = mask_stats_out.get("layers", mask_stats_out)
+                        for _ln, st in layer_stats.items():
                             if not isinstance(st, dict):
                                 continue
                             if "sparsity" in st:
@@ -1977,14 +1978,31 @@ class ClusterAnalysisExperiment:
                                     ach_layer.append(float(st["sparsity"]))
                                 except Exception:
                                     pass
-                            n_pr = st.get("num_pruned")
-                            n_tot = st.get("total_params")
+                            # Preferred keys from MaskOperations.get_mask_statistics.
+                            n_pr = st.get("pruned_elements", st.get("num_pruned"))
+                            n_tot = st.get("total_elements", st.get("total_params"))
                             if n_pr is not None and n_tot is not None:
                                 try:
                                     pruned_total += float(n_pr)
                                     channel_total += float(n_tot)
                                 except Exception:
                                     pass
+                    # Fallback: compute global sparsity directly from masks if stats keys are absent.
+                    if channel_total <= 0:
+                        masks_out = pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else {}
+                        if isinstance(masks_out, dict):
+                            for _ln, mk in masks_out.items():
+                                if mk is None:
+                                    continue
+                                try:
+                                    mk_cpu = mk.detach().cpu().bool()
+                                    n_tot = int(mk_cpu.numel())
+                                    n_pr = int((~mk_cpu).sum().item())
+                                except Exception:
+                                    continue
+                                if n_tot > 0:
+                                    pruned_total += float(n_pr)
+                                    channel_total += float(n_tot)
                     achieved_sparsity_mean_layer = float(np.mean(ach_layer)) if ach_layer else None
                     achieved_sparsity_global = float(pruned_total / channel_total) if channel_total > 0 else None
                     target_sparsity = float(ratio_f)
@@ -3185,6 +3203,123 @@ class ClusterAnalysisExperiment:
                 halo_syn[i] = float(np.mean(next_syn[mask]))
         return halo_syn
 
+    def _allocate_exact_channel_budget(
+        self,
+        *,
+        layer_names: List[str],
+        layer_num_channels: Dict[str, int],
+        per_layer_amounts: Dict[str, float],
+        target_ratio: float,
+    ) -> Dict[str, int]:
+        """
+        Convert per-layer pruning amounts into integer channel counts with exact
+        global channel-budget matching whenever feasible.
+
+        This enforces pruning on *real channel counts*:
+          total_pruned = round(target_ratio * total_prunable_channels)
+        rather than relying on per-layer float amounts + floor, which can drift.
+        """
+        if not layer_names:
+            return {}
+
+        min_amount = float(getattr(self.config, "pruning_min_per_layer", 0.0))
+        max_amount = float(getattr(self.config, "pruning_max_per_layer", 1.0))
+        cap_amount = float(getattr(self.config, "pruning_max_per_layer_sparsity_cap", 1.0))
+
+        min_amount = max(0.0, min(1.0, min_amount))
+        max_amount = max(0.0, min(1.0, max_amount))
+        cap_amount = max(0.0, min(1.0, cap_amount))
+        if max_amount < min_amount:
+            max_amount = min_amount
+
+        raw_counts: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        min_counts: Dict[str, int] = {}
+        max_counts: Dict[str, int] = {}
+
+        total_channels = 0
+        for ln in layer_names:
+            n = int(layer_num_channels.get(ln, 0))
+            if n <= 0:
+                continue
+            total_channels += n
+            amount = float(per_layer_amounts.get(ln, target_ratio))
+            amount = max(min_amount, min(max_amount, amount))
+            raw = amount * n
+            lo = int(np.floor(min_amount * n + 1e-12))
+            hi = int(np.floor(min(max_amount, cap_amount) * n + 1e-12))
+            hi = max(lo, min(hi, n))
+            c0 = int(np.floor(raw + 1e-12))
+            c0 = max(lo, min(c0, hi))
+
+            raw_counts[ln] = raw
+            counts[ln] = c0
+            min_counts[ln] = lo
+            max_counts[ln] = hi
+
+        if total_channels <= 0:
+            return counts
+
+        target_total = int(round(float(target_ratio) * float(total_channels)))
+        min_total = int(sum(min_counts.values()))
+        max_total = int(sum(max_counts.values()))
+        target_total = max(min_total, min(target_total, max_total))
+
+        current_total = int(sum(counts.values()))
+        if current_total < target_total:
+            deficit = int(target_total - current_total)
+            # Add in descending fractional remainder order first.
+            add_order = sorted(
+                counts.keys(),
+                key=lambda ln: (
+                    float(raw_counts.get(ln, 0.0) - np.floor(raw_counts.get(ln, 0.0))),
+                    float(raw_counts.get(ln, 0.0)),
+                    int(layer_num_channels.get(ln, 0)),
+                    ln,
+                ),
+                reverse=True,
+            )
+            while deficit > 0:
+                progressed = False
+                for ln in add_order:
+                    if deficit <= 0:
+                        break
+                    room = int(max_counts[ln] - counts[ln])
+                    if room <= 0:
+                        continue
+                    counts[ln] += 1
+                    deficit -= 1
+                    progressed = True
+                if not progressed:
+                    break
+        elif current_total > target_total:
+            excess = int(current_total - target_total)
+            # Remove from smallest fractional remainder first.
+            drop_order = sorted(
+                counts.keys(),
+                key=lambda ln: (
+                    float(raw_counts.get(ln, 0.0) - np.floor(raw_counts.get(ln, 0.0))),
+                    float(raw_counts.get(ln, 0.0)),
+                    int(layer_num_channels.get(ln, 0)),
+                    ln,
+                ),
+            )
+            while excess > 0:
+                progressed = False
+                for ln in drop_order:
+                    if excess <= 0:
+                        break
+                    room = int(counts[ln] - min_counts[ln])
+                    if room <= 0:
+                        continue
+                    counts[ln] -= 1
+                    excess -= 1
+                    progressed = True
+                if not progressed:
+                    break
+
+        return counts
+
     def _run_cluster_aware_pruning(
         self,
         model: nn.Module,
@@ -3644,6 +3779,30 @@ class ClusterAnalysisExperiment:
             per_layer_amounts = {nm: clipped for nm in layer_scores.keys()}
 
         # Second pass: apply pruning using per-layer allocated amounts
+        strict_global_budget = bool(getattr(self.config, "pruning_enforce_exact_global_channel_budget", False))
+        scored_layer_names = [nm for nm in layer_names_all if nm in layer_scores and nm in layer_pruners]
+        per_layer_prune_counts: Dict[str, int] = {}
+        if strict_global_budget:
+            per_layer_prune_counts = self._allocate_exact_channel_budget(
+                layer_names=scored_layer_names,
+                layer_num_channels=layer_num_channels,
+                per_layer_amounts=per_layer_amounts,
+                target_ratio=float(ratio),
+            )
+            total_channels = int(sum(int(layer_num_channels.get(nm, 0)) for nm in scored_layer_names))
+            target_total = int(round(float(ratio) * float(total_channels))) if total_channels > 0 else 0
+            achieved_total = int(sum(int(per_layer_prune_counts.get(nm, 0)) for nm in scored_layer_names))
+            logger.info(
+                "Strict global channel budget (%s): target=%d/%d (%.4f), allocated=%d/%d (%.4f)",
+                method,
+                target_total,
+                total_channels,
+                (float(target_total) / float(total_channels)) if total_channels > 0 else 0.0,
+                achieved_total,
+                total_channels,
+                (float(achieved_total) / float(total_channels)) if total_channels > 0 else 0.0,
+            )
+
         for layer_name in layer_names_all:
             layer = module_map.get(layer_name)
             if layer is None or not hasattr(layer, "weight") or layer.weight is None:
@@ -3652,8 +3811,11 @@ class ClusterAnalysisExperiment:
                 continue
 
             n_channels = int(layer_num_channels.get(layer_name, layer.weight.shape[0]))
-            amount = float(per_layer_amounts.get(layer_name, float(ratio)))
-            n_prune = int(n_channels * amount)
+            if strict_global_budget and layer_name in per_layer_prune_counts:
+                n_prune = int(per_layer_prune_counts[layer_name])
+            else:
+                amount = float(per_layer_amounts.get(layer_name, float(ratio)))
+                n_prune = int(n_channels * amount)
             if n_prune <= 0:
                 masks[layer_name] = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
                 stats[layer_name] = MaskOperations.get_mask_statistics(masks[layer_name])
@@ -3844,6 +4006,30 @@ class ClusterAnalysisExperiment:
         by_type_total: Dict[str, int] = {}
 
         # Apply pruning layer-by-layer
+        strict_global_budget = bool(getattr(self.config, "pruning_enforce_exact_global_channel_budget", False))
+        scored_layer_names = [nm for nm in layer_names_all if nm in layer_scores]
+        per_layer_prune_counts: Dict[str, int] = {}
+        if strict_global_budget:
+            per_layer_prune_counts = self._allocate_exact_channel_budget(
+                layer_names=scored_layer_names,
+                layer_num_channels=layer_num_channels,
+                per_layer_amounts=per_layer_amounts,
+                target_ratio=float(ratio),
+            )
+            total_channels = int(sum(int(layer_num_channels.get(nm, 0)) for nm in scored_layer_names))
+            target_total = int(round(float(ratio) * float(total_channels))) if total_channels > 0 else 0
+            achieved_total = int(sum(int(per_layer_prune_counts.get(nm, 0)) for nm in scored_layer_names))
+            logger.info(
+                "Strict global channel budget (%s): target=%d/%d (%.4f), allocated=%d/%d (%.4f)",
+                method,
+                target_total,
+                total_channels,
+                (float(target_total) / float(total_channels)) if total_channels > 0 else 0.0,
+                achieved_total,
+                total_channels,
+                (float(achieved_total) / float(total_channels)) if total_channels > 0 else 0.0,
+            )
+
         for layer_name in layer_names_all:
             layer = module_map.get(layer_name)
             if layer is None or not hasattr(layer, "weight") or layer.weight is None:
@@ -3852,8 +4038,11 @@ class ClusterAnalysisExperiment:
                 continue
 
             n_channels = int(layer_num_channels.get(layer_name, layer.weight.shape[0]))
-            amount = float(per_layer_amounts.get(layer_name, float(ratio)))
-            n_prune = int(n_channels * amount)
+            if strict_global_budget and layer_name in per_layer_prune_counts:
+                n_prune = int(per_layer_prune_counts[layer_name])
+            else:
+                amount = float(per_layer_amounts.get(layer_name, float(ratio)))
+                n_prune = int(n_channels * amount)
             if n_prune <= 0:
                 mask = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
                 masks[layer_name] = mask

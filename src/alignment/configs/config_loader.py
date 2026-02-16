@@ -1187,6 +1187,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["pruning_max_per_layer_sparsity_cap"] = pruning_block.get(
         "max_per_layer_sparsity_cap", nested_config.get("pruning_max_per_layer_sparsity_cap", 1.00)
     )
+    flat_config["pruning_enforce_exact_global_channel_budget"] = pruning_block.get(
+        "enforce_exact_global_channel_budget",
+        nested_config.get("pruning_enforce_exact_global_channel_budget", False),
+    )
     # Only set fine_tune defaults if not already set from fine_tune block above
     if "fine_tune_after_pruning" not in flat_config:
         flat_config["fine_tune_after_pruning"] = pruning_block.get("fine_tune_after_pruning", nested_config.get("fine_tune_after_pruning", True))
@@ -1609,6 +1613,7 @@ def load_config_with_overrides(
             "pruning.min_per_layer": "pruning_min_per_layer",
             "pruning.max_per_layer": "pruning_max_per_layer",
             "pruning.max_per_layer_sparsity_cap": "pruning_max_per_layer_sparsity_cap",
+            "pruning.enforce_exact_global_channel_budget": "pruning_enforce_exact_global_channel_budget",
             # Fine-tuning after pruning
             "pruning.fine_tune.enabled": "fine_tune_after_pruning",
             "pruning.fine_tune.epochs": "fine_tune_epochs",
