@@ -5,7 +5,12 @@ Pruning strategies for the alignment framework.
 from .adaptive import AdaptiveSensitivityPruning, LayerSensitivity
 from .alignment_based import AlignmentPruning, GlobalAlignmentPruning, HybridPruning
 from .cascading import CascadingAlignmentPruning
-from .cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig, CompositePruning
+from .cluster_aware import (
+    ClusterAwarePruning,
+    ClusterAwarePruningConfig,
+    ClusterAwareStratifiedPruning,
+    CompositePruning,
+)
 from .eigenvector import EigenvectorPruning
 from .gradient import FisherPruning, GradientPruning, MomentumPruning
 from .movement import AdaptiveMovementPruning, MovementPruning
@@ -78,6 +83,7 @@ __all__ = [
     # Cluster-aware (vision models) - includes depth/sparsity adaptive options via config
     "ClusterAwarePruning",
     "ClusterAwarePruningConfig",
+    "ClusterAwareStratifiedPruning",
     "CompositePruning",
     # LLM Baselines (Wanda, SparseGPT, OWL, LLM-Pruner, FLAP, RIA, SlimLLM)
     "WandaPruning",

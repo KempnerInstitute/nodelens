@@ -1796,6 +1796,9 @@ class ClusterAnalysisExperiment:
             min_amount=float(self.config.pruning_min_per_layer),
             max_amount=float(self.config.pruning_max_per_layer),
             max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
+            enforce_exact_global_channel_budget=bool(
+                getattr(self.config, "pruning_enforce_exact_global_channel_budget", False)
+            ),
         )
         
         # Optional: resume from an existing pruning_results.json (common for long sweeps).
@@ -1965,44 +1968,77 @@ class ClusterAnalysisExperiment:
                     mask_stats_out = pipeline_result.get("stats", {}) if isinstance(pipeline_result, dict) else {}
                     # Explicit target-vs-achieved sparsity bookkeeping for reproducibility
                     # and fair cross-method comparisons.
+                    #
+                    # IMPORTANT: Report *channel-level* sparsity over the intended prunable scope
+                    # (i.e., `layer_modules`) rather than over all propagated dependency layers.
+                    # This avoids denominator drift across methods (e.g., pointwise-only MobileNet).
                     ach_layer = []
                     pruned_total = 0.0
                     channel_total = 0.0
-                    if isinstance(mask_stats_out, dict):
-                        layer_stats = mask_stats_out.get("layers", mask_stats_out)
-                        for _ln, st in layer_stats.items():
-                            if not isinstance(st, dict):
+                    scope_layers_used = 0
+                    prunable_scope = set(layer_modules.keys()) if isinstance(layer_modules, dict) else set()
+
+                    def _in_prunable_scope(layer_name: str) -> bool:
+                        return (not prunable_scope) or (layer_name in prunable_scope)
+
+                    # Preferred path: derive channel counts directly from masks.
+                    masks_out = pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else {}
+                    if isinstance(masks_out, dict):
+                        for _ln, mk in masks_out.items():
+                            if mk is None or (not _in_prunable_scope(str(_ln))):
                                 continue
-                            if "sparsity" in st:
-                                try:
-                                    ach_layer.append(float(st["sparsity"]))
-                                except Exception:
-                                    pass
-                            # Preferred keys from MaskOperations.get_mask_statistics.
-                            n_pr = st.get("pruned_elements", st.get("num_pruned"))
-                            n_tot = st.get("total_elements", st.get("total_params"))
-                            if n_pr is not None and n_tot is not None:
-                                try:
-                                    pruned_total += float(n_pr)
-                                    channel_total += float(n_tot)
-                                except Exception:
-                                    pass
-                    # Fallback: compute global sparsity directly from masks if stats keys are absent.
-                    if channel_total <= 0:
-                        masks_out = pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else {}
-                        if isinstance(masks_out, dict):
-                            for _ln, mk in masks_out.items():
-                                if mk is None:
+                            try:
+                                mk_cpu = mk.detach().cpu().bool()
+                                n_tot = int(mk_cpu.numel())
+                                n_pr = int((~mk_cpu).sum().item())
+                            except Exception:
+                                continue
+                            if n_tot <= 0:
+                                continue
+                            scope_layers_used += 1
+                            pruned_total += float(n_pr)
+                            channel_total += float(n_tot)
+                            ach_layer.append(float(n_pr / n_tot))
+
+                    # Fallback: parse stats in a key-compatible way, still at channel scope.
+                    if channel_total <= 0 and isinstance(mask_stats_out, dict):
+                        layer_stats = mask_stats_out.get("layers", mask_stats_out)
+                        if isinstance(layer_stats, dict):
+                            for _ln, st in layer_stats.items():
+                                if (not isinstance(st, dict)) or (not _in_prunable_scope(str(_ln))):
+                                    continue
+
+                                # Dependency-aware stats usually expose output-channel counts.
+                                n_tot = st.get("outputs_total", st.get("total_outputs"))
+                                n_kept = st.get("outputs_kept", st.get("kept_outputs"))
+                                n_pr = st.get("outputs_pruned", st.get("pruned_outputs"))
+
+                                # MaskOperations stats expose channel-mask element counts.
+                                if n_tot is None:
+                                    n_tot = st.get("total_elements")
+                                if n_pr is None:
+                                    n_pr = st.get("pruned_elements", st.get("num_pruned"))
+
+                                if n_pr is None and n_tot is not None and n_kept is not None:
+                                    try:
+                                        n_pr = float(n_tot) - float(n_kept)
+                                    except Exception:
+                                        n_pr = None
+
+                                if n_tot is None or n_pr is None:
                                     continue
                                 try:
-                                    mk_cpu = mk.detach().cpu().bool()
-                                    n_tot = int(mk_cpu.numel())
-                                    n_pr = int((~mk_cpu).sum().item())
+                                    n_tot_f = float(n_tot)
+                                    n_pr_f = float(n_pr)
                                 except Exception:
                                     continue
-                                if n_tot > 0:
-                                    pruned_total += float(n_pr)
-                                    channel_total += float(n_tot)
+                                if n_tot_f <= 0:
+                                    continue
+                                scope_layers_used += 1
+                                pruned_total += n_pr_f
+                                channel_total += n_tot_f
+                                ach_layer.append(float(n_pr_f / n_tot_f))
+
                     achieved_sparsity_mean_layer = float(np.mean(ach_layer)) if ach_layer else None
                     achieved_sparsity_global = float(pruned_total / channel_total) if channel_total > 0 else None
                     target_sparsity = float(ratio_f)
@@ -2021,6 +2057,13 @@ class ClusterAnalysisExperiment:
                             float(achieved_sparsity_global - target_sparsity)
                             if achieved_sparsity_global is not None
                             else None
+                        ),
+                        "achieved_sparsity_scope_layers": int(scope_layers_used),
+                        "achieved_sparsity_scope_pruned_channels": (
+                            float(pruned_total) if channel_total > 0 else None
+                        ),
+                        "achieved_sparsity_scope_total_channels": (
+                            float(channel_total) if channel_total > 0 else None
                         ),
                         "accuracy_before_ft": acc_before,
                         "accuracy_after_ft": acc_after,
@@ -3336,7 +3379,11 @@ class ClusterAnalysisExperiment:
           - stats: {layer_name: mask stats}
         Also stores a pruned-by-cluster summary under self.pruning_cluster_distributions.
         """
-        from ..pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig
+        from ..pruning.strategies.cluster_aware import (
+            ClusterAwarePruning,
+            ClusterAwarePruningConfig,
+            ClusterAwareStratifiedPruning,
+        )
         from ..services.mask_ops import MaskOperations
 
         # Base config
@@ -3371,6 +3418,26 @@ class ClusterAnalysisExperiment:
         # Variants for ablations / controls (applied *after* config overrides)
         if base_method == "cluster_aware_no_halo":
             cfg.lambda_halo = 0.0
+        elif base_method in {
+            "cluster_aware_stratified",
+            "cluster_aware_stratified_nohalo",
+            "cluster_aware_region_stratified",
+        }:
+            # Label-free variants: avoid type-priority heuristics and treat clusters as structure only.
+            cfg.target_redundant = False
+            cfg.synergy_pair_constraint = False
+            if base_method.endswith("_nohalo"):
+                cfg.lambda_halo = 0.0
+        elif base_method in {
+            "cluster_aware_protect_best_score",
+            "cluster_aware_protect_best_rms",
+            "cluster_aware_protect_best_cascade",
+        }:
+            # Protection is applied externally (protected_indices computed per-layer),
+            # so disable internal "protect critical" logic and avoid type-priority heuristics.
+            cfg.protect_critical_frac = 1.0
+            cfg.target_redundant = False
+            cfg.synergy_pair_constraint = False
         elif base_method == "cluster_aware_no_constraints":
             cfg.protect_critical_frac = 1.0
             cfg.target_redundant = False
@@ -3514,10 +3581,46 @@ class ClusterAnalysisExperiment:
                 else:
                     logger.warning(f"  {layer_name}: mi_in_proxy not available, using RQ")
 
-            pruner = ClusterAwarePruning(
+            # Optional: replace k-means type labels with a simple region partition
+            # (median split on first_metric × synergy) for label-free ablations.
+            pruner_labels = labels
+            pruner_type_mapping = type_mapping
+            if base_method == "cluster_aware_region_stratified":
+                try:
+                    first_metric = pruner_metrics.get("rq", None)
+                    syn_metric = pruner_metrics.get("synergy", None)
+                    if first_metric is not None and syn_metric is not None:
+                        fm = np.asarray(first_metric, dtype=np.float64).reshape(-1)[:n_channels]
+                        syn = np.asarray(syn_metric, dtype=np.float64).reshape(-1)[:n_channels]
+                        log_fm = np.log(np.clip(fm, 1e-10, None))
+                        m0 = float(np.median(log_fm)) if log_fm.size else 0.0
+                        m1 = float(np.median(syn)) if syn.size else 0.0
+                        hi_fm = log_fm >= m0
+                        hi_syn = syn >= m1
+                        # 0: hi_fm+hi_syn, 1: hi_fm+lo_syn, 2: lo_fm+hi_syn, 3: lo_fm+lo_syn
+                        pruner_labels = (2 * (~hi_fm).astype(int) + (~hi_syn).astype(int)).astype(int)
+                        pruner_type_mapping = {
+                            0: "hi_fm_hi_syn",
+                            1: "hi_fm_lo_syn",
+                            2: "lo_fm_hi_syn",
+                            3: "lo_fm_lo_syn",
+                        }
+                except Exception:
+                    pruner_labels = labels
+                    pruner_type_mapping = type_mapping
+
+            PrunerCls = ClusterAwarePruning
+            if base_method in {
+                "cluster_aware_stratified",
+                "cluster_aware_stratified_nohalo",
+                "cluster_aware_region_stratified",
+            }:
+                PrunerCls = ClusterAwareStratifiedPruning
+
+            pruner = PrunerCls(
                 cfg,
                 precomputed_metrics=pruner_metrics,
-                precomputed_clusters={"labels": labels, "type_mapping": type_mapping},
+                precomputed_clusters={"labels": pruner_labels, "type_mapping": pruner_type_mapping},
                 precomputed_halos={"halo_syn": halo_syn},
             )
 
@@ -3838,6 +3941,83 @@ class ClusterAnalysisExperiment:
                         pct = float(getattr(self.config, "bottleneck_protect_percentile", 95.0))
                         thr = float(np.percentile(b, pct))
                         protected_idx = np.where(b >= thr)[0].astype(int).tolist()
+                except Exception:
+                    protected_idx = None
+            elif base_method == "cluster_aware_protect_best_score":
+                # Protect the cluster with the highest mean pruning score (label-free).
+                try:
+                    lab = labels[:n_channels]
+                    best_cid = None
+                    best_val = None
+                    for cid in np.unique(lab):
+                        cid = int(cid)
+                        idxs = np.where(lab == cid)[0]
+                        if idxs.size == 0:
+                            continue
+                        v = float(scores.detach().cpu().numpy().reshape(-1)[idxs].mean())
+                        if best_val is None or v > best_val:
+                            best_val = v
+                            best_cid = cid
+                    if best_cid is not None:
+                        idxs = np.where(lab == int(best_cid))[0]
+                        # Allow pruning at most p_C of the chosen cluster (protect the rest).
+                        p_c = float(getattr(self.config, "cluster_aware_protect_critical_frac", 0.3))
+                        max_prune = int(np.floor(float(len(idxs)) * p_c))
+                        idxs_sorted = sorted((int(i) for i in idxs.tolist()), key=lambda i: float(scores[i].item()))
+                        protected_idx = idxs_sorted[max_prune:]
+                except Exception:
+                    protected_idx = None
+            elif base_method == "cluster_aware_protect_best_rms":
+                # Protect the cluster with the highest mean activation RMS (proxy for "usage").
+                try:
+                    lab = labels[:n_channels]
+                    rms = self.layer_metrics.get(layer_name, {}).get("activation_rms", None)
+                    if rms is not None:
+                        rms = np.asarray(rms, dtype=np.float64).reshape(-1)[:n_channels]
+                        best_cid = None
+                        best_val = None
+                        for cid in np.unique(lab):
+                            cid = int(cid)
+                            idxs = np.where(lab == cid)[0]
+                            if idxs.size == 0:
+                                continue
+                            v = float(rms[idxs].mean())
+                            if best_val is None or v > best_val:
+                                best_val = v
+                                best_cid = cid
+                        if best_cid is not None:
+                            idxs = np.where(lab == int(best_cid))[0]
+                            p_c = float(getattr(self.config, "cluster_aware_protect_critical_frac", 0.3))
+                            max_prune = int(np.floor(float(len(idxs)) * p_c))
+                            idxs_sorted = sorted((int(i) for i in idxs.tolist()), key=lambda i: float(scores[i].item()))
+                            protected_idx = idxs_sorted[max_prune:]
+                except Exception:
+                    protected_idx = None
+            elif base_method == "cluster_aware_protect_best_cascade":
+                # Oracle-style: protect whichever semantic type causes the largest cascade drop.
+                # Uses precomputed cascade_results for the unpruned model.
+                try:
+                    cas = (self.cascade_results.get(layer_name, {}) or {})
+                    if isinstance(cas, dict) and cas:
+                        best_type = None
+                        best_drop = None
+                        for t_name, stats_t in cas.items():
+                            if not isinstance(stats_t, dict):
+                                continue
+                            drop = float(stats_t.get("accuracy_drop", 0.0))
+                            if best_drop is None or drop > best_drop:
+                                best_drop = drop
+                                best_type = str(t_name)
+                        if best_type is not None:
+                            type_to_id = {str(v): int(k) for k, v in (type_mapping or {}).items()}
+                            cid = type_to_id.get(str(best_type), None)
+                            if cid is not None:
+                                lab = labels[:n_channels]
+                                idxs = np.where(lab == int(cid))[0]
+                                p_c = float(getattr(self.config, "cluster_aware_protect_critical_frac", 0.3))
+                                max_prune = int(np.floor(float(len(idxs)) * p_c))
+                                idxs_sorted = sorted((int(i) for i in idxs.tolist()), key=lambda i: float(scores[i].item()))
+                                protected_idx = idxs_sorted[max_prune:]
                 except Exception:
                     protected_idx = None
 

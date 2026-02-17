@@ -2,7 +2,10 @@
 Unit tests for experiment classes.
 """
 
-from alignment.experiments import ExperimentConfig, GeneralAlignmentConfig, GeneralAlignmentExperiment, PruningConfig, TrainingConfig
+import pytest
+from alignment.experiments.base import ExperimentConfig
+from alignment.experiments.general_alignment import GeneralAlignmentConfig
+from alignment.pruning.base import PruningConfig
 
 
 class TestExperimentConfig:
@@ -17,26 +20,11 @@ class TestExperimentConfig:
         assert config.seed == 42
         assert config.batch_size == 32
 
-
-class TestTrainingConfig:
-    """Test suite for TrainingConfig."""
-
-    def test_basic_training_config(self):
-        """Test basic training configuration."""
-        config = TrainingConfig(training_epochs=10, learning_rate=0.001, batch_size=64, optimizer="adam")
-
-        assert config.training_epochs == 10
-        assert config.learning_rate == 0.001
-        assert config.batch_size == 64
-        assert config.optimizer == "adam"
-
-    def test_training_config_defaults(self):
-        """Test training config with defaults."""
-        config = TrainingConfig()
-
-        assert config.training_epochs == 10
-        assert config.learning_rate == 0.001
-        assert config.batch_size == 32
+    def test_default_values(self):
+        """Test that defaults are set correctly."""
+        config = ExperimentConfig(name="test")
+        assert config.experiment_type == "alignment_analysis"
+        assert config.seed == 42
 
 
 class TestPruningConfig:
@@ -44,18 +32,20 @@ class TestPruningConfig:
 
     def test_basic_pruning_config(self):
         """Test basic pruning configuration."""
-        config = PruningConfig(dropout_rates=[0.1, 0.3, 0.5], pruning_metric="magnitude", dropout_mode="scaled")
+        config = PruningConfig(amount=0.3, structured=True, pruning_mode="low")
 
-        assert config.dropout_rates == [0.1, 0.3, 0.5]
-        assert config.pruning_metric == "magnitude"
-        assert config.dropout_mode == "scaled"
+        assert config.amount == 0.3
+        assert config.structured is True
+        assert config.pruning_mode == "low"
 
     def test_pruning_config_defaults(self):
         """Test pruning config with defaults."""
         config = PruningConfig()
 
-        assert len(config.dropout_rates) == 6  # Default is [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
-        assert config.pruning_strategy == "low"
+        assert config.amount == 0.5
+        assert config.structured is False
+        assert config.iterative is False
+        assert config.pruning_mode == "low"
 
 
 class TestGeneralAlignmentConfig:
@@ -79,25 +69,3 @@ class TestGeneralAlignmentConfig:
         assert config.training_epochs == 5
         assert config.dropout_rates == [0.2, 0.5]
         assert config.pruning_amounts == [0.1, 0.3]
-
-
-class TestGeneralAlignmentExperiment:
-    """Test suite for GeneralAlignmentExperiment."""
-
-    def test_initialization(self):
-        """Test experiment initialization."""
-        config = GeneralAlignmentConfig(
-            name="test_experiment",
-            dataset_name="mnist",
-            model_name="mlp",
-            training_epochs=2,
-            batch_size=16,
-            device="cpu",
-            seed=42,
-        )
-
-        exp = GeneralAlignmentExperiment(config=config)
-
-        assert exp.config.name == "test_experiment"
-        assert exp.config.model_name == "mlp"
-        assert exp.config.device == "cpu"

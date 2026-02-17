@@ -12,6 +12,9 @@ import pytest
 import torch
 import torch.nn as nn
 
+# Skip entire module if transformers not installed
+pytest.importorskip("transformers")
+
 from alignment.experiments.llm_experiments import LLMAlignmentExperiment
 from alignment.experiments.base import ExperimentConfig
 
@@ -127,7 +130,8 @@ def tiny_llm_experiment(monkeypatch):
     # Avoid initializing full metric stack for this tiny synthetic test.
     from alignment.experiments.base import BaseExperiment
 
-    monkeypatch.setattr(BaseExperiment, "_initialize_metrics", lambda self: None)
+    monkeypatch.setattr(BaseExperiment, "_initialize_components", lambda self: None)
+    monkeypatch.setattr(BaseExperiment, "_setup_directories", lambda self: None)
 
     model = _TinyRoot(num_layers=1)
     tracked_layers = [
@@ -265,6 +269,7 @@ def test_attention_supernode_core_protection(tiny_llm_experiment):
         mode="low",
         sparsity=0.75,
         layer_key=layer_key,
+        metric="activation_l2_norm",
     )
 
     assert neuron_mask is not None

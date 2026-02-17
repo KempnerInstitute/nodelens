@@ -13,8 +13,11 @@ import torch.nn as nn
 from typing import Dict, Any, Optional
 from unittest.mock import MagicMock, patch
 
+# Skip entire module if transformers not installed
+pytest.importorskip("transformers")
+
+from alignment.experiments.base import BaseExperiment, ExperimentConfig
 from alignment.experiments.llm_experiments import LLMAlignmentExperiment
-from alignment.experiments.base import ExperimentConfig
 
 
 class _TinySelfAttention(nn.Module):
@@ -126,9 +129,16 @@ class _TinyLM(nn.Module):
         return out
 
 
+@pytest.fixture(autouse=True)
+def _bypass_base_init(monkeypatch):
+    """Prevent BaseExperiment from initializing model/dataset/metrics."""
+    monkeypatch.setattr(BaseExperiment, "_initialize_components", lambda self: None)
+    monkeypatch.setattr(BaseExperiment, "_setup_directories", lambda self: None)
+
+
 class TestAttentionSCARMetrics:
     """Tests for compute_attention_scar_metrics method."""
-    
+
     def test_attention_scar_hook_registration(self):
         """Test that hooks are correctly registered on o_proj modules."""
         model = _TinyLM(num_layers=2, embed_dim=16, num_heads=4, vocab_size=100)
@@ -154,6 +164,7 @@ class TestAttentionSCARMetrics:
         
         # Create minimal config
         config = ExperimentConfig(
+            name="test_attn_scar",
             experiment_type="llm_alignment",
             model_name="test",
             device="cpu",
@@ -192,6 +203,7 @@ class TestAttentionSCARMetrics:
     def test_attention_scar_config_disabled(self):
         """Test that disabled config skips computation."""
         config = ExperimentConfig(
+            name="test_attn_scar_disabled",
             experiment_type="llm_alignment",
             model_name="test",
             device="cpu",
@@ -219,6 +231,7 @@ class TestAttentionSCARMetrics:
                 return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
         
         config = ExperimentConfig(
+            name="test_attn_lp",
             experiment_type="llm_alignment",
             model_name="test",
             device="cpu",

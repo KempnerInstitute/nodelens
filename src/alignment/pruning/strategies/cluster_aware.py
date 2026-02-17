@@ -655,6 +655,133 @@ class CompositePruning(ClusterAwarePruning):
         return out
 
 
+class ClusterAwareStratifiedPruning(ClusterAwarePruning):
+    """
+    Cluster-aware pruning with label-free stratified quotas.
+
+    Motivation: the cluster geometry can be informative even when semantic type
+    labels (e.g., "critical") do not reliably correspond to absolute importance.
+    This variant allocates the prune budget proportionally across cluster IDs
+    (approximately equal prune fraction per cluster), then prunes the lowest-score
+    channels within each cluster.
+    """
+
+    def select_channels_to_prune(
+        self,
+        scores: torch.Tensor,
+        n_prune: int,
+        layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
+    ) -> List[int]:
+        n_channels = int(scores.numel())
+        n_prune = int(max(0, min(int(n_prune), int(n_channels))))
+        if n_prune <= 0 or n_channels <= 0:
+            return []
+
+        scores_np = scores.detach().cpu().numpy().reshape(-1)
+        protected = set(int(i) for i in (protected_indices or []) if i is not None)
+
+        clusters = self._cluster_cache.get(layer_name, {})
+        labels = clusters.get("labels", np.zeros(n_channels, dtype=int))
+        if isinstance(labels, list):
+            labels = np.asarray(labels, dtype=int)
+        labels = np.asarray(labels, dtype=int).reshape(-1)[:n_channels]
+
+        # Synergy-pair constraint (optional)
+        if self.config.synergy_pair_constraint:
+            metrics = self._metrics_cache.get(layer_name, {})
+            synergy_pairs = self._get_top_synergy_pairs(metrics, self.config.top_synergy_pairs)
+        else:
+            synergy_pairs = []
+        pair_set: Set[Tuple[int, int]] = set((min(i, j), max(i, j)) for i, j in synergy_pairs)
+
+        sorted_idx = np.argsort(scores_np).tolist()  # low score pruned first
+        # Build cluster->candidate lists in score order.
+        cluster_ids = sorted(int(x) for x in np.unique(labels).tolist())
+        cand_by_cluster: Dict[int, List[int]] = {cid: [] for cid in cluster_ids}
+        for idx in sorted_idx:
+            if int(idx) in protected:
+                continue
+            cid = int(labels[int(idx)])
+            cand_by_cluster.setdefault(cid, []).append(int(idx))
+
+        # Allocate quotas proportional to candidate counts (keeps prune fraction ~constant per cluster).
+        counts = {cid: int(len(idxs)) for cid, idxs in cand_by_cluster.items() if int(len(idxs)) > 0}
+        total = int(sum(counts.values()))
+        if total <= 0:
+            return []
+
+        # Largest remainder method for exact integer budgets.
+        quotas: Dict[int, int] = {cid: 0 for cid in counts}
+        remainders: List[Tuple[float, int]] = []
+        for cid, cnt in counts.items():
+            q = float(n_prune) * float(cnt) / float(total)
+            q_floor = int(np.floor(q))
+            quotas[cid] = q_floor
+            remainders.append((q - q_floor, cid))
+        remaining = int(n_prune - sum(quotas.values()))
+        if remaining > 0:
+            remainders.sort(reverse=True)
+            for _, cid in remainders:
+                if remaining <= 0:
+                    break
+                quotas[cid] = int(quotas.get(cid, 0)) + 1
+                remaining -= 1
+
+        selected: Set[int] = set()
+
+        def _pair_conflict(idx: int) -> bool:
+            if not pair_set:
+                return False
+            for i, j in pair_set:
+                if (idx == i and j in selected) or (idx == j and i in selected):
+                    return True
+            return False
+
+        # Phase 1: satisfy per-cluster quotas.
+        deficit = 0
+        for cid in sorted(quotas.keys()):
+            need = int(quotas.get(cid, 0))
+            if need <= 0:
+                continue
+            for idx in cand_by_cluster.get(cid, []):
+                if need <= 0:
+                    break
+                if idx in selected:
+                    continue
+                if self.config.synergy_pair_constraint and _pair_conflict(idx):
+                    continue
+                selected.add(int(idx))
+                need -= 1
+            if need > 0:
+                deficit += int(need)
+
+        # Phase 2: fill deficit globally by score.
+        if deficit > 0:
+            for idx in sorted_idx:
+                if len(selected) >= n_prune:
+                    break
+                if int(idx) in selected or int(idx) in protected:
+                    continue
+                if self.config.synergy_pair_constraint and _pair_conflict(int(idx)):
+                    continue
+                selected.add(int(idx))
+
+        # Phase 3: if still short, allow protected channels (lowest score first).
+        if len(selected) < n_prune and bool(getattr(self.config, "enforce_exact_prune_budget", True)):
+            protected_sorted = sorted((int(i) for i in protected), key=lambda i: float(scores_np[i]))
+            for idx in protected_sorted:
+                if len(selected) >= n_prune:
+                    break
+                if idx in selected:
+                    continue
+                if self.config.synergy_pair_constraint and _pair_conflict(int(idx)):
+                    continue
+                selected.add(int(idx))
+
+        return sorted((int(i) for i in selected), key=lambda i: float(scores_np[i]))
+
+
 class ClusterAwareAdaptive(ClusterAwarePruning):
     """
     Cluster-aware pruning with AUTOMATIC hyperparameter adaptation.
