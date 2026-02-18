@@ -437,7 +437,11 @@ def _create_cluster_experiment(config):
         test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=test_transform)
     elif "tinyimagenet" in dataset_name:
         # Tiny-ImageNet: 200 classes, 64×64 images, ImageFolder layout
-        root = dataset_cfg.get("root", "./data/tiny-imagenet-200") if isinstance(dataset_cfg, dict) else "./data/tiny-imagenet-200"
+        root = (
+            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
+            or getattr(config, "data_path", None)
+            or "./data/tiny-imagenet-200"
+        )
         train_dir = Path(root) / "train"
         val_dir = Path(root) / "val"
         if not train_dir.exists() or not val_dir.exists():
