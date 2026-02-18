@@ -540,25 +540,25 @@ visualization:
 # ============================================================================
 # results/paper/llama3_8b/
 # ├── metrics/
-# │   ├── layer_metrics.json
-# │   ├── supernode_analysis.json
-# │   ├── supernode_robustness.json
-# │   ├── halo_redundancy.json
-# │   └── cross_layer_analysis.json
+# |   ├── layer_metrics.json
+# |   ├── supernode_analysis.json
+# |   ├── supernode_robustness.json
+# |   ├── halo_redundancy.json
+# |   └── cross_layer_analysis.json
 # ├── evaluation/
-# │   ├── perplexity_results.json
-# │   └── benchmark_results.json
+# |   ├── perplexity_results.json
+# |   └── benchmark_results.json
 # ├── pruning/
-# │   ├── sparsity_curves.json
-# │   └── per_method_results.json
+# |   ├── sparsity_curves.json
+# |   └── per_method_results.json
 # └── figures/
 #     ├── fig1_supernode_distribution.pdf
 #     ├── fig2_halo_redundancy.pdf
 #     ├── fig3_cross_layer_importance.pdf
 #     ├── fig4_pruning_curves.pdf
 #     ├── supernode_robustness/
-#     │   ├── jaccard_heatmap.pdf
-#     │   ├── spearman_heatmap.pdf
-#     │   └── bootstrap_stability.pdf
+#     |   ├── jaccard_heatmap.pdf
+#     |   ├── spearman_heatmap.pdf
+#     |   └── bootstrap_stability.pdf
 #     └── supplementary/
 # ============================================================================

@@ -48,9 +48,9 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         ... )
         >>> result = strategy.prune_adaptive(model, val_loader)
         >>> # Layer sensitivities:
-        >>> # conv1: low → prune 80%
-        >>> # conv2: medium → prune 70%
-        >>> # fc1: high → prune 50%
+        >>> # conv1: low -> prune 80%
+        >>> # conv2: medium -> prune 70%
+        >>> # fc1: high -> prune 50%
         >>> # Overall: 70% average
     """
 
@@ -424,8 +424,8 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         """
         Compute adaptive pruning amounts based on sensitivities.
 
-        High sensitivity → prune less
-        Low sensitivity → prune more
+        High sensitivity -> prune less
+        Low sensitivity -> prune more
 
         Normalized to achieve target overall sparsity.
         """
@@ -444,7 +444,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
             # Normalize sensitivity to [0, 1]
             norm_sens = (layer_sens.sensitivity - min_sens) / sens_range if sens_range > 0 else 0.5
 
-            # Inverse relationship: high sensitivity → low amount
+            # Inverse relationship: high sensitivity -> low amount
             # amount = max_amount - (max_amount - min_amount) × norm_sens
             amount = self.max_amount - (self.max_amount - self.min_amount) * norm_sens
 

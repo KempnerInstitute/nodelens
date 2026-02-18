@@ -147,9 +147,9 @@ class TestTensorizedPruning:
         tensor = tp.compute_pruning_tensor(
             model.fc1, modes=["low"], amounts=[0.0, 0.5]
         )
-        # amount=0.0 → all ones
+        # amount=0.0 -> all ones
         assert tensor[0, 0].sum() == 16 * 8
-        # amount=0.5 → about half pruned
+        # amount=0.5 -> about half pruned
         half = int(0.5 * 16 * 8)
         pruned = (tensor[0, 1] == 0).sum().item()
         assert pruned == half

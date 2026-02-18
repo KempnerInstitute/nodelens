@@ -174,17 +174,17 @@ visualization:
 # ├── results_YYYYMMDD_HHMMSS.json
 # ├── experiment.log
 # ├── plots/
-# │   ├── supernode_robustness/
-# │   │   ├── jaccard_heatmap_layer5.png       # Metric overlap
-# │   │   ├── jaccard_heatmap_layer15.png
-# │   │   ├── jaccard_heatmap_layer25.png
-# │   │   ├── spearman_heatmap_*.png           # Score correlations
-# │   │   ├── bootstrap_stability_*.png        # Per-neuron stability
-# │   │   ├── consistency_bars_*.png           # Cross-metric consistency
-# │   │   └── score_scatter_matrix_*.png       # Metric pairwise scatter
-# │   ├── supernode/
-# │   ├── scar/
-# │   └── pruning/
+# |   ├── supernode_robustness/
+# |   |   ├── jaccard_heatmap_layer5.png       # Metric overlap
+# |   |   ├── jaccard_heatmap_layer15.png
+# |   |   ├── jaccard_heatmap_layer25.png
+# |   |   ├── spearman_heatmap_*.png           # Score correlations
+# |   |   ├── bootstrap_stability_*.png        # Per-neuron stability
+# |   |   ├── consistency_bars_*.png           # Cross-metric consistency
+# |   |   └── score_scatter_matrix_*.png       # Metric pairwise scatter
+# |   ├── supernode/
+# |   ├── scar/
+# |   └── pruning/
 # └── checkpoints/
 
 

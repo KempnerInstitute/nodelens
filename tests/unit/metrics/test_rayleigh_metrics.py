@@ -134,7 +134,7 @@ class TestRayleighQuotientAlternative:
         scores = metric.compute(inputs=inputs, weights=weights)
 
         # Score should be approximately var(dim2) / trace(C) / num_features
-        # trace(C) ≈ 1 + 4 + 9 = 14
+        # trace(C) ~ 1 + 4 + 9 = 14
         expected = 9.0 / 14.0 / dim
         assert abs(scores[0] - expected) < 0.1
 

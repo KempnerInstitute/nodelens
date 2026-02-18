@@ -122,10 +122,10 @@ class DynamicScoreAggregator:
         Compute correlation between each neuron's score and training loss.
 
         High positive correlation: Neuron's importance grew as loss decreased
-        → Neuron is important for learning
+        -> Neuron is important for learning
 
         Negative/low correlation: Neuron's importance didn't track loss
-        → Neuron might be less critical
+        -> Neuron might be less critical
 
         Args:
             score_evolution: Score over time per neuron
@@ -156,8 +156,8 @@ class DynamicScoreAggregator:
         """
         Compute trend (increasing/decreasing) for each neuron.
 
-        Positive trend: Importance increased → likely important
-        Negative trend: Importance decreased → less critical
+        Positive trend: Importance increased -> likely important
+        Negative trend: Importance decreased -> less critical
 
         Returns:
             Trend per neuron [num_neurons]
@@ -188,8 +188,8 @@ class DynamicScoreAggregator:
         """
         Compute stability (inverse variance) for each neuron.
 
-        Low variance: Consistently important → reliable signal
-        High variance: Fluctuating → less reliable
+        Low variance: Consistently important -> reliable signal
+        High variance: Fluctuating -> less reliable
 
         Returns:
             Stability per neuron [num_neurons]

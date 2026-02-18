@@ -85,18 +85,18 @@ Cross-layer halo analysis tracks downstream dependencies to predict cascade effe
 ```
 alignment/
 ├── configs/
-│   ├── cluster_analysis/   # Cluster-based analysis configs
-│   ├── paper/              # Paper experiment configs
-│   └── examples/           # Example configs
+|   ├── cluster_analysis/   # Cluster-based analysis configs
+|   ├── paper/              # Paper experiment configs
+|   └── examples/           # Example configs
 ├── scripts/
-│   ├── run_experiment.py   # Main entry point
-│   └── run_analysis.py     # Post-hoc analysis
+|   ├── run_experiment.py   # Main entry point
+|   └── run_analysis.py     # Post-hoc analysis
 ├── src/alignment/
-│   ├── analysis/           # Visualization, clustering, cascade analysis
-│   ├── experiments/        # Experiment classes
-│   ├── metrics/            # Importance metrics
-│   ├── models/             # Model wrappers
-│   └── pruning/            # Pruning strategies
+|   ├── analysis/           # Visualization, clustering, cascade analysis
+|   ├── experiments/        # Experiment classes
+|   ├── metrics/            # Importance metrics
+|   ├── models/             # Model wrappers
+|   └── pruning/            # Pruning strategies
 ├── tests/                  # Unit tests
 └── docs/                   # Documentation
 ```

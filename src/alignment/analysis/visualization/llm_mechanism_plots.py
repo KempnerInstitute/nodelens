@@ -1125,7 +1125,7 @@ def plot_supernode_hit_rate_dose_response(
     x_round: float = 1.0,
 ) -> plt.Figure:
     """
-    Dose–response diagnostic: evaluate multiple random pruning masks conditioned on a
+    Dose-response diagnostic: evaluate multiple random pruning masks conditioned on a
     target supernode hit-rate, then plot degradation as a function of hit-rate.
 
     This is intentionally more "causal-control" than `plot_supernode_hit_rate_vs_ppl`:

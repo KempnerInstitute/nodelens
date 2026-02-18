@@ -78,7 +78,7 @@ class TestCovAccumulator:
         acc = _CovAccumulator(3)
         acc.update(np.ones((1, 3)), np.array([1.0]))
         var_t, var_y, cov_yy, cov_ty = acc.finalize()
-        # n < 2 → should return zeros
+        # n < 2 -> should return zeros
         assert var_t == 0.0
         np.testing.assert_array_equal(var_y, np.zeros(3))
 

@@ -147,7 +147,7 @@ class InteractionInformation(BaseMetric):
             MI_YZ = self._estimate_mi_binning(Y.unsqueeze(1), Z.unsqueeze(1))
 
             # Compute conditional mutual information I(X;Y|Z)
-            # Using approximation: I(X;Y|Z) ≈ I(X;Y) - I(X;Y;Z)
+            # Using approximation: I(X;Y|Z) ~ I(X;Y) - I(X;Y;Z)
             # Where I(X;Y;Z) is the interaction information
 
             # For simplicity, we'll use the difference of mutual informations

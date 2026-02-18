@@ -55,7 +55,7 @@ class TestComputeFromCovariance:
         C = torch.diag(torch.tensor([4.0, 2.0]))  # trace = 6
         W = torch.tensor([[1.0, 0.0]])
         result = rq._compute_from_covariance(C, W)
-        # RQ = 4/1 = 4, relative = 4/6 ≈ 0.6667
+        # RQ = 4/1 = 4, relative = 4/6 ~ 0.6667
         assert abs(result[0].item() - 4.0 / 6.0) < 1e-5
 
     def test_regularization_applied(self):
@@ -82,8 +82,8 @@ class TestComputeFromCovariance:
         rq = RayleighQuotient(relative=False, regularization=0.0)
         C = torch.diag(torch.tensor([3.0, 1.0]))
         W = torch.tensor([
-            [1.0, 0.0],  # aligned with first eigenvector → RQ = 3
-            [0.0, 1.0],  # aligned with second eigenvector → RQ = 1
+            [1.0, 0.0],  # aligned with first eigenvector -> RQ = 3
+            [0.0, 1.0],  # aligned with second eigenvector -> RQ = 1
         ])
         result = rq._compute_from_covariance(C, W)
         assert abs(result[0].item() - 3.0) < 1e-5
@@ -193,7 +193,7 @@ class TestClassConditionedRQ:
 
     def test_two_class_basic(self):
         rq = RayleighQuotient(relative=True)
-        # Two classes with different means → class-conditioned cov differs from unconditional
+        # Two classes with different means -> class-conditioned cov differs from unconditional
         torch.manual_seed(42)
         n_per_class = 30
         inputs_0 = torch.randn(n_per_class, 8) + 1.0

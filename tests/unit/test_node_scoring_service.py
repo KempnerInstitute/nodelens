@@ -2,7 +2,7 @@
 Unit tests for node scoring service.
 
 Tests validate:
-- _normalize_scores: [1,2,3] → [0,0.5,1.0], constant → 0.5
+- _normalize_scores: [1,2,3] -> [0,0.5,1.0], constant -> 0.5
 - compute_composite_scores: mock metrics, verify weighted sum
 - rank_neurons_globally: sorted descending
 """

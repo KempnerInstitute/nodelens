@@ -53,8 +53,8 @@ Given:
 Standard Taylor:
     Taylor_i = |∂L/∂a_i · a_i|
     
-    Intuition: First-order approximation of loss change when a_i → 0
-    L(a_i=0) - L(a_i) ≈ -∂L/∂a_i · a_i
+    Intuition: First-order approximation of loss change when a_i -> 0
+    L(a_i=0) - L(a_i) ~ -∂L/∂a_i · a_i
 
     In practice, we compute:
     - Forward pass: get a_i
@@ -141,7 +141,7 @@ class GeneralizedTaylorConfig(PruningConfig):
     # Numerical stability / scale parameters (kept explicit so they can be config-driven)
     rq_log_eps: float = 1e-10  # clip floor for log(RQ)
     structural_eps: float = 0.1  # additive eps used in multiplicative structural factors (non-gated variants)
-    grad_over_act_eps: float = 1e-8  # eps for grad≈taylor/|act| approximation
+    grad_over_act_eps: float = 1e-8  # eps for grad~taylor/|act| approximation
     lp_optimal_l2_reg: float = 0.01  # ridge term for taylor_optimal_combo least-squares
 
     # For metric-gated Taylor (Taylor * gate(metrics[, clusters]))
@@ -268,7 +268,7 @@ class GeneralizedTaylorPruning(BasePruningStrategy):
             if grad is not None:
                 grad_norm = self._normalize(np.asarray(grad)[:n_channels])
             else:
-                # Approximate: Taylor ≈ grad × activation, so grad ≈ Taylor / activation
+                # Approximate: Taylor ~ grad × activation, so grad ~ Taylor / activation
                 if act is not None:
                     act_arr = np.asarray(act)[:n_channels]
                     grad_norm = self._normalize(taylor / (np.abs(act_arr) + float(self.config.grad_over_act_eps)))

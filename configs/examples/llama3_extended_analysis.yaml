@@ -192,20 +192,20 @@ visualization:
 # Expected outputs:
 # - results/llama3_extended_analysis_YYYYMMDD_HHMMSS/
 #   ├── metrics/
-#   │   ├── layer_metrics.json
-#   │   ├── halo_redundancy_results.json
-#   │   ├── multi_supernode_results.json
-#   │   └── cross_layer_results.json
+#   |   ├── layer_metrics.json
+#   |   ├── halo_redundancy_results.json
+#   |   ├── multi_supernode_results.json
+#   |   └── cross_layer_results.json
 #   ├── plots/
-#   │   ├── halo/
-#   │   │   ├── halo_redundancy_by_depth.png
-#   │   │   ├── halo_redundancy_comprehensive.png
-#   │   │   └── halo_redundancy_heatmap.png
-#   │   ├── multi_supernode/
-#   │   │   └── cluster_analysis_*.png
-#   │   └── cross_layer/
-#   │       ├── cross_layer_redundancy.png
-#   │       └── layer_efficiency.png
+#   |   ├── halo/
+#   |   |   ├── halo_redundancy_by_depth.png
+#   |   |   ├── halo_redundancy_comprehensive.png
+#   |   |   └── halo_redundancy_heatmap.png
+#   |   ├── multi_supernode/
+#   |   |   └── cluster_analysis_*.png
+#   |   └── cross_layer/
+#   |       ├── cross_layer_redundancy.png
+#   |       └── layer_efficiency.png
 #   └── evaluation/
 #       └── benchmark_results.json
 # ============================================================================

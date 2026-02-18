@@ -158,7 +158,7 @@ class TestSelectChannelsToPrune:
         q = n_channels // 4  # 8 critical channels
         metrics, clusters = _make_precomputed(n_channels)
 
-        protect_frac = 0.25  # at most 25% of critical → at most 2 of 8
+        protect_frac = 0.25  # at most 25% of critical -> at most 2 of 8
         cap = ClusterAwarePruning(
             config=ClusterAwarePruningConfig(
                 amount=0.5,

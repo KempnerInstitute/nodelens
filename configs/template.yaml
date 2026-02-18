@@ -375,13 +375,13 @@ llm:
 #
 # COMPARISON TABLE:
 # ┌─────────────────┬────────────┬─────────────────┬──────────────────────────────┐
-# │ Mode            │ Speed      │ Memory          │ Best For                     │
+# | Mode            | Speed      | Memory          | Best For                     |
 # ├─────────────────┼────────────┼─────────────────┼──────────────────────────────┤
-# │ unfold          │ Slow       │ O(B·P·C·K²)     │ Accurate RQ/MI, later layers │
-# │ patchwise       │ Moderate   │ O(B·C·K²·P)     │ Patch-level analysis         │
-# │ spatial         │ Fast       │ O(B·H·W·C)      │ Covariance metrics           │
-# │ gap             │ Fastest    │ O(B·C)          │ Quick experiments, early CNN │
-# │ channel_variance│ Fast       │ O(C)            │ Activation magnitude only    │
+# | unfold          | Slow       | O(B·P·C·K²)     | Accurate RQ/MI, later layers |
+# | patchwise       | Moderate   | O(B·C·K²·P)     | Patch-level analysis         |
+# | spatial         | Fast       | O(B·H·W·C)      | Covariance metrics           |
+# | gap             | Fastest    | O(B·C)          | Quick experiments, early CNN |
+# | channel_variance| Fast       | O(C)            | Activation magnitude only    |
 # └─────────────────┴────────────┴─────────────────┴──────────────────────────────┘
 #
 # Where: B=batch, C=channels, H/W=spatial dims, K=kernel size, P=num patches

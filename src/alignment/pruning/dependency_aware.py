@@ -2,7 +2,7 @@
 Dependency-aware structured pruning for neural networks.
 
 Handles dependencies between layers:
-- Conv: output channels of layer L → input channels of layer L+1
+- Conv: output channels of layer L -> input channels of layer L+1
 - Skip connections: ensure compatible channel counts
 - Attention: Q/K/V/O projection consistency
 
@@ -429,7 +429,7 @@ class DependencyAwarePruning:
                     if len(our_out) != len(their_in):
                         # This can happen with skip connections - downgrade to warning
                         warnings.append(f"Dimension info: {layer_name}.out ({len(our_out)}) "
-                                       f"→ {next_layer}.in ({len(their_in)}) - may involve skip connection")
+                                       f"-> {next_layer}.in ({len(their_in)}) - may involve skip connection")
                     elif not torch.equal(our_out, their_in):
                         # Mask values differ - also just a warning for complex architectures
                         warnings.append(f"Mask info: {layer_name}.out_mask != {next_layer}.in_mask")

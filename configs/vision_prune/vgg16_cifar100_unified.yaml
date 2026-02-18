@@ -2,7 +2,7 @@
 # VGG-16-BN on CIFAR-100 - UNIFIED FORMAT (paper-ready)
 # =============================================================================
 # Goal: extend the CIFAR-100 (harder) pruning story beyond ResNet-18 by running
-# VGG-16-BN under the same analysis pipeline (metrics → clustering → halos → pruning).
+# VGG-16-BN under the same analysis pipeline (metrics -> clustering -> halos -> pruning).
 #
 # Usage:
 #   python scripts/run_experiment.py --config configs/vision_prune/vgg16_cifar100_unified.yaml

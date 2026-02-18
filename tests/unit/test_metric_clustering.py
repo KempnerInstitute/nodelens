@@ -34,22 +34,22 @@ def _well_separated_data(n_per_type: int = 25, seed: int = 42):
     n = n_per_type
 
     rq = np.concatenate([
-        rng.uniform(8.0, 12.0, n),   # critical – high RQ
-        rng.uniform(0.5, 1.5, n),    # redundant – low RQ
-        rng.uniform(3.0, 5.0, n),    # synergistic – mid RQ
-        rng.uniform(0.1, 0.8, n),    # background – low RQ
+        rng.uniform(8.0, 12.0, n),   # critical - high RQ
+        rng.uniform(0.5, 1.5, n),    # redundant - low RQ
+        rng.uniform(3.0, 5.0, n),    # synergistic - mid RQ
+        rng.uniform(0.1, 0.8, n),    # background - low RQ
     ])
     red = np.concatenate([
-        rng.uniform(0.0, 0.1, n),    # critical – low Red
-        rng.uniform(0.8, 1.0, n),    # redundant – high Red
-        rng.uniform(0.0, 0.15, n),   # synergistic – low Red
-        rng.uniform(0.05, 0.2, n),   # background – low Red
+        rng.uniform(0.0, 0.1, n),    # critical - low Red
+        rng.uniform(0.8, 1.0, n),    # redundant - high Red
+        rng.uniform(0.0, 0.15, n),   # synergistic - low Red
+        rng.uniform(0.05, 0.2, n),   # background - low Red
     ])
     syn = np.concatenate([
-        rng.uniform(0.2, 0.4, n),    # critical – mid Syn
-        rng.uniform(0.0, 0.1, n),    # redundant – low Syn
-        rng.uniform(0.8, 1.0, n),    # synergistic – high Syn
-        rng.uniform(0.0, 0.15, n),   # background – low Syn
+        rng.uniform(0.2, 0.4, n),    # critical - mid Syn
+        rng.uniform(0.0, 0.1, n),    # redundant - low Syn
+        rng.uniform(0.8, 1.0, n),    # synergistic - high Syn
+        rng.uniform(0.0, 0.15, n),   # background - low Syn
     ])
     true_labels = np.array(
         ["critical"] * n + ["redundant"] * n + ["synergistic"] * n + ["background"] * n
@@ -166,10 +166,10 @@ class TestTypesGreedy:
         """Critical = high RQ - low Red, Redundant = high Red, Synergistic = high Syn."""
         msc = MetricSpaceClustering(n_clusters=4, type_mapping_mode="greedy")
         centroids = np.array([
-            [2.0, 0.1, 0.3],  # high RQ, low Red → critical
-            [0.2, 0.9, 0.1],  # high Red → redundant
-            [0.5, 0.1, 0.9],  # high Syn → synergistic
-            [0.1, 0.2, 0.2],  # low everything → background
+            [2.0, 0.1, 0.3],  # high RQ, low Red -> critical
+            [0.2, 0.9, 0.1],  # high Red -> redundant
+            [0.5, 0.1, 0.9],  # high Syn -> synergistic
+            [0.1, 0.2, 0.2],  # low everything -> background
         ])
         mapping = msc._types_greedy(centroids)
         assert mapping[0] == "critical"

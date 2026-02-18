@@ -160,7 +160,7 @@ cascade_analysis:
 #   - distribution: uniform (NOT global_threshold - causes depthwise collapse)
 #   - pointwise_only: true (skip depthwise/expansion layers)
 #   - skip_depthwise: true (redundant but explicit)
-# The "good" Jan20 runs used this protocol and achieved Ours ≈ Taylor at 50%.
+# The "good" Jan20 runs used this protocol and achieved Ours ~ Taylor at 50%.
 pruning:
   enabled: true
   distribution: "uniform"            # uniform is stable for MobileNet (not global_threshold!)

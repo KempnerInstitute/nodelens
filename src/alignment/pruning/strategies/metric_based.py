@@ -41,7 +41,7 @@ class MetricPruningConfig(PruningConfig):
     
     # For composite: weights for each component
     weight_rq: float = 1.0
-    weight_redundancy: float = -0.3  # Negative = high redundancy → low score
+    weight_redundancy: float = -0.3  # Negative = high redundancy -> low score
     weight_synergy: float = 0.5
     weight_mi: float = 0.0  # MI with task (logit margin)
     

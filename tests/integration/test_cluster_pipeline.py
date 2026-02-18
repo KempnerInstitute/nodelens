@@ -1,8 +1,8 @@
 """
 Integration test: full cluster analysis pipeline.
 
-End-to-end: tiny CNN + synthetic data → compute metrics → cluster → halo → CAP prune
-→ verify valid masks and model still runs.
+End-to-end: tiny CNN + synthetic data -> compute metrics -> cluster -> halo -> CAP prune
+-> verify valid masks and model still runs.
 """
 
 import numpy as np
@@ -50,7 +50,7 @@ class _PipelineCNN(nn.Module):
 class TestClusterPipeline:
 
     def test_full_pipeline(self):
-        """Run metrics → cluster → halo → prune → verify model still works."""
+        """Run metrics -> cluster -> halo -> prune -> verify model still works."""
         torch.manual_seed(42)
         np.random.seed(42)
 
@@ -116,10 +116,10 @@ class TestClusterPipeline:
             "critical", "redundant", "synergistic", "background",
         }
 
-        # 5. Halo analysis: conv2 → conv3
+        # 5. Halo analysis: conv2 -> conv3
         halo_analyzer = CrossLayerHaloAnalysis(percentile=80)
         w_next = model.conv3.weight.detach().numpy()
-        # For conv: [out, in, k, k] → sum kernel → [out, in]
+        # For conv: [out, in, k, k] -> sum kernel -> [out, in]
         w_next_2d = np.abs(w_next).sum(axis=(2, 3))
 
         acts_next = activations["conv3"].mean(dim=(2, 3)).numpy()

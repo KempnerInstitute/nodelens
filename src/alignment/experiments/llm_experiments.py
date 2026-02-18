@@ -4347,7 +4347,7 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # Compute W @ Σ: [hidden_dim, intermediate_dim]
                     w_cov = weight @ cov  # [hidden_dim, intermediate_dim]
                     
-                    # Compute (W @ Σ) * W and sum over intermediate dim → w^T Σ w per row
+                    # Compute (W @ Σ) * W and sum over intermediate dim -> w^T Σ w per row
                     w_cov_w = (w_cov * weight).sum(dim=1)  # [hidden_dim]
                     
                     # Compute ||w||^2 per row
@@ -4588,7 +4588,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         # =====================================================================
         # Compute Gaussian Mutual Information (MI) for each follower neuron
         # MI_i = 0.5 * log(var(x_i) / var(x_i | others))
-        # Approximated using correlation: MI ≈ -0.5 * log(1 - r^2)
+        # Approximated using correlation: MI ~ -0.5 * log(1 - r^2)
         # =====================================================================
         mi_scores = torch.zeros(num_followers)
         
@@ -5259,7 +5259,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         the causal/directional flow of information through the network weights.
         
         For each supernode i and downstream neuron j:
-            DirectedRedundancy(i→j) = |weight_ij| × R²(activation_i → activation_j)
+            DirectedRedundancy(i->j) = |weight_ij| × R²(activation_i -> activation_j)
         
         Where R² is the coefficient of determination (variance explained).
         
@@ -5388,7 +5388,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             supernode_acts = all_intermediate[:, supernode_indices]  # [N, num_supernodes]
             
             # =====================================================================
-            # Compute Directed Redundancy: R²(supernode_i → output_j) × |weight_ij|
+            # Compute Directed Redundancy: R²(supernode_i -> output_j) × |weight_ij|
             # =====================================================================
             
             # For efficiency, compute correlations in batch
@@ -5405,7 +5405,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             cov_matrix = (supernode_centered.T @ output_centered) / (N - 1)  # [num_supernodes, hidden_dim]
             
             # Compute R² (coefficient of determination)
-            # R²(i→j) = cov(i,j)² / (var(i) × var(j))
+            # R²(i->j) = cov(i,j)² / (var(i) × var(j))
             denom = (supernode_var.unsqueeze(1) * output_var.unsqueeze(0) + 1e-8)
             r_squared = (cov_matrix ** 2) / denom  # [num_supernodes, hidden_dim]
             
@@ -5625,7 +5625,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             #
             # IMPORTANT: the classic "probability overlap" Conn
             #   <|v_i|, a> / (||v_i||_1 ||a||_1)
-            # tends to collapse to ~1/hidden_dim for dense matrices (≈ 2.4e-4 for d=4096),
+            # tends to collapse to ~1/hidden_dim for dense matrices (~ 2.4e-4 for d=4096),
             # which makes SCAR-Conn numerically ineffective. Instead, we measure the fraction
             # of each channel's write mass that falls on the *core write support*:
             # the top-K hidden dimensions by aggregated supernode write mass a.
@@ -6167,7 +6167,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Convert redundancy-to-core into a [0, 1] protection score.
             #
             # Empirically, redundancy magnitudes can be extremely small; min-max normalization
-            # then collapses most halo channels near Protect≈1. But a fully linear rank/CDF
+            # then collapses most halo channels near Protect~1. But a fully linear rank/CDF
             # can be too aggressive when redundancy estimates are noisy. We therefore default
             # to a *soft* rank-power mapping that mainly penalizes only the most redundant tail.
             norm_mode = str(supernode_cfg.get("protection_normalization", "rank_power")).lower()
@@ -8010,7 +8010,7 @@ class LLMAlignmentExperiment(BaseExperiment):
             if metric not in self.importance_scores[layer_name]:
                 continue
 
-            # Extract layer index (e.g., "model.layers.0.mlp.gate_proj" → 0)
+            # Extract layer index (e.g., "model.layers.0.mlp.gate_proj" -> 0)
             import re
             match = re.search(r'layers\.(\d+)\.mlp', layer_name)
             if not match:
@@ -11085,7 +11085,7 @@ class LLMAlignmentExperiment(BaseExperiment):
         prefix: str = "supernode_hit_rate_sweep",
     ) -> Dict[str, Any]:
         """
-        Dose–response control: random FFN channel pruning masks conditioned on a target
+        Dose-response control: random FFN channel pruning masks conditioned on a target
         *supernode hit-rate* (fraction of LP supernodes pruned).
 
         This constructs synthetic per-channel pruning scores (stored in `self.importance_scores`)
@@ -11094,7 +11094,7 @@ class LLMAlignmentExperiment(BaseExperiment):
           - the remaining pruned channels from non-supernodes, per layer.
 
         The standard pruning loop can then evaluate perplexity/benchmarks for each synthetic
-        metric name, producing a clean causal curve (hit-rate → degradation) without confounds
+        metric name, producing a clean causal curve (hit-rate -> degradation) without confounds
         from comparing only named baselines.
 
         Notes:

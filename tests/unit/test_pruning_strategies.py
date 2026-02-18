@@ -86,7 +86,7 @@ class TestPruningConfig:
 
 
 # =========================================================================
-# BasePruningStrategy – create_pruning_mask
+# BasePruningStrategy - create_pruning_mask
 # =========================================================================
 
 
@@ -149,7 +149,7 @@ class TestCreatePruningMask:
 
 
 # =========================================================================
-# BasePruningStrategy – apply_pruning / remove_pruning
+# BasePruningStrategy - apply_pruning / remove_pruning
 # =========================================================================
 
 

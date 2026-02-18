@@ -86,7 +86,7 @@ class GaussianMIAnalytic(BaseMetric):
     def _univariate_entropy_edgeworth(self, data: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
         """
         Differential entropy of near-Gaussian scalar variable using exact first corrections:
-          h(X) ≈ 0.5 * log(2π e σ^2) - (γ1^2)/12 - (γ2^2)/48
+          h(X) ~ 0.5 * log(2π e σ^2) - (γ1^2)/12 - (γ2^2)/48
         where γ1 is skewness, γ2 is excess kurtosis.
         data: [B]
         Returns scalar entropy in nats.

@@ -402,7 +402,7 @@ class ExperimentConfig:
     do_generalized_importance: bool = False  # Flag for generalized importance
     do_scar_optimal: bool = False  # Flag for SCAR-optimal (learned component weights)
     do_random_supernode_ablation: bool = False  # Flag for random supernode ablation control
-    do_supernode_hit_rate_sweep: bool = False  # Flag for hit-rate dose–response sweep (random masks)
+    do_supernode_hit_rate_sweep: bool = False  # Flag for hit-rate dose-response sweep (random masks)
     supernode_hit_rate_sweep: Dict[str, Any] = field(default_factory=dict)  # Config for hit-rate sweep (LLMs)
 
     # Performance optimization

@@ -1,10 +1,10 @@
-# Metric Definitions & Sign Conventions (Theory ↔ Code)
+# Metric Definitions & Sign Conventions (Theory <-> Code)
 
 This document is a **codebase-facing** reference for the core metrics used throughout `src/alignment/`.
 It exists to prevent subtle drift in:
 - **Formulas** (what is computed),
 - **Keys** (how values are named/stored),
-- **Sign conventions** (what “high” means when used for pruning/scoring).
+- **Sign conventions** (what "high" means when used for pruning/scoring).
 
 It intentionally avoids referencing any paper draft; the canonical sources are the implementations under `src/alignment/metrics/` and the experiment pipeline that stores per-layer metric arrays.
 
@@ -12,9 +12,9 @@ It intentionally avoids referencing any paper draft; the canonical sources are t
 
 ## Conventions (important)
 
-### “Metric value” vs “importance score”
+### "Metric value" vs "importance score"
 
-Many metrics are naturally “larger = more of something” (e.g., more redundancy).  
+Many metrics are naturally "larger = more of something" (e.g., more redundancy).  
 But pruning code often needs an **importance score** with the convention:
 
 - **Higher score = more important (keep)**
@@ -22,7 +22,7 @@ But pruning code often needs an **importance score** with the convention:
 
 Therefore:
 - **Redundancy is typically used as a penalty** (we negate it or apply a negative weight).
-- “High redundancy” ≈ “more replaceable” ⇒ **more prunable**.
+- "High redundancy" ~ "more replaceable" => **more prunable**.
 
 ### Single-metric pruning directions (sanity controls)
 
@@ -62,12 +62,12 @@ For scalar Gaussian variables \(Y_i,Y_j\) with correlation \(\rho\):
 I(Y_i;Y_j) = -\tfrac12 \log(1-\rho^2)
 \]
 
-We typically summarize “redundancy of channel \(i\)” as an **average MI** to other channels (or sampled references).
+We typically summarize "redundancy of channel \(i\)" as an **average MI** to other channels (or sampled references).
 
 **Implementation**
 - `src/alignment/metrics/information/redundancy.py`
   - Computes correlations between projected outputs and converts to MI using the formula above.
-  - Returns **nonnegative** redundancy values (more redundancy ⇒ larger).
+  - Returns **nonnegative** redundancy values (more redundancy => larger).
 
 **Pruning sign**
 - When converted into an importance score: **use `-redundancy`** (or a negative weight).
@@ -121,7 +121,7 @@ For vision runs, per-layer metric arrays are usually stored under (names may var
 - `results.json["layer_metrics"][layer_name]["synergy"]`
 - (optionally) `mi_in_proxy`, `task_mi`, etc.
 
-Pruning strategies may consume these via “precomputed metrics” dicts.
+Pruning strategies may consume these via "precomputed metrics" dicts.
 
 ---
 
@@ -141,5 +141,5 @@ syn = get_metric("gaussian_pid_synergy_mmi")# MMI Gaussian PID synergy
 
 - It prevents **silent sign flips** (especially for redundancy).
 - It keeps metric naming/keys stable across refactors.
-- It gives reviewers and future contributors a single, repo-local “what exactly is computed?” reference.
+- It gives reviewers and future contributors a single, repo-local "what exactly is computed?" reference.
 

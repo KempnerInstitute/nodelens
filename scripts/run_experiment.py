@@ -308,7 +308,7 @@ def _create_cluster_experiment(config):
     weights_name = model_cfg.get("weights", None) if isinstance(model_cfg, dict) else None
     weights_arg = weights_name if pretrained else None
 
-    # Map model_name to torchvision function (handles vgg16→vgg16_bn alias)
+    # Map model_name to torchvision function (handles vgg16->vgg16_bn alias)
     _TORCHVISION_MAP = {
         "resnet18": ("resnet18", "IMAGENET1K_V1"),
         "resnet50": ("resnet50", "IMAGENET1K_V1"),

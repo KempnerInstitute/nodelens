@@ -53,7 +53,7 @@ class CascadingAlignmentPruning(BasePruningStrategy):
 
         Args:
             metric: Alignment metric to use
-            direction: 'forward' (input→output) or 'backward' (output→input)
+            direction: 'forward' (input->output) or 'backward' (output->input)
             config: Pruning configuration
             **metric_kwargs: Additional metric arguments
         """

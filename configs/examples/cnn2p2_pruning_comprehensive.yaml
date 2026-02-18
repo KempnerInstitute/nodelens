@@ -87,13 +87,13 @@ cnn:
 # Higher score = more important (keep) when selection_mode="low"
 #
 # INTERPRETATION GUIDE:
-# - rayleigh_quotient: High = aligned with data → keep (prune low)
-# - conditional_rayleigh_quotient: High = aligned with class-specific data → keep (prune low)
-# - mi_about_class: High = informative about class → keep (prune low)
-# - average_redundancy: High = MORE redundant → prune (use selection_mode="high" to prune high scorers)
-# - activation_l2_norm: High = active neuron → keep (prune low)
-# - composite_importance: Combines RQ + class_MI - redundancy → prune low
-# - alignment_minus_redundancy: RQ - R → prune low
+# - rayleigh_quotient: High = aligned with data -> keep (prune low)
+# - conditional_rayleigh_quotient: High = aligned with class-specific data -> keep (prune low)
+# - mi_about_class: High = informative about class -> keep (prune low)
+# - average_redundancy: High = MORE redundant -> prune (use selection_mode="high" to prune high scorers)
+# - activation_l2_norm: High = active neuron -> keep (prune low)
+# - composite_importance: Combines RQ + class_MI - redundancy -> prune low
+# - alignment_minus_redundancy: RQ - R -> prune low
 
 pruning:
   enabled: true

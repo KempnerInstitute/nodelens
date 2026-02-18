@@ -2,8 +2,8 @@
 Unit tests for cross-layer activation mixing metrics.
 
 Tests validate:
-- compute_downstream_importance: shape, non-negativity, high-corr → high MI
-- compute_within_layer_redundancy: correlated pair → high redundancy
+- compute_downstream_importance: shape, non-negativity, high-corr -> high MI
+- compute_within_layer_redundancy: correlated pair -> high redundancy
 """
 
 import pytest
@@ -114,7 +114,7 @@ class TestWithinLayerRedundancy:
         acts[:, 0] = 5.0  # constant
 
         red = compute_within_layer_redundancy(acts)
-        # Constant neuron correlation with others should be ~0 → low MI
+        # Constant neuron correlation with others should be ~0 -> low MI
         assert red[0] < red[1:].mean() + 0.1
 
 

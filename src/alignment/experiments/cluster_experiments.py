@@ -1589,7 +1589,7 @@ class ClusterAnalysisExperiment:
             # Activation-weighted influence proxy.
             # We approximate sigma_i as the (post-BN when present) channel std:
             #   sigma_conv = sqrt(RQ_i * ||w_i||^2)  (since RQ_i = Var(Y_i)/||w_i||^2)
-            #   sigma_postBN ≈ sigma_conv * |gamma| / sqrt(running_var + eps)
+            #   sigma_postBN ~ sigma_conv * |gamma| / sqrt(running_var + eps)
             if "rq" in src_metrics:
                 w_src = src_layer.weight.data.cpu().numpy().astype(np.float64)
                 w_norm_sq = np.sum(w_src.reshape(w_src.shape[0], -1) ** 2, axis=1)
@@ -3454,7 +3454,7 @@ class ClusterAnalysisExperiment:
         use_ixy_metric = method_name.endswith("_ixy") or "_ixy_" in method_name
 
         # Detect importance-aware clustering mode from method name.
-        # E.g., "cluster_aware_importance_gradient_weighted_ixy" → clustering_override = "importance_reassign"
+        # E.g., "cluster_aware_importance_gradient_weighted_ixy" -> clustering_override = "importance_reassign"
         # The clustering suffix is removed from base_method so variant dispatch works normally.
         _clustering_override: Optional[str] = None
         for _csuffix, _cmode in [
@@ -4518,39 +4518,39 @@ class ClusterAnalysisExperiment:
                     # Compute scores based on method
                     # SINGLE METRICS - prune LOW
                     if method == 'rq_low':
-                        scores = rq_norm  # Low RQ → prune
+                        scores = rq_norm  # Low RQ -> prune
                     elif method == 'redundancy_low':
-                        scores = red_norm  # Low redundancy → prune
+                        scores = red_norm  # Low redundancy -> prune
                     elif method == 'synergy_low':
-                        scores = syn_norm  # Low synergy → prune
+                        scores = syn_norm  # Low synergy -> prune
                     elif method == 'mi_low':
                         # MI = 0.5 * log(1 + RQ * ||w||^2) - get from mi_in_proxy
                         mi = metrics.get('mi_in_proxy', np.zeros(n_ch))
                         mi_norm = (mi - mi.min()) / (mi.max() - mi.min() + 1e-12)
-                        scores = mi_norm  # Low MI → prune
+                        scores = mi_norm  # Low MI -> prune
                     elif method == 'lp_low':
                         # Loss proxy (Fisher importance) - get from loss_proxy
                         lp = metrics.get('loss_proxy', np.zeros(n_ch))
                         lp_norm = (lp - lp.min()) / (lp.max() - lp.min() + 1e-12)
-                        scores = lp_norm  # Low LP → prune
+                        scores = lp_norm  # Low LP -> prune
                     
                     # SINGLE METRICS - prune HIGH
                     elif method == 'rq_high':
-                        scores = -rq_norm  # High RQ → prune (invert)
+                        scores = -rq_norm  # High RQ -> prune (invert)
                     elif method == 'redundancy_high':
-                        scores = -red_norm  # High redundancy → prune
+                        scores = -red_norm  # High redundancy -> prune
                     elif method == 'synergy_high':
-                        scores = -syn_norm  # High synergy → prune
+                        scores = -syn_norm  # High synergy -> prune
                     elif method == 'mi_high':
                         mi = metrics.get('mi_in_proxy', np.zeros(n_ch))
                         mi_norm = (mi - mi.min()) / (mi.max() - mi.min() + 1e-12)
-                        scores = -mi_norm  # High MI → prune
+                        scores = -mi_norm  # High MI -> prune
                     elif method == 'lp_high':
                         lp = metrics.get('loss_proxy', np.zeros(n_ch))
                         lp_norm = (lp - lp.min()) / (lp.max() - lp.min() + 1e-12)
-                        scores = -lp_norm  # High LP → prune
+                        scores = -lp_norm  # High LP -> prune
                     elif method == 'magnitude_high':
-                        scores = -mag_norm  # High magnitude → prune
+                        scores = -mag_norm  # High magnitude -> prune
                     
                     # COMPOSITE COMBINATIONS
                     elif method == 'composite':

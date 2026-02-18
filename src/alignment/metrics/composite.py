@@ -34,10 +34,10 @@ class CompositeImportance(BaseMetric):
     into a single importance score for pruning.
     
     Default weights are based on the alignment theory:
-    - High alignment (RQ) = important → positive weight
-    - High class MI = informative → positive weight  
-    - High synergy = unique contribution → positive weight
-    - High redundancy = replaceable → negative weight (subtract)
+    - High alignment (RQ) = important -> positive weight
+    - High class MI = informative -> positive weight  
+    - High synergy = unique contribution -> positive weight
+    - High redundancy = replaceable -> negative weight (subtract)
     
     Example:
         >>> metric = CompositeImportance(

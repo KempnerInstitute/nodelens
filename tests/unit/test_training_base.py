@@ -236,7 +236,7 @@ class TestEarlyStopping:
         trainer = BaseTrainer(model, config=config)
         trainer._should_stop_early(0.5)  # Best
         trainer._should_stop_early(0.6)  # Worse (patience=1)
-        assert trainer._should_stop_early(0.7) is True  # Worse (patience=2) → stop
+        assert trainer._should_stop_early(0.7) is True  # Worse (patience=2) -> stop
 
 
 # =========================================================================

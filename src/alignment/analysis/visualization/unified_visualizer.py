@@ -256,7 +256,7 @@ class UnifiedVisualizer:
         ax.hist(values, bins=100, edgecolor="black", alpha=0.7)
         ax.set_xlabel("Importance Score")
         ax.set_ylabel("Frequency")
-        ax.set_title(f"Histogram of Importance Scores — {layer_name}\nMetric: {metric_name}")
+        ax.set_title(f"Histogram of Importance Scores - {layer_name}\nMetric: {metric_name}")
 
         y_max = ax.get_ylim()[1]
         k = min(top_k, tensor.numel())
@@ -311,7 +311,7 @@ class UnifiedVisualizer:
         ax.hist(outgoing, bins=80, edgecolor="black", alpha=0.7)
         ax.set_xlabel("Outgoing Weight Value")
         ax.set_ylabel("Frequency")
-        ax.set_title(f"Outgoing Weights Histogram — {layer_name}\nNeuron {neuron_index}")
+        ax.set_title(f"Outgoing Weights Histogram - {layer_name}\nNeuron {neuron_index}")
 
         y_max = ax.get_ylim()[1]
         for i, idx in enumerate(top_idxs):
