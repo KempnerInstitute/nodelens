@@ -162,6 +162,13 @@ class ExperimentConfig:
     # When set to "ixy", clustering uses mi_in_proxy instead of rq as the first dimension
     clustering_first_metric: str = "rq"
 
+    # Clustering importance mode: how types are assigned during channel clustering.
+    # - "geometric": Standard k-means, types by centroid coordinates (default)
+    # - "score_augmented": k-means on (Score, log_RQ, Red, Syn); types by mean importance
+    # - "importance_reassign": Standard k-means geometry, reassign types by mean score
+    # - "quantile": Partition by composite score quartiles (no k-means)
+    clustering_importance_mode: str = "geometric"
+
     # Optional: compute per-channel loss proxy (Fisher/GN-style) on calibration data.
     compute_loss_proxy: bool = False
     loss_proxy_n_calibration: int = 1024

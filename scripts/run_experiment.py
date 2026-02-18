@@ -303,6 +303,8 @@ def _create_cluster_experiment(config):
             if "cifar100" in dataset_name
             else 10
             if "cifar10" in dataset_name
+            else 200
+            if "tinyimagenet" in dataset_name
             else 100
             if "imagenet100" in dataset_name
             else 1000
@@ -351,6 +353,28 @@ def _create_cluster_experiment(config):
             model.maxpool = torch.nn.Identity()
         except Exception:
             pass
+
+    # Tiny-ImageNet adaptation (64×64 input):
+    # - ResNet: 3x3 conv1 (stride 1), keep maxpool (64→32→16 is good for 4 ResNet stages)
+    # - VGG: use standard VGG (5 pool layers: 64→32→16→8→4→2), works at 64×64
+    # - MobileNetV2: reduce first conv stride from 2→1 (64→64 instead of 64→32)
+    if "tinyimagenet" in dataset_name:
+        if "resnet" in model_name:
+            try:
+                model.conv1 = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            except Exception:
+                pass
+        elif "mobilenet" in model_name:
+            try:
+                # MobileNetV2 first conv: change stride 2→1 for 64×64 input
+                first_conv = model.features[0][0]
+                model.features[0][0] = torch.nn.Conv2d(
+                    first_conv.in_channels, first_conv.out_channels,
+                    kernel_size=first_conv.kernel_size, stride=1,
+                    padding=first_conv.padding, bias=False,
+                )
+            except Exception:
+                pass
     
     # Load checkpoint if available, otherwise model needs to be trained
     if checkpoint_path and os.path.exists(checkpoint_path):
@@ -411,6 +435,34 @@ def _create_cluster_experiment(config):
         test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
         train_dataset = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=train_transform)
         test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=test_transform)
+    elif "tinyimagenet" in dataset_name:
+        # Tiny-ImageNet: 200 classes, 64×64 images, ImageFolder layout
+        root = dataset_cfg.get("root", "./data/tiny-imagenet-200") if isinstance(dataset_cfg, dict) else "./data/tiny-imagenet-200"
+        train_dir = Path(root) / "train"
+        val_dir = Path(root) / "val"
+        if not train_dir.exists() or not val_dir.exists():
+            raise FileNotFoundError(
+                f"Tiny-ImageNet not found. Expected ImageFolder dirs at: {train_dir} and {val_dir}. "
+                "Download from http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+            )
+
+        # Tiny-ImageNet uses ImageNet normalization stats (natural images)
+        tin_mean = (0.4802, 0.4481, 0.3975)
+        tin_std = (0.2770, 0.2691, 0.2821)
+        image_size = 64
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(image_size, padding=8),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(tin_mean, tin_std),
+        ])
+        val_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(tin_mean, tin_std),
+        ])
+        train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
+        test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
     elif "imagenet100" in dataset_name:
         # Expected folder structure: {root}/train/* and {root}/val/* (ImageFolder)
         root = dataset_cfg.get("root", "./data/imagenet100") if isinstance(dataset_cfg, dict) else "./data/imagenet100"

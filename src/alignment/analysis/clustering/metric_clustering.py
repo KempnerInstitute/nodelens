@@ -94,16 +94,18 @@ class MetricSpaceClustering:
         ] = mode  # type: ignore[assignment]
 
     def fit(
-        self, 
-        rq, 
-        red, 
-        syn, 
+        self,
+        rq,
+        red,
+        syn,
         name: str = "layer",
         ablation: str = "all",
+        importance_scores: Optional[np.ndarray] = None,
+        clustering_mode: str = "geometric",
     ) -> ClusterResult:
         """
         Cluster channels using specified metrics.
-        
+
         Args:
             rq: Rayleigh quotient values per channel
             red: Redundancy values per channel
@@ -115,7 +117,14 @@ class MetricSpaceClustering:
                 - "rq_syn": RQ + Synergy only
                 - "red_syn": Redundancy + Synergy only
                 - "rq_only", "red_only", "syn_only": Single metrics
-        
+            importance_scores: Per-channel composite importance scores (for
+                score_augmented, importance_reassign, quantile modes)
+            clustering_mode: How to cluster/assign types:
+                - "geometric": Standard k-means, types by centroid coordinates (default)
+                - "score_augmented": k-means on (Score, log_RQ, Red, Syn)
+                - "importance_reassign": Standard k-means geometry, reassign types by mean score
+                - "quantile": Partition by score quartiles (no k-means)
+
         Returns:
             ClusterResult with cluster assignments and statistics
         """
@@ -123,10 +132,15 @@ class MetricSpaceClustering:
         red = np.asarray(red).flatten()
         syn = np.asarray(syn).flatten()
         n = len(rq)
-        
+        clustering_mode = str(clustering_mode or "geometric").lower()
+
+        # --- Quantile mode: skip k-means entirely ---
+        if clustering_mode == "quantile" and importance_scores is not None:
+            return self._fit_quantile(rq, red, syn, importance_scores, name, ablation)
+
         # Get ablation mask
         use_rq, use_red, use_syn = METRIC_ABLATIONS.get(ablation, (True, True, True))
-        
+
         # Build feature matrix based on ablation
         features = []
         feature_names = []
@@ -139,46 +153,70 @@ class MetricSpaceClustering:
         if use_syn:
             features.append(syn)
             feature_names.append("syn")
-        
+
         if len(features) == 0:
-            # Fallback to all metrics if ablation is invalid
             features = [np.log(np.clip(rq, 1e-10, None)), red, syn]
             use_rq, use_red, use_syn = True, True, True
             ablation = "all"
-        
+
         X = np.column_stack(features)
-        X = (X - X.mean(0)) / (X.std(0) + 1e-8)
-        
+        X_std = (X - X.mean(0)) / (X.std(0) + 1e-8)
+
+        # --- Score-augmented mode: add importance score as extra feature ---
+        if clustering_mode == "score_augmented" and importance_scores is not None:
+            scores = np.asarray(importance_scores).flatten()[:n]
+            s_norm = self._norm01(scores)
+            X_cluster = np.column_stack([s_norm.reshape(-1, 1), X_std])
+            X_cluster = (X_cluster - X_cluster.mean(0)) / (X_cluster.std(0) + 1e-8)
+        else:
+            X_cluster = X_std
+
         # Adjust n_clusters for reduced feature dimensions
         effective_k = min(self.n_clusters, n - 1) if n > 1 else 1
         effective_k = max(1, effective_k)
-        
+
         if HAS_SK and n >= effective_k and effective_k >= 2:
             km = KMeans(effective_k, random_state=self.seed, n_init=10)
-            lab = km.fit_predict(X)
+            lab = km.fit_predict(X_cluster)
             cen = km.cluster_centers_
-            sil = silhouette_score(X, lab) if n > effective_k else 0.
+            sil = silhouette_score(X_cluster, lab) if n > effective_k else 0.
         else:
             lab = np.zeros(n, dtype=int)
-            cen = np.zeros((1, len(features)))
+            cen = np.zeros((1, X_cluster.shape[1]))
             sil = 0.
-        
-        # Type mapping needs full 3D centroids for consistent labeling
-        # Pad centroids with zeros for missing dimensions
-        full_cen = np.zeros((len(cen), 3))
-        idx = 0
-        if use_rq:
-            full_cen[:, 0] = cen[:, idx]
-            idx += 1
-        if use_red:
-            full_cen[:, 1] = cen[:, idx]
-            idx += 1
-        if use_syn:
-            full_cen[:, 2] = cen[:, idx]
-        
-        tm = self._types(full_cen, metrics_used=(use_rq, use_red, use_syn))
+
+        # For score_augmented, centroids include the score column at index 0;
+        # extract the geometry-only part for type mapping.
+        if clustering_mode == "score_augmented" and importance_scores is not None:
+            cen_geo = cen[:, 1:]  # drop score column
+        else:
+            cen_geo = cen
+
+        # Type mapping
+        if clustering_mode == "importance_reassign" and importance_scores is not None:
+            # Assign types by mean importance per cluster (higher score = higher type)
+            tm = self._types_by_importance(lab, importance_scores[:n], effective_k)
+        elif clustering_mode == "score_augmented" and importance_scores is not None:
+            # For score-augmented, also assign by importance (the geometry of augmented
+            # space doesn't have the same centroid semantics as pure geometric)
+            tm = self._types_by_importance(lab, importance_scores[:n], effective_k)
+        else:
+            # Geometric mode: use centroid coordinates for type assignment
+            # Pad centroids with zeros for missing dimensions
+            full_cen = np.zeros((len(cen_geo), 3))
+            idx = 0
+            if use_rq:
+                full_cen[:, 0] = cen_geo[:, idx] if idx < cen_geo.shape[1] else 0.0
+                idx += 1
+            if use_red:
+                full_cen[:, 1] = cen_geo[:, idx] if idx < cen_geo.shape[1] else 0.0
+                idx += 1
+            if use_syn:
+                full_cen[:, 2] = cen_geo[:, idx] if idx < cen_geo.shape[1] else 0.0
+            tm = self._types(full_cen, metrics_used=(use_rq, use_red, use_syn))
+
         tc = {t: int((lab == k).sum()) for k, t in tm.items()}
-        
+
         return ClusterResult(
             layer_name=name,
             n_channels=n,
@@ -192,6 +230,101 @@ class MetricSpaceClustering:
             ablation_mode=ablation,
         )
     
+    @staticmethod
+    def _norm01(x: np.ndarray) -> np.ndarray:
+        lo, hi = x.min(), x.max()
+        return (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
+
+    def _types_by_importance(
+        self,
+        labels: np.ndarray,
+        scores: np.ndarray,
+        n_clusters: int,
+    ) -> Dict[int, str]:
+        """Assign type names by ranking clusters by mean importance score.
+
+        Higher mean score -> higher-priority type:
+          rank 3 (highest) = "critical"
+          rank 2 = "synergistic"
+          rank 1 = "redundant"
+          rank 0 (lowest)  = "background"
+        """
+        type_names_ranked = ["background", "redundant", "synergistic", "critical"]
+        scores = np.asarray(scores).flatten()
+        mean_scores = []
+        for c in range(n_clusters):
+            mask = labels == c
+            mean_scores.append(float(np.mean(scores[mask])) if mask.any() else -np.inf)
+        rank = np.argsort(np.argsort(mean_scores))  # 0=lowest, n-1=highest
+        mapping: Dict[int, str] = {}
+        for c in range(n_clusters):
+            r = int(rank[c])
+            if r < len(type_names_ranked):
+                mapping[c] = type_names_ranked[r]
+            else:
+                mapping[c] = "background"
+        return mapping
+
+    def _fit_quantile(
+        self,
+        rq: np.ndarray,
+        red: np.ndarray,
+        syn: np.ndarray,
+        importance_scores: np.ndarray,
+        name: str,
+        ablation: str,
+    ) -> ClusterResult:
+        """Partition channels into quantile-based types by composite score."""
+        n = len(rq)
+        scores = np.asarray(importance_scores).flatten()[:n]
+        k = min(self.n_clusters, n)
+
+        quantiles = np.quantile(scores, np.linspace(0, 1, k + 1))
+        lab = np.zeros(n, dtype=int)
+        for i in range(k):
+            lo = quantiles[i]
+            hi = quantiles[i + 1] if i < k - 1 else np.inf
+            mask = (scores >= lo) & (scores < hi) if i < k - 1 else (scores >= lo)
+            lab[mask] = i
+
+        # Build pseudo-centroids from quantile means (for compatibility)
+        log_rq = np.log(np.clip(rq, 1e-10, None))
+        cen = np.zeros((k, 3))
+        for i in range(k):
+            mask = lab == i
+            if mask.any():
+                cen[i, 0] = float(np.mean(log_rq[mask]))
+                cen[i, 1] = float(np.mean(red[mask]))
+                cen[i, 2] = float(np.mean(syn[mask]))
+
+        # Silhouette on geometry features
+        X = np.column_stack([log_rq, red, syn])
+        X_std = (X - X.mean(0)) / (X.std(0) + 1e-8)
+        if HAS_SK and n > k and k >= 2:
+            sil = silhouette_score(X_std, lab)
+        else:
+            sil = 0.0
+
+        # Type mapping: quartile 0 = background (lowest), k-1 = critical (highest)
+        type_names_ranked = ["background", "redundant", "synergistic", "critical"]
+        tm: Dict[int, str] = {}
+        for i in range(k):
+            tm[i] = type_names_ranked[i] if i < len(type_names_ranked) else "background"
+        tc = {t: int((lab == k_id).sum()) for k_id, t in tm.items()}
+
+        return ClusterResult(
+            layer_name=name,
+            n_channels=n,
+            n_clusters=k,
+            labels=lab,
+            centroids=cen,
+            silhouette=sil,
+            type_mapping=tm,
+            type_counts=tc,
+            metrics_used=(True, True, True),
+            ablation_mode=ablation,
+        )
+
     def run_ablation_study(
         self,
         rq,

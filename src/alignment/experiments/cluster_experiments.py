@@ -1164,10 +1164,15 @@ class ClusterAnalysisExperiment:
             return 0.0
         return max(0.0, 0.5 * float(np.log(var_t * det_y / det_all)))
     
-    def run_clustering(self, run_ablation: Optional[bool] = None, first_metric: Optional[str] = None) -> Dict[str, Any]:
+    def run_clustering(
+        self,
+        run_ablation: Optional[bool] = None,
+        first_metric: Optional[str] = None,
+        clustering_importance_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Cluster channels in each layer.
-        
+
         Args:
             run_ablation: If True, also run ablation study with metric subsets.
                          Uses config.run_metric_ablation if not specified.
@@ -1175,47 +1180,79 @@ class ClusterAnalysisExperiment:
                          - "rq": Use Rayleigh Quotient (default)
                          - "ixy": Use I(X;Y) mutual information (mi_in_proxy)
                          Uses config.clustering_first_metric if not specified.
-        
+            clustering_importance_mode: Override for clustering importance mode. One of:
+                         - "geometric": Standard k-means (default)
+                         - "score_augmented": k-means with importance score as extra feature
+                         - "importance_reassign": k-means geometry, reassign types by score
+                         - "quantile": Partition by composite score quartiles
+
         Returns:
             Dict with cluster results (and ablation results if enabled)
         """
         # Determine first metric to use
         first_metric = first_metric or getattr(self.config, "clustering_first_metric", "rq")
         first_metric = str(first_metric).lower()
-        
+
         if first_metric == "ixy":
             metric_key = "mi_in_proxy"
             metric_label = "I(X;Y)"
         else:
             metric_key = "rq"
             metric_label = "RQ"
-        
-        logger.info(f"Clustering channels using {metric_label} as first metric...")
-        
+
+        # Determine clustering importance mode
+        c_mode = clustering_importance_mode or getattr(self.config, "clustering_importance_mode", "geometric")
+        c_mode = str(c_mode).lower()
+
+        logger.info(f"Clustering channels using {metric_label} as first metric, mode={c_mode}...")
+
         run_ablation = run_ablation if run_ablation is not None else bool(self.config.run_metric_ablation)
-        
+
         clusterer = MetricSpaceClustering(
             n_clusters=self.config.n_clusters,
             seed=self.config.seed,
             type_mapping_mode=str(self.config.type_mapping_mode).lower(),
         )
-        
+
         ablation_results = {}
-        
+
+        # Get score weights from config for computing importance scores
+        alpha = float(getattr(self.config, "cluster_aware_alpha", 1.0))
+        beta = float(getattr(self.config, "cluster_aware_beta", 0.5))
+        gamma = float(getattr(self.config, "cluster_aware_gamma", 0.3))
+
         for name, metrics in self.layer_metrics.items():
             # Get the first metric (RQ or I(X;Y))
             first_values = metrics.get(metric_key)
             if first_values is None:
-                # Fallback to RQ if mi_in_proxy not available
                 first_values = metrics.get("rq", np.ones(1))
                 if first_metric == "ixy":
                     logger.warning(f"  {name}: mi_in_proxy not available, falling back to RQ")
-            
+
+            # Compute importance scores for non-geometric modes
+            importance_scores = None
+            if c_mode != "geometric":
+                fv = np.asarray(first_values, dtype=np.float64).flatten()
+                rd = np.asarray(metrics.get("redundancy", np.zeros_like(fv)), dtype=np.float64).flatten()
+                sy = np.asarray(metrics.get("synergy", np.zeros_like(fv)), dtype=np.float64).flatten()
+                n = min(len(fv), len(rd), len(sy))
+                if n > 0:
+                    fv, rd, sy = fv[:n], rd[:n], sy[:n]
+                    log_fv = np.log(np.clip(fv, 1e-10, None))
+
+                    def _n01(x):
+                        lo, hi = x.min(), x.max()
+                        return (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
+
+                    importance_scores = alpha * _n01(log_fv) + beta * _n01(sy) - gamma * _n01(rd)
+
             result = clusterer.fit(
                 first_values,
                 metrics["redundancy"],
                 metrics["synergy"],
                 name,
+                importance_scores=importance_scores,
+                clustering_mode=c_mode,
             )
             self.cluster_results[name] = {
                 "labels": result.labels,
@@ -1225,7 +1262,8 @@ class ClusterAnalysisExperiment:
                 "type_counts": result.type_counts,
                 "layer_name": name,
                 "ablation_mode": "all",
-                "first_metric": first_metric,  # Track which metric was used
+                "first_metric": first_metric,
+                "clustering_mode": c_mode,
             }
             logger.info(f"  {name}: silhouette={result.silhouette:.3f}, types={result.type_counts}")
             
@@ -3414,6 +3452,20 @@ class ClusterAnalysisExperiment:
 
         # Flag to track whether we should use I(X;Y) instead of RQ
         use_ixy_metric = method_name.endswith("_ixy") or "_ixy_" in method_name
+
+        # Detect importance-aware clustering mode from method name.
+        # E.g., "cluster_aware_importance_gradient_weighted_ixy" → clustering_override = "importance_reassign"
+        # The clustering suffix is removed from base_method so variant dispatch works normally.
+        _clustering_override: Optional[str] = None
+        for _csuffix, _cmode in [
+            ("_importance", "importance_reassign"),
+            ("_quantile", "quantile"),
+            ("_score_augmented", "score_augmented"),
+        ]:
+            if _csuffix in base_method:
+                _clustering_override = _cmode
+                base_method = base_method.replace(_csuffix, "")
+                break
         
         # Variants for ablations / controls (applied *after* config overrides)
         if base_method == "cluster_aware_no_halo":
@@ -3608,6 +3660,40 @@ class ClusterAnalysisExperiment:
                 except Exception:
                     pruner_labels = labels
                     pruner_type_mapping = type_mapping
+
+            # Importance-aware clustering overrides: re-cluster with importance-based
+            # type assignment at pruning time (uses the same k-means geometry but
+            # reassigns types by composite score, or uses quantile partitioning).
+            if _clustering_override is not None:
+                try:
+                    _rq = np.asarray(pruner_metrics.get("rq", []), dtype=np.float64).reshape(-1)[:n_channels]
+                    _red = np.asarray(pruner_metrics.get("redundancy", []), dtype=np.float64).reshape(-1)[:n_channels]
+                    _syn = np.asarray(pruner_metrics.get("synergy", []), dtype=np.float64).reshape(-1)[:n_channels]
+                    _n = min(len(_rq), len(_red), len(_syn), n_channels)
+                    if _n >= 4:
+                        _rq, _red, _syn = _rq[:_n], _red[:_n], _syn[:_n]
+                        _log_rq = np.log(np.clip(_rq, 1e-10, None))
+
+                        def _n01(x):
+                            lo, hi = x.min(), x.max()
+                            return (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
+
+                        _imp = float(cfg.alpha) * _n01(_log_rq) + float(cfg.beta) * _n01(_syn) - float(cfg.gamma) * _n01(_red)
+
+                        _clusterer = MetricSpaceClustering(
+                            n_clusters=cfg.n_clusters,
+                            seed=self.config.seed,
+                            type_mapping_mode=str(self.config.type_mapping_mode).lower(),
+                        )
+                        _cr = _clusterer.fit(
+                            _rq, _red, _syn, layer_name,
+                            importance_scores=_imp,
+                            clustering_mode=_clustering_override,
+                        )
+                        pruner_labels = _cr.labels[:n_channels]
+                        pruner_type_mapping = _cr.type_mapping
+                except Exception:
+                    pass  # fall back to pre-computed clusters
 
             PrunerCls = ClusterAwarePruning
             if base_method in {
