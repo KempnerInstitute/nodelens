@@ -7,26 +7,26 @@
 # This config runs a comprehensive comparison of:
 # 
 # ┌─────────────────────────────────────────────────────────────────────────┐
-# │ CATEGORY           │ METHOD                        │ REFERENCE          │
+# | CATEGORY           | METHOD                        | REFERENCE          |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ ALIGNMENT-BASED    │ rayleigh_quotient (RQ)        │ Our method         │
-# │                    │ gaussian_mi_analytic (MI)     │ Related to RQ      │
-# │                    │ average_redundancy            │ Info-theoretic     │
+# | ALIGNMENT-BASED    | rayleigh_quotient (RQ)        | Our method         |
+# |                    | gaussian_mi_analytic (MI)     | Related to RQ      |
+# |                    | average_redundancy            | Info-theoretic     |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ SCAR METRICS       │ scar_loss_proxy               │ Activation + Grad  │
-# │ (activation+grad)  │ scar_activation_power         │ Raw activation     │
-# │                    │ scar_taylor                   │ First-order term   │
-# │                    │ scar_curvature                │ Second-order term  │
+# | SCAR METRICS       | scar_loss_proxy               | Activation + Grad  |
+# | (activation+grad)  | scar_activation_power         | Raw activation     |
+# |                    | scar_taylor                   | First-order term   |
+# |                    | scar_curvature                | Second-order term  |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ SUPERNODE-AWARE    │ supernode_protection_score    │ Protects important │
-# │                    │ supernode_connectivity_score  │ Connectivity-based │
+# | SUPERNODE-AWARE    | supernode_protection_score    | Protects important |
+# |                    | supernode_connectivity_score  | Connectivity-based |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ GENERALIZED        │ generalized_importance        │ No outlier needed  │
+# | GENERALIZED        | generalized_importance        | No outlier needed  |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ MAGNITUDE-BASED    │ activation_l2_norm            │ Common baseline    │
+# | MAGNITUDE-BASED    | activation_l2_norm            | Common baseline    |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ SOTA BASELINES     │ wanda                         │ Sun et al. 2023    │
-# │                    │ sparsegpt                     │ Frantar+Alistarh'23│
+# | SOTA BASELINES     | wanda                         | Sun et al. 2023    |
+# |                    | sparsegpt                     | Frantar+Alistarh'23|
 # └─────────────────────────────────────────────────────────────────────────┘
 #
 # EVALUATION BENCHMARKS:
@@ -364,32 +364,32 @@ visualization:
 # ├── results_YYYYMMDD_HHMMSS.json    # All metrics and scores
 # ├── experiment.log
 # ├── plots/
-# │   ├── pruning/
-# │   │   ├── pruning_comparison.png                    # All methods, perplexity
-# │   │   ├── pruning_comparison_loss.png              # All methods, loss
-# │   │   ├── pruning_comparison_accuracy_mmlu.png     # All methods, MMLU
-# │   │   ├── pruning_comparison_accuracy_*.png        # Other benchmarks
-# │   │   └── pruning_<method>_comparison_*.png        # Per-method plots
-# │   ├── histograms/
-# │   │   ├── histogram_rayleigh_quotient.png
-# │   │   ├── histogram_scar_loss_proxy.png
-# │   │   └── histogram_*.png
-# │   ├── scatter/
-# │   │   ├── scatter_activation_l2_norm_vs_rayleigh_quotient.png
-# │   │   └── scatter_*.png
-# │   ├── supernode/
-# │   │   ├── supernode_comparison_*.png
-# │   │   └── supernode_score_dist_*.png
-# │   ├── supernode_robustness/
-# │   │   ├── jaccard_heatmap_*.png          # Metric overlap heatmaps
-# │   │   ├── spearman_heatmap_*.png         # Score correlation heatmaps
-# │   │   ├── bootstrap_stability_*.png      # Per-neuron stability
-# │   │   ├── consistency_bars_*.png         # Cross-metric consistency
-# │   │   └── score_scatter_matrix_*.png     # Metric pair correlations
-# │   ├── redundancy/
-# │   │   └── redundancy_heatmap_*.png
-# │   └── scar/
-# │       ├── scar_loss_proxy_layers.png
-# │       └── scar_metrics_heatmap.png
+# |   ├── pruning/
+# |   |   ├── pruning_comparison.png                    # All methods, perplexity
+# |   |   ├── pruning_comparison_loss.png              # All methods, loss
+# |   |   ├── pruning_comparison_accuracy_mmlu.png     # All methods, MMLU
+# |   |   ├── pruning_comparison_accuracy_*.png        # Other benchmarks
+# |   |   └── pruning_<method>_comparison_*.png        # Per-method plots
+# |   ├── histograms/
+# |   |   ├── histogram_rayleigh_quotient.png
+# |   |   ├── histogram_scar_loss_proxy.png
+# |   |   └── histogram_*.png
+# |   ├── scatter/
+# |   |   ├── scatter_activation_l2_norm_vs_rayleigh_quotient.png
+# |   |   └── scatter_*.png
+# |   ├── supernode/
+# |   |   ├── supernode_comparison_*.png
+# |   |   └── supernode_score_dist_*.png
+# |   ├── supernode_robustness/
+# |   |   ├── jaccard_heatmap_*.png          # Metric overlap heatmaps
+# |   |   ├── spearman_heatmap_*.png         # Score correlation heatmaps
+# |   |   ├── bootstrap_stability_*.png      # Per-neuron stability
+# |   |   ├── consistency_bars_*.png         # Cross-metric consistency
+# |   |   └── score_scatter_matrix_*.png     # Metric pair correlations
+# |   ├── redundancy/
+# |   |   └── redundancy_heatmap_*.png
+# |   └── scar/
+# |       ├── scar_loss_proxy_layers.png
+# |       └── scar_metrics_heatmap.png
 # └── checkpoints/
 

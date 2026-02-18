@@ -34,58 +34,60 @@ from typing import Optional
 import torch
 import yaml
 
-# Add the project root and src directory to Python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-repo_root = os.path.dirname(current_dir)
-sys.path.insert(0, repo_root)
-sys.path.insert(0, os.path.join(repo_root, "src"))
+try:
+    from alignment.experiments.general_alignment import GeneralAlignmentExperiment
+    from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+    from alignment.experiments.cluster_experiments import (
+        ClusterAnalysisExperiment,
+        ClusterAnalysisConfig,
+        VisionExperiment,  # backward compat
+        VisionExperimentConfig,  # backward compat
+    )
+except ImportError:
+    # Repo-local runs (without installing the package): add project root + src/ to sys.path.
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(current_dir)
+    sys.path.insert(0, repo_root)
+    sys.path.insert(0, os.path.join(repo_root, "src"))
 
-# Configure tqdm globally to avoid ANSI escape codes in log files
-# This is especially important when running under SLURM where output is redirected to files
-# The [A escape codes you see in logs are cursor movement codes from tqdm progress bars
+    from alignment.experiments.general_alignment import GeneralAlignmentExperiment
+    from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+    from alignment.experiments.cluster_experiments import (
+        ClusterAnalysisExperiment,
+        ClusterAnalysisConfig,
+        VisionExperiment,  # backward compat
+        VisionExperimentConfig,  # backward compat
+    )
 
-# Set environment variable for libraries that respect it (e.g., transformers)
-# This tells tqdm to use simpler formatting
-os.environ.setdefault('TQDM_DISABLE', '0')  # Keep tqdm enabled but configure it
-
+# Configure tqdm to avoid ANSI escape codes in log files (common under SLURM).
 try:
     from tqdm import tqdm
     import tqdm as tqdm_module
-    
-    # Check if we're in a terminal (TTY) - if not, we're likely logging to a file
-    is_tty = hasattr(sys.stderr, 'isatty') and sys.stderr.isatty()
-    
-    # Also check if we're running under SLURM (common case where logs go to files)
-    is_slurm = 'SLURM_JOB_ID' in os.environ
-    
+
+    # Check if we're in a terminal (TTY) - if not, we're likely logging to a file.
+    is_tty = hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+
+    # Also check if we're running under SLURM (common case where logs go to files).
+    is_slurm = "SLURM_JOB_ID" in os.environ
+
     if not is_tty or is_slurm:
-        # When not in terminal or under SLURM, configure tqdm to avoid ANSI escape codes
-        # This prevents escape codes like [A from appearing in log files
         original_tqdm = tqdm_module.tqdm
-        
+
         def patched_tqdm(*args, **kwargs):
-            # Force ASCII mode and simpler formatting when output might go to a file
-            kwargs.setdefault('ascii', True)  # Use ASCII instead of Unicode blocks (prevents █▋ characters)
-            kwargs.setdefault('ncols', 100)   # Fixed width
-            kwargs.setdefault('file', sys.stderr)  # Always use stderr
-            # Disable dynamic resizing which can cause issues
-            kwargs.setdefault('dynamic_ncols', False)
-            # Minimize escape codes
-            kwargs.setdefault('leave', False)  # Don't leave progress bar after completion
+            # Force ASCII mode and simpler formatting when output might go to a file.
+            kwargs.setdefault("ascii", True)  # prevent Unicode blocks in logs
+            kwargs.setdefault("ncols", 100)  # fixed width
+            kwargs.setdefault("file", sys.stderr)  # always use stderr
+            kwargs.setdefault("dynamic_ncols", False)  # avoid resizing escape codes
+            kwargs.setdefault("leave", False)  # don't leave progress bars in logs
             return original_tqdm(*args, **kwargs)
-        
+
         tqdm_module.tqdm = patched_tqdm
 except ImportError:
     pass  # tqdm not available, skip configuration
 
-from alignment.experiments.general_alignment import GeneralAlignmentExperiment
-from alignment.experiments.llm_experiments import LLMAlignmentExperiment
-from alignment.experiments.cluster_experiments import (
-    ClusterAnalysisExperiment,
-    ClusterAnalysisConfig,
-    VisionExperiment,  # backward compat
-    VisionExperimentConfig,  # backward compat
-)
+# Set environment variable for libraries that respect it (e.g., transformers).
+os.environ.setdefault("TQDM_DISABLE", "0")
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +96,7 @@ def _create_cluster_experiment(config):
     """Create ClusterAnalysisExperiment from unified config."""
     import torch
     import torchvision
-    import torchvision.transforms as transforms
-    
+
     # Helper to safely get nested config values
     def _get_nested(obj, key, default):
         """Get nested config value, handling both dict and object attributes."""
@@ -140,6 +141,23 @@ def _create_cluster_experiment(config):
         if hasattr(config, "pruning_max_per_layer")
         else (pruning_cfg.get("max_per_layer", 0.95) if isinstance(pruning_cfg, dict) else 0.95)
     )
+    pruning_max_per_layer_sparsity_cap = float(
+        getattr(config, "pruning_max_per_layer_sparsity_cap", None)
+        if hasattr(config, "pruning_max_per_layer_sparsity_cap")
+        else (pruning_cfg.get("max_per_layer_sparsity_cap", 0.90) if isinstance(pruning_cfg, dict) else 0.90)
+    )
+
+    # Optional pruning layer filters (e.g., MobileNetV2 pointwise-only pruning)
+    pruning_pointwise_only = bool(
+        getattr(config, "pruning_pointwise_only", False)
+        if hasattr(config, "pruning_pointwise_only")
+        else (pruning_cfg.get("pointwise_only", False) if isinstance(pruning_cfg, dict) else False)
+    )
+    pruning_skip_depthwise = bool(
+        getattr(config, "pruning_skip_depthwise", False)
+        if hasattr(config, "pruning_skip_depthwise")
+        else (pruning_cfg.get("skip_depthwise", False) if isinstance(pruning_cfg, dict) else False)
+    )
     
     # Get fine-tuning settings
     fine_tune_cfg = pruning_cfg.get("fine_tune", {}) if isinstance(pruning_cfg, dict) else {}
@@ -164,55 +182,74 @@ def _create_cluster_experiment(config):
     
     # Get pruning algorithms/methods
     pruning_methods = getattr(config, "pruning_strategies", None) or \
+                     (pruning_cfg.get("methods") if isinstance(pruning_cfg, dict) else None) or \
                      (pruning_cfg.get("algorithms") if isinstance(pruning_cfg, dict) else None) or \
                      ['random', 'magnitude', 'taylor', 'composite', 'cluster_aware']
     
-    # Build ClusterAnalysisConfig from the loaded config
-    cluster_config = ClusterAnalysisConfig(
-        model_name=getattr(config, "model_name", model_cfg.get("name", "resnet18") if isinstance(model_cfg, dict) else "resnet18"),
-        dataset_name=getattr(config, "dataset_name", dataset_cfg.get("name", "cifar10") if isinstance(dataset_cfg, dict) else "cifar10"),
-        n_calibration=getattr(config, "n_calibration", metrics_cfg.get("n_calibration_samples", 5000) if isinstance(metrics_cfg, dict) else 5000),
-        n_clusters=getattr(config, "n_clusters", clustering_cfg.get("n_clusters", 4) if isinstance(clustering_cfg, dict) else 4),
-        activation_samples=getattr(
-            config,
-            "activation_samples",
-            metrics_cfg.get("activation_samples", "flatten_spatial") if isinstance(metrics_cfg, dict) else "flatten_spatial",
-        ),
-        spatial_samples_per_image=int(
-            getattr(
-                config,
-                "spatial_samples_per_image",
-                metrics_cfg.get("spatial_samples_per_image", 16) if isinstance(metrics_cfg, dict) else 16,
-            )
-        ),
-        synergy_target=getattr(config, "synergy_target", metrics_cfg.get("synergy_target", "logit_margin") if isinstance(metrics_cfg, dict) else "logit_margin"),
-        synergy_candidate_pool=int(
-            getattr(
-                config,
-                "synergy_candidate_pool",
-                metrics_cfg.get("synergy_candidate_pool", 50) if isinstance(metrics_cfg, dict) else 50,
-            )
-        ),
-        synergy_pairs=getattr(config, "synergy_pairs", metrics_cfg.get("synergy_num_pairs", 10) if isinstance(metrics_cfg, dict) else 10),
-        halo_percentile=getattr(config, "halo_percentile", halo_cfg.get("percentile", 90.0) if isinstance(halo_cfg, dict) else 90.0),
-        pruning_ratios=pruning_ratios,
-        pruning_methods=pruning_methods,
-        fine_tune_after_pruning=fine_tune_enabled,
-        fine_tune_epochs=fine_tune_epochs,
-        fine_tune_lr=fine_tune_lr,
-        fine_tune_max_batches=fine_tune_max_batches,
-        fine_tune_weight_decay=fine_tune_weight_decay,
-        output_dir=getattr(config, "experiment_dir", "results/cluster_analysis"),
-        device=getattr(config, "device", "cuda"),
-        seed=getattr(config, "seed", 42),
-    )
+    # ClusterAnalysisExperiment consumes the repo-standard ExperimentConfig directly.
+    # Keep names from the historical API for minimal downstream churn.
+    cluster_config = config
 
-    # Propagate pruning distribution knobs into ClusterAnalysisConfig so all pruning
-    # methods (including cluster-aware) use the same allocation regime.
-    setattr(cluster_config, "pruning_distribution", str(pruning_distribution))
-    setattr(cluster_config, "dependency_aware_pruning", bool(dependency_aware_pruning))
-    setattr(cluster_config, "pruning_min_per_layer", float(pruning_min_per_layer))
-    setattr(cluster_config, "pruning_max_per_layer", float(pruning_max_per_layer))
+    # Ensure the pruning-related fields are consistent if any were supplied via legacy nesting.
+    try:
+        cluster_config.pruning_amounts = list(pruning_ratios)
+    except Exception:
+        pass
+    try:
+        cluster_config.pruning_strategies = list(pruning_methods)
+    except Exception:
+        pass
+    try:
+        cluster_config.fine_tune_after_pruning = bool(fine_tune_enabled)
+        cluster_config.fine_tune_epochs = int(fine_tune_epochs)
+        cluster_config.fine_tune_learning_rate = float(fine_tune_lr)
+        cluster_config.fine_tune_max_batches = fine_tune_max_batches
+        cluster_config.fine_tune_weight_decay = float(fine_tune_weight_decay)
+    except Exception:
+        pass
+
+    # Metric ablation + permutation baseline (vision diagnostics)
+    ablation_cfg = clustering_cfg.get("ablation", {}) if isinstance(clustering_cfg, dict) else {}
+    run_metric_ablation = bool(
+        getattr(config, "run_metric_ablation", False)
+        or (ablation_cfg.get("enabled", False) if isinstance(ablation_cfg, dict) else False)
+    )
+    metric_ablations = getattr(config, "metric_ablations", None)
+    if not metric_ablations and isinstance(ablation_cfg, dict):
+        metric_ablations = ablation_cfg.get("modes")
+    if not metric_ablations:
+        metric_ablations = ["all", "rq_red", "rq_syn", "red_syn"]
+
+    perm_cfg = halo_cfg.get("permutation_baseline", {}) if isinstance(halo_cfg, dict) else {}
+    run_permutation_baseline = bool(
+        getattr(config, "run_permutation_baseline", False)
+        or (perm_cfg.get("enabled", False) if isinstance(perm_cfg, dict) else False)
+    )
+    n_permutations = getattr(config, "n_permutations", None)
+    if n_permutations is None and isinstance(perm_cfg, dict):
+        n_permutations = perm_cfg.get("n_permutations")
+    if n_permutations is None:
+        n_permutations = 100
+
+    try:
+        cluster_config.run_metric_ablation = bool(run_metric_ablation)
+        cluster_config.metric_ablations = list(metric_ablations)
+        cluster_config.run_permutation_baseline = bool(run_permutation_baseline)
+        cluster_config.n_permutations = int(n_permutations)
+    except Exception:
+        pass
+
+    # Ensure pruning allocation knobs are on the flat config (cluster-aware and baselines share these).
+    try:
+        cluster_config.pruning_distribution = str(pruning_distribution)
+        cluster_config.dependency_aware_pruning = bool(dependency_aware_pruning)
+        cluster_config.pruning_min_per_layer = float(pruning_min_per_layer)
+        cluster_config.pruning_max_per_layer = float(pruning_max_per_layer)
+        cluster_config.pruning_max_per_layer_sparsity_cap = float(pruning_max_per_layer_sparsity_cap)
+        cluster_config.pruning_pointwise_only = bool(pruning_pointwise_only)
+        cluster_config.pruning_skip_depthwise = bool(pruning_skip_depthwise)
+    except Exception:
+        pass
 
     # Optional: allow sweeping cluster-aware score weights via nested pruning config:
     #   pruning.cluster_aware.{alpha,beta,gamma,lambda_halo,protect_critical_frac}
@@ -249,39 +286,73 @@ def _create_cluster_experiment(config):
         if hasattr(config, attr):
             setattr(cluster_config, attr, float(getattr(config, attr)))
     
-    # Load model
-    model_name = cluster_config.model_name.lower()
-    dataset_name = cluster_config.dataset_name.lower()
-    # Prefer explicit num_classes from config.model.num_classes when present
-    num_classes = (
-        int(model_cfg.get("num_classes")) if isinstance(model_cfg, dict) and model_cfg.get("num_classes") is not None
-        else (10 if "cifar10" in dataset_name else 100 if "cifar100" in dataset_name else 100 if "imagenet100" in dataset_name else 1000)
-    )
-    
-    # Check for pre-trained checkpoint
-    model_cfg = _get_nested(config, "model", {})
-    checkpoint_path = model_cfg.get("checkpoint", None) if isinstance(model_cfg, dict) else None
-    checkpoint_path = checkpoint_path or getattr(config, "model_checkpoint", None)
-    
-    pretrained = bool(model_cfg.get("pretrained", True)) if isinstance(model_cfg, dict) else True
+    # ---------------------------------------------------------------
+    # Create model using torchvision + registry-based stem adaptation
+    # ---------------------------------------------------------------
+    from alignment.models.hub import adapt_model_for_dataset
+    from alignment.dataops.datasets.unified_dataset import DATASET_CONFIGS
+
+    model_name = str(cluster_config.model_name).lower()
+    dataset_name = str(cluster_config.dataset_name).lower()
+
+    # Resolve num_classes: explicit model_config > dataset registry > legacy fallback
+    model_cfg = getattr(cluster_config, "model_config", {}) or {}
+    if isinstance(model_cfg, dict) and model_cfg.get("num_classes") is not None:
+        num_classes = int(model_cfg["num_classes"])
+    elif dataset_name in DATASET_CONFIGS:
+        num_classes = DATASET_CONFIGS[dataset_name]["num_classes"]
+    else:
+        num_classes = 1000
+
+    pretrained = bool(getattr(cluster_config, "pretrained", True))
     weights_name = model_cfg.get("weights", None) if isinstance(model_cfg, dict) else None
     weights_arg = weights_name if pretrained else None
 
-    if "resnet18" in model_name:
-        model = torchvision.models.resnet18(weights=weights_arg or 'IMAGENET1K_V1')
-        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-    elif "resnet50" in model_name:
-        model = torchvision.models.resnet50(weights=weights_arg or 'IMAGENET1K_V1')
-        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-    elif "vgg16" in model_name:
-        model = torchvision.models.vgg16_bn(weights=weights_arg or 'IMAGENET1K_V1')
-        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
-    elif "mobilenet" in model_name:
-        model = torchvision.models.mobilenet_v2(weights=weights_arg or 'IMAGENET1K_V1')
-        model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
-    else:
-        raise ValueError(f"Unknown model: {model_name}")
-    
+    # Map model_name to torchvision function (handles vgg16->vgg16_bn alias)
+    _TORCHVISION_MAP = {
+        "resnet18": ("resnet18", "IMAGENET1K_V1"),
+        "resnet50": ("resnet50", "IMAGENET1K_V1"),
+        "vgg16": ("vgg16_bn", "IMAGENET1K_V1"),
+        "mobilenetv2": ("mobilenet_v2", "IMAGENET1K_V1"),
+        "mobilenet_v2": ("mobilenet_v2", "IMAGENET1K_V1"),
+        "mobilenet": ("mobilenet_v2", "IMAGENET1K_V1"),
+        "alexnet": ("alexnet", "IMAGENET1K_V1"),
+    }
+
+    tv_key = None
+    for key in _TORCHVISION_MAP:
+        if key in model_name:
+            tv_key = key
+            break
+
+    if tv_key is None:
+        raise ValueError(
+            f"Unknown model: {model_name}. Supported: {list(_TORCHVISION_MAP.keys())}"
+        )
+
+    tv_func_name, default_weights = _TORCHVISION_MAP[tv_key]
+    tv_func = getattr(torchvision.models, tv_func_name)
+    model = tv_func(weights=weights_arg or default_weights)
+
+    # Adapt classifier head for target num_classes
+    if int(num_classes) != 1000:
+        if hasattr(model, "fc"):
+            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        elif hasattr(model, "classifier"):
+            if isinstance(model.classifier, torch.nn.Sequential):
+                model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+            else:
+                model.classifier = torch.nn.Linear(model.classifier.in_features, num_classes)
+
+    # Adapt model stem for dataset resolution (CIFAR, Tiny-ImageNet, etc.)
+    # This is now handled by a shared utility in src/alignment/models/hub.py
+    adapt_model_for_dataset(model, model_name, dataset_name, pretrained=pretrained)
+
+    # Optional: explicit checkpoint
+    checkpoint_path = getattr(cluster_config, "model_checkpoint", None) or (
+        model_cfg.get("checkpoint") if isinstance(model_cfg, dict) else None
+    )
+
     # Load checkpoint if available, otherwise model needs to be trained
     if checkpoint_path and os.path.exists(checkpoint_path):
         logger.info(f"Loading model checkpoint from {checkpoint_path}")
@@ -291,99 +362,49 @@ def _create_cluster_experiment(config):
         model.load_state_dict(state_dict)
         needs_training = False
     else:
-        logger.warning(f"No checkpoint found - model needs to be trained on {cluster_config.dataset_name}")
-        needs_training = True
-    
-    # Load dataset
-    if "cifar10" in dataset_name:
-        mean = (0.4914, 0.4822, 0.4465)
-        std = (0.2470, 0.2435, 0.2616)
-        root = (
-            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
-            or getattr(config, "data_path", None)
-            or "./data"
-        )
-        # Use standard CIFAR augmentation when training so baseline accuracies match common reporting.
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
-        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
-        train_dataset = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=train_transform)
-        test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=test_transform)
-    elif "cifar100" in dataset_name:
-        mean = (0.5071, 0.4867, 0.4408)
-        std = (0.2675, 0.2565, 0.2761)
-        root = (
-            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
-            or getattr(config, "data_path", None)
-            or "./data"
-        )
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
-        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
-        train_dataset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=train_transform)
-        test_dataset = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=test_transform)
-    elif "imagenet100" in dataset_name:
-        # Expected folder structure: {root}/train/* and {root}/val/* (ImageFolder)
-        root = dataset_cfg.get("root", "./data/imagenet100") if isinstance(dataset_cfg, dict) else "./data/imagenet100"
-        train_dir = Path(root) / "train"
-        val_dir = Path(root) / "val"
-        if not train_dir.exists() or not val_dir.exists():
-            raise FileNotFoundError(
-                f"ImageNet-100 not found. Expected ImageFolder dirs at: {train_dir} and {val_dir}"
-            )
+        if bool(pretrained) and int(num_classes) == 1000:
+            logger.info("No checkpoint provided; using pretrained ImageNet-1K head (no training).")
+            needs_training = False
+        else:
+            logger.warning(f"No checkpoint found - model needs to be trained on {cluster_config.dataset_name}")
+            needs_training = True
 
-        imagenet_mean = (0.485, 0.456, 0.406)
-        imagenet_std = (0.229, 0.224, 0.225)
-        image_size = int(dataset_cfg.get("image_size", 224)) if isinstance(dataset_cfg, dict) else 224
-        train_transform = transforms.Compose([
-            transforms.RandomResizedCrop(image_size),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(imagenet_mean, imagenet_std),
-        ])
-        val_transform = transforms.Compose([
-            transforms.Resize(int(image_size * 256 / 224)),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(imagenet_mean, imagenet_std),
-        ])
-        train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
-        test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
-    
+    # ---------------------------------------------------------------
+    # Create dataset using unified registry (DATASET_CONFIGS)
+    # ---------------------------------------------------------------
+    # Resolve data path: dataset_config.root > data_path > registry default
+    dataset_cfg = getattr(cluster_config, "dataset_config", {}) or {}
+    if not isinstance(dataset_cfg, dict):
+        dataset_cfg = {}
+    data_path = (
+        dataset_cfg.get("root")
+        or getattr(config, "data_path", None)
+        or "./data"
+    )
+
+    if dataset_name not in DATASET_CONFIGS:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(DATASET_CONFIGS.keys())}")
+
+    from alignment.dataops.datasets.unified_dataset import UnifiedDataset
+    train_dataset = UnifiedDataset(
+        dataset_type=dataset_name,
+        data_path=data_path,
+        train=True,
+        augment=True,
+        normalize=True,
+    )
+    test_dataset = UnifiedDataset(
+        dataset_type=dataset_name,
+        data_path=data_path,
+        train=False,
+        augment=False,
+        normalize=True,
+    )
+
     batch_size = int(getattr(config, "batch_size", 128))
     num_workers = int(getattr(config, "num_workers", 4))
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=num_workers)
-    
-    # CIFAR-specific stem tweak: using the ImageNet stem (7x7,stride2 + maxpool)
-    # degrades CIFAR accuracy. Use the standard CIFAR stem and (when pretrained)
-    # seed weights by center-cropping the 7x7 conv filter.
-    if ("cifar" in dataset_name) and ("resnet" in model_name):
-        if hasattr(model, "conv1") and hasattr(model, "maxpool"):
-            old_conv = model.conv1
-            new_conv = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            try:
-                if pretrained and hasattr(old_conv, "weight") and old_conv.weight.shape[-1] == 7:
-                    with torch.no_grad():
-                        new_conv.weight.copy_(old_conv.weight[:, :, 2:5, 2:5])
-            except Exception:
-                pass
-            model.conv1 = new_conv
-            model.maxpool = torch.nn.Identity()
 
     # Train/fine-tune the model on target dataset before experiments.
     # If you want a pure "no-training" analysis, provide an explicit checkpoint and set do_train=false.
@@ -409,7 +430,12 @@ def _create_cluster_experiment(config):
         )
     
     # Save the trained model checkpoint
-    output_dir = Path(cluster_config.output_dir)
+    # Standard runner sets config.experiment_dir to the job directory.
+    output_dir = Path(
+        getattr(cluster_config, "experiment_dir", None)
+        or getattr(cluster_config, "results_path", None)  # legacy
+        or "results/cluster_analysis"
+    )
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True, parents=True)
     trained_checkpoint = checkpoint_dir / "trained_model.pth"
@@ -840,6 +866,11 @@ def main():
     parser.add_argument("--output-dir", type=str, help="Override output directory (full path)")
     parser.add_argument("--base-output-dir", type=str, help="Override base output directory (creates job subdir)")
     parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow running with a dirty git working tree (not recommended for paper-grade artifacts).",
+    )
+    parser.add_argument(
         "--analysis-only",
         action="store_true",
         help="Load existing experiment and regenerate analysis/plots",
@@ -851,6 +882,11 @@ def main():
     )
 
     args, unknown = parser.parse_known_args()
+
+    # Determine repo root for provenance checks. This works both when running from a
+    # source checkout and when the package is importable (where the earlier fallback
+    # ImportError branch is not taken).
+    repo_root_path = Path(__file__).resolve().parent.parent
 
     # Parse overrides
     overrides = {}
@@ -865,10 +901,58 @@ def main():
     from alignment.configs.config_loader import load_config_with_overrides as proper_load_config
     cli_overrides = [x for x in (unknown or []) if isinstance(x, str) and "=" in x]
     config = proper_load_config(args.config, overrides=overrides or None, cli_args=cli_overrides or None)
+
+    # -------------------------------------------------------------------------
+    # Paper-grade reproducibility guard: require clean git state unless explicitly
+    # overridden. This prevents '...-dirty' results from being accidentally used
+    # in reports/figures.
+    # -------------------------------------------------------------------------
+    def _git_porcelain_status(cwd: str) -> str:
+        try:
+            import subprocess
+
+            return subprocess.check_output(["git", "status", "--porcelain"], cwd=cwd, text=True).strip()
+        except Exception:
+            return ""
+
+    # Only enforce for full experiment runs (not analysis-only regeneration).
+    if not bool(args.analysis_only):
+        status = _git_porcelain_status(str(repo_root_path))
+        is_dirty = bool(status)
+        if is_dirty and not bool(args.allow_dirty):
+            print("\nERROR: git working tree is dirty.")
+            print("Refusing to run because this often leads to irreproducible artifacts.")
+            print("Options:")
+            print("  - Commit/stash your changes, then rerun")
+            print("  - Or rerun with --allow-dirty (will record git diff in the run dir)\n")
+            sys.exit(2)
     
     # Override base_output_dir if provided via CLI
     if args.base_output_dir:
         config.base_output_dir = args.base_output_dir
+
+    # -------------------------------------------------------------------------
+    # Global seeding (important for reproducibility of:
+    # - DataLoader shuffle order
+    # - stochastic data augmentation (RandomCrop/Flip) across workers
+    # - any metric sampling that uses numpy/torch RNGs
+    # -------------------------------------------------------------------------
+    try:
+        import random
+        import numpy as np
+        import torch
+
+        seed = int(getattr(config, "seed", 42))
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        # Keep cuDNN deterministic for stable results across reruns.
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
 
     is_analysis_only = bool(args.analysis_only)
 
@@ -900,6 +984,22 @@ def main():
 
         config_save_path = output_dir / "experiment_config.yaml"
         config.save(config_save_path)
+
+        # If we allowed a dirty run, record the diff for exact provenance.
+        if bool(args.allow_dirty):
+            try:
+                import subprocess
+
+                status = subprocess.check_output(["git", "status", "--porcelain"], cwd=str(repo_root_path), text=True).strip()
+                if status:
+                    (output_dir / "git_status_porcelain.txt").write_text(status + "\n")
+                    diff = subprocess.check_output(["git", "diff"], cwd=str(repo_root_path), text=True)
+                    (output_dir / "git_diff.patch").write_text(diff)
+                    diff_cached = subprocess.check_output(["git", "diff", "--cached"], cwd=str(repo_root_path), text=True)
+                    if diff_cached.strip():
+                        (output_dir / "git_diff_cached.patch").write_text(diff_cached)
+            except Exception:
+                pass
 
         # Set paths - use new subdirectory structure
         config.checkpoint_dir = str(output_dir / "checkpoints")

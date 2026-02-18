@@ -1,0 +1,127 @@
+# =============================================================================
+# AlexNet on ImageNet-1K - PAPER PILOT (no training; fast pruning sweep)
+# =============================================================================
+# Goal: generate a tractable AlexNet/ImageNet-1K pruning result by:
+#   - using the native pretrained 1000-way head (no training)
+#   - running a small pruning grid (50% and 90%)
+#   - keeping fine-tuning lightweight (1 epoch, capped batches)
+#
+# Usage:
+#   IMAGENET1K_ROOT=/path/to/imagenet_1k \
+#   python scripts/run_experiment.py --config configs/vision_prune/alexnet_imagenet1k_unified_fastprune.yaml
+# =============================================================================
+
+experiment:
+  name: "alexnet_imagenet1k_cluster_analysis"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision/alexnet_imagenet1k"
+
+model:
+  name: "alexnet"
+  pretrained: true
+  num_classes: 1000
+  weights: "IMAGENET1K_V1"
+
+dataset:
+  name: "imagenet1k"
+  # Use env var when available (common on shared clusters); default is a local path.
+  root: "${IMAGENET1K_ROOT:./data/imagenet_1k}"
+  batch_size: 64
+  num_workers: 8
+  image_size: 224
+  normalize: true
+
+# No training: keep the native pretrained ImageNet-1K classifier head.
+training:
+  enabled: false
+
+calibration:
+  num_samples: 5000
+
+metrics:
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
+  compute_loss_proxy: false
+  optimization:
+    use_jit: false
+    use_gpu_acceleration: false
+    force_cpu_for_large_ops: true
+    cpu_threshold: 100000000
+
+  rayleigh_quotient:
+    enabled: true
+    relative: false
+    shrinkage: true
+
+  redundancy:
+    enabled: true
+    sampling: "all"
+
+  synergy:
+    enabled: true
+    target: "logit_margin"
+    num_pairs: 10
+    sampling: "top_k"
+
+  taylor:
+    enabled: true
+    criterion: "gradient_weight"
+
+clustering:
+  enabled: true
+  n_clusters: 4
+  type_names: ["critical", "redundant", "synergistic", "background"]
+  normalize_features: true
+  features: ["rayleigh_quotient", "redundancy", "synergy"]
+  stability_enabled: false
+
+halo_analysis:
+  enabled: false
+
+cascade_analysis:
+  enabled: false
+
+pruning:
+  enabled: true
+  distribution: "uniform"
+  dependency_aware: false
+  min_per_layer: 0.0
+  max_per_layer: 0.90
+  ratios: [0.5, 0.9]
+
+  # Minimal method set for a first pass on ImageNet-1K.
+  methods:
+    - "magnitude"
+    - "hrank"
+    - "taylor"
+    - "cluster_aware_annealed"
+    - "cluster_aware_depth_adaptive"
+
+  fine_tune:
+    enabled: true
+    epochs: 1
+    learning_rate: 0.00001
+    weight_decay: 0.0001
+    # Critical for feasibility: avoid full-epoch fine-tuning on ImageNet-1K.
+    max_batches: 50
+
+evaluation:
+  enabled: true
+  accuracy: true
+  top1_accuracy: true
+  loss: true
+
+visualization:
+  enabled: false
+
+output:
+  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red"
+  dir: "./results/vision/alexnet_imagenet1k"
+  save_metrics: true
+  save_clusters: true
+  save_figures: false
+  save_checkpoints: true
+  save_per_layer: true
+

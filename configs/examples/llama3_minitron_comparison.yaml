@@ -11,36 +11,36 @@
 # - Full benchmark suite from Minitron paper
 #
 # ┌──────────────────┬─────────────────┬───────────────────────┬─────────────┐
-# │ Benchmark        │ Llama 3.1 8B    │ Minitron-4B-Width     │ Few-shot    │
-# │                  │ (baseline)      │ (50% pruned)          │ Setting     │
+# | Benchmark        | Llama 3.1 8B    | Minitron-4B-Width     | Few-shot    |
+# |                  | (baseline)      | (50% pruned)          | Setting     |
 # ├──────────────────┼─────────────────┼───────────────────────┼─────────────┤
-# │ Winogrande       │ 77.3%           │ 73.5%                 │ 5-shot      │
-# │ ARC-Challenge    │ 57.9%           │ 55.6%                 │ 25-shot     │
-# │ MMLU             │ 65.3%           │ 60.5%                 │ 5-shot      │
-# │ HellaSwag        │ 81.8%           │ 76.1%                 │ 10-shot     │
-# │ GSM8k            │ 48.6%           │ 41.2%                 │ 5-shot+CoT  │
-# │ TruthfulQA       │ 45.0%           │ 42.9%                 │ 0-shot      │
-# │ MBPP             │ 42.3%           │ 32.4%                 │ 0-shot      │
-# │ HumanEval        │ 24.8%           │ -                     │ 0-shot      │
+# | Winogrande       | 77.3%           | 73.5%                 | 5-shot      |
+# | ARC-Challenge    | 57.9%           | 55.6%                 | 25-shot     |
+# | MMLU             | 65.3%           | 60.5%                 | 5-shot      |
+# | HellaSwag        | 81.8%           | 76.1%                 | 10-shot     |
+# | GSM8k            | 48.6%           | 41.2%                 | 5-shot+CoT  |
+# | TruthfulQA       | 45.0%           | 42.9%                 | 0-shot      |
+# | MBPP             | 42.3%           | 32.4%                 | 0-shot      |
+# | HumanEval        | 24.8%           | -                     | 0-shot      |
 # └──────────────────┴─────────────────┴───────────────────────┴─────────────┘
 #
 # PRUNING METHODS COMPARED:
 # ┌─────────────────────────────────────────────────────────────────────────┐
-# │ CATEGORY           │ METHOD                        │ REFERENCE          │
+# | CATEGORY           | METHOD                        | REFERENCE          |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ ALIGNMENT-BASED    │ rayleigh_quotient (RQ)        │ Our method         │
-# │                    │ gaussian_mi_analytic (MI)     │ Related to RQ      │
-# │                    │ average_redundancy            │ Info-theoretic     │
+# | ALIGNMENT-BASED    | rayleigh_quotient (RQ)        | Our method         |
+# |                    | gaussian_mi_analytic (MI)     | Related to RQ      |
+# |                    | average_redundancy            | Info-theoretic     |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ SCAR METRICS       │ scar_loss_proxy               │ Activation + Grad  │
+# | SCAR METRICS       | scar_loss_proxy               | Activation + Grad  |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ SUPERNODE-AWARE    │ supernode_protection_score    │ Protects important │
-# │                    │ supernode_connectivity_score  │ Connectivity-based │
+# | SUPERNODE-AWARE    | supernode_protection_score    | Protects important |
+# |                    | supernode_connectivity_score  | Connectivity-based |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ MAGNITUDE-BASED    │ activation_l2_norm            │ Common baseline    │
+# | MAGNITUDE-BASED    | activation_l2_norm            | Common baseline    |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
-# │ SOTA BASELINES     │ wanda                         │ Sun et al. 2023    │
-# │                    │ sparsegpt                     │ Frantar+Alistarh'23│
+# | SOTA BASELINES     | wanda                         | Sun et al. 2023    |
+# |                    | sparsegpt                     | Frantar+Alistarh'23|
 # └─────────────────────────────────────────────────────────────────────────┘
 #
 # EXPECTED RUNTIME: ~8-12 hours on H100 (with full few-shot benchmarks)
@@ -306,10 +306,10 @@ visualization:
 # ├── nvidia_benchmark_comparison.json  # NVIDIA Minitron vs our methods
 # ├── experiment.log
 # ├── plots/
-# │   ├── pruning/
-# │   │   ├── pruning_comparison_*.png
-# │   │   └── nvidia_minitron_comparison.png
-# │   ├── supernode_robustness/
-# │   │   └── *.png
-# │   └── ...
+# |   ├── pruning/
+# |   |   ├── pruning_comparison_*.png
+# |   |   └── nvidia_minitron_comparison.png
+# |   ├── supernode_robustness/
+# |   |   └── *.png
+# |   └── ...
 # └── checkpoints/

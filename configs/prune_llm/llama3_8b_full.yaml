@@ -205,8 +205,14 @@ supernode:
     - "scar_loss_proxy"                 # SCAR-LP
     - "supernode_protection_score"      # SCAR-Prot
     - "supernode_connectivity_score"    # SCAR-Conn
-  # If true, treat anti-correlated q-signals as NON-redundant (recommended ablation)
-  positive_redundancy: false
+  # Redundancy definition (paper): count only positive correlation as redundancy (anti-correlation is not redundancy).
+  positive_redundancy: true
+  # Aggregate redundancy-to-core as a Top-k mean (reduces max inflation / multiple comparisons).
+  redundancy_reduce: "topk_mean"
+  redundancy_topk: 5
+  # Multiple-comparisons control: also compute redundancy-to-core against a matched random core (analysis-only).
+  compute_random_core_baseline: true
+  random_core_seed: 12345
   
   cross_layer_analysis: true
   compare_by_connection: true
@@ -216,6 +222,33 @@ supernode:
     - "rayleigh_quotient"
     - "mutual_information"
     - "redundancy"
+
+  # --------------------------------------------------------------------------
+  # Optional cross-layer "read-halo" analysis (mechanistic only; does NOT affect pruning).
+  # Produces: figures/paper/fig_read_halo_dependence.png (if compute_dependence=true).
+  # --------------------------------------------------------------------------
+  read_halo_analysis:
+    enabled: false
+    read_halo_fraction: 0.10
+    num_texts: 4
+    max_length: 256
+    random_seed: 0
+    compute_dependence: false
+    dependence_max_points: 20000
+
+  # --------------------------------------------------------------------------
+  # Optional conditional halo ablation (causal redundancy probe; expensive).
+  # Produces: figures/paper/fig_halo_conditional_ablation.png.
+  # --------------------------------------------------------------------------
+  conditional_halo_ablation:
+    enabled: false
+    # If layer_indices is null, use layer_stride (e.g., every 4th layer).
+    layer_stride: 4
+    layer_indices: null
+    num_texts: 16
+    max_length: 256
+    match_bins: 10
+    seed: 0
 
 # ============================================================================
 # SUPERNODE ROBUSTNESS ANALYSIS
@@ -327,6 +360,10 @@ pruning:
     # Supernode-aware
     - "supernode_protection_score"
     - "supernode_connectivity_score"
+    # Cross-layer read-halo (optional ablations; disabled unless supernode.read_halo_pruning.enabled=true)
+    - "supernode_read_halo_score"
+    - "supernode_read_halo_protect_score"
+    - "supernode_two_halo_score"
     
     # Generalized (no outlier assumption)
     - "generalized_importance"
@@ -354,6 +391,9 @@ pruning:
     - "scar_taylor"
     - "supernode_protection_score"
     - "supernode_connectivity_score"
+    - "supernode_read_halo_score"
+    - "supernode_read_halo_protect_score"
+    - "supernode_two_halo_score"
     - "generalized_importance"
     - "cross_layer_importance"
     - "within_layer_importance"
@@ -500,25 +540,25 @@ visualization:
 # ============================================================================
 # results/paper/llama3_8b/
 # ├── metrics/
-# │   ├── layer_metrics.json
-# │   ├── supernode_analysis.json
-# │   ├── supernode_robustness.json
-# │   ├── halo_redundancy.json
-# │   └── cross_layer_analysis.json
+# |   ├── layer_metrics.json
+# |   ├── supernode_analysis.json
+# |   ├── supernode_robustness.json
+# |   ├── halo_redundancy.json
+# |   └── cross_layer_analysis.json
 # ├── evaluation/
-# │   ├── perplexity_results.json
-# │   └── benchmark_results.json
+# |   ├── perplexity_results.json
+# |   └── benchmark_results.json
 # ├── pruning/
-# │   ├── sparsity_curves.json
-# │   └── per_method_results.json
+# |   ├── sparsity_curves.json
+# |   └── per_method_results.json
 # └── figures/
 #     ├── fig1_supernode_distribution.pdf
 #     ├── fig2_halo_redundancy.pdf
 #     ├── fig3_cross_layer_importance.pdf
 #     ├── fig4_pruning_curves.pdf
 #     ├── supernode_robustness/
-#     │   ├── jaccard_heatmap.pdf
-#     │   ├── spearman_heatmap.pdf
-#     │   └── bootstrap_stability.pdf
+#     |   ├── jaccard_heatmap.pdf
+#     |   ├── spearman_heatmap.pdf
+#     |   └── bootstrap_stability.pdf
 #     └── supplementary/
 # ============================================================================

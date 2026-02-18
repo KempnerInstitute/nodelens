@@ -225,6 +225,36 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             "enabled": enabled_metrics,
             **metric_configs,
         }
+
+        # Preserve vision/cluster-analysis sampling knobs when present.
+        # These are consumed by ClusterAnalysisExperiment (not by the generic metric registry).
+        for k in (
+            "activation_point",
+            "activation_samples",
+            "task_activation_samples",
+            "spatial_samples_per_image",
+            "synergy_candidate_pool",
+            # Reproducibility knobs
+            "calibration_mode",
+            "calibration_num_workers",
+            "n_calibration_samples",
+            # New analysis artifacts (vision)
+            "within_layer_connectivity",
+            "within_layer_red_topk",
+            "within_layer_syn_topk",
+            "compute_loss_proxy",
+            "loss_proxy_n_calibration",
+        ):
+            if k in metrics:
+                original["metrics"][k] = metrics.get(k)
+
+        # Synergy settings (unified -> original top-level convenience keys)
+        if isinstance(metrics.get("synergy"), dict):
+            syn = metrics["synergy"]
+            if "target" in syn:
+                original["metrics"]["synergy_target"] = syn.get("target")
+            if "num_pairs" in syn:
+                original["metrics"]["synergy_num_pairs"] = syn.get("num_pairs")
         
         # Composite weights - convert unified names to original
         if "composite_weights" in metrics:
@@ -279,10 +309,16 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         if "selection_modes" in pruning:
             original_pruning["selection_modes"] = pruning["selection_modes"]
         
-        # Convert algorithm names
-        if "algorithms" in pruning:
+        # Convert algorithm names (support both "algorithms" and "methods" keys)
+        methods_key = None
+        if "methods" in pruning:
+            methods_key = "methods"
+        elif "algorithms" in pruning:
+            methods_key = "algorithms"
+        
+        if methods_key:
             converted_algorithms = []
-            for alg in pruning["algorithms"]:
+            for alg in pruning[methods_key]:
                 # Important: pruning algorithm names are *not* the same as metric names.
                 # In particular, unified configs often use "magnitude" to mean the
                 # standard *weight* magnitude pruning baseline (filter/channel L2),
@@ -291,7 +327,8 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                     converted_algorithms.append("magnitude")
                 else:
                     converted_algorithms.append(METRIC_UNIFIED_TO_ORIGINAL.get(alg, alg))
-            original_pruning["algorithms"] = converted_algorithms
+            # Store as "methods" to match what _map_nested_to_flat_config expects
+            original_pruning["methods"] = converted_algorithms
         
         # Convert scoring methods
         if "scoring_methods" in pruning:
@@ -304,13 +341,27 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original_pruning["scoring_methods"] = converted_scoring
         
         # Other pruning fields
-        for key in ["distribution", "structured", "dependency_aware", "target", "single_strategy"]:
+        # Note: unified configs commonly specify per-layer caps as min_per_layer/max_per_layer.
+        for key in [
+            "distribution",
+            "structured",
+            "dependency_aware",
+            "target",
+            "single_strategy",
+            "min_per_layer",
+            "max_per_layer",
+            "pointwise_only",
+            "skip_depthwise",
+            # Method-family hyperparameters
+            "generalized_taylor",
+        ]:
             if key in pruning:
                 original_pruning[key] = pruning[key]
         
-        # Fine-tune settings
-        if "fine_tune" in pruning:
-            original_pruning["fine_tune"] = pruning["fine_tune"]
+        # Fine-tune settings (support both "fine_tune" and "fine_tuning")
+        fine_tune_block = pruning.get("fine_tune") or pruning.get("fine_tuning")
+        if fine_tune_block:
+            original_pruning["fine_tune"] = fine_tune_block
         
         original["pruning"] = original_pruning
     
@@ -420,7 +471,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             if extra["halo_analysis"].get("enabled"):
                 original["do_halo_analysis"] = True
         
-        # Visualization (detailed paper figure settings) - MERGE with top-level
+        # Visualization (detailed figure settings) - MERGE with top-level
         if "visualization" in extra:
             if "visualization" not in original:
                 original["visualization"] = {}
@@ -696,6 +747,18 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["num_workers"] = nested_config.get("num_workers", 4)
         flat_config["dataset_config"] = nested_config.get("dataset_config", {})
 
+    # Preserve already-flat metric fields when present (common in locked configs).
+    if isinstance(nested_config.get("metrics"), list):
+        flat_config["metrics"] = list(nested_config.get("metrics", []))
+    if isinstance(nested_config.get("metric_configs"), dict):
+        flat_config["metric_configs"] = dict(nested_config.get("metric_configs", {}))
+        rq_cfg_flat = flat_config["metric_configs"].get("rayleigh_quotient", {})
+        if isinstance(rq_cfg_flat, dict):
+            if "definition" in rq_cfg_flat:
+                flat_config["rq_definition"] = str(rq_cfg_flat.get("definition"))
+            elif "estimator" in rq_cfg_flat:
+                flat_config["rq_definition"] = str(rq_cfg_flat.get("estimator"))
+
     # Map metric configuration block (optional nested structure)
     metric_block = nested_config.get("metrics")
     if isinstance(metric_block, dict):
@@ -721,8 +784,33 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
                 # Merge optimization options into each metric config
                 merged_cfg = {**global_optimization_opts, **metric_cfg}
                 metric_configs[metric_name] = merged_cfg
+                if metric_name == "rayleigh_quotient":
+                    if "definition" in metric_cfg:
+                        flat_config["rq_definition"] = str(metric_cfg.get("definition"))
+                    elif "estimator" in metric_cfg:
+                        flat_config["rq_definition"] = str(metric_cfg.get("estimator"))
         if metric_configs:
             flat_config["metric_configs"] = metric_configs
+
+    # Map clustering ablation settings (vision diagnostics)
+    clustering_block = nested_config.get("clustering", {})
+    if isinstance(clustering_block, dict):
+        ablation_block = clustering_block.get("ablation", {})
+        if isinstance(ablation_block, dict):
+            if "enabled" in ablation_block:
+                flat_config["run_metric_ablation"] = bool(ablation_block.get("enabled"))
+            if "modes" in ablation_block and ablation_block.get("modes") is not None:
+                flat_config["metric_ablations"] = list(ablation_block.get("modes"))
+
+    # Map permutation baseline settings (halo diagnostics)
+    halo_block = nested_config.get("halo_analysis", {})
+    if isinstance(halo_block, dict):
+        perm_block = halo_block.get("permutation_baseline", {})
+        if isinstance(perm_block, dict):
+            if "enabled" in perm_block:
+                flat_config["run_permutation_baseline"] = bool(perm_block.get("enabled"))
+            if "n_permutations" in perm_block and perm_block.get("n_permutations") is not None:
+                flat_config["n_permutations"] = int(perm_block.get("n_permutations"))
 
     # Map model configuration
     if "model" in nested_config:
@@ -858,6 +946,60 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         # Composite weights from metrics block
         if "composite_weights" in metrics_block:
             flat_config["alignment_composite_weights"] = metrics_block["composite_weights"]
+
+        # -----------------------------------------------------------------
+        # Vision cluster-analysis metric sampling knobs (kept flat for clarity)
+        # -----------------------------------------------------------------
+        if "activation_point" in metrics_block:
+            flat_config["activation_point"] = metrics_block.get("activation_point", flat_config.get("activation_point", "pre_bn"))
+        if "activation_samples" in metrics_block:
+            flat_config["activation_samples"] = metrics_block.get("activation_samples", flat_config.get("activation_samples", "flatten_spatial"))
+        if "task_activation_samples" in metrics_block:
+            flat_config["task_activation_samples"] = metrics_block.get("task_activation_samples")
+        if "spatial_samples_per_image" in metrics_block:
+            flat_config["spatial_samples_per_image"] = int(metrics_block.get("spatial_samples_per_image", flat_config.get("spatial_samples_per_image", 16)))
+        if "synergy_target" in metrics_block:
+            flat_config["synergy_target"] = metrics_block.get("synergy_target", flat_config.get("synergy_target", "logit_margin"))
+        # Also accept unified-style per-metric config (synergy_gaussian_mmi) after conversion.
+        if isinstance(metrics_block.get("synergy_gaussian_mmi"), dict):
+            syn_cfg = metrics_block["synergy_gaussian_mmi"]
+            if "target" in syn_cfg and "synergy_target" not in metrics_block:
+                flat_config["synergy_target"] = syn_cfg.get("target", flat_config.get("synergy_target", "logit_margin"))
+            if "num_pairs" in syn_cfg and "synergy_num_pairs" not in metrics_block:
+                flat_config["synergy_pairs"] = int(syn_cfg.get("num_pairs", flat_config.get("synergy_pairs", 10)))
+        if "synergy_candidate_pool" in metrics_block:
+            flat_config["synergy_candidate_pool"] = int(metrics_block.get("synergy_candidate_pool", flat_config.get("synergy_candidate_pool", 50)))
+        if "synergy_num_pairs" in metrics_block:
+            flat_config["synergy_pairs"] = int(metrics_block.get("synergy_num_pairs", flat_config.get("synergy_pairs", 10)))
+        if "compute_loss_proxy" in metrics_block:
+            flat_config["compute_loss_proxy"] = bool(metrics_block.get("compute_loss_proxy", False))
+        if "loss_proxy_n_calibration" in metrics_block:
+            flat_config["loss_proxy_n_calibration"] = int(metrics_block.get("loss_proxy_n_calibration", flat_config.get("loss_proxy_n_calibration", 1024)))
+        # Within-layer connectivity summaries (vision)
+        if "within_layer_connectivity" in metrics_block:
+            flat_config["compute_within_layer_connectivity"] = bool(metrics_block.get("within_layer_connectivity", False))
+        if "within_layer_red_topk" in metrics_block and metrics_block.get("within_layer_red_topk") is not None:
+            flat_config["within_layer_red_topk"] = int(metrics_block.get("within_layer_red_topk", flat_config.get("within_layer_red_topk", 20)))
+        if "within_layer_syn_topk" in metrics_block and metrics_block.get("within_layer_syn_topk") is not None:
+            flat_config["within_layer_syn_topk"] = int(metrics_block.get("within_layer_syn_topk", flat_config.get("within_layer_syn_topk", 10)))
+
+        # Calibration-mode knobs (optional)
+        if "calibration_mode" in metrics_block:
+            flat_config["calibration_mode"] = str(metrics_block.get("calibration_mode", flat_config.get("calibration_mode", "indices")))
+        if "calibration_num_workers" in metrics_block:
+            flat_config["calibration_num_workers"] = int(metrics_block.get("calibration_num_workers", flat_config.get("calibration_num_workers", 0)))
+
+        # Calibration sample count (vision cluster analysis).
+        if "n_calibration_samples" in metrics_block:
+            flat_config["n_calibration"] = int(metrics_block.get("n_calibration_samples", flat_config.get("n_calibration", 5000)))
+        elif "num_samples" in metrics_block:
+            # Unified configs often use metrics.num_samples as the calibration size.
+            flat_config["n_calibration"] = int(metrics_block.get("num_samples", flat_config.get("n_calibration", 5000)))
+
+    # Calibration block (unified-format convenience): calibration.num_samples
+    cal_block = nested_config.get("calibration", {})
+    if isinstance(cal_block, dict) and "num_samples" in cal_block:
+        flat_config["n_calibration"] = int(cal_block.get("num_samples", flat_config.get("n_calibration", 5000)))
     
     # Handle nested alignment block (backward compatibility)
     if "alignment" in nested_config and isinstance(nested_config["alignment"], dict):
@@ -956,7 +1098,8 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     if "structured" in pruning_block:
         flat_config["alignment_structured_pruning"] = pruning_block["structured"]
 
-    fine_tune_block = pruning_block.get("fine_tune")
+    # Support both "fine_tune" and "fine_tuning" keys
+    fine_tune_block = pruning_block.get("fine_tune") or pruning_block.get("fine_tuning")
     if isinstance(fine_tune_block, dict):
         if "enabled" in fine_tune_block:
             flat_config["fine_tune_after_pruning"] = fine_tune_block.get("enabled", True)
@@ -968,6 +1111,45 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["fine_tune_max_batches"] = fine_tune_block["max_batches"]
         if "weight_decay" in fine_tune_block:
             flat_config["fine_tune_weight_decay"] = fine_tune_block["weight_decay"]
+        if "track_epoch_accuracy" in fine_tune_block:
+            flat_config["fine_tune_track_epoch_accuracy"] = bool(fine_tune_block["track_epoch_accuracy"])
+
+        type_aware_block = fine_tune_block.get("type_aware")
+        if isinstance(type_aware_block, dict):
+            if "enabled" in type_aware_block:
+                flat_config["fine_tune_type_aware_enabled"] = bool(type_aware_block["enabled"])
+            if "methods" in type_aware_block and isinstance(type_aware_block["methods"], (list, tuple)):
+                flat_config["fine_tune_type_aware_methods"] = [str(x) for x in type_aware_block["methods"]]
+            if "lr_multipliers" in type_aware_block and isinstance(type_aware_block["lr_multipliers"], dict):
+                flat_config["fine_tune_type_aware_lr_multipliers"] = {
+                    str(k): float(v) for k, v in type_aware_block["lr_multipliers"].items()
+                }
+            if "wd_multipliers" in type_aware_block and isinstance(type_aware_block["wd_multipliers"], dict):
+                flat_config["fine_tune_type_aware_wd_multipliers"] = {
+                    str(k): float(v) for k, v in type_aware_block["wd_multipliers"].items()
+                }
+            if "scale_batchnorm" in type_aware_block:
+                flat_config["fine_tune_type_aware_scale_batchnorm"] = bool(type_aware_block["scale_batchnorm"])
+            if "scale_classifier" in type_aware_block:
+                flat_config["fine_tune_type_aware_scale_classifier"] = bool(type_aware_block["scale_classifier"])
+
+        # Flat keys inside pruning.fine_tune for convenience.
+        if "type_aware_enabled" in fine_tune_block:
+            flat_config["fine_tune_type_aware_enabled"] = bool(fine_tune_block["type_aware_enabled"])
+        if "type_aware_methods" in fine_tune_block and isinstance(fine_tune_block["type_aware_methods"], (list, tuple)):
+            flat_config["fine_tune_type_aware_methods"] = [str(x) for x in fine_tune_block["type_aware_methods"]]
+        if "type_aware_lr_multipliers" in fine_tune_block and isinstance(fine_tune_block["type_aware_lr_multipliers"], dict):
+            flat_config["fine_tune_type_aware_lr_multipliers"] = {
+                str(k): float(v) for k, v in fine_tune_block["type_aware_lr_multipliers"].items()
+            }
+        if "type_aware_wd_multipliers" in fine_tune_block and isinstance(fine_tune_block["type_aware_wd_multipliers"], dict):
+            flat_config["fine_tune_type_aware_wd_multipliers"] = {
+                str(k): float(v) for k, v in fine_tune_block["type_aware_wd_multipliers"].items()
+            }
+        if "type_aware_scale_batchnorm" in fine_tune_block:
+            flat_config["fine_tune_type_aware_scale_batchnorm"] = bool(fine_tune_block["type_aware_scale_batchnorm"])
+        if "type_aware_scale_classifier" in fine_tune_block:
+            flat_config["fine_tune_type_aware_scale_classifier"] = bool(fine_tune_block["type_aware_scale_classifier"])
 
     # Map top-level analysis flags
     flat_config["do_pruning_experiments"] = pruning_block.get("enabled", nested_config.get("do_pruning_experiments", False))
@@ -977,15 +1159,18 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map pruning parameters (prioritize nested pruning block, fallback to top-level)
     # Pruning uses metrics from metrics.enabled as scoring criteria.
     # Random selection is handled via selection_modes, not as a separate strategy.
-    if "algorithms" in pruning_block:
+    if "methods" in pruning_block:
+        # Primary: use pruning.methods for pruning method list
+        flat_config["pruning_strategies"] = pruning_block["methods"]
+    elif "algorithms" in pruning_block:
         # Backward compatibility: explicit algorithms list
         flat_config["pruning_strategies"] = pruning_block["algorithms"]
-    elif flat_config.get("metrics"):
-        # Use computed metrics as pruning strategies
-        flat_config["pruning_strategies"] = list(flat_config["metrics"])
     else:
-        # Fallback default
-        flat_config["pruning_strategies"] = nested_config.get("pruning_strategies", ["rayleigh_quotient"])
+        # Fallback to default pruning methods
+        flat_config["pruning_strategies"] = nested_config.get(
+            "pruning_strategies", 
+            ["random", "magnitude", "taylor", "cluster_aware", "cluster_aware_annealed"]
+        )
     
     flat_config["pruning_amounts"] = pruning_block.get("sparsity_levels", nested_config.get("pruning_amounts", [0.1, 0.3, 0.5, 0.7, 0.9]))
     selection_modes = pruning_block.get("selection_modes", nested_config.get("pruning_selection_mode", "low"))
@@ -999,6 +1184,13 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["pruning_max_per_layer"] = pruning_block.get(
         "max_per_layer", nested_config.get("pruning_max_per_layer", 0.95)
     )
+    flat_config["pruning_max_per_layer_sparsity_cap"] = pruning_block.get(
+        "max_per_layer_sparsity_cap", nested_config.get("pruning_max_per_layer_sparsity_cap", 1.00)
+    )
+    flat_config["pruning_enforce_exact_global_channel_budget"] = pruning_block.get(
+        "enforce_exact_global_channel_budget",
+        nested_config.get("pruning_enforce_exact_global_channel_budget", False),
+    )
     # Only set fine_tune defaults if not already set from fine_tune block above
     if "fine_tune_after_pruning" not in flat_config:
         flat_config["fine_tune_after_pruning"] = pruning_block.get("fine_tune_after_pruning", nested_config.get("fine_tune_after_pruning", True))
@@ -1011,10 +1203,149 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["dependency_aware_pruning"] = pruning_block.get(
         "dependency_aware", nested_config.get("dependency_aware_pruning", False)
     )
+
+    # Optional: restrict which conv layers are prunable (vision)
+    if "pointwise_only" in pruning_block:
+        flat_config["pruning_pointwise_only"] = bool(pruning_block.get("pointwise_only", False))
+    if "skip_depthwise" in pruning_block:
+        flat_config["pruning_skip_depthwise"] = bool(pruning_block.get("skip_depthwise", False))
+
+    # Cluster-aware method configuration (all variants)
+    if isinstance(pruning_block.get("cluster_aware"), dict):
+        ca = pruning_block["cluster_aware"]
+        # Score weights
+        if "alpha" in ca:
+            flat_config["cluster_aware_alpha"] = float(ca["alpha"])
+        if "beta" in ca:
+            flat_config["cluster_aware_beta"] = float(ca["beta"])
+        if "gamma" in ca:
+            flat_config["cluster_aware_gamma"] = float(ca["gamma"])
+        if "lambda_halo" in ca:
+            flat_config["cluster_aware_lambda_halo"] = float(ca["lambda_halo"])
+        if "protect_critical_frac" in ca:
+            flat_config["cluster_aware_protect_critical_frac"] = float(ca["protect_critical_frac"])
+        
+        # Annealing window (for cluster_aware_annealed)
+        if "anneal_start" in ca:
+            flat_config["cluster_aware_anneal_start"] = float(ca["anneal_start"])
+        if "anneal_end" in ca:
+            flat_config["cluster_aware_anneal_end"] = float(ca["anneal_end"])
+        
+        # Taylor blend weight (for cluster_aware_taylor_blend)
+        if "taylor_weight" in ca:
+            flat_config["cluster_aware_taylor_weight"] = float(ca["taylor_weight"])
+        
+        # Depth-adaptive settings (for cluster_aware_depth_adaptive)
+        if "depth_adaptive" in ca:
+            flat_config["cluster_aware_depth_adaptive"] = bool(ca["depth_adaptive"])
+        if "early_layer_frac" in ca:
+            flat_config["cluster_aware_early_layer_frac"] = float(ca["early_layer_frac"])
+        if "early_alpha" in ca:
+            flat_config["cluster_aware_early_alpha"] = float(ca["early_alpha"])
+        if "early_gamma" in ca:
+            flat_config["cluster_aware_early_gamma"] = float(ca["early_gamma"])
+        if "late_alpha" in ca:
+            flat_config["cluster_aware_late_alpha"] = float(ca["late_alpha"])
+        if "late_gamma" in ca:
+            flat_config["cluster_aware_late_gamma"] = float(ca["late_gamma"])
+
+    # Generalized Taylor pruning configuration (vision)
+    if isinstance(pruning_block.get("generalized_taylor"), dict):
+        gt = pruning_block["generalized_taylor"]
+        if "weight_rq" in gt:
+            flat_config["generalized_taylor_weight_rq"] = float(gt["weight_rq"])
+        if "weight_redundancy" in gt:
+            flat_config["generalized_taylor_weight_redundancy"] = float(gt["weight_redundancy"])
+        if "weight_synergy" in gt:
+            flat_config["generalized_taylor_weight_synergy"] = float(gt["weight_synergy"])
+        if "gradient_exponent" in gt:
+            flat_config["generalized_taylor_gradient_exponent"] = float(gt["gradient_exponent"])
+        if "activation_exponent" in gt:
+            flat_config["generalized_taylor_activation_exponent"] = float(gt["activation_exponent"])
+        if "redundancy_discount_beta" in gt:
+            flat_config["generalized_taylor_redundancy_discount_beta"] = float(gt["redundancy_discount_beta"])
+        if "synergy_boost_gamma" in gt:
+            flat_config["generalized_taylor_synergy_boost_gamma"] = float(gt["synergy_boost_gamma"])
+        if "critical_multiplier" in gt:
+            flat_config["generalized_taylor_critical_multiplier"] = float(gt["critical_multiplier"])
+        if "redundant_multiplier" in gt:
+            flat_config["generalized_taylor_redundant_multiplier"] = float(gt["redundant_multiplier"])
+        if "synergistic_multiplier" in gt:
+            flat_config["generalized_taylor_synergistic_multiplier"] = float(gt["synergistic_multiplier"])
+        if "background_multiplier" in gt:
+            flat_config["generalized_taylor_background_multiplier"] = float(gt["background_multiplier"])
+        if "gate_mode" in gt:
+            flat_config["generalized_taylor_gate_mode"] = str(gt["gate_mode"])
+        if "gate_temperature" in gt:
+            flat_config["generalized_taylor_gate_temperature"] = float(gt["gate_temperature"])
+        if "gate_bias" in gt:
+            flat_config["generalized_taylor_gate_bias"] = float(gt["gate_bias"])
+        if "gate_eps" in gt:
+            flat_config["generalized_taylor_gate_eps"] = float(gt["gate_eps"])
+        if "gate_min" in gt:
+            flat_config["generalized_taylor_gate_min"] = float(gt["gate_min"])
+        if "gate_include_cluster_multiplier" in gt:
+            flat_config["generalized_taylor_gate_include_cluster_multiplier"] = bool(gt["gate_include_cluster_multiplier"])
+
+        # Numerical stability parameters
+        if "structural_eps" in gt:
+            flat_config["generalized_taylor_structural_eps"] = float(gt["structural_eps"])
+        if "rq_log_eps" in gt:
+            flat_config["generalized_taylor_rq_log_eps"] = float(gt["rq_log_eps"])
+        if "grad_over_act_eps" in gt:
+            flat_config["generalized_taylor_grad_over_act_eps"] = float(gt["grad_over_act_eps"])
+        if "lp_optimal_l2_reg" in gt:
+            flat_config["generalized_taylor_lp_optimal_l2_reg"] = float(gt["lp_optimal_l2_reg"])
+
+    # Halo-analysis direct knobs (vision)
+    halo_block = nested_config.get("halo_analysis", {})
+    if isinstance(halo_block, dict):
+        if "percentile" in halo_block:
+            flat_config["halo_percentile"] = float(halo_block.get("percentile", flat_config.get("halo_percentile", 90.0)))
+        if "use_activation_weight" in halo_block:
+            flat_config["use_activation_weight"] = bool(halo_block.get("use_activation_weight", flat_config.get("use_activation_weight", True)))
+        perm = halo_block.get("permutation_baseline", {})
+        if isinstance(perm, dict):
+            if "enabled" in perm:
+                flat_config["run_permutation_baseline"] = bool(perm.get("enabled", False))
+            if "n_permutations" in perm:
+                flat_config["n_permutations"] = int(perm.get("n_permutations", flat_config.get("n_permutations", 100)))
+
+    # Clustering block (vision)
+    clustering_block = nested_config.get("clustering", {})
+    if isinstance(clustering_block, dict):
+        if "n_clusters" in clustering_block:
+            flat_config["n_clusters"] = int(clustering_block.get("n_clusters", flat_config.get("n_clusters", 4)))
+        if "type_mapping_mode" in clustering_block:
+            flat_config["type_mapping_mode"] = str(clustering_block.get("type_mapping_mode", flat_config.get("type_mapping_mode", "global")))
+        abl = clustering_block.get("ablation", {})
+        if isinstance(abl, dict):
+            if "enabled" in abl:
+                flat_config["run_metric_ablation"] = bool(abl.get("enabled", False))
+            if "modes" in abl:
+                flat_config["metric_ablations"] = list(abl.get("modes", flat_config.get("metric_ablations", ["all", "rq_red", "rq_syn", "red_syn"])))
+
+    # Cascade analysis (vision)
+    cascade_block = nested_config.get("cascade_analysis", {})
+    if isinstance(cascade_block, dict):
+        if "n_remove_per_group" in cascade_block:
+            flat_config["cascade_n_remove"] = int(cascade_block.get("n_remove_per_group", flat_config.get("cascade_n_remove", 5)))
+        elif "n_remove_per_cluster" in cascade_block:
+            flat_config["cascade_n_remove"] = int(cascade_block.get("n_remove_per_cluster", flat_config.get("cascade_n_remove", 5)))
+        if "damage_sample_fraction" in cascade_block:
+            flat_config["damage_sample_frac"] = float(cascade_block.get("damage_sample_fraction", flat_config.get("damage_sample_frac", 0.2)))
     
     # Single-layer pruning: specify a layer name to prune only that layer
     flat_config["pruning_target_layer"] = pruning_block.get(
         "target_layer", nested_config.get("pruning_target_layer", None)
+    )
+
+    # Optional pruning layer filters (primarily for MobileNet-like nets)
+    flat_config["pruning_pointwise_only"] = pruning_block.get(
+        "pointwise_only", nested_config.get("pruning_pointwise_only", False)
+    )
+    flat_config["pruning_skip_depthwise"] = pruning_block.get(
+        "skip_depthwise", nested_config.get("pruning_skip_depthwise", False)
     )
 
     # Performance settings (all optimizations enabled by default)
@@ -1224,7 +1555,7 @@ def load_config_with_overrides(
 
     # Apply CLI overrides
     if cli_args:
-        # Map "unified-style" dotted CLI keys used by paper SLURM scripts into the
+        # Map "unified-style" dotted CLI keys used by downstream SLURM wrappers into the
         # flat ExperimentConfig namespace produced by load_config().
         #
         # Without this mapping, overrides like `metrics.activation_samples=gap` would
@@ -1233,25 +1564,94 @@ def load_config_with_overrides(
         # dict (which ExperimentConfig cannot accept).
         dotted_key_map = {
             # Activation sampling / CNN handling for cluster experiments
+            "metrics.activation_point": "activation_point",
             "metrics.activation_samples": "activation_samples",
+            "metrics.task_activation_samples": "task_activation_samples",
             "metrics.spatial_samples_per_image": "spatial_samples_per_image",
+            "metrics.rq_definition": "rq_definition",
+            "metrics.rayleigh_quotient.definition": "rq_definition",
+            "metrics.rayleigh_quotient.estimator": "rq_definition",
             "metrics.synergy_target": "synergy_target",
             "metrics.synergy_candidate_pool": "synergy_candidate_pool",
             "metrics.synergy_num_pairs": "synergy_pairs",
+            "metrics.compute_loss_proxy": "compute_loss_proxy",
+            "metrics.loss_proxy_n_calibration": "loss_proxy_n_calibration",
+            "metrics.within_layer_connectivity": "compute_within_layer_connectivity",
+            "metrics.within_layer_red_topk": "within_layer_red_topk",
+            "metrics.within_layer_syn_topk": "within_layer_syn_topk",
+            "metrics.calibration_mode": "calibration_mode",
+            "metrics.calibration_num_workers": "calibration_num_workers",
+            "metrics.n_calibration_samples": "n_calibration",
             # Clustering
             "clustering.n_clusters": "n_clusters",
-            # Cluster-aware pruning weight sweeps (paper)
+            "clustering.type_mapping_mode": "type_mapping_mode",
+            "clustering.ablation.enabled": "run_metric_ablation",
+            "clustering.ablation.modes": "metric_ablations",
+            # Halo permutation baselines
+            "halo_analysis.percentile": "halo_percentile",
+            "halo_analysis.use_activation_weight": "use_activation_weight",
+            "halo_analysis.permutation_baseline.enabled": "run_permutation_baseline",
+            "halo_analysis.permutation_baseline.n_permutations": "n_permutations",
+            # Cluster-aware pruning weight sweeps
             "pruning.cluster_aware.alpha": "cluster_aware_alpha",
             "pruning.cluster_aware.beta": "cluster_aware_beta",
             "pruning.cluster_aware.gamma": "cluster_aware_gamma",
             "pruning.cluster_aware.lambda_halo": "cluster_aware_lambda_halo",
             "pruning.cluster_aware.protect_critical_frac": "cluster_aware_protect_critical_frac",
+            "pruning.cluster_aware.anneal_start": "cluster_aware_anneal_start",
+            "pruning.cluster_aware.anneal_end": "cluster_aware_anneal_end",
+            "pruning.cluster_aware.taylor_weight": "cluster_aware_taylor_weight",
+            "pruning.cluster_aware.depth_adaptive": "cluster_aware_depth_adaptive",
+            "pruning.cluster_aware.early_layer_frac": "cluster_aware_early_layer_frac",
+            "pruning.cluster_aware.early_alpha": "cluster_aware_early_alpha",
+            "pruning.cluster_aware.early_gamma": "cluster_aware_early_gamma",
+            "pruning.cluster_aware.late_alpha": "cluster_aware_late_alpha",
+            "pruning.cluster_aware.late_gamma": "cluster_aware_late_gamma",
+            # Pruning distribution safety caps
+            "pruning.distribution": "pruning_distribution",
+            "pruning.dependency_aware": "dependency_aware_pruning",
+            "pruning.min_per_layer": "pruning_min_per_layer",
+            "pruning.max_per_layer": "pruning_max_per_layer",
+            "pruning.max_per_layer_sparsity_cap": "pruning_max_per_layer_sparsity_cap",
+            "pruning.enforce_exact_global_channel_budget": "pruning_enforce_exact_global_channel_budget",
             # Fine-tuning after pruning
             "pruning.fine_tune.enabled": "fine_tune_after_pruning",
             "pruning.fine_tune.epochs": "fine_tune_epochs",
             "pruning.fine_tune.learning_rate": "fine_tune_learning_rate",
             "pruning.fine_tune.max_batches": "fine_tune_max_batches",
             "pruning.fine_tune.weight_decay": "fine_tune_weight_decay",
+            "pruning.fine_tune.track_epoch_accuracy": "fine_tune_track_epoch_accuracy",
+            "pruning.fine_tune.type_aware.enabled": "fine_tune_type_aware_enabled",
+            "pruning.fine_tune.type_aware.methods": "fine_tune_type_aware_methods",
+            "pruning.fine_tune.type_aware.lr_multipliers": "fine_tune_type_aware_lr_multipliers",
+            "pruning.fine_tune.type_aware.wd_multipliers": "fine_tune_type_aware_wd_multipliers",
+            "pruning.fine_tune.type_aware.scale_batchnorm": "fine_tune_type_aware_scale_batchnorm",
+            "pruning.fine_tune.type_aware.scale_classifier": "fine_tune_type_aware_scale_classifier",
+            # Optional: restrict which conv layers are prunable
+            "pruning.pointwise_only": "pruning_pointwise_only",
+            "pruning.skip_depthwise": "pruning_skip_depthwise",
+            # Generalized Taylor hyperparameters
+            "pruning.generalized_taylor.weight_rq": "generalized_taylor_weight_rq",
+            "pruning.generalized_taylor.weight_redundancy": "generalized_taylor_weight_redundancy",
+            "pruning.generalized_taylor.weight_synergy": "generalized_taylor_weight_synergy",
+            "pruning.generalized_taylor.gradient_exponent": "generalized_taylor_gradient_exponent",
+            "pruning.generalized_taylor.activation_exponent": "generalized_taylor_activation_exponent",
+            "pruning.generalized_taylor.redundancy_discount_beta": "generalized_taylor_redundancy_discount_beta",
+            "pruning.generalized_taylor.synergy_boost_gamma": "generalized_taylor_synergy_boost_gamma",
+            "pruning.generalized_taylor.critical_multiplier": "generalized_taylor_critical_multiplier",
+            "pruning.generalized_taylor.redundant_multiplier": "generalized_taylor_redundant_multiplier",
+            "pruning.generalized_taylor.synergistic_multiplier": "generalized_taylor_synergistic_multiplier",
+            "pruning.generalized_taylor.background_multiplier": "generalized_taylor_background_multiplier",
+            "pruning.generalized_taylor.gate_mode": "generalized_taylor_gate_mode",
+            "pruning.generalized_taylor.gate_temperature": "generalized_taylor_gate_temperature",
+            "pruning.generalized_taylor.gate_bias": "generalized_taylor_gate_bias",
+            "pruning.generalized_taylor.gate_eps": "generalized_taylor_gate_eps",
+            "pruning.generalized_taylor.gate_min": "generalized_taylor_gate_min",
+            "pruning.generalized_taylor.gate_include_cluster_multiplier": "generalized_taylor_gate_include_cluster_multiplier",
+            "pruning.generalized_taylor.structural_eps": "generalized_taylor_structural_eps",
+            "pruning.generalized_taylor.rq_log_eps": "generalized_taylor_rq_log_eps",
+            "pruning.generalized_taylor.grad_over_act_eps": "generalized_taylor_grad_over_act_eps",
+            "pruning.generalized_taylor.lp_optimal_l2_reg": "generalized_taylor_lp_optimal_l2_reg",
         }
 
         for arg in cli_args:

@@ -46,3 +46,12 @@ repos:
     hooks:
       - id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
+
+  - repo: local
+    hooks:
+      - id: fast-tests
+        name: Fast unit tests
+        entry: python -m pytest tests/unit/ -x -q -m "not slow and not integration and not gpu"
+        language: system
+        pass_filenames: false
+        always_run: true

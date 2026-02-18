@@ -41,6 +41,9 @@ class ClusterAwarePruningConfig(PruningConfig):
     # Synergy-pair constraint
     synergy_pair_constraint: bool = True
     top_synergy_pairs: int = 10          # Number of top synergy pairs to protect
+    # If constraints block too many candidates, relax them to hit the requested
+    # prune count exactly (prevents target/achieved sparsity drift at high ratios).
+    enforce_exact_prune_budget: bool = True
     
     # Halo parameters
     halo_percentile: float = 90.0
@@ -51,6 +54,34 @@ class ClusterAwarePruningConfig(PruningConfig):
     
     # Structured pruning (default True for channels)
     structured: bool = True
+    
+    # =========================================================================
+    # IMPROVED FEATURES (depth/sparsity adaptive)
+    # =========================================================================
+    
+    # Depth-adaptive weighting: vary weights based on layer depth
+    depth_adaptive: bool = False          # Enable depth-adaptive weights
+    early_layer_fraction: float = 0.3     # First 30% of layers are "early"
+    
+    # Early layer weights (less aggressive on RQ/synergy)
+    early_alpha: float = 0.5
+    early_beta: float = 0.3
+    early_gamma: float = 0.2
+    early_lambda_halo: float = 0.2
+    
+    # Late layer weights (full cluster-aware)
+    late_alpha: float = 1.2
+    late_beta: float = 0.8
+    late_gamma: float = 0.5
+    late_lambda_halo: float = 0.7
+    
+    # MI-aware scoring: use log(1+RQ) instead of log(RQ) for MI proxy
+    use_mi_proxy: bool = False
+    
+    # Sparsity-adaptive protection: stronger critical protection at high sparsity
+    sparsity_adaptive_protection: bool = False
+    high_sparsity_threshold: float = 0.7  # When to strengthen protection
+    high_sparsity_critical_frac: float = 0.1  # Max critical pruning at high sparsity
 
 
 class ClusterAwarePruning(BasePruningStrategy):
@@ -153,12 +184,18 @@ class ClusterAwarePruning(BasePruningStrategy):
         )
         
         # 4. Compute composite scores
-        log_rq = np.log(np.clip(metrics['rq'], 1e-10, None))
+        # Convert lists to arrays (from JSON deserialization)
+        rq = np.asarray(metrics['rq'])
+        syn = np.asarray(metrics['synergy'])
+        red = np.asarray(metrics['redundancy'])
+        halo_syn = np.asarray(halo_syn)
+        
+        log_rq = np.log(np.clip(rq, 1e-10, None))
         
         # Normalize each component to [0, 1] for stable weighting
         log_rq_norm = self._normalize(log_rq)
-        syn_norm = self._normalize(metrics['synergy'])
-        red_norm = self._normalize(metrics['redundancy'])
+        syn_norm = self._normalize(syn)
+        red_norm = self._normalize(red)
         halo_syn_norm = self._normalize(halo_syn)
         
         scores = (
@@ -175,6 +212,7 @@ class ClusterAwarePruning(BasePruningStrategy):
         scores: torch.Tensor,
         n_prune: int,
         layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
     ) -> List[int]:
         """
         Select channels to prune with cluster constraints.
@@ -188,19 +226,22 @@ class ClusterAwarePruning(BasePruningStrategy):
             List of channel indices to prune
         """
         n_channels = len(scores)
+        n_prune = int(max(0, min(int(n_prune), int(n_channels))))
         scores_np = scores.cpu().numpy()
         
         # Get cluster info
         clusters = self._cluster_cache.get(layer_name, {})
         labels = clusters.get('labels', np.zeros(n_channels, dtype=int))
+        if isinstance(labels, list):
+            labels = np.array(labels, dtype=int)
         type_mapping = clusters.get('type_mapping', {0: 'unknown'})
         
-        # Invert type_mapping for lookup
-        type_to_id = {v: k for k, v in type_mapping.items()}
+        # Invert type_mapping for lookup (convert keys to int for JSON compatibility)
+        type_to_id = {v: int(k) for k, v in type_mapping.items()}
         
         # Initialize selection
         selected = set()
-        protected = set()
+        protected = set(int(i) for i in (protected_indices or []) if i is not None)
         
         # 1. Apply critical protection constraint
         if self.config.protect_critical_frac < 1.0:
@@ -268,8 +309,54 @@ class ClusterAwarePruning(BasePruningStrategy):
                     continue
             
             selected.add(idx)
-        
-        return list(selected)
+
+        # 5. Budget enforcement: if constraints prevented enough selections,
+        #    relax constraints in a deterministic order to match target sparsity.
+        if len(selected) < n_prune and bool(getattr(self.config, "enforce_exact_prune_budget", True)):
+            deficit_initial = int(n_prune - len(selected))
+
+            # Phase A: ignore synergy-pair constraint, still honor protected set.
+            for idx in sorted_idx:
+                if len(selected) >= n_prune:
+                    break
+                if idx in selected or idx in protected:
+                    continue
+                selected.add(int(idx))
+
+            # Phase B: if still short, allow protected channels (lowest score first).
+            if len(selected) < n_prune:
+                protected_sorted = sorted((int(i) for i in protected), key=lambda i: float(scores_np[i]))
+                for idx in protected_sorted:
+                    if len(selected) >= n_prune:
+                        break
+                    if idx in selected:
+                        continue
+                    selected.add(int(idx))
+
+            if len(selected) < n_prune:
+                # Final safety fallback (should be unreachable): fill with any remaining index.
+                for idx in sorted_idx:
+                    if len(selected) >= n_prune:
+                        break
+                    if idx in selected:
+                        continue
+                    selected.add(int(idx))
+
+            deficit_final = int(n_prune - len(selected))
+            logger.warning(
+                "ClusterAware budget enforcement on layer %s: initial deficit=%d, final deficit=%d "
+                "(target=%d, selected=%d, protected=%d, pair_constraint=%s)",
+                layer_name,
+                deficit_initial,
+                deficit_final,
+                n_prune,
+                len(selected),
+                len(protected),
+                bool(self.config.synergy_pair_constraint),
+            )
+
+        # Keep deterministic order for reproducibility.
+        return sorted((int(i) for i in selected), key=lambda i: float(scores_np[i]))
     
     def _get_metrics(
         self,
@@ -379,10 +466,11 @@ class ClusterAwarePruning(BasePruningStrategy):
             n_clusters=self.config.n_clusters,
             seed=42,
         )
+        # Convert lists to arrays (from JSON deserialization)
         result = clusterer.fit(
-            metrics['rq'],
-            metrics['redundancy'],
-            metrics['synergy'],
+            np.asarray(metrics['rq']),
+            np.asarray(metrics['redundancy']),
+            np.asarray(metrics['synergy']),
             layer_name,
         )
         
@@ -447,8 +535,10 @@ class ClusterAwarePruning(BasePruningStrategy):
             n_in = min(influence.shape[1], len(std))
             influence[:, :n_in] = influence[:, :n_in] * std[:n_in]
         
-        # Get next layer synergy
+        # Get next layer synergy (convert list to array for JSON compatibility)
         next_syn = next_layer_metrics.get('synergy', np.zeros(influence.shape[0]))
+        if isinstance(next_syn, list):
+            next_syn = np.array(next_syn)
         
         # Per-channel halo synergy
         halo_syn = np.zeros(n_channels)
@@ -472,6 +562,9 @@ class ClusterAwarePruning(BasePruningStrategy):
     ) -> List[Tuple[int, int]]:
         """Get top synergy pairs for constraint."""
         synergy = metrics.get('synergy', np.array([]))
+        # Convert list to array (from JSON deserialization)
+        if isinstance(synergy, list):
+            synergy = np.array(synergy)
         n = len(synergy)
         if n < 2:
             return []
@@ -485,6 +578,9 @@ class ClusterAwarePruning(BasePruningStrategy):
     
     def _normalize(self, x: np.ndarray) -> np.ndarray:
         """Normalize array to [0, 1]."""
+        # Handle list inputs (e.g., from JSON deserialization)
+        if isinstance(x, list):
+            x = np.array(x)
         x_min, x_max = x.min(), x.max()
         if x_max > x_min:
             return (x - x_min) / (x_max - x_min)
@@ -518,7 +614,7 @@ class CompositePruning(ClusterAwarePruning):
     - Synergy-pair constraints
     - Halo term (lambda = 0)
     
-    This corresponds to the "Composite" baseline in the paper.
+    This corresponds to a composite-score baseline (same features, no constraints).
     """
     
     def __init__(
@@ -542,8 +638,347 @@ class CompositePruning(ClusterAwarePruning):
         scores: torch.Tensor,
         n_prune: int,
         layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
     ) -> List[int]:
         """Simple selection by score (no constraints)."""
         scores_np = scores.cpu().numpy()
         sorted_idx = np.argsort(scores_np)
-        return sorted_idx[:n_prune].tolist()
+        # Respect external protection constraints if provided.
+        protected = set(int(i) for i in (protected_indices or []) if i is not None)
+        out = []
+        for idx in sorted_idx.tolist():
+            if idx in protected:
+                continue
+            out.append(int(idx))
+            if len(out) >= int(n_prune):
+                break
+        return out
+
+
+class ClusterAwareStratifiedPruning(ClusterAwarePruning):
+    """
+    Cluster-aware pruning with label-free stratified quotas.
+
+    Motivation: the cluster geometry can be informative even when semantic type
+    labels (e.g., "critical") do not reliably correspond to absolute importance.
+    This variant allocates the prune budget proportionally across cluster IDs
+    (approximately equal prune fraction per cluster), then prunes the lowest-score
+    channels within each cluster.
+    """
+
+    def select_channels_to_prune(
+        self,
+        scores: torch.Tensor,
+        n_prune: int,
+        layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
+    ) -> List[int]:
+        n_channels = int(scores.numel())
+        n_prune = int(max(0, min(int(n_prune), int(n_channels))))
+        if n_prune <= 0 or n_channels <= 0:
+            return []
+
+        scores_np = scores.detach().cpu().numpy().reshape(-1)
+        protected = set(int(i) for i in (protected_indices or []) if i is not None)
+
+        clusters = self._cluster_cache.get(layer_name, {})
+        labels = clusters.get("labels", np.zeros(n_channels, dtype=int))
+        if isinstance(labels, list):
+            labels = np.asarray(labels, dtype=int)
+        labels = np.asarray(labels, dtype=int).reshape(-1)[:n_channels]
+
+        # Synergy-pair constraint (optional)
+        if self.config.synergy_pair_constraint:
+            metrics = self._metrics_cache.get(layer_name, {})
+            synergy_pairs = self._get_top_synergy_pairs(metrics, self.config.top_synergy_pairs)
+        else:
+            synergy_pairs = []
+        pair_set: Set[Tuple[int, int]] = set((min(i, j), max(i, j)) for i, j in synergy_pairs)
+
+        sorted_idx = np.argsort(scores_np).tolist()  # low score pruned first
+        # Build cluster->candidate lists in score order.
+        cluster_ids = sorted(int(x) for x in np.unique(labels).tolist())
+        cand_by_cluster: Dict[int, List[int]] = {cid: [] for cid in cluster_ids}
+        for idx in sorted_idx:
+            if int(idx) in protected:
+                continue
+            cid = int(labels[int(idx)])
+            cand_by_cluster.setdefault(cid, []).append(int(idx))
+
+        # Allocate quotas proportional to candidate counts (keeps prune fraction ~constant per cluster).
+        counts = {cid: int(len(idxs)) for cid, idxs in cand_by_cluster.items() if int(len(idxs)) > 0}
+        total = int(sum(counts.values()))
+        if total <= 0:
+            return []
+
+        # Largest remainder method for exact integer budgets.
+        quotas: Dict[int, int] = {cid: 0 for cid in counts}
+        remainders: List[Tuple[float, int]] = []
+        for cid, cnt in counts.items():
+            q = float(n_prune) * float(cnt) / float(total)
+            q_floor = int(np.floor(q))
+            quotas[cid] = q_floor
+            remainders.append((q - q_floor, cid))
+        remaining = int(n_prune - sum(quotas.values()))
+        if remaining > 0:
+            remainders.sort(reverse=True)
+            for _, cid in remainders:
+                if remaining <= 0:
+                    break
+                quotas[cid] = int(quotas.get(cid, 0)) + 1
+                remaining -= 1
+
+        selected: Set[int] = set()
+
+        def _pair_conflict(idx: int) -> bool:
+            if not pair_set:
+                return False
+            for i, j in pair_set:
+                if (idx == i and j in selected) or (idx == j and i in selected):
+                    return True
+            return False
+
+        # Phase 1: satisfy per-cluster quotas.
+        deficit = 0
+        for cid in sorted(quotas.keys()):
+            need = int(quotas.get(cid, 0))
+            if need <= 0:
+                continue
+            for idx in cand_by_cluster.get(cid, []):
+                if need <= 0:
+                    break
+                if idx in selected:
+                    continue
+                if self.config.synergy_pair_constraint and _pair_conflict(idx):
+                    continue
+                selected.add(int(idx))
+                need -= 1
+            if need > 0:
+                deficit += int(need)
+
+        # Phase 2: fill deficit globally by score.
+        if deficit > 0:
+            for idx in sorted_idx:
+                if len(selected) >= n_prune:
+                    break
+                if int(idx) in selected or int(idx) in protected:
+                    continue
+                if self.config.synergy_pair_constraint and _pair_conflict(int(idx)):
+                    continue
+                selected.add(int(idx))
+
+        # Phase 3: if still short, allow protected channels (lowest score first).
+        if len(selected) < n_prune and bool(getattr(self.config, "enforce_exact_prune_budget", True)):
+            protected_sorted = sorted((int(i) for i in protected), key=lambda i: float(scores_np[i]))
+            for idx in protected_sorted:
+                if len(selected) >= n_prune:
+                    break
+                if idx in selected:
+                    continue
+                if self.config.synergy_pair_constraint and _pair_conflict(int(idx)):
+                    continue
+                selected.add(int(idx))
+
+        return sorted((int(i) for i in selected), key=lambda i: float(scores_np[i]))
+
+
+class ClusterAwareAdaptive(ClusterAwarePruning):
+    """
+    Cluster-aware pruning with AUTOMATIC hyperparameter adaptation.
+    
+    Key innovations:
+    1. Protection threshold adapts to cluster distribution (no hardcoded 0.3)
+    2. Per-layer weights based on layer depth ratio
+    3. Sparsity-aware protection scaling
+    
+    This removes the flat region problem by smoothly transitioning constraints.
+    """
+    
+    def __init__(
+        self,
+        config: Optional[ClusterAwarePruningConfig] = None,
+        **kwargs,
+    ):
+        if config is None:
+            config = ClusterAwarePruningConfig()
+        
+        # Enable all adaptive features
+        config.depth_adaptive = True
+        config.sparsity_adaptive_protection = True
+        
+        super().__init__(config, **kwargs)
+        
+        # Cache for cluster distribution analysis
+        self._cluster_distribution: Dict[str, Dict[str, int]] = {}
+        self._layer_depths: Dict[str, float] = {}
+        self._n_layers: int = 0
+    
+    def _analyze_cluster_distribution(self) -> Dict[str, float]:
+        """
+        Compute global cluster distribution from cached clusters.
+        Returns fraction of each cluster type.
+        """
+        if not self._clusters_cache:
+            return {'critical': 0.25, 'synergistic': 0.25, 
+                    'redundant': 0.25, 'background': 0.25}
+        
+        total_by_type = {'critical': 0, 'synergistic': 0, 
+                         'redundant': 0, 'background': 0}
+        
+        for layer_name, clusters in self._clusters_cache.items():
+            types = clusters.get('types', [])
+            for t in range(len(types)):
+                type_name = ['critical', 'synergistic', 'redundant', 'background'][types[t] % 4]
+                total_by_type[type_name] += 1
+        
+        total = sum(total_by_type.values())
+        if total == 0:
+            return {'critical': 0.25, 'synergistic': 0.25, 
+                    'redundant': 0.25, 'background': 0.25}
+        
+        return {k: v / total for k, v in total_by_type.items()}
+    
+    def _compute_adaptive_protection(self, target_sparsity: float) -> float:
+        """
+        Compute protection fraction based on cluster distribution and target sparsity.
+        
+        Logic:
+        - If we can achieve target by pruning only redundant+background, no protection needed
+        - Otherwise, scale protection to preserve critical channels proportionally
+        """
+        dist = self._analyze_cluster_distribution()
+        safe_frac = dist['redundant'] + dist['background']
+        
+        if target_sparsity <= safe_frac:
+            # Can achieve target without touching critical
+            return 0.0  # No protection needed
+        else:
+            # Need to prune some critical/synergistic
+            # Linear scaling: more protection as we exceed safe zone
+            overshoot = (target_sparsity - safe_frac) / (1.0 - safe_frac + 1e-6)
+            # Protection decreases as we approach 100% (nothing to protect)
+            # At safe_frac: protect 50% of critical
+            # At 100%: protect 0% (must prune everything)
+            protection = 0.5 * (1.0 - overshoot)
+            return max(0.0, min(0.7, protection))  # Clamp to [0, 0.7]
+    
+    def _get_layer_depth_ratio(self, layer_name: str) -> float:
+        """Get normalized depth (0=first layer, 1=last layer)."""
+        if layer_name in self._layer_depths:
+            return self._layer_depths[layer_name]
+        
+        # Estimate from layer name patterns
+        import re
+        
+        # Extract numeric indices
+        nums = re.findall(r'\d+', layer_name)
+        if nums:
+            # Use first number as rough depth indicator
+            idx = int(nums[0])
+            # Assume max ~20 layers for normalization
+            depth = min(1.0, idx / 20.0)
+        else:
+            depth = 0.5  # Default to middle
+        
+        self._layer_depths[layer_name] = depth
+        return depth
+    
+    def _get_adaptive_weights(self, layer_name: str) -> Tuple[float, float, float, float]:
+        """
+        Get (alpha, beta, gamma, lambda_halo) adapted to layer depth.
+        
+        Early layers: preserve features (high RQ weight, low synergy)
+        Late layers: task-specific (high synergy weight, high halo)
+        """
+        depth = self._get_layer_depth_ratio(layer_name)
+        
+        # Smooth interpolation between early and late weights
+        if depth < 0.3:
+            # Early: feature extraction layers
+            t = depth / 0.3  # 0 to 1 within early region
+            alpha = 0.6 + 0.2 * t      # 0.6 -> 0.8
+            beta = 0.2 + 0.2 * t       # 0.2 -> 0.4
+            gamma = 0.2 + 0.1 * t      # 0.2 -> 0.3
+            lambda_h = 0.1 + 0.2 * t   # 0.1 -> 0.3
+        elif depth < 0.7:
+            # Mid: transition layers
+            t = (depth - 0.3) / 0.4  # 0 to 1 within mid region
+            alpha = 0.8 + 0.2 * t      # 0.8 -> 1.0
+            beta = 0.4 + 0.3 * t       # 0.4 -> 0.7
+            gamma = 0.3 + 0.1 * t      # 0.3 -> 0.4
+            lambda_h = 0.3 + 0.3 * t   # 0.3 -> 0.6
+        else:
+            # Late: task-specific layers
+            t = (depth - 0.7) / 0.3  # 0 to 1 within late region
+            alpha = 1.0 + 0.3 * t      # 1.0 -> 1.3
+            beta = 0.7 + 0.3 * t       # 0.7 -> 1.0
+            gamma = 0.4 + 0.2 * t      # 0.4 -> 0.6
+            lambda_h = 0.6 + 0.2 * t   # 0.6 -> 0.8
+        
+        return alpha, beta, gamma, lambda_h
+    
+    def compute_importance_scores(
+        self,
+        module: nn.Module,
+        inputs: Optional[torch.Tensor] = None,
+        layer_name: str = "",
+        **kwargs,
+    ) -> torch.Tensor:
+        """
+        Compute scores with adaptive weights based on layer depth.
+        """
+        # Get adaptive weights for this layer
+        alpha, beta, gamma, lambda_h = self._get_adaptive_weights(layer_name)
+        
+        # Temporarily override config weights
+        orig_alpha = self.config.alpha
+        orig_beta = self.config.beta
+        orig_gamma = self.config.gamma
+        orig_lambda = self.config.lambda_halo
+        
+        self.config.alpha = alpha
+        self.config.beta = beta
+        self.config.gamma = gamma
+        self.config.lambda_halo = lambda_h
+        
+        try:
+            scores = super().compute_importance_scores(
+                module, inputs=inputs, layer_name=layer_name, **kwargs
+            )
+        finally:
+            # Restore original weights
+            self.config.alpha = orig_alpha
+            self.config.beta = orig_beta
+            self.config.gamma = orig_gamma
+            self.config.lambda_halo = orig_lambda
+        
+        return scores
+    
+    def select_channels_to_prune(
+        self,
+        scores: torch.Tensor,
+        n_prune: int,
+        layer_name: str = "",
+        protected_indices: Optional[List[int]] = None,
+    ) -> List[int]:
+        """
+        Select channels with adaptive protection based on sparsity.
+        """
+        n_channels = len(scores)
+        target_sparsity = n_prune / n_channels if n_channels > 0 else 0.0
+        
+        # Compute adaptive protection
+        adaptive_protection = self._compute_adaptive_protection(target_sparsity)
+        
+        # Temporarily override protection
+        orig_protect = self.config.protect_critical_frac
+        self.config.protect_critical_frac = adaptive_protection
+        
+        try:
+            result = super().select_channels_to_prune(
+                scores, n_prune, layer_name, protected_indices
+            )
+        finally:
+            self.config.protect_critical_frac = orig_protect
+        
+        return result

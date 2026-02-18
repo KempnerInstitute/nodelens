@@ -9,17 +9,19 @@ Implements:
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
-import numpy as np
+from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+import numpy as np
 
 try:
     import torch
     import torch.nn as nn
+
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,28 +76,43 @@ class CascadeAnalysis:
         layer = dict(self.model.named_modules()).get(layer_name)
         if layer is None or not hasattr(layer, 'weight'):
             return CascadeResult(layer_name, "", len(indices), 0., 0.)
-        orig_w = layer.weight.data.clone()
-        orig_b = layer.bias.data.clone() if layer.bias is not None else None
-        layer.weight.data[indices] = 0
-        if orig_b is not None:
-            layer.bias.data[indices] = 0
+        # Performance: avoid cloning the entire parameter tensor for each ablation.
+        # We only need to restore the ablated output channels (dim=0).
+        idx = [int(i) for i in indices]
+        orig_w_slice = layer.weight.data[idx].clone()
+        orig_b_slice = layer.bias.data[idx].clone() if layer.bias is not None else None
+        layer.weight.data[idx] = 0
+        if orig_b_slice is not None:
+            layer.bias.data[idx] = 0
         new = self._eval()
-        layer.weight.data = orig_w
-        if orig_b is not None:
-            layer.bias.data = orig_b
+        layer.weight.data[idx] = orig_w_slice
+        if orig_b_slice is not None:
+            layer.bias.data[idx] = orig_b_slice
         return CascadeResult(layer_name, "", len(indices),
                             self._baseline["acc"] - new["acc"],
                             new["loss"] - self._baseline["loss"])
 
-    def by_cluster(self, layer: str, labels: np.ndarray, 
-                   types: Dict[int, str], n_rm: int = 5) -> Dict[str, CascadeResult]:
-        """Run cascade test per cluster type."""
+    def by_cluster(
+        self,
+        layer: str,
+        labels: np.ndarray,
+        types: Dict[int, str],
+        n_rm: int = 5,
+        seed: int = 0,
+    ) -> Dict[str, CascadeResult]:
+        """Run cascade test per cluster type.
+
+        Notes:
+        - We sample channels *within* each cluster type to make the comparison fair.
+        - We use a fixed RNG seed by default for reproducible summaries.
+        """
         results = {}
+        rng = np.random.default_rng(int(seed))
         for cid, ctype in types.items():
             idx = np.where(labels == cid)[0]
             if len(idx) == 0:
                 continue
-            rm = np.random.choice(idx, min(n_rm, len(idx)), replace=False).tolist()
+            rm = rng.choice(idx, min(int(n_rm), len(idx)), replace=False).tolist()
             r = self.ablate(layer, rm)
             r.cluster_type = ctype
             results[ctype] = r
@@ -123,10 +140,14 @@ class DamagePrediction:
         self.layer = layer
         self._damages = None
 
-    def compute_damages(self, n_ch: int, frac: float = 0.2) -> np.ndarray:
-        """Compute true per-channel damage."""
+    def compute_damages(self, n_ch: int, frac: float = 0.2, seed: int = 0) -> np.ndarray:
+        """Compute true per-channel damage.
+
+        Uses a fixed RNG seed by default for reproducible comparisons.
+        """
         damages = np.zeros(n_ch)
-        test_idx = np.random.choice(n_ch, max(1, int(n_ch * frac)), replace=False)
+        rng = np.random.default_rng(int(seed))
+        test_idx = rng.choice(int(n_ch), max(1, int(n_ch * frac)), replace=False)
         for i in test_idx:
             r = self.cascade.ablate(self.layer, [int(i)])
             # Use loss increase as a smoother "damage" signal than accuracy drop,
@@ -145,7 +166,7 @@ class DamagePrediction:
         if mask.sum() < 5:
             return DamageResult(self.layer, method, 0., {})
         d, s = self._damages[mask], scores[mask]
-        # In the paper scripts we treat `scores` as a *prune score* where higher
+        # In some pruning workflows we treat `scores` as a *prune score* where higher
         # means "safer to remove". A good prune score should correlate with
         # *lower* damage; we therefore correlate against -d so higher rho is better.
         rho, _ = stats.spearmanr(s, -d)

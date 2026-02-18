@@ -1,0 +1,161 @@
+# ============================================================================
+# LLAMA-3.1-8B MECHANISM PROBES (LIGHTWEIGHT)
+# ============================================================================
+#
+# Purpose:
+# - Run *only* the mechanistic diagnostics used by the paper appendix:
+#   - LP-vs-magnitude controls
+#   - ReadConn dependence (support ablation)
+#   - Conditional halo ablation (halo vs LP-matched non-halo)
+#   - LP vs true Δloss validation via single-channel ablations
+#
+# This intentionally disables:
+# - pruning sweeps
+# - downstream evaluation suites
+#
+# Expected runtime depends on `supernode.lp_ablation_validation.*` settings.
+# ============================================================================
+
+experiment:
+  name: "llama3_8b_paper_results_mechanism_probes"
+  type: "llm_alignment"
+  output_dir: "./results/paper/llama3_8b_mechanism_probes"
+  seed: 42
+  device: "cuda"
+  save_activations: false
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+calibration:
+  dataset: "wikitext"
+  subset: "wikitext-2-raw-v1"
+  split: "train"
+  num_samples: 128
+  max_length: 512
+  batch_size: 4
+
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+  # Controls how many calibration sequences are used for importance-score collection
+  # (defaults to 1 if omitted).
+  num_samples: 64
+
+# Minimal LLM settings (used by some probes for dataset selection)
+llm:
+  wikitext_subset: "wikitext-2-raw-v1"
+  scar_metrics: true
+  scar_num_samples: 64
+  scar_max_length: 512
+
+analysis:
+  # We regenerate paper figures from cached JSON summaries during artifact collection.
+  generate_plots: true
+  save_scores: true
+
+# Some codepaths read these as top-level flags (not under `analysis:`).
+generate_plots: true
+save_scores: true
+
+# SCAR metric collection (activation + gradient) for LP.
+do_scar_metrics: true
+scar_num_samples: 64
+scar_max_length: 512
+
+# Enable SCAR connectivity computation (required by halo/read probes).
+do_connectivity_pruning: true
+do_directed_redundancy: false
+do_halo_analysis: false
+do_generalized_importance: false
+
+supernode:
+  enabled: true
+  score_metric: "scar_loss_proxy"
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  halo_fraction: 0.10
+  connectivity_topk: 256
+  connectivity_rank_normalize: false
+  connectivity_power: 1.0
+
+  non_halo_sample_size: 256
+  non_halo_sample_seed: 0
+
+  protection_normalization: "rank_power"
+  protection_rank_power: 8.0
+  protection_floor: 0.2
+  protect_core: true
+  protect_core_metrics:
+    - "scar_loss_proxy"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+
+  positive_redundancy: true
+  redundancy_reduce: "topk_mean"
+  redundancy_topk: 5
+  compute_random_core_baseline: true
+  random_core_seed: 12345
+
+  cross_layer_analysis: true
+  compare_by_connection: true
+  compute_metrics:
+    - "activation"
+    - "mutual_information"
+    - "redundancy"
+
+  # Cross-layer read-halo dependence (support ablation)
+  read_halo_analysis:
+    enabled: false
+    read_halo_fraction: 0.10
+    num_texts: 4
+    max_length: 256
+    random_seed: 0
+    compute_dependence: true
+    dependence_max_points: 20000
+
+  # Conditional halo ablation (causal control)
+  conditional_halo_ablation:
+    enabled: false
+    layer_stride: 4
+    layer_indices: null
+    num_texts: 16
+    max_length: 256
+    match_bins: 10
+    seed: 0
+
+  # LP instrument validation: LP vs true ΔNLL under single-channel ablation
+  lp_ablation_validation:
+    enabled: true
+    layer_stride: 8
+    layer_indices: null
+    num_texts: 8
+    max_length: 256
+    num_channels: 128
+    quantile_bins: 8
+    seed: 0
+
+# Disable pruning/eval sweeps for this probe job
+pruning:
+  enabled: false
+
+evaluation:
+  enabled: false
+
+# Disable expensive/default-on analyses that bloat the results JSON.
+supernode_robustness:
+  enabled: false
+
+supernode_summary:
+  enabled: false
+  outlier_analysis: false

@@ -12,10 +12,10 @@
 #
 # From SCAR paper Table 5 (Cross-Model Generalization at 50% sparsity):
 # ┌─────────────────┬──────────────┬──────────────────┐
-# │ Model           │ Method       │ PPL↓  │ Acc.↑   │
+# | Model           | Method       | PPLdown  | Acc.up   |
 # ├─────────────────┼──────────────┼───────┼─────────┤
-# │ Mistral-7B      │ Wanda        │ 16.2  │ 65.1%   │
-# │                 │ SCAR         │ 11.8  │ 68.9%   │
+# | Mistral-7B      | Wanda        | 16.2  | 65.1%   |
+# |                 | SCAR         | 11.8  | 68.9%   |
 # └─────────────────┴──────────────┴───────┴─────────┘
 #
 # EXPECTED RUNTIME: ~6-10 hours on H100

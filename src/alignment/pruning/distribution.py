@@ -156,12 +156,21 @@ class PruningDistributionManager:
             threshold = torch.kthvalue(all_scores_cat, k).values.item()
 
         # Compute implied amount per layer
+        #
+        # IMPORTANT: Cap per-layer sparsity to prevent complete layer removal, which can
+        # cause network collapse (especially for deep networks). Expose this as a knob
+        # for reproducibility / ablations; set to 1.0 to match legacy behavior.
+        max_per_layer = float(self.kwargs.get("max_per_layer_sparsity_cap", 1.00))
+        max_per_layer = max(0.0, min(1.0, max_per_layer))
+        
         amounts = {}
         for layer_name, scores in layer_scores.items():
             # Fraction below threshold in this layer
             # usage of <= to be safe
             below_threshold = (scores <= threshold).float().mean().item()
-            amounts[layer_name] = max(self.min_amount, min(self.max_amount, below_threshold))
+            # Apply per-layer cap to prevent complete layer removal
+            capped = min(below_threshold, max_per_layer)
+            amounts[layer_name] = max(self.min_amount, min(self.max_amount, capped))
 
         return amounts
 
@@ -332,7 +341,7 @@ class PruningDistributionManager:
         layer_fractions = {name: size / total_size for name, size in layer_sizes.items()}
 
         # Adjust amounts based on size
-        # Larger fraction → prune more
+        # Larger fraction -> prune more
         amounts = {}
         for name, fraction in layer_fractions.items():
             # Scale around target
@@ -349,7 +358,7 @@ class PruningDistributionManager:
         """
         Distribute based on average layer importance.
 
-        Low average importance → prune more.
+        Low average importance -> prune more.
         """
         # Compute average importance per layer
         layer_importance = {name: scores.mean().item() for name, scores in layer_scores.items()}
@@ -360,7 +369,7 @@ class PruningDistributionManager:
         importance_range = max_importance - min_importance
 
         if importance_range < 1e-6:
-            # All same importance → uniform
+            # All same importance -> uniform
             return self._uniform_distribution(list(layer_scores.keys()))
 
         # Compute amounts (inverse to importance)
@@ -369,7 +378,7 @@ class PruningDistributionManager:
             # Normalize to [0, 1]
             norm_importance = (importance - min_importance) / importance_range
 
-            # Inverse: high importance → low amount
+            # Inverse: high importance -> low amount
             amount = self.target_sparsity + 0.3 * (1 - norm_importance) - 0.15
             amounts[name] = max(self.min_amount, min(self.max_amount, amount))
 

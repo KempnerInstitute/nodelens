@@ -15,18 +15,18 @@ Compatible with any neural network architecture:
 """
 
 import logging
-from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-import json
-import numpy as np
 
-logger = logging.getLogger(__name__)
+import numpy as np
 
 try:
     import torch
     import torch.nn as nn
+    import torch.nn.functional as F
     from torch.utils.data import DataLoader
+
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
@@ -34,6 +34,43 @@ except ImportError:
 from ..analysis.clustering import MetricSpaceClustering, CrossLayerHaloAnalysis
 from ..analysis.cascade_analysis import CascadeAnalysis, DamagePrediction
 from ..pruning.pipeline import PruningPipelineOptions, run_pruning_pipeline
+
+logger = logging.getLogger(__name__)
+
+def _json_default(obj):
+    """
+    JSON encoder helper for experiment outputs.
+
+    We explicitly handle numpy arrays/scalars (and torch tensors) so results.json stores
+    numeric arrays as JSON lists instead of stringified numpy reprs.
+    """
+    try:
+        from pathlib import Path
+
+        if isinstance(obj, Path):
+            return str(obj)
+    except Exception:
+        pass
+    try:
+        import numpy as _np
+
+        if isinstance(obj, _np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (_np.floating,)):
+            return float(obj)
+        if isinstance(obj, (_np.integer,)):
+            return int(obj)
+    except Exception:
+        pass
+    try:
+        import torch as _torch
+
+        if isinstance(obj, _torch.Tensor):
+            return obj.detach().cpu().tolist()
+    except Exception:
+        pass
+    # Fall back to string to avoid hard crashes during artifact writing.
+    return str(obj)
 
 
 class _CovAccumulator:
@@ -106,46 +143,47 @@ class _CovAccumulator:
         return var_t, var_y, cov_yy, cov_ty
 
 
-@dataclass
-class ClusterAnalysisConfig:
-    """Configuration for cluster-based analysis experiments."""
-    model_name: str = "resnet18"
-    dataset_name: str = "cifar10"
-    n_calibration: int = 5000
-    n_clusters: int = 4
-    # How to form channel samples from Conv outputs Y[B,C,H,W]
-    # - "flatten_spatial": treat spatial positions as samples (subsample per image)
-    # - "gap": global-average-pool per image (one sample per image)
-    activation_samples: str = "flatten_spatial"
-    spatial_samples_per_image: int = 16  # used when activation_samples="flatten_spatial"
-    synergy_target: str = "logit_margin"  # logit_margin, correct_logit
-    # Synergy settings:
-    # - synergy_candidate_pool: number of candidate partners per channel (chosen by redundancy)
-    # - synergy_pairs: top-m partners to average (Eq. per_channel_syn)
-    synergy_candidate_pool: int = 50
-    synergy_pairs: int = 10
-    halo_percentile: float = 90.0
-    use_activation_weight: bool = True  # Use activation-weighted influence for halos
-    cascade_n_remove: int = 5
-    damage_sample_frac: float = 0.2
-    # Pruning experiment settings
-    pruning_ratios: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7])
-    pruning_methods: List[str] = field(default_factory=lambda: [
-        'random', 'magnitude', 'taylor', 'network_slimming', 'composite', 'cluster_aware'
-    ])
-    fine_tune_after_pruning: bool = False  # Whether to fine-tune after pruning
-    fine_tune_epochs: int = 10
-    fine_tune_lr: float = 0.0001
-    fine_tune_max_batches: Optional[int] = None
-    fine_tune_weight_decay: float = 0.0
-    # Output
-    output_dir: str = "results/cluster_analysis"
-    device: str = "cuda"
-    seed: int = 42
+class _VarAccumulator:
+    """
+    Streaming per-channel variance accumulator.
+
+    Used for explicit Eq. (w^T Σ_X w / ||w||^2) RQ computation via sampled
+    input-patch projections (without storing the full covariance matrix).
+    """
+
+    def __init__(self, n_channels: int):
+        self.n = 0
+        self.sum_y = np.zeros(n_channels, dtype=np.float64)
+        self.sum_y2 = np.zeros(n_channels, dtype=np.float64)
+
+    def update(self, y: np.ndarray) -> None:
+        y = np.asarray(y, dtype=np.float64)
+        if y.ndim != 2:
+            raise ValueError(f"Expected y as [N,C], got shape {y.shape}")
+        if y.size == 0:
+            return
+        self.n += int(y.shape[0])
+        self.sum_y += y.sum(axis=0)
+        self.sum_y2 += np.square(y).sum(axis=0)
+
+    def variance(self) -> np.ndarray:
+        if self.n < 2:
+            return np.zeros_like(self.sum_y, dtype=np.float64)
+        n = float(self.n)
+        mean_y = self.sum_y / n
+        var = (self.sum_y2 - n * np.square(mean_y)) / (n - 1.0)
+        return np.clip(var, 1e-12, None)
 
 
-# Backward compatibility alias
-VisionExperimentConfig = ClusterAnalysisConfig
+from .base import ExperimentConfig
+
+# ---------------------------------------------------------------------
+# Backward-compatible aliases:
+# Historically this module defined a separate `ClusterAnalysisConfig` dataclass.
+# We now use the repo-standard `ExperimentConfig` as the single source of truth.
+# ---------------------------------------------------------------------
+ClusterAnalysisConfig = ExperimentConfig
+VisionExperimentConfig = ExperimentConfig
 
 
 class ClusterAnalysisExperiment:
@@ -155,7 +193,7 @@ class ClusterAnalysisExperiment:
     Works with any architecture that has Conv2d or Linear layers.
     
     Example:
-        >>> config = ClusterAnalysisConfig(model_name="resnet18")
+        >>> config = ClusterAnalysisConfig(name="cluster_analysis", model_name="resnet18")
         >>> exp = ClusterAnalysisExperiment(config, model, train_loader, test_loader)
         >>> results = exp.run()
     """
@@ -178,14 +216,33 @@ class ClusterAnalysisExperiment:
         self.cluster_results = {}
         self.halo_results = {}
         self.halo_flow_results = {}
+        # Within-layer connectivity summaries (vision)
+        self.within_layer_connectivity = {}
+        # Temporary storage of within-layer top-k neighbors (computed during metrics pass),
+        # used to aggregate type×type connectivity matrices after clustering.
+        self._within_layer_neighbors: Dict[str, Dict[str, np.ndarray]] = {}
+        self.permutation_results = {}  # Permutation baseline results
+        self.ablation_results = {}     # Metric ablation results
         self.cascade_results = {}
         self.pruning_results = {}
         self.pruning_cluster_distributions = {}
         # Cache for expensive pruning scores (e.g., gradient-based Taylor)
         self._pruning_score_cache: Dict[str, Dict[str, "torch.Tensor"]] = {}
+
+        # Deterministic calibration subset (saved to disk for reproducibility)
+        self._calibration_indices: Optional[List[int]] = None
+        self._calibration_loader: Optional["DataLoader"] = None
         
-        # Setup output directory
-        self.output_dir = Path(config.output_dir)
+        # Setup output directory.
+        # The standard runner (`scripts/run_experiment.py`) sets `config.experiment_dir`
+        # to a unique job directory; fall back to legacy keys when needed.
+        out_dir = (
+            getattr(config, "experiment_dir", None)
+            or getattr(config, "output_dir", None)  # legacy
+            or getattr(config, "results_path", None)  # legacy
+            or "results/cluster_analysis"
+        )
+        self.output_dir = Path(str(out_dir))
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Get analyzable layers
@@ -199,6 +256,253 @@ class ClusterAnalysisExperiment:
             if isinstance(module, nn.Conv2d) and module.out_channels >= 4:
                 layers.append((name, module))
         return layers
+
+    def _calibration_indices_path(self) -> Path:
+        return self.output_dir / "calibration_indices.json"
+
+    def _get_calibration_indices(self) -> List[int]:
+        """
+        Return a deterministic subset of dataset indices for calibration.
+
+        This avoids relying on DataLoader shuffle / worker ordering, and makes it
+        possible to exactly reproduce metrics/clusters/pruning across machines.
+        """
+        if self._calibration_indices is not None:
+            return list(self._calibration_indices)
+
+        path = self._calibration_indices_path()
+        seed = int(self.config.seed)
+        n_cal = int(self.config.n_calibration)
+
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text())
+                idx = payload.get("indices", payload)
+                if isinstance(idx, list) and len(idx) > 0:
+                    if len(idx) != n_cal:
+                        logger.warning(
+                            "Loaded calibration indices of length %d but config.n_calibration=%d; "
+                            "using saved indices for reproducibility.",
+                            len(idx),
+                            n_cal,
+                        )
+                    self._calibration_indices = [int(i) for i in idx]
+                    return list(self._calibration_indices)
+            except Exception as exc:
+                logger.warning("Failed to load calibration indices from %s: %s", path, exc)
+
+        # Create a fresh deterministic subset and persist it.
+        dataset = getattr(self.train_loader, "dataset", None)
+        if dataset is None:
+            raise ValueError("train_loader has no dataset; cannot create calibration subset")
+
+        try:
+            n_total = int(len(dataset))
+        except Exception as exc:
+            raise ValueError(f"train_loader.dataset has no length; cannot sample indices: {exc}") from exc
+
+        n_cal = max(1, min(n_cal, n_total))
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(n_total, size=n_cal, replace=False).tolist()
+
+        payload = {"seed": seed, "n_calibration": n_cal, "indices": [int(i) for i in idx]}
+        try:
+            path.write_text(json.dumps(payload, indent=2))
+        except Exception as exc:
+            logger.warning("Failed to write calibration indices to %s: %s", path, exc)
+
+        self._calibration_indices = [int(i) for i in idx]
+        return list(self._calibration_indices)
+
+    def _get_calibration_loader(self) -> "DataLoader":
+        """
+        Build (and cache) a calibration DataLoader.
+
+        Modes:
+        - calibration_mode="indices" (default): deterministic subset via saved indices (reproducible).
+        - calibration_mode="train_loader": use the provided train_loader directly (legacy behavior).
+        """
+        if self._calibration_loader is not None:
+            return self._calibration_loader
+
+        if not HAS_TORCH:
+            raise RuntimeError("Torch is required to build a calibration DataLoader")
+
+        cal_mode = str(self.config.calibration_mode).lower()
+        if cal_mode in {"train_loader", "train", "legacy", "dataloader"}:
+            # Legacy mode: use the original training loader (incl. its shuffle/augmentations).
+            self._calibration_loader = self.train_loader
+            return self._calibration_loader
+
+        from torch.utils.data import DataLoader, Subset
+
+        dataset = getattr(self.train_loader, "dataset", None)
+        if dataset is None:
+            raise ValueError("train_loader has no dataset; cannot build calibration DataLoader")
+
+        idx = self._get_calibration_indices()
+        subset = Subset(dataset, idx)
+
+        batch_size = int(getattr(self.train_loader, "batch_size", 128) or 128)
+        pin_memory = bool(getattr(self.train_loader, "pin_memory", False))
+        collate_fn = getattr(self.train_loader, "collate_fn", None)
+        num_workers = int(self.config.calibration_num_workers)
+        num_workers = max(0, num_workers)
+
+        self._calibration_loader = DataLoader(
+            subset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            drop_last=False,
+            collate_fn=collate_fn,
+        )
+        return self._calibration_loader
+
+    def _maybe_advance_rng_for_legacy_calibration(self) -> None:
+        """
+        Optionally advance torch RNG state to approximate the RNG consumption that would
+        have occurred during training before computing calibration-based metrics.
+
+        This is ONLY applied when calibration_mode="train_loader" and
+        simulate_post_train_shuffle_epochs > 0.
+
+        Motivation: when a historical run trained for E epochs and then computed metrics
+        by iterating the shuffled training DataLoader, the resulting calibration subset
+        depends on the torch RNG state after those E epochs (DataLoader iterator creation
+        draws random seeds; RandomSampler draws a permutation).
+        """
+        try:
+            import torch  # type: ignore
+            from torch.utils.data import RandomSampler  # type: ignore
+        except Exception:
+            return
+
+        cal_mode = str(getattr(self.config, "calibration_mode", "indices")).lower()
+        if cal_mode not in {"train_loader", "train", "legacy", "dataloader"}:
+            return
+
+        n_epochs = int(getattr(self.config, "simulate_post_train_shuffle_epochs", 0) or 0)
+        if n_epochs <= 0:
+            return
+
+        include_eval = bool(getattr(self.config, "simulate_post_train_include_eval", True))
+
+        # Best-effort dataset size
+        dataset = getattr(self.train_loader, "dataset", None)
+        if dataset is None:
+            return
+        try:
+            n_train = int(len(dataset))
+        except Exception:
+            return
+        if n_train <= 0:
+            return
+
+        # Detect whether the training loader is shuffled (RandomSampler).
+        # NOTE: for DataLoader(shuffle=True, generator=None), RandomSampler does NOT
+        # draw permutations from the global RNG directly; instead it draws a single
+        # 64-bit seed from the global RNG and then uses a private Generator to
+        # create the epoch permutation. So the global RNG consumption per epoch is:
+        #   - 1 draw for DataLoader base_seed (when num_workers>0)
+        #   - 1 draw for RandomSampler epoch seed (when shuffle=True, generator=None)
+        # We mimic that here.
+        is_shuffled = isinstance(getattr(self.train_loader, "sampler", None), RandomSampler)
+        has_generator = getattr(self.train_loader, "generator", None) is not None
+        train_num_workers = int(getattr(self.train_loader, "num_workers", 0) or 0)
+        test_num_workers = int(getattr(self.test_loader, "num_workers", 0) or 0) if self.test_loader is not None else 0
+
+        logger.info(
+            "Advancing torch RNG for %d simulated epochs (legacy calibration): shuffled=%s, "
+            "train_workers=%d, include_eval=%s, test_workers=%d, has_generator=%s",
+            n_epochs,
+            is_shuffled,
+            train_num_workers,
+            include_eval,
+            test_num_workers,
+            has_generator,
+        )
+
+        # Mimic the torch RNG draws done during each epoch's DataLoader iterator creation.
+        # For multi-worker loaders, DataLoader draws a base_seed via torch.empty(...).random_().
+        # For shuffled training loaders with generator=None, RandomSampler draws an epoch
+        # seed via torch.empty(...).random_(). (Permutation is generated from a *private*
+        # generator seeded by that value, so we should NOT call torch.randperm here.)
+        for _ in range(n_epochs):
+            if train_num_workers > 0:
+                _ = torch.empty((), dtype=torch.int64).random_().item()
+            if is_shuffled and not has_generator:
+                _ = torch.empty((), dtype=torch.int64).random_().item()
+            if include_eval and test_num_workers > 0:
+                _ = torch.empty((), dtype=torch.int64).random_().item()
+
+    def _collect_run_metadata(self) -> Dict[str, Any]:
+        """Collect lightweight metadata for reproducibility (git commit, env, etc.)."""
+        import os
+        import platform
+        import subprocess
+        import sys
+        from datetime import datetime, timezone
+
+        meta: Dict[str, Any] = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "hostname": platform.node(),
+            "pid": os.getpid(),
+            "python": sys.version,
+            "slurm": {
+                "job_id": os.environ.get("SLURM_JOB_ID"),
+                "array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
+                "array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
+                "node_list": os.environ.get("SLURM_NODELIST"),
+            },
+        }
+
+        # Key package versions
+        try:
+            import torch  # type: ignore
+
+            meta["torch"] = {
+                "version": getattr(torch, "__version__", None),
+                "cuda_available": bool(torch.cuda.is_available()),
+                "cuda_version": getattr(torch.version, "cuda", None),
+            }
+        except Exception:
+            meta["torch"] = {}
+        try:
+            import numpy as _np  # type: ignore
+
+            meta["numpy_version"] = getattr(_np, "__version__", None)
+        except Exception:
+            pass
+        try:
+            import sklearn  # type: ignore
+
+            meta["sklearn_version"] = getattr(sklearn, "__version__", None)
+        except Exception:
+            pass
+
+        # Git info (best-effort)
+        try:
+            cwd = Path(__file__).resolve().parent
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=cwd, text=True).strip()
+            branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd, text=True).strip()
+            describe = subprocess.check_output(["git", "describe", "--always", "--dirty", "--tags"], cwd=cwd, text=True).strip()
+            # Determine dirty state
+            dirty = subprocess.call(["git", "diff", "--quiet"], cwd=cwd) != 0 or subprocess.call(
+                ["git", "diff", "--quiet", "--cached"], cwd=cwd
+            ) != 0
+            meta["git"] = {"commit": commit, "branch": branch, "describe": describe, "dirty": bool(dirty)}
+        except Exception:
+            meta["git"] = {}
+
+        # Calibration reproducibility info
+        try:
+            meta["calibration_indices_file"] = str(self._calibration_indices_path())
+        except Exception:
+            pass
+
+        return meta
     
     def compute_metrics(self) -> Dict[str, Dict[str, np.ndarray]]:
         """
@@ -207,35 +511,205 @@ class ClusterAnalysisExperiment:
         Returns:
             Dict mapping layer_name to dict of metric arrays
         """
-        logger.info("Computing per-channel metrics (streaming)...")
+        logger.info("Computing per-channel metrics...")
         self.model.eval()
 
+        # Optional: advance RNG state to emulate "post-training" loader shuffle behavior
+        # when using calibration_mode="train_loader" for legacy comparisons.
+        self._maybe_advance_rng_for_legacy_calibration()
+
+        # RQ estimator configuration.
+        # Default stays backward-compatible (streaming Eq. 2 form).
+        rq_cfg = {}
+        try:
+            rq_cfg = dict(getattr(self.config, "metric_configs", {}).get("rayleigh_quotient", {}) or {})
+        except Exception:
+            rq_cfg = {}
+        rq_definition = str(
+            getattr(
+                self.config,
+                "rq_definition",
+                rq_cfg.get("definition", rq_cfg.get("estimator", "equivalent_streaming")),
+            )
+        ).lower()
+        rq_definition_aliases = {
+            "streaming": "equivalent_streaming",
+            "equivalent": "equivalent_streaming",
+            "var": "equivalent_streaming",
+            "proxy": "equivalent_streaming",
+            "exact": "covariance_exact",
+            "covariance": "covariance_exact",
+            "cov_exact": "covariance_exact",
+        }
+        rq_definition = rq_definition_aliases.get(rq_definition, rq_definition)
+        if rq_definition not in {"equivalent_streaming", "covariance_exact", "both"}:
+            logger.warning(f"Unknown rq_definition='{rq_definition}', using equivalent_streaming.")
+            rq_definition = "equivalent_streaming"
+
+        activation_point = str(self.config.activation_point).lower()
+        activation_mode = str(self.config.activation_samples).lower()
+
+        rq_exact_requested = rq_definition in {"covariance_exact", "both"}
+        rq_exact_active = rq_exact_requested
+        if rq_exact_active and activation_point not in {"pre_bn", "prebn", "pre"}:
+            logger.warning(
+                "rq_definition=%s requested but activation_point=%s. "
+                "Exact covariance RQ currently supports pre-BN hooks; falling back to equivalent_streaming.",
+                rq_definition,
+                activation_point,
+            )
+            rq_exact_active = False
+        if rq_exact_active and activation_mode in {"gap", "global", "global_avg", "global_average"}:
+            logger.warning(
+                "rq_definition=%s requested with activation_samples=%s. "
+                "Exact covariance RQ currently supports spatial samples; falling back to equivalent_streaming.",
+                rq_definition,
+                activation_mode,
+            )
+            rq_exact_active = False
+
+        if rq_definition == "both":
+            logger.info(
+                "RQ mode: both (use covariance_exact for pruning/clustering, also store equivalent_streaming diagnostics)."
+            )
+        elif rq_definition == "covariance_exact":
+            logger.info("RQ mode: covariance_exact (Eq. 1 explicit on sampled conv inputs).")
+        else:
+            logger.info("RQ mode: equivalent_streaming (Eq. 2, Var(Y)/||w||^2).")
+
         # Per-layer accumulators (filled lazily once we see a batch for the layer)
-        accs: Dict[str, _CovAccumulator] = {}
+        #
+        # IMPORTANT (task-level targets): for decision-level quantities involving the
+        # image-level target T (e.g., TaskMI, synergy), treating spatial positions as
+        # independent samples creates pseudo-replication because T is repeated for all
+        # positions within an image. To avoid inflating the effective sample size, we
+        # compute task-level stats from per-image pooled activations (GAP) regardless
+        # of how we sample for within-layer redundancy.
+        accs_local: Dict[str, _CovAccumulator] = {}
+        accs_task: Dict[str, _CovAccumulator] = {}
+        accs_rq_exact: Dict[str, _VarAccumulator] = {}
 
         # Temporary per-batch activations captured by hooks
         batch_acts: Dict[str, "torch.Tensor"] = {}
+        batch_inputs: Dict[str, "torch.Tensor"] = {}
+
+        def _project_conv_outputs_from_input(
+            layer: "nn.Conv2d",
+            inp_cpu: "torch.Tensor",
+            sample_idx: Optional[np.ndarray],
+            expected_hw: int,
+        ) -> Optional[np.ndarray]:
+            """
+            Explicit Eq. (w^T Σ_X w) projections on sampled conv input patches.
+            Returns sampled pre-activation outputs [N, C_out] aligned with y_local.
+            """
+            try:
+                if inp_cpu.ndim != 4:
+                    return None
+                if not isinstance(layer, nn.Conv2d):
+                    return None
+
+                # [B, C_in*k*k, L] where L = H_out * W_out
+                patches = F.unfold(
+                    inp_cpu,
+                    kernel_size=layer.kernel_size,
+                    dilation=layer.dilation,
+                    padding=layer.padding,
+                    stride=layer.stride,
+                )
+                bsz, d_full, n_pos = patches.shape
+                if expected_hw > 0 and n_pos != expected_hw:
+                    return None
+
+                if sample_idx is None:
+                    # [B*L, D]
+                    x_flat = patches.permute(0, 2, 1).reshape(bsz * n_pos, d_full)
+                else:
+                    idx_t = torch.as_tensor(sample_idx, dtype=torch.long, device=patches.device)
+                    if idx_t.ndim != 2 or idx_t.shape[0] != bsz:
+                        return None
+                    idx_t = torch.clamp(idx_t, 0, max(0, n_pos - 1))
+                    gather_idx = idx_t.unsqueeze(1).expand(bsz, d_full, idx_t.shape[1])
+                    # [B, D, p] -> [B*p, D]
+                    x_flat = torch.gather(patches, dim=2, index=gather_idx).permute(0, 2, 1).reshape(-1, d_full)
+
+                weight = layer.weight.detach().cpu()
+                c_out = int(weight.shape[0])
+                groups = int(getattr(layer, "groups", 1))
+
+                if groups == 1:
+                    w_mat = weight.reshape(c_out, -1).t().to(x_flat.dtype)
+                    proj = x_flat @ w_mat  # [N, C_out]
+                else:
+                    c_in_total = int(inp_cpu.shape[1])
+                    k_elems = int(weight.shape[2] * weight.shape[3])
+                    c_in_per_group = c_in_total // groups
+                    c_out_per_group = c_out // groups
+                    x3 = x_flat.reshape(x_flat.shape[0], c_in_total, k_elems)
+                    proj = x_flat.new_zeros((x_flat.shape[0], c_out))
+                    for g in range(groups):
+                        xs = x3[:, g * c_in_per_group : (g + 1) * c_in_per_group, :].reshape(x_flat.shape[0], -1)
+                        ws = weight[g * c_out_per_group : (g + 1) * c_out_per_group].reshape(c_out_per_group, -1).t().to(xs.dtype)
+                        proj[:, g * c_out_per_group : (g + 1) * c_out_per_group] = xs @ ws
+
+                if layer.bias is not None:
+                    proj = proj + layer.bias.detach().cpu().reshape(1, -1).to(proj.dtype)
+
+                return proj.numpy().astype(np.float64, copy=False)
+            except Exception:
+                return None
 
         def hook_fn(name: str):
             def fn(_m, _inp, out):
                 # Store only for this batch; processed after logits are computed
                 batch_acts[name] = out.detach()
+                if rq_exact_active and isinstance(_inp, (tuple, list)) and len(_inp) > 0 and torch.is_tensor(_inp[0]):
+                    batch_inputs[name] = _inp[0].detach()
             return fn
 
-        # Register hooks
+        # Register hooks.
+        # By default we hook conv outputs (pre-BN); optionally hook matching BN outputs (post-BN)
+        # while still storing under the conv's name so downstream code stays consistent.
+        modules = dict(self.model.named_modules())
+        activation_point = str(self.config.activation_point).lower()
+
+        def _bn_for_conv_name(conv_name: str):
+            # Best-effort mapping using common naming conventions (ResNet/VGG).
+            cand = [
+                conv_name.replace("conv", "bn"),
+                conv_name.replace(".conv", ".bn"),
+                conv_name + "_bn",
+            ]
+            if "downsample.0" in conv_name:
+                cand.append(conv_name.replace("downsample.0", "downsample.1"))
+            for n in cand:
+                m = modules.get(n)
+                if m is not None and m.__class__.__name__.lower().startswith("batchnorm"):
+                    return n, m
+            return None, None
+
         handles = []
         for name, layer in self.layers:
-            handles.append(layer.register_forward_hook(hook_fn(name)))
+            hook_mod = layer
+            if activation_point in {"post_bn", "postbn", "bn"}:
+                _bn_name, bn = _bn_for_conv_name(name)
+                if bn is not None:
+                    hook_mod = bn
+            handles.append(hook_mod.register_forward_hook(hook_fn(name)))
 
-        activation_mode = str(getattr(self.config, "activation_samples", "flatten_spatial")).lower()
-        samples_per_img = int(getattr(self.config, "spatial_samples_per_image", 16))
+        activation_mode = str(self.config.activation_samples).lower()
+        task_mode_raw = self.config.task_activation_samples
+        task_mode = "gap" if task_mode_raw is None else str(task_mode_raw).lower()
+        if task_mode in {"match", "same", "local"}:
+            task_mode = activation_mode
+        samples_per_img = int(self.config.spatial_samples_per_image)
         samples_per_img = max(1, samples_per_img)
 
-        rng = np.random.default_rng(int(getattr(self.config, "seed", 42)))
+        rng = np.random.default_rng(int(self.config.seed))
 
         n_seen = 0
         with torch.no_grad():
-            for x, y in self.train_loader:
+            for x, y in self._get_calibration_loader():
                 if n_seen >= self.config.n_calibration:
                     break
 
@@ -251,6 +725,7 @@ class ClusterAnalysisExperiment:
                 y = y.to(self.device)
 
                 batch_acts.clear()
+                batch_inputs.clear()
                 logits = self.model(x)
 
                 # Continuous target T (logit margin)
@@ -272,9 +747,13 @@ class ClusterAnalysisExperiment:
                     out_cpu = out.detach().cpu()  # [B, C, H, W]
                     b, c, h, w = out_cpu.shape
 
+                    # ---------------------------
+                    # Local sampling (redundancy/RQ): configurable
+                    # ---------------------------
+                    sample_idx = None
                     if activation_mode in {"gap", "global", "global_avg", "global_average"}:
-                        y_s = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
-                        t_s = T_img
+                        y_local = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
+                        t_local = T_img
                     else:
                         # Spatially-flattened samples, subsampled per image
                         hw = int(h * w)
@@ -284,15 +763,51 @@ class ClusterAnalysisExperiment:
                         if p < hw:
                             idx = rng.integers(0, hw, size=(b, p), endpoint=False)
                             row = np.arange(b)[:, None]
-                            y_s = y_hw_np[row, idx, :].reshape(b * p, c)
-                            t_s = np.repeat(T_img, p)
+                            y_local = y_hw_np[row, idx, :].reshape(b * p, c)
+                            t_local = np.repeat(T_img, p)
+                            sample_idx = idx
                         else:
-                            y_s = y_hw_np.reshape(b * hw, c)
-                            t_s = np.repeat(T_img, hw)
+                            y_local = y_hw_np.reshape(b * hw, c)
+                            t_local = np.repeat(T_img, hw)
+                            sample_idx = None
 
-                    if name not in accs:
-                        accs[name] = _CovAccumulator(n_channels=c)
-                    accs[name].update(y_s, t_s)
+                    if name not in accs_local:
+                        accs_local[name] = _CovAccumulator(n_channels=c)
+                    accs_local[name].update(y_local, t_local)
+
+                    # Optional: explicit Eq. (w^T Σ_X w / ||w||^2) path from sampled inputs.
+                    if rq_exact_active:
+                        inp = batch_inputs.get(name)
+                        if inp is not None:
+                            proj_local = _project_conv_outputs_from_input(
+                                layer=layer,
+                                inp_cpu=inp.detach().cpu(),
+                                sample_idx=sample_idx,
+                                expected_hw=int(h * w),
+                            )
+                            if proj_local is not None and proj_local.shape[1] == c:
+                                if name not in accs_rq_exact:
+                                    accs_rq_exact[name] = _VarAccumulator(n_channels=c)
+                                accs_rq_exact[name].update(proj_local)
+
+                    # ---------------------------
+                    # Task-level sampling (TaskMI/synergy)
+                    # ---------------------------
+                    if task_mode in {"gap", "global", "global_avg", "global_average"}:
+                        # Default: per-image pooled (GAP) to avoid pseudo-replication.
+                        y_task = out_cpu.mean(dim=(2, 3)).numpy()  # [B, C]
+                        t_task = T_img
+                    elif task_mode == activation_mode:
+                        # Legacy reproduction: reuse the exact same samples as y_local.
+                        y_task = y_local
+                        t_task = t_local
+                    else:
+                        # Best-effort: treat non-GAP task_mode as "match local".
+                        y_task = y_local
+                        t_task = t_local
+                    if name not in accs_task:
+                        accs_task[name] = _CovAccumulator(n_channels=c)
+                    accs_task[name].update(y_task, t_task)
 
                 n_seen += int(x.size(0))
 
@@ -302,11 +817,13 @@ class ClusterAnalysisExperiment:
 
         # Compute metrics per layer from accumulated Gaussian stats
         for name, layer in self.layers:
-            acc = accs.get(name)
+            acc = accs_local.get(name)
             if acc is None:
                 continue
+            acc_t = accs_task.get(name, acc)
 
             var_t, var_y, cov_yy, cov_ty = acc.finalize()
+            var_t_task, var_y_task, cov_yy_task, cov_ty_task = acc_t.finalize()
             n_channels = int(var_y.shape[0])
 
             metrics: Dict[str, np.ndarray] = {}
@@ -319,12 +836,63 @@ class ClusterAnalysisExperiment:
                 y2 = np.clip(np.diag(acc.sum_yy) / float(acc.n), 0.0, None)
                 metrics["activation_rms"] = np.sqrt(y2)[:n_channels].astype(np.float64)
 
-            # 1) Rayleigh Quotient proxy: Var(Y_i) / ||w_i||^2
+            # 1) Rayleigh Quotient
             weight = layer.weight.data.cpu()  # [C_out, C_in, k, k]
             weight_flat = weight.view(weight.size(0), -1)  # [C_out, ...]
             weight_norm = weight_flat.norm(dim=1).numpy().astype(np.float64) ** 2
-            rq = var_y / (weight_norm[:n_channels] + 1e-10)
-            metrics["rq"] = rq.astype(np.float64)
+            rq_equiv = None
+            rq_exact = None
+            # If we used post-BN activations as Y, fold the BN scale into the denominator so
+            # RQ remains comparable to the pre-BN definition (since Var(BN(y)) scales by gamma^2/rv).
+            if activation_point in {"post_bn", "postbn", "bn"}:
+                _bn_name, bn = _bn_for_conv_name(name)
+                if bn is not None and hasattr(bn, "weight") and hasattr(bn, "running_var"):
+                    try:
+                        gamma = bn.weight.detach().cpu().numpy().astype(np.float64)
+                        rv = bn.running_var.detach().cpu().numpy().astype(np.float64)
+                        eps = float(getattr(bn, "eps", 1e-5))
+                        scale_sq = (gamma[:n_channels] ** 2) / (rv[:n_channels] + eps)
+                        denom = (weight_norm[:n_channels] * scale_sq) + 1e-10
+                        rq_equiv = var_y / denom
+                    except Exception:
+                        denom = (weight_norm[:n_channels] + 1e-10)
+                        rq_equiv = var_y / denom
+                else:
+                    denom = (weight_norm[:n_channels] + 1e-10)
+                    rq_equiv = var_y / denom
+            else:
+                denom = (weight_norm[:n_channels] + 1e-10)
+                rq_equiv = var_y / denom
+
+            # Optional explicit Eq. 1 path (covariance_exact): use projected sampled inputs.
+            if rq_exact_active:
+                acc_exact = accs_rq_exact.get(name)
+                if acc_exact is not None and acc_exact.n >= 2:
+                    var_y_exact = acc_exact.variance()[:n_channels]
+                    rq_exact = (var_y_exact / denom).astype(np.float64)
+
+            rq_to_use = rq_equiv
+            if rq_definition in {"covariance_exact", "both"} and rq_exact is not None:
+                rq_to_use = rq_exact
+            elif rq_definition in {"covariance_exact", "both"} and rq_exact is None:
+                logger.warning(
+                    "Layer %s: covariance_exact RQ unavailable; falling back to equivalent_streaming for this layer.",
+                    name,
+                )
+
+            metrics["rq"] = np.asarray(rq_to_use, dtype=np.float64)
+            metrics["rq_equivalent"] = np.asarray(rq_equiv, dtype=np.float64)
+            if rq_exact is not None:
+                metrics["rq_exact"] = np.asarray(rq_exact, dtype=np.float64)
+                metrics["rq_abs_diff"] = np.abs(metrics["rq_exact"] - metrics["rq_equivalent"]).astype(np.float64)
+            metrics["weight_norm_sq"] = weight_norm[:n_channels].astype(np.float64)
+            metrics["activation_var"] = var_y[:n_channels].astype(np.float64)
+
+            # 1b) Input MI proxy (scale-sensitive): 0.5 * log(1 + RQ * ||w||^2 / sigma0^2)
+            # We use a per-layer reference sigma0^2 to make the proxy comparable across depth.
+            signal_power = (metrics["rq"] * weight_norm[:n_channels]).astype(np.float64)
+            sigma0_sq = float(np.median(signal_power)) + 1e-12
+            metrics["mi_in_proxy"] = (0.5 * np.log1p(signal_power / sigma0_sq)).astype(np.float64)
 
             # 2) Redundancy via Gaussian MI from correlations
             denom = np.sqrt(np.outer(var_y, var_y)) + 1e-12
@@ -334,52 +902,100 @@ class ClusterAnalysisExperiment:
             np.fill_diagonal(mi_matrix, 0.0)
             metrics["redundancy"] = mi_matrix.mean(axis=1).astype(np.float64)
 
-            # 3) Synergy with scalar target under Gaussian approximation (MMI)
-            # MI(T;Y_i) depends only on corr(T,Y_i)
-            corr_ty = cov_ty / (np.sqrt(var_t * var_y) + 1e-12)
-            corr_ty = np.clip(corr_ty, -0.999, 0.999)
-            mi_t = np.maximum(0.0, -0.5 * np.log(1.0 - corr_ty ** 2))
+            # 3) TaskMI + Synergy with scalar target under Gaussian approximation (MMI)
+            #
+            # IMPORTANT: We compute these from per-image pooled activations to avoid
+            # pseudo-replication when activation_samples="flatten_spatial".
+            corr_ty_task = cov_ty_task / (np.sqrt(var_t_task * var_y_task) + 1e-12)
+            corr_ty_task = np.clip(corr_ty_task, -0.999, 0.999)
+            mi_t = np.maximum(0.0, -0.5 * np.log(1.0 - corr_ty_task ** 2))
+            metrics["task_mi"] = mi_t.astype(np.float64)
 
-            candidate_pool = int(getattr(self.config, "synergy_candidate_pool", 50))
-            top_m = int(getattr(self.config, "synergy_pairs", 10))
+            candidate_pool = int(self.config.synergy_candidate_pool)
+            top_m = int(self.config.synergy_pairs)
             candidate_pool = max(2, min(candidate_pool, n_channels))
             top_m = max(1, min(top_m, candidate_pool - 1))
 
             synergy = np.zeros(n_channels, dtype=np.float64)
 
-            # Precompute partner ordering by redundancy (MI) per channel
-            # Use the MI matrix row i, excluding i.
+            # Partner ordering by redundancy (Gaussian MI) on task-level pooled activations.
+            denom_task = np.sqrt(np.outer(var_y_task, var_y_task)) + 1e-12
+            corr_task = cov_yy_task / denom_task
+            corr_task = np.clip(corr_task, -0.999, 0.999)
+            mi_matrix_task = -0.5 * np.log(1.0 - corr_task ** 2)
+            np.fill_diagonal(mi_matrix_task, 0.0)
+
+            # Optional: within-layer connectivity summaries (store only top-k neighbors per channel).
+            collect_within = bool(getattr(self.config, "compute_within_layer_connectivity", False))
+            red_k = int(getattr(self.config, "within_layer_red_topk", 0) or 0)
+            syn_k = int(getattr(self.config, "within_layer_syn_topk", 0) or 0)
+            red_idx = None
+            red_val = None
+            syn_idx = None
+            syn_val = None
+            if collect_within:
+                red_k = max(1, min(int(red_k), n_channels - 1))
+                syn_k = max(1, min(int(syn_k), candidate_pool))
+                red_idx = -np.ones((n_channels, red_k), dtype=np.int32)
+                red_val = np.zeros((n_channels, red_k), dtype=np.float32)
+                syn_idx = -np.ones((n_channels, syn_k), dtype=np.int32)
+                syn_val = np.zeros((n_channels, syn_k), dtype=np.float32)
+
             for i in range(n_channels):
-                order = np.argsort(-mi_matrix[i])
+                order = np.argsort(-mi_matrix_task[i])
                 order = order[order != i]
+                if collect_within and red_idx is not None and red_val is not None:
+                    rr = order[:red_k]
+                    if rr.size:
+                        red_idx[i, : rr.size] = rr.astype(np.int32)
+                        red_val[i, : rr.size] = mi_matrix_task[i, rr].astype(np.float32)
                 cand = order[:candidate_pool]
                 if cand.size == 0:
                     continue
 
                 mi_i = float(mi_t[i])
-                syn_vals: List[float] = []
+                syn_pairs: List[Tuple[float, int]] = []
                 for j in cand:
                     j = int(j)
                     mi_j = float(mi_t[j])
-                    cov_i_j = float(cov_yy[i, j])
+                    cov_i_j = float(cov_yy_task[i, j])
                     mi_joint = self._gaussian_mi_joint_from_stats(
-                        var_t=var_t,
-                        var_i=float(var_y[i]),
-                        var_j=float(var_y[j]),
-                        cov_t_i=float(cov_ty[i]),
-                        cov_t_j=float(cov_ty[j]),
+                        var_t=var_t_task,
+                        var_i=float(var_y_task[i]),
+                        var_j=float(var_y_task[j]),
+                        cov_t_i=float(cov_ty_task[i]),
+                        cov_t_j=float(cov_ty_task[j]),
                         cov_i_j=cov_i_j,
                     )
                     s = mi_joint - mi_i - mi_j + min(mi_i, mi_j)
-                    syn_vals.append(float(s))
+                    syn_pairs.append((float(s), j))
 
-                if syn_vals:
-                    syn_vals.sort(reverse=True)
-                    synergy[i] = float(np.mean(syn_vals[:top_m]))
+                if syn_pairs:
+                    syn_pairs.sort(key=lambda x: x[0], reverse=True)
+                    synergy[i] = float(np.mean([s for (s, _j) in syn_pairs[:top_m]]))
+                    if collect_within and syn_idx is not None and syn_val is not None:
+                        top_edges = syn_pairs[:syn_k]
+                        if top_edges:
+                            syn_idx[i, : len(top_edges)] = np.asarray([j for (_s, j) in top_edges], dtype=np.int32)
+                            syn_val[i, : len(top_edges)] = np.asarray([s for (s, _j) in top_edges], dtype=np.float32)
 
             metrics["synergy"] = synergy
 
+            if collect_within and red_idx is not None and red_val is not None and syn_idx is not None and syn_val is not None:
+                self._within_layer_neighbors[name] = {
+                    "red_idx": red_idx,
+                    "red_val": red_val,
+                    "syn_idx": syn_idx,
+                    "syn_val": syn_val,
+                }
+
             self.layer_metrics[name] = metrics
+            if "rq_exact" in metrics:
+                try:
+                    mae = float(np.mean(np.abs(metrics["rq_exact"] - metrics["rq_equivalent"])))
+                    logger.info("    %s: RQ exact/equivalent mean abs diff = %.3e", name, mae)
+                except Exception:
+                    pass
             logger.info(
                 "  %s: %d channels (mode=%s, n_samples=%d)",
                 name,
@@ -389,6 +1005,116 @@ class ClusterAnalysisExperiment:
             )
 
         return self.layer_metrics
+
+    def compute_loss_proxy(self) -> Dict[str, np.ndarray]:
+        """
+        Compute a per-channel loss proxy (Fisher/Gauss-Newton style) on calibration data.
+
+        For each channel i in a conv layer, define per-image:
+          q_i(x) = sum_{h,w} A_i(x) * dL/dA_i(x)
+        and proxy:
+          LP_i = 0.5 * E_x[ q_i(x)^2 ].
+
+        Notes:
+        - Uses the same activation_point hook convention as compute_metrics.
+        - This is intended as an analysis signal ("importance ground truth") and is optional.
+        """
+        if not HAS_TORCH:
+            raise RuntimeError("Torch is required to compute loss proxy")
+        import torch
+
+        logger.info("Computing per-channel loss proxy on calibration data...")
+        self.model.eval()
+        criterion = nn.CrossEntropyLoss()
+
+        # Accumulate sum of q^2 over images, per layer/channel
+        sum_q2: Dict[str, np.ndarray] = {}
+        n_seen = 0
+        max_images = int(self.config.loss_proxy_n_calibration or 1024)
+        max_images = max(1, max_images)
+
+        activation_point = str(self.config.activation_point).lower()
+        modules = dict(self.model.named_modules())
+
+        # Forward hook registers a gradient hook on the activation tensor to accumulate q^2
+        def hook_fn(name: str):
+            def fn(_m, _inp, out):
+                if out is None or not hasattr(out, "register_hook"):
+                    return
+                if getattr(out, "ndim", 0) != 4:
+                    return
+
+                def grad_hook(grad):
+                    try:
+                        # q: [B, C]
+                        q = (out * grad).sum(dim=(2, 3))
+                        q2 = (q ** 2).sum(dim=0)  # [C]
+                        q2_np = q2.detach().cpu().double().numpy()
+                        if name not in sum_q2:
+                            sum_q2[name] = np.zeros_like(q2_np, dtype=np.float64)
+                        # Guard against occasional shape mismatches
+                        m = min(sum_q2[name].shape[0], q2_np.shape[0])
+                        sum_q2[name][:m] += q2_np[:m]
+                    except Exception:
+                        return
+
+                out.register_hook(grad_hook)
+
+            return fn
+
+        # Register hooks (conv or corresponding BN module)
+        handles = []
+        for name, layer in self.layers:
+            hook_mod = layer
+            if activation_point in {"post_bn", "postbn", "bn"}:
+                bn = self._find_bn_for_conv(self.model, name)
+                if bn is not None:
+                    hook_mod = bn
+            handles.append(hook_mod.register_forward_hook(hook_fn(name)))
+
+        try:
+            for x, y in self._get_calibration_loader():
+                if n_seen >= max_images:
+                    break
+
+                remaining = int(max_images) - int(n_seen)
+                if remaining <= 0:
+                    break
+                if x.size(0) > remaining:
+                    x = x[:remaining]
+                    y = y[:remaining]
+
+                x = x.to(self.device)
+                y = y.to(self.device)
+
+                self.model.zero_grad(set_to_none=True)
+                logits = self.model(x)
+                loss = criterion(logits, y)
+                loss.backward()
+
+                n_seen += int(x.size(0))
+        finally:
+            for h in handles:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+
+        if n_seen <= 0:
+            raise RuntimeError("Loss proxy saw 0 images; cannot compute")
+
+        # Normalize and store in layer_metrics
+        for name, layer in self.layers:
+            lp = sum_q2.get(name)
+            if lp is None:
+                continue
+            lp = 0.5 * (lp / float(n_seen))
+            if name not in self.layer_metrics:
+                self.layer_metrics[name] = {}
+            self.layer_metrics[name]["loss_proxy"] = lp.astype(np.float64)
+
+        logger.info("Loss proxy computed on %d images", int(n_seen))
+        return {k: v.astype(np.float64) for k, v in sum_q2.items()}
     
     def _gaussian_mi(self, x: np.ndarray, y: np.ndarray) -> float:
         """Compute Gaussian MI between two variables."""
@@ -438,21 +1164,95 @@ class ClusterAnalysisExperiment:
             return 0.0
         return max(0.0, 0.5 * float(np.log(var_t * det_y / det_all)))
     
-    def run_clustering(self) -> Dict[str, Any]:
-        """Cluster channels in each layer."""
-        logger.info("Clustering channels...")
-        
+    def run_clustering(
+        self,
+        run_ablation: Optional[bool] = None,
+        first_metric: Optional[str] = None,
+        clustering_importance_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Cluster channels in each layer.
+
+        Args:
+            run_ablation: If True, also run ablation study with metric subsets.
+                         Uses config.run_metric_ablation if not specified.
+            first_metric: Override for first clustering metric. One of:
+                         - "rq": Use Rayleigh Quotient (default)
+                         - "ixy": Use I(X;Y) mutual information (mi_in_proxy)
+                         Uses config.clustering_first_metric if not specified.
+            clustering_importance_mode: Override for clustering importance mode. One of:
+                         - "geometric": Standard k-means (default)
+                         - "score_augmented": k-means with importance score as extra feature
+                         - "importance_reassign": k-means geometry, reassign types by score
+                         - "quantile": Partition by composite score quartiles
+
+        Returns:
+            Dict with cluster results (and ablation results if enabled)
+        """
+        # Determine first metric to use
+        first_metric = first_metric or getattr(self.config, "clustering_first_metric", "rq")
+        first_metric = str(first_metric).lower()
+
+        if first_metric == "ixy":
+            metric_key = "mi_in_proxy"
+            metric_label = "I(X;Y)"
+        else:
+            metric_key = "rq"
+            metric_label = "RQ"
+
+        # Determine clustering importance mode
+        c_mode = clustering_importance_mode or getattr(self.config, "clustering_importance_mode", "geometric")
+        c_mode = str(c_mode).lower()
+
+        logger.info(f"Clustering channels using {metric_label} as first metric, mode={c_mode}...")
+
+        run_ablation = run_ablation if run_ablation is not None else bool(self.config.run_metric_ablation)
+
         clusterer = MetricSpaceClustering(
             n_clusters=self.config.n_clusters,
             seed=self.config.seed,
+            type_mapping_mode=str(self.config.type_mapping_mode).lower(),
         )
-        
+
+        ablation_results = {}
+
+        # Get score weights from config for computing importance scores
+        alpha = float(getattr(self.config, "cluster_aware_alpha", 1.0))
+        beta = float(getattr(self.config, "cluster_aware_beta", 0.5))
+        gamma = float(getattr(self.config, "cluster_aware_gamma", 0.3))
+
         for name, metrics in self.layer_metrics.items():
+            # Get the first metric (RQ or I(X;Y))
+            first_values = metrics.get(metric_key)
+            if first_values is None:
+                first_values = metrics.get("rq", np.ones(1))
+                if first_metric == "ixy":
+                    logger.warning(f"  {name}: mi_in_proxy not available, falling back to RQ")
+
+            # Compute importance scores for non-geometric modes
+            importance_scores = None
+            if c_mode != "geometric":
+                fv = np.asarray(first_values, dtype=np.float64).flatten()
+                rd = np.asarray(metrics.get("redundancy", np.zeros_like(fv)), dtype=np.float64).flatten()
+                sy = np.asarray(metrics.get("synergy", np.zeros_like(fv)), dtype=np.float64).flatten()
+                n = min(len(fv), len(rd), len(sy))
+                if n > 0:
+                    fv, rd, sy = fv[:n], rd[:n], sy[:n]
+                    log_fv = np.log(np.clip(fv, 1e-10, None))
+
+                    def _n01(x):
+                        lo, hi = x.min(), x.max()
+                        return (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
+
+                    importance_scores = alpha * _n01(log_fv) + beta * _n01(sy) - gamma * _n01(rd)
+
             result = clusterer.fit(
-                metrics["rq"],
+                first_values,
                 metrics["redundancy"],
                 metrics["synergy"],
                 name,
+                importance_scores=importance_scores,
+                clustering_mode=c_mode,
             )
             self.cluster_results[name] = {
                 "labels": result.labels,
@@ -461,26 +1261,283 @@ class ClusterAnalysisExperiment:
                 "type_mapping": result.type_mapping,
                 "type_counts": result.type_counts,
                 "layer_name": name,
+                "ablation_mode": "all",
+                "first_metric": first_metric,
+                "clustering_mode": c_mode,
             }
             logger.info(f"  {name}: silhouette={result.silhouette:.3f}, types={result.type_counts}")
+            
+            # Run ablation study if enabled
+            if run_ablation:
+                ablations = list(self.config.metric_ablations)
+                abl_results = clusterer.run_ablation_study(
+                    first_values,
+                    metrics["redundancy"],
+                    metrics["synergy"],
+                    name,
+                    ablations=ablations,
+                )
+                ablation_results[name] = {
+                    ablation: {
+                        "silhouette": res.silhouette,
+                        "ari_vs_full": res.ari_vs_full,
+                        "ami_vs_full": res.ami_vs_full,
+                        "type_counts": res.cluster_result.type_counts,
+                    }
+                    for ablation, res in abl_results.items()
+                }
+                logger.info(f"    Ablation: {[f'{k}: sil={v.silhouette:.3f}' for k,v in abl_results.items()]}")
+        
+        if run_ablation:
+            self.cluster_results["_ablation"] = ablation_results
+        
+        # Store metadata about clustering config
+        self.cluster_results["_config"] = {
+            "first_metric": first_metric,
+            "n_clusters": self.config.n_clusters,
+        }
         
         return self.cluster_results
     
-    def run_halo_analysis(self) -> Dict[str, Any]:
+    def run_clustering_comparison(self) -> Dict[str, Any]:
+        """
+        Run clustering with both RQ and I(X;Y) as first metric and compare results.
+        
+        This is useful for comparing clustering quality between the two approaches.
+        
+        Returns:
+            Dict with comparison results including silhouette scores and cluster agreement
+        """
+        logger.info("Running clustering comparison: RQ vs I(X;Y)...")
+        
+        clusterer = MetricSpaceClustering(
+            n_clusters=self.config.n_clusters,
+            seed=self.config.seed,
+            type_mapping_mode=str(self.config.type_mapping_mode).lower(),
+        )
+        
+        comparison_results = {}
+        
+        for name, metrics in self.layer_metrics.items():
+            rq_values = metrics.get("rq", np.ones(1))
+            ixy_values = metrics.get("mi_in_proxy")
+            
+            if ixy_values is None:
+                logger.warning(f"  {name}: mi_in_proxy not available, skipping comparison")
+                continue
+            
+            red_values = metrics["redundancy"]
+            syn_values = metrics["synergy"]
+            
+            # Cluster with RQ
+            result_rq = clusterer.fit(rq_values, red_values, syn_values, name, ablation="all")
+            
+            # Cluster with I(X;Y)
+            result_ixy = clusterer.fit(ixy_values, red_values, syn_values, name, ablation="all")
+            
+            # Compute agreement between the two clustering approaches
+            try:
+                from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
+                ari = adjusted_rand_score(result_rq.labels, result_ixy.labels)
+                ami = adjusted_mutual_info_score(result_rq.labels, result_ixy.labels)
+            except ImportError:
+                ari = 0.0
+                ami = 0.0
+            
+            comparison_results[name] = {
+                "rq": {
+                    "silhouette": result_rq.silhouette,
+                    "type_counts": result_rq.type_counts,
+                    "labels": result_rq.labels.tolist(),
+                },
+                "ixy": {
+                    "silhouette": result_ixy.silhouette,
+                    "type_counts": result_ixy.type_counts,
+                    "labels": result_ixy.labels.tolist(),
+                },
+                "agreement": {
+                    "ari": ari,
+                    "ami": ami,
+                },
+                "silhouette_diff": result_ixy.silhouette - result_rq.silhouette,
+            }
+            
+            logger.info(
+                f"  {name}: RQ sil={result_rq.silhouette:.3f}, "
+                f"I(X;Y) sil={result_ixy.silhouette:.3f}, "
+                f"ARI={ari:.3f}, diff={result_ixy.silhouette - result_rq.silhouette:+.3f}"
+            )
+        
+        # Compute summary statistics
+        if comparison_results:
+            layer_names = [n for n in comparison_results.keys() if not n.startswith("_")]
+            avg_sil_rq = np.mean([comparison_results[n]["rq"]["silhouette"] for n in layer_names])
+            avg_sil_ixy = np.mean([comparison_results[n]["ixy"]["silhouette"] for n in layer_names])
+            avg_ari = np.mean([comparison_results[n]["agreement"]["ari"] for n in layer_names])
+            avg_diff = np.mean([comparison_results[n]["silhouette_diff"] for n in layer_names])
+            
+            comparison_results["_summary"] = {
+                "avg_silhouette_rq": avg_sil_rq,
+                "avg_silhouette_ixy": avg_sil_ixy,
+                "avg_ari": avg_ari,
+                "avg_silhouette_diff": avg_diff,
+                "n_layers": len(layer_names),
+            }
+            
+            logger.info(
+                f"Summary: Avg RQ sil={avg_sil_rq:.3f}, "
+                f"Avg I(X;Y) sil={avg_sil_ixy:.3f}, "
+                f"Avg ARI={avg_ari:.3f}, Avg diff={avg_diff:+.3f}"
+            )
+        
+        return comparison_results
+
+    def run_within_layer_connectivity(self) -> Dict[str, Any]:
+        """
+        Aggregate within-layer top-k neighbor summaries into type×type connectivity matrices.
+
+        This supports within-layer organization analyses (e.g., whether redundancy edges
+        cluster within semantic types, whether synergy edges preferentially connect
+        specific type pairs, etc.).
+
+        Requirements:
+        - `compute_metrics()` must have been run with `config.compute_within_layer_connectivity=True`
+          so `self._within_layer_neighbors[layer]` is populated.
+        - `run_clustering()` must have been run so we can map channels to semantic types.
+        """
+        if not bool(getattr(self.config, "compute_within_layer_connectivity", False)):
+            self.within_layer_connectivity = {}
+            return self.within_layer_connectivity
+
+        type_order = ["critical", "synergistic", "redundant", "background"]
+        t2i = {t: i for i, t in enumerate(type_order)}
+
+        def _norm_type(t: str) -> str:
+            tt = str(t).lower().strip()
+            return tt if tt in t2i else "background"
+
+        out: Dict[str, Any] = {}
+        for layer_name, neigh in self._within_layer_neighbors.items():
+            cr = self.cluster_results.get(layer_name, {})
+            if not isinstance(cr, dict) or "labels" not in cr or "type_mapping" not in cr:
+                continue
+
+            labels = np.asarray(cr.get("labels", []), dtype=np.int64).reshape(-1)
+            tm = cr.get("type_mapping", {}) or {}
+            # cluster-id -> semantic type
+            cid2type: Dict[int, str] = {}
+            for k, v in tm.items():
+                try:
+                    cid2type[int(k)] = _norm_type(v)
+                except Exception:
+                    continue
+
+            if labels.size == 0:
+                continue
+
+            ch_type = np.asarray([cid2type.get(int(cid), "background") for cid in labels], dtype=object)
+
+            # Initialize matrices
+            red_sum = np.zeros((4, 4), dtype=np.float64)
+            red_cnt = np.zeros((4, 4), dtype=np.int64)
+            syn_sum = np.zeros((4, 4), dtype=np.float64)
+            syn_cnt = np.zeros((4, 4), dtype=np.int64)
+
+            # Redundancy edges (directed i -> j)
+            red_idx = np.asarray(neigh.get("red_idx", np.zeros((0, 0), dtype=np.int32)), dtype=np.int32)
+            red_val = np.asarray(neigh.get("red_val", np.zeros((0, 0), dtype=np.float32)), dtype=np.float64)
+            n_i = int(min(labels.size, red_idx.shape[0], red_val.shape[0]))
+            for i in range(n_i):
+                ti = t2i[_norm_type(ch_type[i])]
+                for k in range(red_idx.shape[1]):
+                    j = int(red_idx[i, k])
+                    if j < 0 or j >= labels.size:
+                        continue
+                    tj = t2i[_norm_type(ch_type[j])]
+                    w = float(red_val[i, k])
+                    if not np.isfinite(w):
+                        continue
+                    red_sum[ti, tj] += w
+                    red_cnt[ti, tj] += 1
+
+            # Synergy edges (directed i -> j, use positive part)
+            syn_idx = np.asarray(neigh.get("syn_idx", np.zeros((0, 0), dtype=np.int32)), dtype=np.int32)
+            syn_val = np.asarray(neigh.get("syn_val", np.zeros((0, 0), dtype=np.float32)), dtype=np.float64)
+            n_i = int(min(labels.size, syn_idx.shape[0], syn_val.shape[0]))
+            for i in range(n_i):
+                ti = t2i[_norm_type(ch_type[i])]
+                for k in range(syn_idx.shape[1]):
+                    j = int(syn_idx[i, k])
+                    if j < 0 or j >= labels.size:
+                        continue
+                    tj = t2i[_norm_type(ch_type[j])]
+                    w = float(syn_val[i, k])
+                    if not np.isfinite(w):
+                        continue
+                    w = max(0.0, w)
+                    syn_sum[ti, tj] += w
+                    syn_cnt[ti, tj] += 1
+
+            red_mat = red_sum / np.maximum(1, red_cnt)
+            syn_mat = syn_sum / np.maximum(1, syn_cnt)
+
+            red_total = int(red_cnt.sum())
+            syn_total = int(syn_cnt.sum())
+            red_within = float(red_cnt.diagonal().sum() / max(1, red_total))
+            syn_within = float(syn_cnt.diagonal().sum() / max(1, syn_total))
+
+            out[layer_name] = {
+                "type_order": type_order,
+                "red_matrix": red_mat,
+                "syn_matrix": syn_mat,
+                "red_edges": red_total,
+                "syn_edges": syn_total,
+                "red_within_type_frac": red_within,
+                "syn_within_type_frac": syn_within,
+                "red_topk": int(getattr(self.config, "within_layer_red_topk", 0) or 0),
+                "syn_topk": int(getattr(self.config, "within_layer_syn_topk", 0) or 0),
+            }
+
+        self.within_layer_connectivity = out
+        return self.within_layer_connectivity
+    
+    def run_halo_analysis(
+        self,
+        run_permutation: Optional[bool] = None,
+        n_permutations: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Analyze cross-layer halos with activation-weighted influence.
         
         Uses effective influence: ||W||_1 * std(Y) to account for
         batch normalization scaling effects.
+        
+        Args:
+            run_permutation: If True, run permutation test to establish null baseline.
+                            Uses config.run_permutation_baseline if not specified.
+            n_permutations: Number of permutations for baseline (default: config.n_permutations)
+        
+        Returns:
+            Dict with halo results per transition
         """
         logger.info("Analyzing cross-layer halos...")
         
+        # Get permutation settings
+        run_permutation = run_permutation if run_permutation is not None else bool(self.config.run_permutation_baseline)
+        n_permutations = n_permutations if n_permutations is not None else int(self.config.n_permutations)
+        
+        # Initialize permutation results storage if needed
+        if not hasattr(self, 'permutation_results'):
+            self.permutation_results = {}
+        
         halo_analyzer = CrossLayerHaloAnalysis(
             percentile=self.config.halo_percentile,
-            use_activation_weight=getattr(self.config, 'use_activation_weight', True),
+            use_activation_weight=bool(self.config.use_activation_weight),
         )
         
         layer_names = list(self.cluster_results.keys())
+        # Filter out special keys like "_ablation"
+        layer_names = [n for n in layer_names if not n.startswith("_")]
         modules = dict(self.model.named_modules())
         
         # Choose halo transitions along *direct weight-connected* edges by matching channel dimensions.
@@ -532,7 +1589,7 @@ class ClusterAnalysisExperiment:
             # Activation-weighted influence proxy.
             # We approximate sigma_i as the (post-BN when present) channel std:
             #   sigma_conv = sqrt(RQ_i * ||w_i||^2)  (since RQ_i = Var(Y_i)/||w_i||^2)
-            #   sigma_postBN ≈ sigma_conv * |gamma| / sqrt(running_var + eps)
+            #   sigma_postBN ~ sigma_conv * |gamma| / sqrt(running_var + eps)
             if "rq" in src_metrics:
                 w_src = src_layer.weight.data.cpu().numpy().astype(np.float64)
                 w_norm_sq = np.sum(w_src.reshape(w_src.shape[0], -1) ** 2, axis=1)
@@ -550,6 +1607,80 @@ class ClusterAnalysisExperiment:
 
                 n_in_actual = min(n_in, len(sigma))
                 influence[:, :n_in_actual] = influence[:, :n_in_actual] * sigma[:n_in_actual]
+
+            # ------------------------------------------------------------------
+            # Per-channel fan-out metrics (source -> next layer)
+            # ------------------------------------------------------------------
+            # p(j|i) ∝ influence[j,i]; entropy measures "broadcast vs specialized" usage.
+            try:
+                col_sum = influence.sum(axis=0) + 1e-12  # [in]
+                p = influence / col_sum[None, :]
+                ent = -(p * np.log(p + 1e-12)).sum(axis=0)  # [in]
+                eff = np.exp(ent)  # effective fanout
+                if src_name in self.layer_metrics:
+                    n_store = min(int(self.layer_metrics[src_name].get("rq", np.array([])).shape[0] or 0), ent.shape[0])
+                    if n_store <= 0:
+                        n_store = min(src_out, ent.shape[0])
+                    self.layer_metrics[src_name]["fanout_entropy"] = ent[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["fanout_effective"] = eff[:n_store].astype(np.float64)
+
+                    # ----------------------------------------------------------
+                    # Between-layer routing metrics (tail/bottleneck + propagation)
+                    # ----------------------------------------------------------
+                    topk = int(getattr(self.config, "routing_bottleneck_topk", 5) or 5)
+                    topk = max(1, min(topk, int(p.shape[0])))
+
+                    # Outgoing concentration (normalized over receivers for each source)
+                    bottleneck_out_max = p.max(axis=0)  # [in]
+                    bottleneck_out_topk_mass = np.sort(p, axis=0)[-topk:, :].sum(axis=0)  # [in]
+
+                    # Receiver-normalized influence r_{j<-i} (normalized over sources for each receiver)
+                    row_sum = influence.sum(axis=1) + 1e-12  # [out]
+                    r = influence / row_sum[:, None]  # [out, in]
+                    bottleneck_in_max = r.max(axis=0)  # [in]
+                    bottleneck_in_topk_mass = np.sort(r, axis=0)[-topk:, :].sum(axis=0)  # [in]
+
+                    self.layer_metrics[src_name]["bottleneck_out_max"] = bottleneck_out_max[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["bottleneck_out_topk_mass"] = bottleneck_out_topk_mass[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["bottleneck_in_max"] = bottleneck_in_max[:n_store].astype(np.float64)
+                    self.layer_metrics[src_name]["bottleneck_in_topk_mass"] = bottleneck_in_topk_mass[:n_store].astype(np.float64)
+
+                    # HaloLP: importance propagation into important receivers (if LP is available for the target layer)
+                    try:
+                        lp_tgt = tgt_metrics.get("loss_proxy", None)
+                        if lp_tgt is not None:
+                            lp_tgt = np.asarray(lp_tgt, dtype=np.float64).reshape(-1)[: r.shape[0]]
+                            halo_lp = (r[: lp_tgt.shape[0], :] * lp_tgt[:, None]).sum(axis=0)  # [in]
+                            self.layer_metrics[src_name]["halo_lp"] = halo_lp[:n_store].astype(np.float64)
+                    except Exception:
+                        pass
+
+                    # Outgoing overlap-based substitutability (OutRed): mean top-m overlap with other sources.
+                    try:
+                        n_in_ch = int(p.shape[1])
+                        if n_in_ch > 1:
+                            cand_k = int(getattr(self.config, "outred_candidate_pool", 64) or 64)
+                            topm = int(getattr(self.config, "outred_topm", 8) or 8)
+                            cand_k = max(1, min(cand_k, n_in_ch - 1))
+                            topm = max(1, min(topm, cand_k))
+
+                            rng = np.random.default_rng(int(self.config.seed) + 10000 * int(i))
+                            outred = np.zeros(n_in_ch, dtype=np.float64)
+                            for ii in range(n_in_ch):
+                                # Sample candidates from [0..n_in_ch-2], then shift to skip self.
+                                cand = rng.choice(n_in_ch - 1, size=cand_k, replace=False)
+                                cand = np.where(cand >= ii, cand + 1, cand)
+                                v = p[:, ii]  # [out]
+                                # overlap(i,i') = 1 - 0.5 * ||p_i - p_{i'}||_1
+                                l1 = np.abs(v[:, None] - p[:, cand]).sum(axis=0)
+                                overlap = np.clip(1.0 - 0.5 * l1, 0.0, 1.0)
+                                outred[ii] = float(np.mean(np.sort(overlap)[-topm:]))
+
+                            self.layer_metrics[src_name]["outred"] = outred[:n_store].astype(np.float64)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             
             halo_data = {}
             for cid, ctype in src_result["type_mapping"].items():
@@ -590,6 +1721,33 @@ class ClusterAnalysisExperiment:
                     self.halo_flow_results[f"{src_name}->{tgt_name}"] = flow
             except Exception as exc:
                 logger.debug("Could not compute halo flow matrix for %s->%s: %s", src_name, tgt_name, exc)
+            
+            # Run permutation baseline if enabled
+            if run_permutation:
+                try:
+                    src_labels = np.asarray(src_result.get("labels", np.array([], dtype=int))).astype(int)
+                    src_labels = src_labels[: min(len(src_labels), n_in)]
+                    
+                    perm_results = halo_analyzer.permutation_baseline(
+                        influence=influence,
+                        labels=src_labels,
+                        type_mapping=src_result["type_mapping"],
+                        redundancy=tgt_metrics["redundancy"],
+                        synergy=tgt_metrics["synergy"],
+                        n_permutations=n_permutations,
+                        seed=self.config.seed,
+                    )
+                    self.permutation_results[f"{src_name}->{tgt_name}"] = perm_results
+                    
+                    # Log significant results
+                    for ctype, pres in perm_results.items():
+                        if pres.get('p_syn', 1.0) < 0.05 or pres.get('p_red', 1.0) < 0.05:
+                            logger.info(
+                                f"    Permutation test {ctype}: z_syn={pres['z_syn']:.2f} "
+                                f"(p={pres['p_syn']:.3f}), z_red={pres['z_red']:.2f} (p={pres['p_red']:.3f})"
+                            )
+                except Exception as exc:
+                    logger.debug("Permutation baseline failed for %s->%s: %s", src_name, tgt_name, exc)
         
         return self.halo_results
     
@@ -601,6 +1759,13 @@ class ClusterAnalysisExperiment:
         cascade.baseline()
         
         for name, cluster_data in self.cluster_results.items():
+            # Skip non-layer entries (e.g., "_ablation" summary blocks)
+            if not isinstance(cluster_data, dict):
+                logger.debug("Skipping non-layer cluster entry %s (non-dict)", name)
+                continue
+            if "labels" not in cluster_data or "type_mapping" not in cluster_data:
+                logger.debug("Skipping non-layer cluster entry %s (missing labels/type_mapping)", name)
+                continue
             results = cascade.by_cluster(
                 name,
                 cluster_data["labels"],
@@ -627,6 +1792,9 @@ class ClusterAnalysisExperiment:
         fine_tune_lr: float = 0.0001,
         fine_tune_max_batches: Optional[int] = None,
         fine_tune_weight_decay: float = 0.0,
+        *,
+        resume: bool = True,
+        overwrite: bool = False,
     ) -> Dict[str, Any]:
         """
         Run pruning experiments comparing different methods.
@@ -636,67 +1804,158 @@ class ClusterAnalysisExperiment:
             methods: Pruning methods to compare (default: all)
             fine_tune_epochs: Number of fine-tuning epochs after pruning
             fine_tune_lr: Learning rate for fine-tuning (unused when fine_tune_epochs=0)
+            resume: If True and `pruning_results.json` exists, load it and skip already-computed
+                (method, ratio) entries unless overwrite=True.
+            overwrite: If True, recompute entries even if they exist in `pruning_results.json`.
             
         Returns:
             Dict mapping (method, ratio) to accuracy results
         """
         import copy
+        import json as _json
         
-        ratios = ratios or getattr(self.config, "pruning_ratios", None) \
-                       or getattr(self.config, "pruning_amounts", None) \
-                       or [0.1, 0.3, 0.5, 0.7]
-        
-        default_methods = [
-            "random", "magnitude",
-            "network_slimming",
-            "rq_low", "rq_high",
-            "redundancy_low", "redundancy_high",
-            "synergy_low", "synergy_high",
-            "composite", "composite_pos_red",
-            "rq_minus_red", "rq_plus_red",
-            "magnitude_plus_rq", "magnitude_minus_red", "magnitude_plus_red",
-        ]
-        methods = methods or getattr(self.config, "pruning_methods", None) \
-                          or getattr(self.config, "pruning_algorithms", None) \
-                          or getattr(self.config, "pruning_strategies", None) \
-                          or default_methods
-        
+        ratios = ratios or list(self.config.pruning_amounts)
+        if not ratios:
+            raise ValueError("No pruning ratios provided (ratios arg empty and config.pruning_amounts empty).")
+
+        # Prefer explicit config-driven strategy selection.
+        # (Legacy aliases supported for older configs/scripts.)
+        legacy_methods = getattr(self.config, "pruning_methods", None) or getattr(self.config, "pruning_algorithms", None)
+        methods = methods or (list(self.config.pruning_strategies) if self.config.pruning_strategies else None) or legacy_methods
+        if not methods:
+            raise ValueError(
+                "No pruning methods specified. Set config.pruning_strategies (recommended) "
+                "or pass `methods=[...]` to run_pruning_experiments."
+            )
+
         pipeline_options = PruningPipelineOptions(
-            distribution=getattr(self.config, "pruning_distribution", "uniform"),
-            dependency_aware=bool(getattr(self.config, "dependency_aware_pruning", False)),
-            min_amount=getattr(self.config, "pruning_min_per_layer", 0.0),
-            max_amount=getattr(self.config, "pruning_max_per_layer", 0.95),
+            distribution=str(self.config.pruning_distribution),
+            dependency_aware=bool(self.config.dependency_aware_pruning),
+            min_amount=float(self.config.pruning_min_per_layer),
+            max_amount=float(self.config.pruning_max_per_layer),
+            max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
+            enforce_exact_global_channel_budget=bool(
+                getattr(self.config, "pruning_enforce_exact_global_channel_budget", False)
+            ),
         )
         
+        # Optional: resume from an existing pruning_results.json (common for long sweeps).
+        pr_path = self.output_dir / "pruning_results.json"
+        results: Dict[str, Any] = {"baseline": None, "methods": {}}
+        if bool(resume) and pr_path.exists():
+            try:
+                loaded = _json.loads(pr_path.read_text())
+                if isinstance(loaded, dict):
+                    results = loaded
+            except Exception:
+                pass
+        if not isinstance(results, dict):
+            results = {"baseline": None, "methods": {}}
+        if not isinstance(results.get("methods", None), dict):
+            results["methods"] = {}
+
         baseline_acc = self._evaluate_accuracy()
         logger.info(f"Baseline accuracy: {baseline_acc:.2%}")
         
         if baseline_acc < 0.7:
             logger.warning("Baseline accuracy is low; pruning comparisons may be noisy.")
         
-        results = {"baseline": baseline_acc, "methods": {}}
+        # Always update baseline (cheap, and keeps the file self-consistent).
+        results["baseline"] = baseline_acc
+
+        def _checkpoint_pruning_results() -> None:
+            """
+            Best-effort incremental save.
+
+            Some sweeps (e.g., ImageNet methods × sparsity) can exceed typical walltimes.
+            We therefore periodically write `pruning_results.json` so partial progress is
+            recoverable and artifact-generation can still consume whatever finished.
+            """
+            try:
+                tmp = self.output_dir / "pruning_results.json.tmp"
+                with open(tmp, "w") as f:
+                    json.dump(results, f, indent=2, default=_json_default)
+                tmp.replace(self.output_dir / "pruning_results.json")
+            except Exception as exc:
+                logger.debug("Failed to checkpoint pruning_results.json: %s", exc)
         
+        configured_type_aware_methods = {
+            str(m) for m in (getattr(self.config, "fine_tune_type_aware_methods", []) or [])
+        }
+
         for method in methods:
-            logger.info(f"Running pruning method: {method}")
-            method_results = {}
-            results["methods"][method] = method_results
+            method_name = str(method)
+            prune_method = method_name
+            force_type_aware_ft = False
+            if prune_method.endswith("_typeft"):
+                prune_method = prune_method[:-7]
+                force_type_aware_ft = True
+
+            logger.info(
+                "Running pruning method: %s (base=%s, type-aware-ft=%s)",
+                method_name,
+                prune_method,
+                force_type_aware_ft,
+            )
+            method_results = results["methods"].get(method_name, {})
+            if not isinstance(method_results, dict):
+                method_results = {}
+            results["methods"][method_name] = method_results
             
             for ratio in ratios:
                 logger.info(f"  Target sparsity: {ratio:.0%}")
+
+                # Use a stable string key for JSON (avoids float-key mismatch on reload).
+                try:
+                    ratio_f = float(ratio)
+                except Exception:
+                    ratio_f = float(str(ratio))
+                ratio_key = str(ratio_f)
+
+                # Find an existing ratio key numerically (handles minor string formatting diffs).
+                existing_key: Optional[str] = None
+                for k in list(method_results.keys()):
+                    try:
+                        if abs(float(k) - ratio_f) < 1e-12:
+                            existing_key = str(k)
+                            break
+                    except Exception:
+                        continue
+                store_key = existing_key or ratio_key
+
+                if bool(resume) and (not bool(overwrite)) and existing_key is not None:
+                    existing = method_results.get(store_key, None)
+                    if isinstance(existing, dict) and not existing.get("error", None):
+                        if (existing.get("accuracy_after_ft") is not None) or (existing.get("accuracy_before_ft") is not None):
+                            logger.info("    Skipping (already computed)")
+                            continue
+
                 model_copy = copy.deepcopy(self.model)
-                layer_modules = self._get_layer_module_map(model_copy)
-                selection_mode = self._selection_mode_for_method(method)
+                layer_modules = self._filter_pruning_layer_modules(self._get_layer_module_map(model_copy))
+                selection_mode = self._selection_mode_for_method(prune_method)
                 
                 try:
-                    if method.startswith("cluster_aware"):
+                    if prune_method.startswith("cluster_aware") or prune_method in ("cap_ixy", "composite_ixy"):
                         pipeline_result = self._run_cluster_aware_pruning(
                             model_copy,
                             layer_modules=layer_modules,
                             ratio=ratio,
-                            method=method,
+                            method=prune_method,
+                        )
+                    elif prune_method in {"lp_with_constraints", "type_quota_taylor", "outred_with_constraints"}:
+                        pipeline_result = self._run_type_constrained_pruning(
+                            model_copy,
+                            layer_modules=layer_modules,
+                            ratio=ratio,
+                            method=prune_method,
                         )
                     else:
-                        layer_scores = self._compute_layer_scores_for_method(method, model_copy)
+                        layer_scores = self._compute_layer_scores_for_method(prune_method, model_copy)
+                        # If we filtered prunable layers (e.g., pointwise-only for MobileNet),
+                        # restrict pruning scores to the same subset for *all* methods so the
+                        # comparison stays fair.
+                        if layer_modules:
+                            layer_scores = {k: v for k, v in layer_scores.items() if k in layer_modules}
                         if not layer_scores:
                             raise ValueError("No layer scores available for method")
 
@@ -710,53 +1969,465 @@ class ClusterAnalysisExperiment:
                         )
                     
                     self._zero_batchnorm_from_masks(model_copy, pipeline_result.get("masks", {}))
+
+                    # Diagnostics about *what* was pruned (independent of fine-tuning)
+                    diagnostics = self._compute_pruning_diagnostics(
+                        masks=pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else {},
+                        mask_stats=pipeline_result.get("stats", {}) if isinstance(pipeline_result, dict) else {},
+                    )
                     
                     acc_before = self._evaluate_accuracy(model_copy)
                     acc_after = acc_before
+                    fine_tune_curve: List[Dict[str, float]] = []
                     if fine_tune_epochs > 0:
-                        model_copy = self._fine_tune(
+                        use_type_aware_ft = bool(getattr(self.config, "fine_tune_type_aware_enabled", False))
+                        if configured_type_aware_methods:
+                            use_type_aware_ft = (
+                                use_type_aware_ft
+                                and (method_name in configured_type_aware_methods or prune_method in configured_type_aware_methods)
+                            )
+                        if force_type_aware_ft:
+                            use_type_aware_ft = True
+
+                        model_copy, fine_tune_curve = self._fine_tune(
                             model_copy,
                             epochs=fine_tune_epochs,
                             lr=fine_tune_lr,
                             max_batches=fine_tune_max_batches,
                             weight_decay=fine_tune_weight_decay,
                             masks=pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else None,
+                            type_aware=use_type_aware_ft,
+                            track_epoch_accuracy=bool(getattr(self.config, "fine_tune_track_epoch_accuracy", False)),
                         )
                         acc_after = self._evaluate_accuracy(model_copy)
+                    else:
+                        use_type_aware_ft = False
                     
-                    method_results[ratio] = {
+                    mask_stats_out = pipeline_result.get("stats", {}) if isinstance(pipeline_result, dict) else {}
+                    # Explicit target-vs-achieved sparsity bookkeeping for reproducibility
+                    # and fair cross-method comparisons.
+                    #
+                    # IMPORTANT: Report *channel-level* sparsity over the intended prunable scope
+                    # (i.e., `layer_modules`) rather than over all propagated dependency layers.
+                    # This avoids denominator drift across methods (e.g., pointwise-only MobileNet).
+                    ach_layer = []
+                    pruned_total = 0.0
+                    channel_total = 0.0
+                    scope_layers_used = 0
+                    prunable_scope = set(layer_modules.keys()) if isinstance(layer_modules, dict) else set()
+
+                    def _in_prunable_scope(layer_name: str) -> bool:
+                        return (not prunable_scope) or (layer_name in prunable_scope)
+
+                    # Preferred path: derive channel counts directly from masks.
+                    masks_out = pipeline_result.get("masks", {}) if isinstance(pipeline_result, dict) else {}
+                    if isinstance(masks_out, dict):
+                        for _ln, mk in masks_out.items():
+                            if mk is None or (not _in_prunable_scope(str(_ln))):
+                                continue
+                            try:
+                                mk_cpu = mk.detach().cpu().bool()
+                                n_tot = int(mk_cpu.numel())
+                                n_pr = int((~mk_cpu).sum().item())
+                            except Exception:
+                                continue
+                            if n_tot <= 0:
+                                continue
+                            scope_layers_used += 1
+                            pruned_total += float(n_pr)
+                            channel_total += float(n_tot)
+                            ach_layer.append(float(n_pr / n_tot))
+
+                    # Fallback: parse stats in a key-compatible way, still at channel scope.
+                    if channel_total <= 0 and isinstance(mask_stats_out, dict):
+                        layer_stats = mask_stats_out.get("layers", mask_stats_out)
+                        if isinstance(layer_stats, dict):
+                            for _ln, st in layer_stats.items():
+                                if (not isinstance(st, dict)) or (not _in_prunable_scope(str(_ln))):
+                                    continue
+
+                                # Dependency-aware stats usually expose output-channel counts.
+                                n_tot = st.get("outputs_total", st.get("total_outputs"))
+                                n_kept = st.get("outputs_kept", st.get("kept_outputs"))
+                                n_pr = st.get("outputs_pruned", st.get("pruned_outputs"))
+
+                                # MaskOperations stats expose channel-mask element counts.
+                                if n_tot is None:
+                                    n_tot = st.get("total_elements")
+                                if n_pr is None:
+                                    n_pr = st.get("pruned_elements", st.get("num_pruned"))
+
+                                if n_pr is None and n_tot is not None and n_kept is not None:
+                                    try:
+                                        n_pr = float(n_tot) - float(n_kept)
+                                    except Exception:
+                                        n_pr = None
+
+                                if n_tot is None or n_pr is None:
+                                    continue
+                                try:
+                                    n_tot_f = float(n_tot)
+                                    n_pr_f = float(n_pr)
+                                except Exception:
+                                    continue
+                                if n_tot_f <= 0:
+                                    continue
+                                scope_layers_used += 1
+                                pruned_total += n_pr_f
+                                channel_total += n_tot_f
+                                ach_layer.append(float(n_pr_f / n_tot_f))
+
+                    achieved_sparsity_mean_layer = float(np.mean(ach_layer)) if ach_layer else None
+                    achieved_sparsity_global = float(pruned_total / channel_total) if channel_total > 0 else None
+                    target_sparsity = float(ratio_f)
+
+                    method_results[store_key] = {
+                        "pruning_method": prune_method,
+                        "target_sparsity": target_sparsity,
+                        "achieved_sparsity_mean_layer": achieved_sparsity_mean_layer,
+                        "achieved_sparsity_global": achieved_sparsity_global,
+                        "achieved_sparsity_error_mean_layer": (
+                            float(achieved_sparsity_mean_layer - target_sparsity)
+                            if achieved_sparsity_mean_layer is not None
+                            else None
+                        ),
+                        "achieved_sparsity_error_global": (
+                            float(achieved_sparsity_global - target_sparsity)
+                            if achieved_sparsity_global is not None
+                            else None
+                        ),
+                        "achieved_sparsity_scope_layers": int(scope_layers_used),
+                        "achieved_sparsity_scope_pruned_channels": (
+                            float(pruned_total) if channel_total > 0 else None
+                        ),
+                        "achieved_sparsity_scope_total_channels": (
+                            float(channel_total) if channel_total > 0 else None
+                        ),
                         "accuracy_before_ft": acc_before,
                         "accuracy_after_ft": acc_after,
                         "accuracy_drop": baseline_acc - acc_before,
                         "accuracy_recovery": acc_after - acc_before if fine_tune_epochs > 0 else 0.0,
+                        "fine_tune_type_aware": bool(use_type_aware_ft),
+                        "fine_tune_track_epoch_accuracy": bool(getattr(self.config, "fine_tune_track_epoch_accuracy", False)),
+                        "fine_tune_type_aware_lr_multipliers": dict(
+                            getattr(self.config, "fine_tune_type_aware_lr_multipliers", {}) or {}
+                        ),
+                        "fine_tune_type_aware_wd_multipliers": dict(
+                            getattr(self.config, "fine_tune_type_aware_wd_multipliers", {}) or {}
+                        ),
+                        "fine_tune_curve": fine_tune_curve,
                         "selection_mode": selection_mode,
-                        "mask_stats": pipeline_result.get("stats", {}),
+                        "mask_stats": mask_stats_out,
+                        "diagnostics": diagnostics,
                     }
                     
                     logger.info("    Result: %.2f%% (drop %.2f%%)", acc_after * 100, (baseline_acc - acc_after) * 100)
                 except Exception as exc:
-                    logger.warning("    Pruning failed for %s @ %.0f%%: %s", method, ratio * 100, exc)
-                    method_results[ratio] = {"error": str(exc)}
+                    import traceback
+                    logger.warning("    Pruning failed for %s @ %.0f%%: %s", method_name, ratio * 100, exc)
+                    logger.warning("    Traceback:\n%s", traceback.format_exc())
+                    method_results[store_key] = {"error": str(exc)}
                 finally:
                     del model_copy
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                    _checkpoint_pruning_results()
         
         self.pruning_results = results
         with open(self.output_dir / "pruning_results.json", "w") as f:
-            json.dump(results, f, indent=2, default=str)
+            json.dump(results, f, indent=2, default=_json_default)
         return results
+
+    def _compute_pruning_diagnostics(self, *, masks: Dict[str, "torch.Tensor"], mask_stats: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Summarize what a pruning mask removed.
+
+        Primary goal: make pruning curves interpretable and sanity-checkable.
+        We intentionally keep these diagnostics lightweight and model-agnostic.
+
+        Reported:
+        - LP directionality (mean LP pruned vs kept, fraction of LP mass removed)
+        - Type composition (critical/redundant/synergistic/background pruned counts)
+        - Layerwise sparsity summary
+        """
+        import numpy as _np
+
+        diag: Dict[str, Any] = {"global": {}, "by_type": {}, "by_layer": {}}
+
+        # ----------------------------
+        # Layerwise sparsity summary
+        # ----------------------------
+        try:
+            sparsities = []
+            for _layer, st in (mask_stats or {}).items():
+                if isinstance(st, dict) and "sparsity" in st:
+                    sparsities.append(float(st["sparsity"]))
+            if sparsities:
+                diag["global"]["layer_sparsity_min"] = float(min(sparsities))
+                diag["global"]["layer_sparsity_max"] = float(max(sparsities))
+                diag["global"]["layer_sparsity_mean"] = float(_np.mean(sparsities))
+        except Exception:
+            pass
+
+        # ----------------------------
+        # LP diagnostics (if present)
+        # ----------------------------
+        lp_total = 0.0
+        lp_pruned = 0.0
+        lp_kept = 0.0
+        lp_pruned_vals: List[float] = []
+        lp_kept_vals: List[float] = []
+
+        # ----------------------------
+        # Optional routing diagnostics (if present)
+        # ----------------------------
+        # Each entry: (metric_name, summarize_as_mass)
+        # - summarize_as_mass=True => also compute removed fraction via sum(metric)
+        routing_metrics = [
+            ("halo_lp", True),
+            ("bottleneck_in_max", False),
+            ("bottleneck_in_topk_mass", False),
+            ("bottleneck_out_max", False),
+            ("bottleneck_out_topk_mass", False),
+            ("outred", False),
+        ]
+        routing_sums_total: Dict[str, float] = {}
+        routing_sums_pruned: Dict[str, float] = {}
+        routing_vals_pruned: Dict[str, List[float]] = {k: [] for (k, _mass) in routing_metrics}
+        routing_vals_kept: Dict[str, List[float]] = {k: [] for (k, _mass) in routing_metrics}
+
+        # ----------------------------
+        # Type diagnostics (if present)
+        # ----------------------------
+        type_total_counts: Dict[str, int] = {}
+        type_pruned_counts: Dict[str, int] = {}
+
+        def _type_from_cluster(layer_name: str, idx: _np.ndarray) -> List[str]:
+            cr = self.cluster_results.get(layer_name, {}) if hasattr(self, "cluster_results") else {}
+            labels = cr.get("labels", None)
+            type_mapping = cr.get("type_mapping", None)
+            if labels is None or type_mapping is None:
+                return []
+            labels = _np.asarray(labels).astype(int)
+            if labels.size == 0:
+                return []
+            # Normalize mapping keys to int->str
+            tm: Dict[int, str] = {}
+            if isinstance(type_mapping, dict):
+                for k, v in type_mapping.items():
+                    try:
+                        tm[int(k)] = str(v)
+                    except Exception:
+                        continue
+            out = []
+            for i in idx.tolist():
+                if 0 <= int(i) < int(labels.size):
+                    out.append(tm.get(int(labels[int(i)]), "unknown"))
+            return out
+
+        for layer_name, mask in (masks or {}).items():
+            if mask is None:
+                continue
+            try:
+                m = mask.detach().cpu().numpy().astype(float).reshape(-1)
+            except Exception:
+                continue
+            if m.size == 0:
+                continue
+
+            kept = m > 0.0
+            pruned = ~kept
+            pruned_idx = _np.where(pruned)[0]
+            kept_idx = _np.where(kept)[0]
+
+            layer_out: Dict[str, Any] = {
+                "n_total": int(m.size),
+                "n_pruned": int(pruned.sum()),
+                "n_kept": int(kept.sum()),
+                "pruned_frac": float(pruned.mean()),
+            }
+
+            lm = self.layer_metrics.get(layer_name, {}) if hasattr(self, "layer_metrics") else {}
+            lp = lm.get("loss_proxy", None)
+            if lp is not None:
+                try:
+                    lp_arr = _np.asarray(lp, dtype=_np.float64).reshape(-1)[: m.size]
+                    lp_layer_total = float(lp_arr.sum())
+                    lp_layer_pruned = float(lp_arr[pruned].sum())
+                    lp_layer_kept = float(lp_arr[kept].sum())
+                    lp_total += lp_layer_total
+                    lp_pruned += lp_layer_pruned
+                    lp_kept += lp_layer_kept
+                    if pruned.any():
+                        lp_pruned_vals.extend([float(x) for x in lp_arr[pruned].tolist()])
+                    if kept.any():
+                        lp_kept_vals.extend([float(x) for x in lp_arr[kept].tolist()])
+
+                    layer_out["lp_total"] = lp_layer_total
+                    layer_out["lp_pruned"] = lp_layer_pruned
+                    layer_out["lp_kept"] = lp_layer_kept
+                    layer_out["lp_mass_removed_frac"] = float(lp_layer_pruned / (lp_layer_total + 1e-12))
+                    layer_out["lp_mean_pruned"] = float(_np.mean(lp_arr[pruned])) if pruned.any() else None
+                    layer_out["lp_mean_kept"] = float(_np.mean(lp_arr[kept])) if kept.any() else None
+                except Exception:
+                    pass
+
+            # Routing metrics (if available): report pruned vs kept means, and (for halo_lp) removed mass fraction.
+            try:
+                for metric_name, as_mass in routing_metrics:
+                    v = lm.get(metric_name, None)
+                    if v is None:
+                        continue
+                    arr = _np.asarray(v, dtype=_np.float64).reshape(-1)[: m.size]
+                    if arr.size <= 0:
+                        continue
+                    if pruned.any():
+                        routing_vals_pruned[metric_name].extend([float(x) for x in arr[pruned].tolist()])
+                    if kept.any():
+                        routing_vals_kept[metric_name].extend([float(x) for x in arr[kept].tolist()])
+                    layer_out[f"{metric_name}_mean_pruned"] = float(_np.mean(arr[pruned])) if pruned.any() else None
+                    layer_out[f"{metric_name}_mean_kept"] = float(_np.mean(arr[kept])) if kept.any() else None
+                    if as_mass:
+                        tot = float(arr.sum())
+                        pr = float(arr[pruned].sum())
+                        routing_sums_total[metric_name] = routing_sums_total.get(metric_name, 0.0) + tot
+                        routing_sums_pruned[metric_name] = routing_sums_pruned.get(metric_name, 0.0) + pr
+                        layer_out[f"{metric_name}_mass_removed_frac"] = float(pr / (tot + 1e-12))
+            except Exception:
+                pass
+
+            # Type composition (overall + per layer)
+            types_pruned = _type_from_cluster(layer_name, pruned_idx)
+            types_all = _type_from_cluster(layer_name, _np.arange(int(m.size)))
+            if types_all:
+                ttot: Dict[str, int] = {}
+                for t in types_all:
+                    ttot[t] = ttot.get(t, 0) + 1
+                tpr: Dict[str, int] = {}
+                for t in types_pruned:
+                    tpr[t] = tpr.get(t, 0) + 1
+
+                layer_out["type_total_counts"] = ttot
+                layer_out["type_pruned_counts"] = tpr
+                # convenience scalar
+                crit_tot = int(ttot.get("critical", 0))
+                crit_pr = int(tpr.get("critical", 0))
+                layer_out["critical_pruned_frac"] = float(crit_pr / max(1, crit_tot))
+
+                for k, v in ttot.items():
+                    type_total_counts[k] = type_total_counts.get(k, 0) + int(v)
+                for k, v in tpr.items():
+                    type_pruned_counts[k] = type_pruned_counts.get(k, 0) + int(v)
+
+            diag["by_layer"][layer_name] = layer_out
+
+        if lp_total > 0:
+            diag["global"]["lp_mass_removed_frac"] = float(lp_pruned / (lp_total + 1e-12))
+            diag["global"]["lp_mean_pruned"] = float(_np.mean(lp_pruned_vals)) if lp_pruned_vals else None
+            diag["global"]["lp_mean_kept"] = float(_np.mean(lp_kept_vals)) if lp_kept_vals else None
+
+        # Global routing summaries (when present)
+        try:
+            for metric_name, as_mass in routing_metrics:
+                pv = routing_vals_pruned.get(metric_name) or []
+                kv = routing_vals_kept.get(metric_name) or []
+                if pv:
+                    diag["global"][f"{metric_name}_mean_pruned"] = float(_np.mean(pv))
+                if kv:
+                    diag["global"][f"{metric_name}_mean_kept"] = float(_np.mean(kv))
+                if as_mass and routing_sums_total.get(metric_name, 0.0) > 0.0:
+                    diag["global"][f"{metric_name}_mass_removed_frac"] = float(
+                        routing_sums_pruned.get(metric_name, 0.0) / (routing_sums_total.get(metric_name, 0.0) + 1e-12)
+                    )
+        except Exception:
+            pass
+
+        if type_total_counts:
+            diag["by_type"]["total_counts"] = {k: int(v) for k, v in type_total_counts.items()}
+            diag["by_type"]["pruned_counts"] = {k: int(v) for k, v in type_pruned_counts.items()}
+            diag["by_type"]["pruned_frac"] = {
+                k: float(type_pruned_counts.get(k, 0) / max(1, type_total_counts.get(k, 0)))
+                for k in type_total_counts.keys()
+            }
+
+        return diag
 
     def _get_layer_module_map(self, model: nn.Module) -> Dict[str, nn.Module]:
         modules = dict(model.named_modules())
         return {name: modules.get(name) for name, _ in self.layers if name in modules}
 
+    def _filter_pruning_layer_modules(self, layer_modules: Dict[str, nn.Module]) -> Dict[str, nn.Module]:
+        """
+        Optionally restrict which Conv layers are *prunable* (without changing which layers
+        we analyze for metrics/clustering).
+
+        This is especially useful for MobileNetV2-style architectures where:
+        - depthwise convolutions are structurally delicate
+        - most FLOPs live in pointwise (1x1) convolutions
+
+        Config knobs (flattened):
+          - pruning_skip_depthwise: bool
+          - pruning_pointwise_only: bool
+        """
+        if not layer_modules:
+            return layer_modules
+
+        skip_depthwise = bool(self.config.pruning_skip_depthwise)
+        pointwise_only = bool(self.config.pruning_pointwise_only)
+        if not (skip_depthwise or pointwise_only):
+            return layer_modules
+
+        def _is_depthwise_conv(m: nn.Module) -> bool:
+            if not isinstance(m, nn.Conv2d):
+                return False
+            groups = int(getattr(m, "groups", 1))
+            in_ch = int(getattr(m, "in_channels", 0))
+            out_ch = int(getattr(m, "out_channels", 0))
+            try:
+                in_per_group = int(m.weight.shape[1])
+            except Exception:
+                in_per_group = 0
+            return (groups > 1) and (groups == in_ch) and (out_ch == in_ch) and (in_per_group == 1)
+
+        def _is_pointwise_conv(m: nn.Module) -> bool:
+            if not isinstance(m, nn.Conv2d):
+                return False
+            k = getattr(m, "kernel_size", None)
+            if isinstance(k, int):
+                k = (k, k)
+            return (k == (1, 1)) and (int(getattr(m, "groups", 1)) == 1)
+
+        kept: Dict[str, nn.Module] = {}
+        for name, m in layer_modules.items():
+            if not isinstance(m, nn.Conv2d):
+                kept[name] = m
+                continue
+            if pointwise_only and (not _is_pointwise_conv(m)):
+                continue
+            if skip_depthwise and _is_depthwise_conv(m):
+                continue
+            kept[name] = m
+
+        if len(kept) != len(layer_modules):
+            logger.info(
+                "Pruning layer filter applied: kept %d/%d layers (pointwise_only=%s, skip_depthwise=%s)",
+                len(kept),
+                len(layer_modules),
+                pointwise_only,
+                skip_depthwise,
+            )
+
+        return kept
+
     def _selection_mode_for_method(self, method: str) -> str:
         if method == "random":
             return "random"
-        high_methods = {"rq_high", "redundancy_high", "synergy_high", "magnitude_high", "activation_l2_norm_high"}
-        if method in high_methods:
+        # Convention: methods ending in `_high` prune HIGH-scoring channels; `_low` prune LOW-scoring channels.
+        # This avoids brittle per-method allowlists and keeps naming consistent across all metrics.
+        if method.endswith("_high"):
             return "high"
+        if method.endswith("_low"):
+            return "low"
         return "low"
 
     def _compute_taylor_channel_scores(self, model: nn.Module) -> Dict[str, "torch.Tensor"]:
@@ -772,7 +2443,7 @@ class ClusterAnalysisExperiment:
             return {}
 
         # Keep this small by default; configurable via config if present.
-        max_samples = int(getattr(self.config, "taylor_samples", 1024))
+        max_samples = int(self.config.taylor_samples)
         max_samples = max(1, max_samples)
 
         model = model.to(self.device)
@@ -782,7 +2453,7 @@ class ClusterAnalysisExperiment:
         model.zero_grad(set_to_none=True)
 
         n_seen = 0
-        for x, y in self.train_loader:
+        for x, y in self._get_calibration_loader():
             if n_seen >= max_samples:
                 break
 
@@ -816,6 +2487,134 @@ class ClusterAnalysisExperiment:
         model.zero_grad(set_to_none=True)
         return out
 
+    def _compute_taylor_act_channel_scores(self, model: nn.Module) -> Dict[str, "torch.Tensor"]:
+        """
+        Compute per-output-channel Taylor saliency scores using activations:
+
+          score_i = E[ | a_i * dL/da_i | ]
+
+        where a_i is the (pre-nonlinearity) conv output channel activation and dL/da_i is
+        its gradient. For Conv2d outputs, we reduce over batch + spatial dims to get a
+        single score per output channel.
+
+        Notes:
+        - This is the canonical "Taylor channel pruning" baseline (Molchanov-style).
+        - We compute it over a small calibration subset from the (deterministic) calibration loader.
+        """
+        if not HAS_TORCH:
+            return {}
+
+        max_samples = int(getattr(self.config, "taylor_act_samples", self.config.taylor_samples))
+        max_samples = max(1, max_samples)
+
+        model = model.to(self.device)
+        model.eval()
+
+        criterion = nn.CrossEntropyLoss()
+
+        modules = dict(model.named_modules())
+
+        # Accumulators on CPU (float64 for stability)
+        sum_scores: Dict[str, "torch.Tensor"] = {}
+        count_scores: Dict[str, int] = {}
+
+        # Capture activations for the current forward pass. We retain grads so we can read dL/da.
+        acts: Dict[str, "torch.Tensor"] = {}
+
+        def hook_fn(layer_name: str):
+            def fn(_m, _inp, out):
+                try:
+                    if out is None or not hasattr(out, "retain_grad"):
+                        return
+                    # Conv outputs are typically [B, C, H, W].
+                    out.retain_grad()
+                    acts[layer_name] = out
+                except Exception:
+                    # Best-effort; if retain_grad fails we skip that layer for this batch.
+                    return
+
+            return fn
+
+        handles = []
+        try:
+            for name, _layer in self.layers:
+                m = modules.get(name)
+                if isinstance(m, nn.Conv2d):
+                    handles.append(m.register_forward_hook(hook_fn(name)))
+
+            n_seen = 0
+            for x, y in self._get_calibration_loader():
+                if n_seen >= max_samples:
+                    break
+
+                remaining = max_samples - n_seen
+                if x.size(0) > remaining:
+                    x = x[:remaining]
+                    y = y[:remaining]
+
+                # Activation-Taylor can be memory-heavy if we retain grads for all conv outputs.
+                # Cap the effective batch size to keep peak memory bounded, independent of the
+                # main training/eval loader batch size.
+                act_bsz = int(getattr(self.config, "taylor_act_batch_size", 16) or 16)
+                act_bsz = max(1, act_bsz)
+                if x.size(0) > act_bsz:
+                    x = x[:act_bsz]
+                    y = y[:act_bsz]
+
+                x = x.to(self.device)
+                y = y.to(self.device)
+
+                # Fresh graph per batch.
+                model.zero_grad(set_to_none=True)
+                acts.clear()
+
+                logits = model(x)
+                loss = criterion(logits, y)
+                loss.backward()
+
+                bsz = int(x.size(0))
+                n_seen += bsz
+
+                for lname, out in list(acts.items()):
+                    try:
+                        g = getattr(out, "grad", None)
+                        if g is None:
+                            continue
+                        # Reduce to [C_out] via mean over batch+spatial dims.
+                        if out.ndim == 4:
+                            prod = (out.detach() * g.detach()).abs()
+                            score = prod.mean(dim=(0, 2, 3)).detach().cpu().double()  # [C]
+                        else:
+                            # Fallback: flatten all but last dim as "samples"
+                            o2 = out.detach().reshape(-1, out.shape[-1])
+                            g2 = g.detach().reshape(-1, g.shape[-1])
+                            score = (o2 * g2).abs().mean(dim=0).detach().cpu().double()
+
+                        if lname not in sum_scores:
+                            sum_scores[lname] = torch.zeros_like(score, dtype=torch.float64)
+                            count_scores[lname] = 0
+                        # Weight by batch size for a proper sample-weighted average across batches.
+                        sum_scores[lname] += score * float(bsz)
+                        count_scores[lname] += bsz
+                    except Exception:
+                        continue
+
+        finally:
+            for h in handles:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+            model.zero_grad(set_to_none=True)
+
+        out: Dict[str, "torch.Tensor"] = {}
+        for lname, s in sum_scores.items():
+            n = int(count_scores.get(lname, 0))
+            if n <= 0:
+                continue
+            out[lname] = (s / float(n)).detach().cpu()
+        return out
+
     def _compute_geometric_median_channel_scores(self, model: nn.Module) -> Dict[str, "torch.Tensor"]:
         """
         Geometric-median (FPGM-style) per-channel importance for Conv layers.
@@ -828,9 +2627,9 @@ class ClusterAnalysisExperiment:
             return {}
 
         # Weiszfeld settings (keep small; this is run once and cached)
-        iters = int(getattr(self.config, "geometric_median_iters", 10))
+        iters = int(self.config.geometric_median_iters)
         iters = max(1, min(iters, 50))
-        eps = float(getattr(self.config, "geometric_median_eps", 1e-8))
+        eps = float(self.config.geometric_median_eps)
         eps = max(eps, 1e-12)
 
         modules = dict(model.named_modules())
@@ -876,11 +2675,11 @@ class ClusterAnalysisExperiment:
 
         import torch.nn.functional as F
 
-        max_images = int(getattr(self.config, "hrank_images", 256))
+        max_images = int(self.config.hrank_images)
         max_images = max(1, max_images)
-        pool = int(getattr(self.config, "hrank_pool", 8))
+        pool = int(self.config.hrank_pool)
         pool = max(2, min(pool, 32))
-        sv_eps = float(getattr(self.config, "hrank_sv_eps", 1e-3))
+        sv_eps = float(self.config.hrank_sv_eps)
         sv_eps = max(sv_eps, 1e-6)
 
         model = model.to(self.device)
@@ -936,7 +2735,7 @@ class ClusterAnalysisExperiment:
 
         n_seen = 0
         with torch.no_grad():
-            for x, _y in self.train_loader:
+            for x, _y in self._get_calibration_loader():
                 if n_seen >= max_images:
                     break
 
@@ -963,6 +2762,108 @@ class ClusterAnalysisExperiment:
 
         return out_scores
 
+    def _compute_chip_channel_scores(self, model: nn.Module) -> Dict[str, np.ndarray]:
+        """
+        CHIP: Channel Independence-based Pruning (Sui et al. NeurIPS 2021).
+
+        Computes per-channel "independence score" based on inter-channel correlations.
+        Channels with LOW independence (high correlation with others) are pruned first.
+
+        Independence_i = 1 / (1 + sum_j |corr(Y_i, Y_j)|)
+
+        This is conceptually similar to our "redundancy_high" pruning but uses
+        activation correlations directly rather than Gaussian MI.
+
+        Reference: https://arxiv.org/abs/2110.13981
+        """
+        if not HAS_TORCH:
+            return {}
+
+        max_images = int(getattr(self.config, "chip_images", 256))
+        max_images = max(1, max_images)
+
+        model = model.to(self.device)
+        model.eval()
+
+        modules = dict(model.named_modules())
+
+        # Collect activations per layer
+        activations: Dict[str, List[torch.Tensor]] = {}
+
+        def hook_fn(layer_name: str):
+            def fn(_m, _inp, out):
+                if out is None:
+                    return
+                if isinstance(out, tuple):
+                    out = out[0]
+                if out.ndim < 2:
+                    return
+                # Keep on CPU to avoid memory issues
+                activations.setdefault(layer_name, []).append(out.detach().cpu())
+            return fn
+
+        handles = []
+        for name, _layer in self.layers:
+            m = modules.get(name)
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                handles.append(m.register_forward_hook(hook_fn(name)))
+
+        n_seen = 0
+        with torch.no_grad():
+            for x, _y in self._get_calibration_loader():
+                if n_seen >= max_images:
+                    break
+                remaining = max_images - n_seen
+                if x.size(0) > remaining:
+                    x = x[:remaining]
+                x = x.to(self.device)
+                _ = model(x)
+                n_seen += int(x.size(0))
+
+        for h in handles:
+            h.remove()
+
+        # Compute independence scores per layer
+        out_scores: Dict[str, np.ndarray] = {}
+        for layer_name, acts_list in activations.items():
+            if not acts_list:
+                continue
+            try:
+                acts = torch.cat(acts_list, dim=0)  # [N, C, ...] or [N, C]
+                # Flatten spatial dims if present
+                if acts.ndim == 4:
+                    N, C, H, W = acts.shape
+                    acts = acts.permute(1, 0, 2, 3).reshape(C, -1)  # [C, N*H*W]
+                elif acts.ndim == 3:
+                    N, C, D = acts.shape
+                    acts = acts.permute(1, 0, 2).reshape(C, -1)  # [C, N*D]
+                elif acts.ndim == 2:
+                    acts = acts.T  # [C, N]
+                else:
+                    continue
+
+                acts = acts.float()
+                C = acts.shape[0]
+
+                # Compute correlation matrix
+                acts_centered = acts - acts.mean(dim=1, keepdim=True)
+                stds = acts_centered.std(dim=1, keepdim=True).clamp(min=1e-8)
+                acts_normed = acts_centered / stds
+                corr = (acts_normed @ acts_normed.T) / acts.shape[1]
+                corr = corr.clamp(-1, 1)
+
+                # Independence: I_i = 1 / (1 + sum_{j!=i} |corr(i,j)|)
+                abs_corr = torch.abs(corr)
+                abs_corr.fill_diagonal_(0)
+                sum_abs_corr = abs_corr.sum(dim=1)
+                independence = 1.0 / (1.0 + sum_abs_corr)
+
+                out_scores[layer_name] = independence.cpu().numpy()
+            except Exception as exc:
+                logger.debug("CHIP score computation failed for %s: %s", layer_name, exc)
+
+        return out_scores
+
     def _compute_layer_scores_for_method(self, method: str, model: nn.Module) -> Dict[str, torch.Tensor]:
         layer_scores: Dict[str, torch.Tensor] = {}
         modules = self._get_layer_module_map(model)
@@ -973,6 +2874,12 @@ class ClusterAnalysisExperiment:
             "redundancy_high": "redundancy",
             "synergy_low": "synergy",
             "synergy_high": "synergy",
+            # MI = 0.5 * log(1 + RQ * ||w||^2) - already computed as mi_in_proxy
+            "mi_low": "mi_in_proxy",
+            "mi_high": "mi_in_proxy",
+            # Loss proxy (Fisher importance)
+            "lp_low": "loss_proxy",
+            "lp_high": "loss_proxy",
         }
         for name, layer in modules.items():
             if layer is None or not hasattr(layer, "weight"):
@@ -1028,6 +2935,23 @@ class ClusterAnalysisExperiment:
                     layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
                 else:
                     layer_scores[name] = cpu_scores.to(device=device, dtype=torch.float32)
+            elif method == "taylor_act":
+                # Canonical activation-based Taylor: E[|a * dL/da|] per output channel.
+                # Compute once per experiment and cache on CPU.
+                cache_key = "taylor_act"
+                if cache_key not in self._pruning_score_cache:
+                    try:
+                        self._pruning_score_cache[cache_key] = self._compute_taylor_act_channel_scores(model)
+                    except Exception as exc:
+                        logger.warning("Taylor-act score computation failed (%s); falling back to magnitude", exc)
+                        self._pruning_score_cache[cache_key] = {}
+                cpu_scores = (self._pruning_score_cache.get(cache_key, {}) or {}).get(name)
+                if cpu_scores is None or (hasattr(cpu_scores, "numel") and cpu_scores.numel() != n_channels):
+                    # Fallback: weight magnitude if we couldn't compute gradients or mismatch
+                    w_flat = weight.view(n_channels, -1)
+                    layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
+                else:
+                    layer_scores[name] = torch.as_tensor(cpu_scores, device=device, dtype=torch.float32)
             elif method in {"geometric_median", "fpgm"}:
                 cache_key = "geometric_median"
                 if cache_key not in self._pruning_score_cache:
@@ -1056,6 +2980,26 @@ class ClusterAnalysisExperiment:
                     layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
                 else:
                     layer_scores[name] = cpu_scores.to(device=device, dtype=torch.float32)
+            # ------------------------------------------------------------------
+            # CHIP: Channel Independence-based Pruning (Sui et al. NeurIPS 2021)
+            # Prunes channels with low independence (high inter-channel correlation).
+            # Conceptually similar to "redundancy_high" but uses correlation directly.
+            # ------------------------------------------------------------------
+            elif method == "chip":
+                cache_key = "chip"
+                if cache_key not in self._pruning_score_cache:
+                    try:
+                        self._pruning_score_cache[cache_key] = self._compute_chip_channel_scores(model)
+                    except Exception as exc:
+                        logger.warning("CHIP score computation failed (%s); falling back to magnitude", exc)
+                        self._pruning_score_cache[cache_key] = {}
+                cpu_scores = self._pruning_score_cache.get(cache_key, {}).get(name)
+                if cpu_scores is None or (hasattr(cpu_scores, "numel") and cpu_scores.numel() != n_channels):
+                    # Fallback to magnitude
+                    w_flat = weight.view(n_channels, -1)
+                    layer_scores[name] = torch.norm(w_flat, p=2, dim=1)
+                else:
+                    layer_scores[name] = torch.as_tensor(cpu_scores, device=device, dtype=torch.float32)
             elif method in metric_map:
                 values = metrics.get(metric_map[method])
                 if values is None:
@@ -1073,6 +3017,139 @@ class ClusterAnalysisExperiment:
                 comp = self._compute_composite_metric(method, metrics, layer)
                 if comp is not None:
                     layer_scores[name] = comp.to(device)
+            # ------------------------------------------------------------------
+            # METRIC-BASED METHODS (single metrics, Taylor-weighted, LP-optimal)
+            # ------------------------------------------------------------------
+            elif (method.startswith("taylor_") or method.startswith("taylor_act_")) and method not in {
+                "taylor_rq_weighted", "taylor_redundancy_discounted", "taylor_synergy_boosted",
+                "taylor_structural", "taylor_mi", "taylor_cluster_type", "taylor_optimal_combo",
+                # Activation-Taylor generalized variants (handled below)
+                "taylor_act_rq_weighted", "taylor_act_redundancy_discounted", "taylor_act_synergy_boosted",
+                "taylor_act_structural", "taylor_act_mi", "taylor_act_cluster_type", "taylor_act_optimal_combo",
+            } or method in {"lp_optimal", "cluster_structure"}:
+                from ..pruning.strategies.metric_based import create_metric_pruning_strategy
+                
+                # Get Taylor scores if needed
+                taylor = None
+                if method.startswith("taylor_") or method.startswith("taylor_act_"):
+                    cache_key = "taylor_act" if method.startswith("taylor_act_") else "taylor"
+                    if cache_key not in self._pruning_score_cache:
+                        try:
+                            if cache_key == "taylor_act":
+                                self._pruning_score_cache[cache_key] = self._compute_taylor_act_channel_scores(model)
+                            else:
+                                self._pruning_score_cache[cache_key] = self._compute_taylor_channel_scores(model)
+                        except Exception:
+                            self._pruning_score_cache[cache_key] = {}
+                    taylor = (self._pruning_score_cache.get(cache_key, {}) or {}).get(name)
+                    if taylor is not None:
+                        # tensor or numpy; normalize downstream
+                        try:
+                            taylor = taylor.cpu().numpy()
+                        except Exception:
+                            pass
+                
+                # Get LP scores if needed
+                lp = None
+                if method == "lp_optimal":
+                    lp = metrics.get("loss_proxy", metrics.get("lp", metrics.get("fisher")))
+                
+                # Get cluster info
+                clusters = self.cluster_results.get(name, {})
+                
+                strategy = create_metric_pruning_strategy(
+                    method=method,
+                    precomputed_metrics=metrics,
+                    precomputed_clusters=clusters,
+                    taylor_scores=taylor,
+                    lp_scores=lp,
+                )
+                scores = strategy.compute_importance_scores(layer, layer_name=name)
+                layer_scores[name] = scores.to(device)
+            # ------------------------------------------------------------------
+            # GENERALIZED TAYLOR METHODS
+            # ------------------------------------------------------------------
+            elif method in {
+                "taylor_rq_weighted", "taylor_redundancy_discounted", "taylor_synergy_boosted",
+                "taylor_structural", "taylor_mi", "taylor_cluster_type", "taylor_optimal_combo",
+                "rq_weighted_taylor", "redundancy_discounted_taylor", "synergy_boosted_taylor",
+                "structural_taylor", "metric_gated_taylor", "mi_taylor", "cluster_type_taylor",
+                # Activation-Taylor variants (same variants, different Taylor source)
+                "taylor_act_rq_weighted", "taylor_act_redundancy_discounted", "taylor_act_synergy_boosted",
+                "taylor_act_structural", "taylor_act_mi", "taylor_act_cluster_type", "taylor_act_optimal_combo",
+            }:
+                from ..pruning.strategies.generalized_taylor import create_generalized_taylor
+                
+                # Map method name to variant
+                variant_map = {
+                    "taylor_rq_weighted": "rq_weighted_taylor",
+                    "taylor_redundancy_discounted": "redundancy_discounted_taylor",
+                    "taylor_synergy_boosted": "synergy_boosted_taylor",
+                    "taylor_structural": "structural_taylor",
+                    "taylor_mi": "mi_taylor",
+                    "taylor_cluster_type": "cluster_type_taylor",
+                    "taylor_optimal_combo": "taylor_optimal_combo",
+                    # Activation-Taylor aliases (use same underlying variant)
+                    "taylor_act_rq_weighted": "rq_weighted_taylor",
+                    "taylor_act_redundancy_discounted": "redundancy_discounted_taylor",
+                    "taylor_act_synergy_boosted": "synergy_boosted_taylor",
+                    "taylor_act_structural": "structural_taylor",
+                    "taylor_act_mi": "mi_taylor",
+                    "taylor_act_cluster_type": "cluster_type_taylor",
+                    "taylor_act_optimal_combo": "taylor_optimal_combo",
+                }
+                variant = variant_map.get(method, method)
+                
+                # Get Taylor scores
+                cache_key = "taylor_act" if method.startswith("taylor_act_") else "taylor"
+                if cache_key not in self._pruning_score_cache:
+                    try:
+                        if cache_key == "taylor_act":
+                            self._pruning_score_cache[cache_key] = self._compute_taylor_act_channel_scores(model)
+                        else:
+                            self._pruning_score_cache[cache_key] = self._compute_taylor_channel_scores(model)
+                    except Exception:
+                        self._pruning_score_cache[cache_key] = {}
+                taylor_cpu = (self._pruning_score_cache.get(cache_key, {}) or {}).get(name)
+                taylor_np = taylor_cpu.cpu().numpy() if taylor_cpu is not None else None
+                
+                # Get cluster info
+                clusters = self.cluster_results.get(name, {})
+                
+                strategy = create_generalized_taylor(
+                    variant=variant,
+                    precomputed_metrics=metrics,
+                    precomputed_clusters=clusters,
+                    taylor_scores=taylor_np,
+                    # Configurable hyperparameters (YAML-driven; saved in experiment_config.yaml)
+                    weight_rq=float(getattr(self.config, "generalized_taylor_weight_rq", 1.0)),
+                    weight_redundancy=float(getattr(self.config, "generalized_taylor_weight_redundancy", 0.3)),
+                    weight_synergy=float(getattr(self.config, "generalized_taylor_weight_synergy", 0.5)),
+                    gradient_exponent=float(getattr(self.config, "generalized_taylor_gradient_exponent", 1.0)),
+                    activation_exponent=float(getattr(self.config, "generalized_taylor_activation_exponent", 1.0)),
+                    redundancy_discount_beta=float(
+                        getattr(self.config, "generalized_taylor_redundancy_discount_beta", 1.0)
+                    ),
+                    synergy_boost_gamma=float(getattr(self.config, "generalized_taylor_synergy_boost_gamma", 0.5)),
+                    critical_multiplier=float(getattr(self.config, "generalized_taylor_critical_multiplier", 1.5)),
+                    redundant_multiplier=float(getattr(self.config, "generalized_taylor_redundant_multiplier", 0.5)),
+                    synergistic_multiplier=float(getattr(self.config, "generalized_taylor_synergistic_multiplier", 1.2)),
+                    background_multiplier=float(getattr(self.config, "generalized_taylor_background_multiplier", 0.8)),
+                    gate_mode=str(getattr(self.config, "generalized_taylor_gate_mode", "sigmoid")),
+                    gate_temperature=float(getattr(self.config, "generalized_taylor_gate_temperature", 6.0)),
+                    gate_bias=float(getattr(self.config, "generalized_taylor_gate_bias", 0.5)),
+                    gate_eps=float(getattr(self.config, "generalized_taylor_gate_eps", 0.05)),
+                    gate_min=float(getattr(self.config, "generalized_taylor_gate_min", 0.0)),
+                    gate_include_cluster_multiplier=bool(
+                        getattr(self.config, "generalized_taylor_gate_include_cluster_multiplier", True)
+                    ),
+                    structural_eps=float(getattr(self.config, "generalized_taylor_structural_eps", 0.1)),
+                    rq_log_eps=float(getattr(self.config, "generalized_taylor_rq_log_eps", 1e-10)),
+                    grad_over_act_eps=float(getattr(self.config, "generalized_taylor_grad_over_act_eps", 1e-8)),
+                    lp_optimal_l2_reg=float(getattr(self.config, "generalized_taylor_lp_optimal_l2_reg", 0.01)),
+                )
+                scores = strategy.compute_importance_scores(layer, layer_name=name)
+                layer_scores[name] = scores.to(device)
             else:
                 logger.warning("Unknown pruning method '%s'; skipping layer scores", method)
                 return {}
@@ -1082,6 +3159,8 @@ class ClusterAnalysisExperiment:
         rq = np.log(np.clip(metrics.get("rq", np.ones(layer.weight.shape[0])), 1e-10, None))
         redundancy = metrics.get("redundancy", np.zeros_like(rq))
         synergy = metrics.get("synergy", np.zeros_like(rq))
+        # I(X;Y) - mutual information proxy (already in log scale from computation)
+        ixy = metrics.get("mi_in_proxy", rq)  # fallback to rq if not available
 
         def normalize(arr: np.ndarray) -> np.ndarray:
             if arr.size == 0:
@@ -1093,6 +3172,7 @@ class ClusterAnalysisExperiment:
             return (arr - min_v) / (max_v - min_v)
 
         rq_norm = normalize(rq)
+        ixy_norm = normalize(ixy)
         red_norm = normalize(redundancy)
         syn_norm = normalize(synergy)
 
@@ -1100,6 +3180,16 @@ class ClusterAnalysisExperiment:
             scores = rq_norm + 0.5 * syn_norm - 0.3 * red_norm
         elif method == "composite_pos_red":
             scores = rq_norm + 0.5 * syn_norm + 0.3 * red_norm
+        # I(X;Y)-based composite variants
+        elif method == "composite_ixy":
+            # Use I(X;Y) instead of RQ: Score = I(X;Y) + 0.5*Syn - 0.3*Red
+            scores = ixy_norm + 0.5 * syn_norm - 0.3 * red_norm
+        elif method == "composite_ixy_pos_red":
+            scores = ixy_norm + 0.5 * syn_norm + 0.3 * red_norm
+        elif method == "ixy_minus_red":
+            scores = ixy_norm - 0.5 * red_norm
+        elif method == "ixy_plus_red":
+            scores = ixy_norm + 0.5 * red_norm
         elif method == "rq_minus_red":
             scores = rq_norm - 0.5 * red_norm
         elif method == "rq_plus_red":
@@ -1108,6 +3198,10 @@ class ClusterAnalysisExperiment:
             w = layer.weight.detach().view(layer.weight.shape[0], -1)
             mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
             scores = mag + 0.5 * rq_norm
+        elif method == "magnitude_plus_ixy":
+            w = layer.weight.detach().view(layer.weight.shape[0], -1)
+            mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
+            scores = mag + 0.5 * ixy_norm
         elif method == "magnitude_minus_red":
             w = layer.weight.detach().view(layer.weight.shape[0], -1)
             mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
@@ -1190,6 +3284,123 @@ class ClusterAnalysisExperiment:
                 halo_syn[i] = float(np.mean(next_syn[mask]))
         return halo_syn
 
+    def _allocate_exact_channel_budget(
+        self,
+        *,
+        layer_names: List[str],
+        layer_num_channels: Dict[str, int],
+        per_layer_amounts: Dict[str, float],
+        target_ratio: float,
+    ) -> Dict[str, int]:
+        """
+        Convert per-layer pruning amounts into integer channel counts with exact
+        global channel-budget matching whenever feasible.
+
+        This enforces pruning on *real channel counts*:
+          total_pruned = round(target_ratio * total_prunable_channels)
+        rather than relying on per-layer float amounts + floor, which can drift.
+        """
+        if not layer_names:
+            return {}
+
+        min_amount = float(getattr(self.config, "pruning_min_per_layer", 0.0))
+        max_amount = float(getattr(self.config, "pruning_max_per_layer", 1.0))
+        cap_amount = float(getattr(self.config, "pruning_max_per_layer_sparsity_cap", 1.0))
+
+        min_amount = max(0.0, min(1.0, min_amount))
+        max_amount = max(0.0, min(1.0, max_amount))
+        cap_amount = max(0.0, min(1.0, cap_amount))
+        if max_amount < min_amount:
+            max_amount = min_amount
+
+        raw_counts: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        min_counts: Dict[str, int] = {}
+        max_counts: Dict[str, int] = {}
+
+        total_channels = 0
+        for ln in layer_names:
+            n = int(layer_num_channels.get(ln, 0))
+            if n <= 0:
+                continue
+            total_channels += n
+            amount = float(per_layer_amounts.get(ln, target_ratio))
+            amount = max(min_amount, min(max_amount, amount))
+            raw = amount * n
+            lo = int(np.floor(min_amount * n + 1e-12))
+            hi = int(np.floor(min(max_amount, cap_amount) * n + 1e-12))
+            hi = max(lo, min(hi, n))
+            c0 = int(np.floor(raw + 1e-12))
+            c0 = max(lo, min(c0, hi))
+
+            raw_counts[ln] = raw
+            counts[ln] = c0
+            min_counts[ln] = lo
+            max_counts[ln] = hi
+
+        if total_channels <= 0:
+            return counts
+
+        target_total = int(round(float(target_ratio) * float(total_channels)))
+        min_total = int(sum(min_counts.values()))
+        max_total = int(sum(max_counts.values()))
+        target_total = max(min_total, min(target_total, max_total))
+
+        current_total = int(sum(counts.values()))
+        if current_total < target_total:
+            deficit = int(target_total - current_total)
+            # Add in descending fractional remainder order first.
+            add_order = sorted(
+                counts.keys(),
+                key=lambda ln: (
+                    float(raw_counts.get(ln, 0.0) - np.floor(raw_counts.get(ln, 0.0))),
+                    float(raw_counts.get(ln, 0.0)),
+                    int(layer_num_channels.get(ln, 0)),
+                    ln,
+                ),
+                reverse=True,
+            )
+            while deficit > 0:
+                progressed = False
+                for ln in add_order:
+                    if deficit <= 0:
+                        break
+                    room = int(max_counts[ln] - counts[ln])
+                    if room <= 0:
+                        continue
+                    counts[ln] += 1
+                    deficit -= 1
+                    progressed = True
+                if not progressed:
+                    break
+        elif current_total > target_total:
+            excess = int(current_total - target_total)
+            # Remove from smallest fractional remainder first.
+            drop_order = sorted(
+                counts.keys(),
+                key=lambda ln: (
+                    float(raw_counts.get(ln, 0.0) - np.floor(raw_counts.get(ln, 0.0))),
+                    float(raw_counts.get(ln, 0.0)),
+                    int(layer_num_channels.get(ln, 0)),
+                    ln,
+                ),
+            )
+            while excess > 0:
+                progressed = False
+                for ln in drop_order:
+                    if excess <= 0:
+                        break
+                    room = int(counts[ln] - min_counts[ln])
+                    if room <= 0:
+                        continue
+                    counts[ln] -= 1
+                    excess -= 1
+                    progressed = True
+                if not progressed:
+                    break
+
+        return counts
+
     def _run_cluster_aware_pruning(
         self,
         model: nn.Module,
@@ -1199,36 +3410,113 @@ class ClusterAnalysisExperiment:
         method: str,
     ) -> Dict[str, Any]:
         """
-        Apply cluster-aware pruning using the paper strategy (halo score + constraints).
+        Apply cluster-aware pruning using a halo-augmented score plus structured constraints.
 
         Returns a pipeline-like dict with:
           - masks: {layer_name: [C] mask}
           - stats: {layer_name: mask stats}
         Also stores a pruned-by-cluster summary under self.pruning_cluster_distributions.
         """
-        from ..pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig
+        from ..pruning.strategies.cluster_aware import (
+            ClusterAwarePruning,
+            ClusterAwarePruningConfig,
+            ClusterAwareStratifiedPruning,
+        )
         from ..services.mask_ops import MaskOperations
 
         # Base config
         cfg = ClusterAwarePruningConfig(amount=float(ratio), structured=True)
 
-        # Variants for ablations / controls
-        if method == "cluster_aware_no_halo":
+        # Allow external workflows (e.g., hyperparameter sweeps) to override score weights via config.
+        cfg.alpha = float(self.config.cluster_aware_alpha)
+        cfg.beta = float(self.config.cluster_aware_beta)
+        cfg.gamma = float(self.config.cluster_aware_gamma)
+        cfg.lambda_halo = float(self.config.cluster_aware_lambda_halo)
+        cfg.protect_critical_frac = float(self.config.cluster_aware_protect_critical_frac)
+
+        # Keep halo settings consistent with experiment config unless overridden
+        cfg.halo_percentile = float(self.config.halo_percentile)
+        cfg.use_activation_weight = bool(self.config.use_activation_weight)
+        cfg.n_clusters = int(self.config.n_clusters)
+
+        method_name = str(method).lower()
+        # Normalize CAP aliases so variant logic below can be shared between
+        # RQ-first and I(X;Y)-first versions (e.g., *_ixy methods).
+        base_method = method_name
+        if base_method in ("cap_ixy",):
+            base_method = "cluster_aware"
+        if base_method.endswith("_ixy"):
+            base_method = base_method[:-4]
+        if "_ixy_" in base_method:
+            base_method = base_method.replace("_ixy_", "_")
+
+        # Flag to track whether we should use I(X;Y) instead of RQ
+        use_ixy_metric = method_name.endswith("_ixy") or "_ixy_" in method_name
+
+        # Detect importance-aware clustering mode from method name.
+        # E.g., "cluster_aware_importance_gradient_weighted_ixy" -> clustering_override = "importance_reassign"
+        # The clustering suffix is removed from base_method so variant dispatch works normally.
+        _clustering_override: Optional[str] = None
+        for _csuffix, _cmode in [
+            ("_importance", "importance_reassign"),
+            ("_quantile", "quantile"),
+            ("_score_augmented", "score_augmented"),
+        ]:
+            if _csuffix in base_method:
+                _clustering_override = _cmode
+                base_method = base_method.replace(_csuffix, "")
+                break
+        
+        # Variants for ablations / controls (applied *after* config overrides)
+        if base_method == "cluster_aware_no_halo":
             cfg.lambda_halo = 0.0
-        elif method == "cluster_aware_no_constraints":
+        elif base_method in {
+            "cluster_aware_stratified",
+            "cluster_aware_stratified_nohalo",
+            "cluster_aware_region_stratified",
+        }:
+            # Label-free variants: avoid type-priority heuristics and treat clusters as structure only.
+            cfg.target_redundant = False
+            cfg.synergy_pair_constraint = False
+            if base_method.endswith("_nohalo"):
+                cfg.lambda_halo = 0.0
+        elif base_method in {
+            "cluster_aware_protect_best_score",
+            "cluster_aware_protect_best_rms",
+            "cluster_aware_protect_best_cascade",
+        }:
+            # Protection is applied externally (protected_indices computed per-layer),
+            # so disable internal "protect critical" logic and avoid type-priority heuristics.
             cfg.protect_critical_frac = 1.0
             cfg.target_redundant = False
             cfg.synergy_pair_constraint = False
-        elif method == "cluster_aware_protect_redundant":
+        elif base_method == "cluster_aware_no_constraints":
+            cfg.protect_critical_frac = 1.0
+            cfg.target_redundant = False
+            cfg.synergy_pair_constraint = False
+        elif base_method == "cluster_aware_protect_redundant":
             # Inverted priority (rough proxy): do not preferentially prune redundant/background
             cfg.target_redundant = False
-        elif method == "cluster_aware_annealed":
+        elif method_name in ("cluster_aware_ixy", "cap_ixy"):
+            # Use I(X;Y) instead of RQ in the CAP score
+            # Score_i = α·log(I(X;Y)_i) + β·Syn_i - γ·Red_i + λ·HaloSyn_i
+            use_ixy_metric = True
+        elif base_method == "composite":
+            # Score-only baseline (no halo term, no type constraints).
+            # This branch is primarily used by "composite_ixy" so the
+            # first metric can be switched to I(X;Y) while keeping the
+            # same score-only selection semantics.
+            cfg.lambda_halo = 0.0
+            cfg.protect_critical_frac = 1.0
+            cfg.target_redundant = False
+            cfg.synergy_pair_constraint = False
+        elif base_method == "cluster_aware_annealed":
             # Anneal constraints + mix in a strong low-sparsity baseline (Taylor) so we
             # behave like Taylor/Magnitude at low sparsity and like Cluster-aware at high sparsity.
             #
             # anneal_w(r)=0 below start, 1 above end.
-            start = float(getattr(self.config, "cluster_aware_anneal_start", 0.70))
-            end = float(getattr(self.config, "cluster_aware_anneal_end", 0.90))
+            start = float(self.config.cluster_aware_anneal_start)
+            end = float(self.config.cluster_aware_anneal_end)
             if end <= start:
                 end = start + 1e-6
             if ratio <= start:
@@ -1246,18 +3534,6 @@ class ClusterAnalysisExperiment:
             cfg.target_redundant = bool(w_anneal >= 0.5)
             cfg.synergy_pair_constraint = bool(w_anneal >= 0.5)
 
-        # Allow paper scripts / SLURM jobs to sweep score weights via config overrides
-        cfg.alpha = float(getattr(self.config, "cluster_aware_alpha", cfg.alpha))
-        cfg.beta = float(getattr(self.config, "cluster_aware_beta", cfg.beta))
-        cfg.gamma = float(getattr(self.config, "cluster_aware_gamma", cfg.gamma))
-        cfg.lambda_halo = float(getattr(self.config, "cluster_aware_lambda_halo", cfg.lambda_halo))
-        cfg.protect_critical_frac = float(getattr(self.config, "cluster_aware_protect_critical_frac", cfg.protect_critical_frac))
-
-        # Keep halo settings consistent with experiment config unless overridden
-        cfg.halo_percentile = float(getattr(self.config, "halo_percentile", cfg.halo_percentile))
-        cfg.use_activation_weight = bool(getattr(self.config, "use_activation_weight", cfg.use_activation_weight))
-        cfg.n_clusters = int(getattr(self.config, "n_clusters", cfg.n_clusters))
-
         masks: Dict[str, torch.Tensor] = {}
         stats: Dict[str, Any] = {}
 
@@ -1265,7 +3541,10 @@ class ClusterAnalysisExperiment:
         by_type_pruned: Dict[str, int] = {}
         by_type_total: Dict[str, int] = {}
 
-        layer_names = [nm for nm, _ in self.layers]
+        # Use *all* analyzed layers for halo "next-layer" selection, but only prune the
+        # subset of layers passed via `layer_modules` (e.g., pointwise-only for MobileNet).
+        layer_names_all = [nm for nm, _ in self.layers]
+        prunable_set = set(layer_modules.keys())
         module_map = dict(model.named_modules())
 
         # ------------------------------------------------------------------
@@ -1279,16 +3558,18 @@ class ClusterAnalysisExperiment:
         # we compute the per-layer cluster-aware scores first, then allocate per
         # layer amounts from those scores.
         # ------------------------------------------------------------------
-        distribution = getattr(self.config, "pruning_distribution", "uniform")
-        min_amount = float(getattr(self.config, "pruning_min_per_layer", 0.0))
-        max_amount = float(getattr(self.config, "pruning_max_per_layer", 0.95))
+        distribution = str(self.config.pruning_distribution)
+        min_amount = float(self.config.pruning_min_per_layer)
+        max_amount = float(self.config.pruning_max_per_layer)
 
         # First pass: compute per-layer cluster-aware scores (no pruning yet)
         layer_scores: Dict[str, torch.Tensor] = {}
         layer_pruners: Dict[str, "ClusterAwarePruning"] = {}
         layer_num_channels: Dict[str, int] = {}
 
-        for idx, layer_name in enumerate(layer_names):
+        for idx, layer_name in enumerate(layer_names_all):
+            if prunable_set and (layer_name not in prunable_set):
+                continue
             layer = module_map.get(layer_name)
             if layer is None or not hasattr(layer, "weight") or layer.weight is None:
                 continue
@@ -1299,8 +3580,8 @@ class ClusterAnalysisExperiment:
             # Pick the next *weight-connected* layer by matching channel dimensions (same logic as halo analysis).
             src_out = int(layer.weight.shape[0])
             next_layer_name = None
-            for j in range(idx + 1, len(layer_names)):
-                cand_name = layer_names[j]
+            for j in range(idx + 1, len(layer_names_all)):
+                cand_name = layer_names_all[j]
                 cand_layer = module_map.get(cand_name)
                 if cand_layer is None or not hasattr(cand_layer, "weight"):
                     continue
@@ -1328,11 +3609,104 @@ class ClusterAnalysisExperiment:
                 halo_percentile=cfg.halo_percentile,
                 use_activation_weight=cfg.use_activation_weight,
             )
+            # Variant: use HaloLP (propagated LP) as the halo term instead of HaloSyn.
+            # HaloLP is computed during `run_halo_analysis` and stored in layer_metrics[layer]["halo_lp"].
+            if base_method == "cluster_aware_halo_lp":
+                try:
+                    halo_lp = pre_metrics.get("halo_lp", None)
+                    if halo_lp is not None:
+                        halo_lp = np.asarray(halo_lp, dtype=np.float64).reshape(-1)[:n_channels]
+                        if halo_lp.size > 0:
+                            halo_syn = halo_lp
+                except Exception:
+                    pass
 
-            pruner = ClusterAwarePruning(
+            # Prepare metrics for the pruner - optionally use I(X;Y) instead of RQ
+            pruner_metrics = pre_metrics.copy() if hasattr(pre_metrics, 'copy') else dict(pre_metrics)
+            if use_ixy_metric:
+                # Replace RQ with I(X;Y) (mi_in_proxy) for the CAP score
+                ixy_values = pre_metrics.get("mi_in_proxy")
+                if ixy_values is not None:
+                    pruner_metrics = dict(pre_metrics)
+                    pruner_metrics["rq"] = ixy_values  # ClusterAwarePruning uses "rq" key internally
+                    logger.debug(f"  {layer_name}: Using I(X;Y) instead of RQ for CAP score")
+                else:
+                    logger.warning(f"  {layer_name}: mi_in_proxy not available, using RQ")
+
+            # Optional: replace k-means type labels with a simple region partition
+            # (median split on first_metric × synergy) for label-free ablations.
+            pruner_labels = labels
+            pruner_type_mapping = type_mapping
+            if base_method == "cluster_aware_region_stratified":
+                try:
+                    first_metric = pruner_metrics.get("rq", None)
+                    syn_metric = pruner_metrics.get("synergy", None)
+                    if first_metric is not None and syn_metric is not None:
+                        fm = np.asarray(first_metric, dtype=np.float64).reshape(-1)[:n_channels]
+                        syn = np.asarray(syn_metric, dtype=np.float64).reshape(-1)[:n_channels]
+                        log_fm = np.log(np.clip(fm, 1e-10, None))
+                        m0 = float(np.median(log_fm)) if log_fm.size else 0.0
+                        m1 = float(np.median(syn)) if syn.size else 0.0
+                        hi_fm = log_fm >= m0
+                        hi_syn = syn >= m1
+                        # 0: hi_fm+hi_syn, 1: hi_fm+lo_syn, 2: lo_fm+hi_syn, 3: lo_fm+lo_syn
+                        pruner_labels = (2 * (~hi_fm).astype(int) + (~hi_syn).astype(int)).astype(int)
+                        pruner_type_mapping = {
+                            0: "hi_fm_hi_syn",
+                            1: "hi_fm_lo_syn",
+                            2: "lo_fm_hi_syn",
+                            3: "lo_fm_lo_syn",
+                        }
+                except Exception:
+                    pruner_labels = labels
+                    pruner_type_mapping = type_mapping
+
+            # Importance-aware clustering overrides: re-cluster with importance-based
+            # type assignment at pruning time (uses the same k-means geometry but
+            # reassigns types by composite score, or uses quantile partitioning).
+            if _clustering_override is not None:
+                try:
+                    _rq = np.asarray(pruner_metrics.get("rq", []), dtype=np.float64).reshape(-1)[:n_channels]
+                    _red = np.asarray(pruner_metrics.get("redundancy", []), dtype=np.float64).reshape(-1)[:n_channels]
+                    _syn = np.asarray(pruner_metrics.get("synergy", []), dtype=np.float64).reshape(-1)[:n_channels]
+                    _n = min(len(_rq), len(_red), len(_syn), n_channels)
+                    if _n >= 4:
+                        _rq, _red, _syn = _rq[:_n], _red[:_n], _syn[:_n]
+                        _log_rq = np.log(np.clip(_rq, 1e-10, None))
+
+                        def _n01(x):
+                            lo, hi = x.min(), x.max()
+                            return (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
+
+                        _imp = float(cfg.alpha) * _n01(_log_rq) + float(cfg.beta) * _n01(_syn) - float(cfg.gamma) * _n01(_red)
+
+                        _clusterer = MetricSpaceClustering(
+                            n_clusters=cfg.n_clusters,
+                            seed=self.config.seed,
+                            type_mapping_mode=str(self.config.type_mapping_mode).lower(),
+                        )
+                        _cr = _clusterer.fit(
+                            _rq, _red, _syn, layer_name,
+                            importance_scores=_imp,
+                            clustering_mode=_clustering_override,
+                        )
+                        pruner_labels = _cr.labels[:n_channels]
+                        pruner_type_mapping = _cr.type_mapping
+                except Exception:
+                    pass  # fall back to pre-computed clusters
+
+            PrunerCls = ClusterAwarePruning
+            if base_method in {
+                "cluster_aware_stratified",
+                "cluster_aware_stratified_nohalo",
+                "cluster_aware_region_stratified",
+            }:
+                PrunerCls = ClusterAwareStratifiedPruning
+
+            pruner = PrunerCls(
                 cfg,
-                precomputed_metrics=pre_metrics,
-                precomputed_clusters={"labels": labels, "type_mapping": type_mapping},
+                precomputed_metrics=pruner_metrics,
+                precomputed_clusters={"labels": pruner_labels, "type_mapping": pruner_type_mapping},
                 precomputed_halos={"halo_syn": halo_syn},
             )
 
@@ -1344,39 +3718,51 @@ class ClusterAnalysisExperiment:
                 layer_name=layer_name,
             )
 
-            # Optional annealed mixing: blend cluster-aware score with Taylor at low sparsity.
-            if method == "cluster_aware_annealed":
-                # Ensure Taylor cache exists (computed once; reused across ratios/methods).
+            # ------------------------------------------------------------------
+            # METHOD VARIANTS: Different ways to combine cluster-aware with Taylor
+            # ------------------------------------------------------------------
+            
+            # Helper: normalize tensor to [0,1]
+            def _minmax(x: "torch.Tensor") -> "torch.Tensor":
+                x = x.float()
+                if x.numel() == 0:
+                    return x
+                mn = float(x.min().item())
+                mx = float(x.max().item())
+                if mx - mn < 1e-12:
+                    return torch.zeros_like(x)
+                return (x - mn) / (mx - mn)
+            
+            # Helper: get Taylor scores for this layer
+            def _get_taylor_scores() -> "torch.Tensor":
                 if "taylor" not in self._pruning_score_cache:
                     try:
                         self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(self.model)
                     except Exception:
                         self._pruning_score_cache["taylor"] = {}
-
                 t_cpu = (self._pruning_score_cache.get("taylor", {}) or {}).get(layer_name)
                 if t_cpu is None or (hasattr(t_cpu, "numel") and int(t_cpu.numel()) != int(n_channels)):
-                    # Fallback to weight magnitude if Taylor is unavailable/mismatched
                     w_flat = layer.weight.detach().view(n_channels, -1)
-                    t = w_flat.norm(p=2, dim=1).detach().cpu()
-                else:
-                    t = t_cpu.detach().cpu()
-
-                # Normalize both to [0,1] per-layer for stable mixing
-                def _minmax(x: "torch.Tensor") -> "torch.Tensor":
-                    x = x.float()
-                    if x.numel() == 0:
-                        return x
-                    mn = float(x.min().item())
-                    mx = float(x.max().item())
-                    if mx - mn < 1e-12:
-                        return torch.zeros_like(x)
-                    return (x - mn) / (mx - mn)
-
+                    return w_flat.norm(p=2, dim=1).detach().cpu()
+                return t_cpu.detach().cpu()
+            
+            # Compute depth fraction for depth-adaptive methods
+            depth_frac = float(idx) / max(1, len(layer_names_all) - 1)
+            
+            # ------------------------------------------------------------------
+            # OPTION 1: cluster_aware (pure) - no modification needed, use scores as-is
+            # ------------------------------------------------------------------
+            
+            # ------------------------------------------------------------------
+            # OPTION 2: cluster_aware_annealed - blend with Taylor based on sparsity
+            # ------------------------------------------------------------------
+            if base_method == "cluster_aware_annealed":
+                t = _get_taylor_scores()
                 s_ca = _minmax(scores.detach().cpu())
                 s_t = _minmax(t)
 
-                start = float(getattr(self.config, "cluster_aware_anneal_start", 0.70))
-                end = float(getattr(self.config, "cluster_aware_anneal_end", 0.90))
+                start = float(self.config.cluster_aware_anneal_start)
+                end = float(self.config.cluster_aware_anneal_end)
                 if end <= start:
                     end = start + 1e-6
                 if ratio <= start:
@@ -1388,6 +3774,172 @@ class ClusterAnalysisExperiment:
 
                 mixed = (1.0 - w_anneal) * s_t + w_anneal * s_ca
                 scores = mixed.to(device=scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 3: cluster_aware_taylor_blend - add Taylor as weighted component
+            # score = (1-w)*cluster_aware + w*taylor (constant weight, not sparsity-dependent)
+            # ------------------------------------------------------------------
+            elif base_method == "cluster_aware_taylor_blend":
+                t = _get_taylor_scores()
+                s_ca = _minmax(scores.detach().cpu())
+                s_t = _minmax(t)
+                
+                w_taylor = float(self.config.cluster_aware_taylor_weight)
+                mixed = (1.0 - w_taylor) * s_ca + w_taylor * s_t
+                scores = mixed.to(device=scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 4: cluster_aware_depth_adaptive - per-layer score weight adjustment
+            # Early layers: more conservative (protect more)
+            # Late layers: more aggressive (target redundancy more)
+            # ------------------------------------------------------------------
+            elif base_method == "cluster_aware_depth_adaptive":
+                early_frac = float(self.config.cluster_aware_early_layer_frac)
+                
+                if depth_frac < early_frac:
+                    # Early layers: use early-layer weights
+                    alpha_adj = float(self.config.cluster_aware_early_alpha)
+                    gamma_adj = float(self.config.cluster_aware_early_gamma)
+                else:
+                    # Late layers: interpolate toward late-layer weights
+                    t_interp = (depth_frac - early_frac) / (1.0 - early_frac + 1e-6)
+                    alpha_adj = (1 - t_interp) * float(self.config.cluster_aware_early_alpha) + \
+                                t_interp * float(self.config.cluster_aware_late_alpha)
+                    gamma_adj = (1 - t_interp) * float(self.config.cluster_aware_early_gamma) + \
+                                t_interp * float(self.config.cluster_aware_late_gamma)
+                
+                # Recompute scores with adjusted weights
+                # Get raw metrics
+                lm = pruner_metrics
+                rq = np.asarray(lm.get("rq", lm.get("rayleigh_quotient", [])), dtype=np.float64).reshape(-1)
+                red = np.asarray(lm.get("redundancy", []), dtype=np.float64).reshape(-1)
+                syn = np.asarray(lm.get("synergy", []), dtype=np.float64).reshape(-1)
+                
+                n = min(n_channels, len(rq), len(red), len(syn))
+                if n > 0:
+                    rq = rq[:n]
+                    red = red[:n]
+                    syn = syn[:n]
+                    
+                    def _norm(x):
+                        x = np.asarray(x, dtype=np.float64)
+                        mn, mx = x.min(), x.max()
+                        if mx - mn < 1e-12:
+                            return np.zeros_like(x)
+                        return (x - mn) / (mx - mn)
+                    
+                    log_rq = np.log(np.clip(rq, 1e-10, None))
+                    score_np = (alpha_adj * _norm(log_rq) +
+                                float(cfg.beta) * _norm(syn) -
+                                gamma_adj * _norm(red) +
+                                float(cfg.lambda_halo) * _norm(halo_syn[:n]))
+                    
+                    scores = torch.from_numpy(score_np).float().to(scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 5: cluster_aware_gradient_weighted - generalized Taylor
+            # Compute gradient of loss w.r.t. our cluster-aware score, then weight by it
+            # This is: importance = |∂L/∂score| * score (like Taylor but for our score)
+            # ------------------------------------------------------------------
+            elif base_method == "cluster_aware_gradient_weighted":
+                # Get Taylor-like sensitivity (gradient * activation) for each channel
+                t = _get_taylor_scores()
+                
+                # The idea: Taylor measures |grad * activation|
+                # We measure: |grad * activation| * (cluster_aware_score / activation)
+                # = |grad| * cluster_aware_score
+                # This weights our structural score by the loss sensitivity
+                
+                s_ca = scores.detach().cpu().float()
+                t_scores = t.float()
+                
+                # Normalize both
+                s_ca_norm = _minmax(s_ca)
+                t_norm = _minmax(t_scores)
+                
+                # Gradient-weighted score: combine Taylor sensitivity with cluster-aware structure
+                # Higher Taylor = more loss-sensitive, higher CA = more structurally important
+                # Product gives channels that are both loss-sensitive AND structurally important
+                gradient_weighted = torch.sqrt(t_norm * s_ca_norm + 1e-8)  # Geometric mean
+                
+                scores = gradient_weighted.to(device=scores.device)
+            
+            # ------------------------------------------------------------------
+            # OPTION 6: cluster_aware_adaptive - automatic hyperparameter tuning
+            # Adapts protection and weights based on cluster distribution and layer depth
+            # ------------------------------------------------------------------
+            elif base_method == "cluster_aware_adaptive":
+                # Compute cluster distribution for this network
+                total_by_type = {'critical': 0, 'synergistic': 0, 'redundant': 0, 'background': 0}
+                for ln in layer_names_all:
+                    cr = self.cluster_results.get(ln, {})
+                    type_counts = cr.get('type_counts', {})
+                    for t_name in total_by_type:
+                        total_by_type[t_name] += type_counts.get(t_name, 0)
+                
+                total_channels = sum(total_by_type.values())
+                if total_channels > 0:
+                    safe_frac = (total_by_type['redundant'] + total_by_type['background']) / total_channels
+                else:
+                    safe_frac = 0.5
+                
+                # Adaptive protection based on target sparsity
+                if ratio <= safe_frac:
+                    adaptive_protect = 0.0  # Can prune without touching critical
+                else:
+                    overshoot = (ratio - safe_frac) / (1.0 - safe_frac + 1e-6)
+                    adaptive_protect = 0.5 * (1.0 - overshoot)
+                    adaptive_protect = max(0.0, min(0.7, adaptive_protect))
+                
+                # Override protection for this layer
+                cfg.protect_critical_frac = adaptive_protect
+                
+                # Adaptive weights based on layer depth (smooth interpolation)
+                if depth_frac < 0.3:
+                    t = depth_frac / 0.3
+                    alpha_adj = 0.6 + 0.2 * t
+                    beta_adj = 0.2 + 0.2 * t
+                    gamma_adj = 0.2 + 0.1 * t
+                elif depth_frac < 0.7:
+                    t = (depth_frac - 0.3) / 0.4
+                    alpha_adj = 0.8 + 0.2 * t
+                    beta_adj = 0.4 + 0.3 * t
+                    gamma_adj = 0.3 + 0.1 * t
+                else:
+                    t = (depth_frac - 0.7) / 0.3
+                    alpha_adj = 1.0 + 0.3 * t
+                    beta_adj = 0.7 + 0.3 * t
+                    gamma_adj = 0.4 + 0.2 * t
+                
+                # Recompute scores with adaptive weights
+                lm = pruner_metrics
+                rq = np.asarray(lm.get("rq", lm.get("rayleigh_quotient", [])), dtype=np.float64).reshape(-1)
+                red = np.asarray(lm.get("redundancy", []), dtype=np.float64).reshape(-1)
+                syn = np.asarray(lm.get("synergy", []), dtype=np.float64).reshape(-1)
+                
+                n = min(n_channels, len(rq), len(red), len(syn))
+                if n > 0:
+                    rq = rq[:n]
+                    red = red[:n]
+                    syn = syn[:n]
+                    
+                    def _norm(x):
+                        x = np.asarray(x, dtype=np.float64)
+                        mn, mx = x.min(), x.max()
+                        if mx - mn < 1e-12:
+                            return np.zeros_like(x)
+                        return (x - mn) / (mx - mn)
+                    
+                    log_rq = np.log(np.clip(rq, 1e-10, None))
+                    # Adaptive lambda_halo based on depth (more halo influence in late layers)
+                    lambda_h = 0.1 + 0.7 * depth_frac
+                    
+                    score_np = (alpha_adj * _norm(log_rq) +
+                                beta_adj * _norm(syn) -
+                                gamma_adj * _norm(red) +
+                                lambda_h * _norm(halo_syn[:n]))
+                    
+                    scores = torch.from_numpy(score_np).float().to(scores.device)
 
             layer_scores[layer_name] = scores.detach()
             layer_pruners[layer_name] = pruner
@@ -1401,9 +3953,10 @@ class ClusterAnalysisExperiment:
                 target_sparsity=float(ratio),
                 min_amount=float(min_amount),
                 max_amount=float(max_amount),
+                max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
             )
             # Only include layers we actually scored
-            scored_names = [nm for nm in layer_names if nm in layer_scores]
+            scored_names = [nm for nm in layer_names_all if nm in layer_scores]
             per_layer_amounts = manager.compute_distribution(model, scored_names, layer_scores=layer_scores)
         except Exception as exc:
             logger.warning(
@@ -1415,7 +3968,31 @@ class ClusterAnalysisExperiment:
             per_layer_amounts = {nm: clipped for nm in layer_scores.keys()}
 
         # Second pass: apply pruning using per-layer allocated amounts
-        for layer_name in layer_names:
+        strict_global_budget = bool(getattr(self.config, "pruning_enforce_exact_global_channel_budget", False))
+        scored_layer_names = [nm for nm in layer_names_all if nm in layer_scores and nm in layer_pruners]
+        per_layer_prune_counts: Dict[str, int] = {}
+        if strict_global_budget:
+            per_layer_prune_counts = self._allocate_exact_channel_budget(
+                layer_names=scored_layer_names,
+                layer_num_channels=layer_num_channels,
+                per_layer_amounts=per_layer_amounts,
+                target_ratio=float(ratio),
+            )
+            total_channels = int(sum(int(layer_num_channels.get(nm, 0)) for nm in scored_layer_names))
+            target_total = int(round(float(ratio) * float(total_channels))) if total_channels > 0 else 0
+            achieved_total = int(sum(int(per_layer_prune_counts.get(nm, 0)) for nm in scored_layer_names))
+            logger.info(
+                "Strict global channel budget (%s): target=%d/%d (%.4f), allocated=%d/%d (%.4f)",
+                method,
+                target_total,
+                total_channels,
+                (float(target_total) / float(total_channels)) if total_channels > 0 else 0.0,
+                achieved_total,
+                total_channels,
+                (float(achieved_total) / float(total_channels)) if total_channels > 0 else 0.0,
+            )
+
+        for layer_name in layer_names_all:
             layer = module_map.get(layer_name)
             if layer is None or not hasattr(layer, "weight") or layer.weight is None:
                 continue
@@ -1423,8 +4000,11 @@ class ClusterAnalysisExperiment:
                 continue
 
             n_channels = int(layer_num_channels.get(layer_name, layer.weight.shape[0]))
-            amount = float(per_layer_amounts.get(layer_name, float(ratio)))
-            n_prune = int(n_channels * amount)
+            if strict_global_budget and layer_name in per_layer_prune_counts:
+                n_prune = int(per_layer_prune_counts[layer_name])
+            else:
+                amount = float(per_layer_amounts.get(layer_name, float(ratio)))
+                n_prune = int(n_channels * amount)
             if n_prune <= 0:
                 masks[layer_name] = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
                 stats[layer_name] = MaskOperations.get_mask_statistics(masks[layer_name])
@@ -1438,7 +4018,101 @@ class ClusterAnalysisExperiment:
 
             pruner = layer_pruners[layer_name]
             scores = layer_scores[layer_name].to(device=layer.weight.device)
-            prune_idx = pruner.select_channels_to_prune(scores, n_prune, layer_name=layer_name)
+            protected_idx = None
+            if base_method == "cluster_aware_bottleneck_protect":
+                try:
+                    b = self.layer_metrics.get(layer_name, {}).get("bottleneck_in_max", None)
+                    if b is not None:
+                        b = np.asarray(b, dtype=np.float64).reshape(-1)[:n_channels]
+                        pct = float(getattr(self.config, "bottleneck_protect_percentile", 95.0))
+                        thr = float(np.percentile(b, pct))
+                        protected_idx = np.where(b >= thr)[0].astype(int).tolist()
+                except Exception:
+                    protected_idx = None
+            elif base_method == "cluster_aware_protect_best_score":
+                # Protect the cluster with the highest mean pruning score (label-free).
+                try:
+                    lab = labels[:n_channels]
+                    best_cid = None
+                    best_val = None
+                    for cid in np.unique(lab):
+                        cid = int(cid)
+                        idxs = np.where(lab == cid)[0]
+                        if idxs.size == 0:
+                            continue
+                        v = float(scores.detach().cpu().numpy().reshape(-1)[idxs].mean())
+                        if best_val is None or v > best_val:
+                            best_val = v
+                            best_cid = cid
+                    if best_cid is not None:
+                        idxs = np.where(lab == int(best_cid))[0]
+                        # Allow pruning at most p_C of the chosen cluster (protect the rest).
+                        p_c = float(getattr(self.config, "cluster_aware_protect_critical_frac", 0.3))
+                        max_prune = int(np.floor(float(len(idxs)) * p_c))
+                        idxs_sorted = sorted((int(i) for i in idxs.tolist()), key=lambda i: float(scores[i].item()))
+                        protected_idx = idxs_sorted[max_prune:]
+                except Exception:
+                    protected_idx = None
+            elif base_method == "cluster_aware_protect_best_rms":
+                # Protect the cluster with the highest mean activation RMS (proxy for "usage").
+                try:
+                    lab = labels[:n_channels]
+                    rms = self.layer_metrics.get(layer_name, {}).get("activation_rms", None)
+                    if rms is not None:
+                        rms = np.asarray(rms, dtype=np.float64).reshape(-1)[:n_channels]
+                        best_cid = None
+                        best_val = None
+                        for cid in np.unique(lab):
+                            cid = int(cid)
+                            idxs = np.where(lab == cid)[0]
+                            if idxs.size == 0:
+                                continue
+                            v = float(rms[idxs].mean())
+                            if best_val is None or v > best_val:
+                                best_val = v
+                                best_cid = cid
+                        if best_cid is not None:
+                            idxs = np.where(lab == int(best_cid))[0]
+                            p_c = float(getattr(self.config, "cluster_aware_protect_critical_frac", 0.3))
+                            max_prune = int(np.floor(float(len(idxs)) * p_c))
+                            idxs_sorted = sorted((int(i) for i in idxs.tolist()), key=lambda i: float(scores[i].item()))
+                            protected_idx = idxs_sorted[max_prune:]
+                except Exception:
+                    protected_idx = None
+            elif base_method == "cluster_aware_protect_best_cascade":
+                # Oracle-style: protect whichever semantic type causes the largest cascade drop.
+                # Uses precomputed cascade_results for the unpruned model.
+                try:
+                    cas = (self.cascade_results.get(layer_name, {}) or {})
+                    if isinstance(cas, dict) and cas:
+                        best_type = None
+                        best_drop = None
+                        for t_name, stats_t in cas.items():
+                            if not isinstance(stats_t, dict):
+                                continue
+                            drop = float(stats_t.get("accuracy_drop", 0.0))
+                            if best_drop is None or drop > best_drop:
+                                best_drop = drop
+                                best_type = str(t_name)
+                        if best_type is not None:
+                            type_to_id = {str(v): int(k) for k, v in (type_mapping or {}).items()}
+                            cid = type_to_id.get(str(best_type), None)
+                            if cid is not None:
+                                lab = labels[:n_channels]
+                                idxs = np.where(lab == int(cid))[0]
+                                p_c = float(getattr(self.config, "cluster_aware_protect_critical_frac", 0.3))
+                                max_prune = int(np.floor(float(len(idxs)) * p_c))
+                                idxs_sorted = sorted((int(i) for i in idxs.tolist()), key=lambda i: float(scores[i].item()))
+                                protected_idx = idxs_sorted[max_prune:]
+                except Exception:
+                    protected_idx = None
+
+            prune_idx = pruner.select_channels_to_prune(
+                scores,
+                n_prune,
+                layer_name=layer_name,
+                protected_indices=protected_idx,
+            )
 
             mask = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
             if prune_idx:
@@ -1463,13 +4137,225 @@ class ClusterAnalysisExperiment:
                     pruned = int((~mask.detach().cpu().numpy().astype(bool))[idxs].sum())
                     by_type_pruned[ctype] = by_type_pruned.get(ctype, 0) + pruned
 
-        # Store summary for paper figures
+        # Store summary for downstream plots/reports
         self.pruning_cluster_distributions.setdefault(method, {})
         self.pruning_cluster_distributions[method][float(ratio)] = {
             "pruned": by_type_pruned,
             "total": by_type_total,
         }
 
+        return {"masks": masks, "stats": stats}
+
+    def _run_type_constrained_pruning(
+        self,
+        model: "nn.Module",
+        *,
+        layer_modules: Dict[str, "nn.Module"],
+        ratio: float,
+        method: str,
+    ) -> Dict[str, Any]:
+        """
+        Hybrid pruning: select channels using the cluster-aware *constraints* (type protection + optional
+        redundancy prioritization), but rank channels using an external score.
+
+        Implemented methods:
+        - "lp_with_constraints": rank by loss_proxy (LP), but protect critical types.
+        - "type_quota_taylor": rank by Taylor, but protect critical types.
+
+        Note: this intentionally avoids "scalar blending" tricks; it is a stable division of labor:
+          - structure decides *how many/which types* are safe to prune
+          - a strong scalar decides *which channels* within those types
+        """
+        import torch
+        import numpy as np
+
+        from ..pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig
+        from ..services.mask_ops import MaskOperations
+
+        # Build a constraint-only cluster-aware config.
+        cfg = ClusterAwarePruningConfig(amount=float(ratio), structured=True)
+        cfg.protect_critical_frac = float(self.config.cluster_aware_protect_critical_frac)
+        cfg.target_redundant = True  # prioritize pruning redundant/background first
+        cfg.synergy_pair_constraint = False
+        cfg.lambda_halo = 0.0  # score itself comes from the external signal
+
+        # Score source
+        score_kind = str(method)
+        if score_kind not in {"lp_with_constraints", "type_quota_taylor", "outred_with_constraints"}:
+            raise ValueError(f"Unknown type-constrained method: {method}")
+
+        # Which layers are prunable (respect MobileNet pointwise-only / skip-depthwise filters)
+        prunable_set = set(layer_modules.keys())
+        module_map = dict(model.named_modules())
+        layer_names_all = [nm for nm, _ in self.layers]
+
+        # Precompute per-layer scores on CPU for distribution allocation
+        layer_scores: Dict[str, torch.Tensor] = {}
+        layer_num_channels: Dict[str, int] = {}
+
+        # Taylor cache (computed once on the unpruned base model)
+        taylor_scores_by_layer: Dict[str, torch.Tensor] = {}
+        if score_kind == "type_quota_taylor":
+            if "taylor" not in self._pruning_score_cache:
+                try:
+                    self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(self.model)
+                except Exception:
+                    self._pruning_score_cache["taylor"] = {}
+            taylor_scores_by_layer = self._pruning_score_cache.get("taylor", {}) or {}
+
+        for layer_name in layer_names_all:
+            if prunable_set and (layer_name not in prunable_set):
+                continue
+            layer = module_map.get(layer_name)
+            if layer is None or not hasattr(layer, "weight") or layer.weight is None:
+                continue
+            n_channels = int(layer.weight.shape[0])
+            layer_num_channels[layer_name] = n_channels
+
+            if score_kind == "lp_with_constraints":
+                lm = self.layer_metrics.get(layer_name, {})
+                lp = lm.get("loss_proxy", None)
+                if lp is None:
+                    raise ValueError("lp_with_constraints requires loss_proxy; set compute_loss_proxy=true")
+                s = np.asarray(lp, dtype=np.float64).reshape(-1)[:n_channels]
+                scores = torch.as_tensor(s, dtype=torch.float32)
+            elif score_kind == "outred_with_constraints":
+                lm = self.layer_metrics.get(layer_name, {})
+                outred = lm.get("outred", None)
+                if outred is None:
+                    raise ValueError("outred_with_constraints requires outred; run halo analysis with routing metrics enabled")
+                s = np.asarray(outred, dtype=np.float64).reshape(-1)[:n_channels]
+                # We want to prune HIGH outred (more substitutable). Since ClusterAwarePruning prunes LOW scores,
+                # use the negative overlap as the score.
+                scores = torch.as_tensor(-s, dtype=torch.float32)
+            else:
+                t = taylor_scores_by_layer.get(layer_name)
+                if t is None or (hasattr(t, "numel") and int(t.numel()) != int(n_channels)):
+                    # Fallback to weight magnitude if Taylor unavailable
+                    w_flat = layer.weight.detach().view(n_channels, -1)
+                    scores = w_flat.norm(p=2, dim=1).detach().cpu().float()
+                else:
+                    scores = t.detach().cpu().float()
+
+            layer_scores[layer_name] = scores
+
+        # Allocate per-layer amounts (same logic as cluster-aware; use score-dependent distributions if configured)
+        distribution = str(self.config.pruning_distribution)
+        min_amount = float(self.config.pruning_min_per_layer)
+        max_amount = float(self.config.pruning_max_per_layer)
+
+        try:
+            from ..pruning.distribution import PruningDistributionManager
+
+            manager = PruningDistributionManager(
+                strategy=str(distribution),
+                target_sparsity=float(ratio),
+                min_amount=float(min_amount),
+                max_amount=float(max_amount),
+                max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
+            )
+            scored_names = [nm for nm in layer_names_all if nm in layer_scores]
+            per_layer_amounts = manager.compute_distribution(model, scored_names, layer_scores=layer_scores)
+        except Exception as exc:
+            logger.warning(
+                "Type-constrained pruning: failed to compute distribution '%s' (%s); falling back to uniform",
+                distribution,
+                exc,
+            )
+            clipped = max(min_amount, min(max_amount, float(ratio)))
+            per_layer_amounts = {nm: clipped for nm in layer_scores.keys()}
+
+        masks: Dict[str, torch.Tensor] = {}
+        stats: Dict[str, Any] = {}
+
+        by_type_pruned: Dict[str, int] = {}
+        by_type_total: Dict[str, int] = {}
+
+        # Apply pruning layer-by-layer
+        strict_global_budget = bool(getattr(self.config, "pruning_enforce_exact_global_channel_budget", False))
+        scored_layer_names = [nm for nm in layer_names_all if nm in layer_scores]
+        per_layer_prune_counts: Dict[str, int] = {}
+        if strict_global_budget:
+            per_layer_prune_counts = self._allocate_exact_channel_budget(
+                layer_names=scored_layer_names,
+                layer_num_channels=layer_num_channels,
+                per_layer_amounts=per_layer_amounts,
+                target_ratio=float(ratio),
+            )
+            total_channels = int(sum(int(layer_num_channels.get(nm, 0)) for nm in scored_layer_names))
+            target_total = int(round(float(ratio) * float(total_channels))) if total_channels > 0 else 0
+            achieved_total = int(sum(int(per_layer_prune_counts.get(nm, 0)) for nm in scored_layer_names))
+            logger.info(
+                "Strict global channel budget (%s): target=%d/%d (%.4f), allocated=%d/%d (%.4f)",
+                method,
+                target_total,
+                total_channels,
+                (float(target_total) / float(total_channels)) if total_channels > 0 else 0.0,
+                achieved_total,
+                total_channels,
+                (float(achieved_total) / float(total_channels)) if total_channels > 0 else 0.0,
+            )
+
+        for layer_name in layer_names_all:
+            layer = module_map.get(layer_name)
+            if layer is None or not hasattr(layer, "weight") or layer.weight is None:
+                continue
+            if layer_name not in layer_scores:
+                continue
+
+            n_channels = int(layer_num_channels.get(layer_name, layer.weight.shape[0]))
+            if strict_global_budget and layer_name in per_layer_prune_counts:
+                n_prune = int(per_layer_prune_counts[layer_name])
+            else:
+                amount = float(per_layer_amounts.get(layer_name, float(ratio)))
+                n_prune = int(n_channels * amount)
+            if n_prune <= 0:
+                mask = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
+                masks[layer_name] = mask
+                stats[layer_name] = MaskOperations.get_mask_statistics(mask)
+                continue
+
+            pre_clusters = self.cluster_results.get(layer_name, {})
+            labels = np.asarray(pre_clusters.get("labels", np.zeros(n_channels, dtype=int))).astype(int)
+            type_mapping = pre_clusters.get("type_mapping", {})
+
+            pruner = ClusterAwarePruning(
+                cfg,
+                precomputed_metrics=self.layer_metrics.get(layer_name, {}),
+                precomputed_clusters={"labels": labels, "type_mapping": type_mapping},
+                precomputed_halos={"halo_syn": np.zeros(n_channels, dtype=np.float64)},
+            )
+            # Ensure caches are populated for constraint logic
+            pruner._cluster_cache[layer_name] = {"labels": labels, "type_mapping": type_mapping}
+            pruner._metrics_cache[layer_name] = self.layer_metrics.get(layer_name, {})
+
+            scores = layer_scores[layer_name].to(device=layer.weight.device)
+            prune_idx = pruner.select_channels_to_prune(scores, n_prune, layer_name=layer_name)
+
+            mask = torch.ones(n_channels, dtype=torch.bool, device=layer.weight.device)
+            if prune_idx:
+                mask[torch.as_tensor(prune_idx, device=layer.weight.device)] = False
+                with torch.no_grad():
+                    layer.weight.data[~mask] = 0.0
+                    if getattr(layer, "bias", None) is not None and layer.bias.data.numel() == n_channels:
+                        layer.bias.data[~mask] = 0.0
+
+            masks[layer_name] = mask
+            stats[layer_name] = MaskOperations.get_mask_statistics(mask)
+
+            # By-type summaries (for reports/diagnostics)
+            labels = labels[: min(len(labels), n_channels)]
+            if isinstance(type_mapping, dict):
+                for cid, ctype in type_mapping.items():
+                    cid_int = int(cid)
+                    idxs = np.where(labels == cid_int)[0]
+                    by_type_total[ctype] = by_type_total.get(ctype, 0) + int(len(idxs))
+                    if len(idxs) > 0:
+                        pruned = int((~mask.detach().cpu().numpy().astype(bool))[idxs].sum())
+                        by_type_pruned[ctype] = by_type_pruned.get(ctype, 0) + pruned
+
+        self.pruning_cluster_distributions.setdefault(method, {})
+        self.pruning_cluster_distributions[method][float(ratio)] = {"pruned": by_type_pruned, "total": by_type_total}
         return {"masks": masks, "stats": stats}
 
     def _zero_batchnorm_from_masks(self, model: nn.Module, masks: Dict[str, torch.Tensor]) -> None:
@@ -1498,7 +4384,8 @@ class ClusterAnalysisExperiment:
         BASELINE:
         - 'random': Random channel selection
         - 'magnitude': Prune lowest activation magnitude (standard baseline)
-        - 'taylor': Prune by gradient-based importance
+        - 'taylor': Prune by weight-based grad×weight saliency (legacy Taylor baseline)
+        - 'taylor_act': Prune by activation-based Taylor saliency E[|a·dL/da|] (recommended)
         
         SINGLE METRICS (prune LOW values = assume low is unimportant):
         - 'rq_low': Prune channels with lowest Rayleigh Quotient
@@ -1631,21 +4518,39 @@ class ClusterAnalysisExperiment:
                     # Compute scores based on method
                     # SINGLE METRICS - prune LOW
                     if method == 'rq_low':
-                        scores = rq_norm  # Low RQ → prune
+                        scores = rq_norm  # Low RQ -> prune
                     elif method == 'redundancy_low':
-                        scores = red_norm  # Low redundancy → prune
+                        scores = red_norm  # Low redundancy -> prune
                     elif method == 'synergy_low':
-                        scores = syn_norm  # Low synergy → prune
+                        scores = syn_norm  # Low synergy -> prune
+                    elif method == 'mi_low':
+                        # MI = 0.5 * log(1 + RQ * ||w||^2) - get from mi_in_proxy
+                        mi = metrics.get('mi_in_proxy', np.zeros(n_ch))
+                        mi_norm = (mi - mi.min()) / (mi.max() - mi.min() + 1e-12)
+                        scores = mi_norm  # Low MI -> prune
+                    elif method == 'lp_low':
+                        # Loss proxy (Fisher importance) - get from loss_proxy
+                        lp = metrics.get('loss_proxy', np.zeros(n_ch))
+                        lp_norm = (lp - lp.min()) / (lp.max() - lp.min() + 1e-12)
+                        scores = lp_norm  # Low LP -> prune
                     
                     # SINGLE METRICS - prune HIGH
                     elif method == 'rq_high':
-                        scores = -rq_norm  # High RQ → prune (invert)
+                        scores = -rq_norm  # High RQ -> prune (invert)
                     elif method == 'redundancy_high':
-                        scores = -red_norm  # High redundancy → prune
+                        scores = -red_norm  # High redundancy -> prune
                     elif method == 'synergy_high':
-                        scores = -syn_norm  # High synergy → prune
+                        scores = -syn_norm  # High synergy -> prune
+                    elif method == 'mi_high':
+                        mi = metrics.get('mi_in_proxy', np.zeros(n_ch))
+                        mi_norm = (mi - mi.min()) / (mi.max() - mi.min() + 1e-12)
+                        scores = -mi_norm  # High MI -> prune
+                    elif method == 'lp_high':
+                        lp = metrics.get('loss_proxy', np.zeros(n_ch))
+                        lp_norm = (lp - lp.min()) / (lp.max() - lp.min() + 1e-12)
+                        scores = -lp_norm  # High LP -> prune
                     elif method == 'magnitude_high':
-                        scores = -mag_norm  # High magnitude → prune
+                        scores = -mag_norm  # High magnitude -> prune
                     
                     # COMPOSITE COMBINATIONS
                     elif method == 'composite':
@@ -1761,6 +4666,59 @@ class ClusterAnalysisExperiment:
                 # Verify pruning: count zeroed channels
                 n_zeroed = (layer.weight.data.view(n_channels, -1).abs().sum(dim=1) == 0).sum().item()
                 logger.debug(f"    {name}: pruned {n_prune} channels, verified {n_zeroed} are zeroed")
+                
+                # ================================================================
+                # TRACK CLUSTER DISTRIBUTION AND METRICS OF PRUNED CHANNELS
+                # ================================================================
+                if clusters is not None and 'types' in clusters:
+                    cluster_types = clusters['types']  # [n_channels] array of type labels
+                    type_names = ['critical', 'synergistic', 'redundant', 'background']
+                    
+                    # Initialize tracking if needed
+                    if method not in self.pruning_cluster_distributions:
+                        self.pruning_cluster_distributions[method] = {}
+                    if str(ratio) not in self.pruning_cluster_distributions[method]:
+                        self.pruning_cluster_distributions[method][str(ratio)] = {
+                            'pruned': {t: 0 for t in type_names},
+                            'total': {t: 0 for t in type_names},
+                            # Track metric values of pruned vs kept channels
+                            'pruned_metrics': {'rq': [], 'redundancy': [], 'synergy': []},
+                            'kept_metrics': {'rq': [], 'redundancy': [], 'synergy': []},
+                        }
+                    
+                    pcd = self.pruning_cluster_distributions[method][str(ratio)]
+                    
+                    # Count total and pruned by type for this layer
+                    for ti, tname in enumerate(type_names):
+                        type_mask = (cluster_types == ti)
+                        n_type_total = int(type_mask.sum()) if hasattr(type_mask, 'sum') else sum(type_mask)
+                        pcd['total'][tname] = pcd['total'].get(tname, 0) + n_type_total
+                        
+                        # Count pruned channels of this type
+                        n_type_pruned = sum(1 for idx in prune_idx if idx < len(cluster_types) and cluster_types[idx] == ti)
+                        pcd['pruned'][tname] = pcd['pruned'].get(tname, 0) + n_type_pruned
+                    
+                    # Track RQ, Redundancy, Synergy values of pruned vs kept
+                    if metrics is not None:
+                        rq_vals = np.array(metrics.get('rq', []))
+                        red_vals = np.array(metrics.get('redundancy', []))
+                        syn_vals = np.array(metrics.get('synergy', []))
+                        
+                        if len(rq_vals) == n_channels:
+                            prune_set = set(prune_idx)
+                            for idx in range(n_channels):
+                                if idx in prune_set:
+                                    pcd['pruned_metrics']['rq'].append(float(rq_vals[idx]))
+                                    if len(red_vals) == n_channels:
+                                        pcd['pruned_metrics']['redundancy'].append(float(red_vals[idx]))
+                                    if len(syn_vals) == n_channels:
+                                        pcd['pruned_metrics']['synergy'].append(float(syn_vals[idx]))
+                                else:
+                                    pcd['kept_metrics']['rq'].append(float(rq_vals[idx]))
+                                    if len(red_vals) == n_channels:
+                                        pcd['kept_metrics']['redundancy'].append(float(red_vals[idx]))
+                                    if len(syn_vals) == n_channels:
+                                        pcd['kept_metrics']['synergy'].append(float(syn_vals[idx]))
                         
             except Exception as e:
                 logger.debug(f"Pruning {name} with {method} failed: {e}")
@@ -1815,6 +4773,53 @@ class ClusterAnalysisExperiment:
         
         return None
     
+    def _type_multiplier_for_layer(
+        self,
+        *,
+        layer_name: str,
+        n_channels: int,
+        multipliers: Dict[str, float],
+        device: "torch.device",
+    ) -> "torch.Tensor":
+        """
+        Build per-output-channel multipliers from this run's cluster assignments.
+
+        Missing layers/channels default to 1.0 so the feature degrades gracefully.
+        """
+        alias = {
+            "critical": "critical",
+            "crit": "critical",
+            "synergistic": "synergistic",
+            "syn": "synergistic",
+            "redundant": "redundant",
+            "red": "redundant",
+            "background": "background",
+            "bg": "background",
+        }
+        safe_mult = {str(k).strip().lower(): float(v) for k, v in (multipliers or {}).items()}
+
+        out = np.ones(int(n_channels), dtype=np.float32)
+        cr = self.cluster_results.get(layer_name, {}) if hasattr(self, "cluster_results") else {}
+        labels = np.asarray(cr.get("labels", []), dtype=np.int64).reshape(-1)
+        type_mapping = cr.get("type_mapping", {}) if isinstance(cr, dict) else {}
+
+        cid_to_type: Dict[int, str] = {}
+        if isinstance(type_mapping, dict):
+            for cid, ctype in type_mapping.items():
+                try:
+                    cid_int = int(cid)
+                except Exception:
+                    continue
+                ctype_norm = alias.get(str(ctype).strip().lower(), str(ctype).strip().lower())
+                cid_to_type[cid_int] = ctype_norm
+
+        n = int(min(out.size, labels.size))
+        for idx in range(n):
+            ctype = cid_to_type.get(int(labels[idx]), "background")
+            out[idx] = float(safe_mult.get(ctype, 1.0))
+
+        return torch.as_tensor(out, dtype=torch.float32, device=device)
+
     def _fine_tune(
         self,
         model: nn.Module,
@@ -1823,15 +4828,13 @@ class ClusterAnalysisExperiment:
         max_batches: Optional[int] = None,
         weight_decay: float = 0.0,
         masks: Optional[Dict[str, torch.Tensor]] = None,
-    ) -> nn.Module:
-        """Fine-tune a pruned model.
-
-        Important: when fine-tuning after structured pruning, we must keep pruned
-        channels pruned. We do this by re-applying channel masks after each
-        optimizer step (and keeping the corresponding BatchNorm params zeroed).
-        """
+        *,
+        type_aware: bool = False,
+        track_epoch_accuracy: bool = False,
+    ) -> Tuple[nn.Module, List[Dict[str, float]]]:
+        """Fine-tune a pruned model, optionally with type-aware gradient scaling."""
         import torch.optim as optim
-        
+
         model.train()
         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay or 0.0))
         criterion = nn.CrossEntropyLoss()
@@ -1839,6 +4842,7 @@ class ClusterAnalysisExperiment:
         module_map: Dict[str, nn.Module] = dict(model.named_modules())
         masks_dev: Dict[str, torch.Tensor] = {}
         bn_map: Dict[str, nn.Module] = {}
+        ft_curve: List[Dict[str, float]] = []
 
         if masks:
             for layer_name, mask in masks.items():
@@ -1856,6 +4860,92 @@ class ClusterAnalysisExperiment:
                 except Exception:
                     continue
 
+        lr_mult_cfg = getattr(self.config, "fine_tune_type_aware_lr_multipliers", {}) or {}
+        wd_mult_cfg = getattr(self.config, "fine_tune_type_aware_wd_multipliers", {}) or {}
+        scale_bn = bool(getattr(self.config, "fine_tune_type_aware_scale_batchnorm", True))
+        scale_classifier = bool(getattr(self.config, "fine_tune_type_aware_scale_classifier", False))
+
+        type_lr_mult: Dict[str, torch.Tensor] = {}
+        type_wd_mult: Dict[str, torch.Tensor] = {}
+        if bool(type_aware):
+            target_layers = set(masks_dev.keys())
+            if scale_classifier:
+                for layer_name, module in module_map.items():
+                    if not isinstance(module, nn.Linear):
+                        continue
+                    if not hasattr(module, "weight") or getattr(module, "weight", None) is None:
+                        continue
+                    if layer_name in self.cluster_results:
+                        target_layers.add(layer_name)
+
+            for layer_name in sorted(target_layers):
+                module = module_map.get(layer_name)
+                if module is None or not hasattr(module, "weight") or getattr(module, "weight", None) is None:
+                    continue
+                n_out = int(module.weight.shape[0])
+                if n_out <= 0:
+                    continue
+                type_lr_mult[layer_name] = self._type_multiplier_for_layer(
+                    layer_name=layer_name,
+                    n_channels=n_out,
+                    multipliers=lr_mult_cfg,
+                    device=module.weight.device,
+                )
+                type_wd_mult[layer_name] = self._type_multiplier_for_layer(
+                    layer_name=layer_name,
+                    n_channels=n_out,
+                    multipliers=wd_mult_cfg,
+                    device=module.weight.device,
+                )
+
+        def _scale_param_grad_by_channels(param: Optional["torch.Tensor"], scale_vec: Optional["torch.Tensor"]) -> None:
+            if param is None or param.grad is None or scale_vec is None:
+                return
+            if param.grad.ndim < 1 or int(param.grad.shape[0]) != int(scale_vec.numel()):
+                return
+            vec = scale_vec.to(device=param.grad.device, dtype=param.grad.dtype)
+            view_shape = [int(vec.numel())] + [1] * int(param.grad.ndim - 1)
+            param.grad.mul_(vec.view(*view_shape))
+
+        def _apply_wd_delta(param: Optional["torch.Tensor"], wd_vec: Optional["torch.Tensor"]) -> None:
+            if param is None or param.grad is None or wd_vec is None:
+                return
+            wd = float(weight_decay or 0.0)
+            if wd <= 0.0:
+                return
+            if param.grad.ndim < 1 or int(param.grad.shape[0]) != int(wd_vec.numel()):
+                return
+            delta = wd_vec.to(device=param.grad.device, dtype=param.grad.dtype) - 1.0
+            if float(delta.abs().max().item()) < 1e-12:
+                return
+            view_shape = [int(delta.numel())] + [1] * int(param.grad.ndim - 1)
+            param.grad.add_(param.detach() * (wd * delta.view(*view_shape)))
+
+        def _apply_type_aware_updates() -> None:
+            if not type_lr_mult:
+                return
+            for layer_name, scale_vec in type_lr_mult.items():
+                m = module_map.get(layer_name)
+                if m is None or not hasattr(m, "weight"):
+                    continue
+                wd_vec = type_wd_mult.get(layer_name)
+                _scale_param_grad_by_channels(getattr(m, "weight", None), scale_vec)
+                _scale_param_grad_by_channels(getattr(m, "bias", None), scale_vec)
+                _apply_wd_delta(getattr(m, "weight", None), wd_vec)
+                _apply_wd_delta(getattr(m, "bias", None), wd_vec)
+
+                if not scale_bn:
+                    continue
+                bn = bn_map.get(layer_name)
+                if bn is None:
+                    continue
+                if hasattr(bn, "weight"):
+                    _scale_param_grad_by_channels(getattr(bn, "weight", None), scale_vec)
+                    _apply_wd_delta(getattr(bn, "weight", None), wd_vec)
+                if hasattr(bn, "bias"):
+                    _scale_param_grad_by_channels(getattr(bn, "bias", None), scale_vec)
+                    _apply_wd_delta(getattr(bn, "bias", None), wd_vec)
+
         def _reapply_masks() -> None:
             if not masks_dev:
                 return
@@ -1867,12 +4957,10 @@ class ClusterAnalysisExperiment:
                     if mb.numel() != int(m.weight.shape[0]):
                         continue
 
-                    # Zero pruned output channels
                     m.weight.data[~mb] = 0.0
                     if getattr(m, "bias", None) is not None and m.bias.data.numel() == mb.numel():
                         m.bias.data[~mb] = 0.0
 
-                    # Keep matched BatchNorm channels zeroed too (when present)
                     bn = bn_map.get(layer_name)
                     if bn is None or not hasattr(bn, "weight") or getattr(bn, "weight", None) is None:
                         continue
@@ -1885,32 +4973,40 @@ class ClusterAnalysisExperiment:
                         bn.running_mean.data[~mb] = 0.0
                     if hasattr(bn, "running_var"):
                         bn.running_var.data[~mb] = 1.0
-        
+
         for epoch in range(epochs):
-            total_loss = 0
+            total_loss = 0.0
             n_batches = 0
-            
+
             for x, y in self.train_loader:
                 x, y = x.to(self.device), y.to(self.device)
-                
+
                 optimizer.zero_grad()
                 out = model(x)
                 loss = criterion(out, y)
                 loss.backward()
+                if bool(type_aware):
+                    _apply_type_aware_updates()
                 optimizer.step()
                 _reapply_masks()
-                
-                total_loss += loss.item()
+
+                total_loss += float(loss.item())
                 n_batches += 1
                 if max_batches is not None and n_batches >= int(max_batches):
                     break
-            
+
             if epoch == 0 or (epoch + 1) % 5 == 0:
                 avg_loss = total_loss / max(n_batches, 1)
-                logger.debug(f"    FT epoch {epoch+1}/{epochs}: loss={avg_loss:.4f}")
-        
+                logger.debug("    FT epoch %d/%d: loss=%.4f", epoch + 1, epochs, avg_loss)
+
+            if bool(track_epoch_accuracy):
+                model.eval()
+                acc = float(self._evaluate_accuracy(model))
+                ft_curve.append({"epoch": int(epoch + 1), "accuracy": acc})
+                model.train()
+
         model.eval()
-        return model
+        return model, ft_curve
     
     def _evaluate_accuracy(self, model: Optional[nn.Module] = None) -> float:
         """Evaluate model accuracy on test set."""
@@ -1940,9 +5036,23 @@ class ClusterAnalysisExperiment:
         
         # 1. Compute metrics
         self.compute_metrics()
+
+        # 1b. Optional: loss proxy importance signal
+        if bool(self.config.compute_loss_proxy):
+            try:
+                self.compute_loss_proxy()
+            except Exception as exc:
+                logger.warning("Loss proxy computation failed (continuing): %s", exc)
         
         # 2. Clustering
         self.run_clustering()
+
+        # 2b. Optional: within-layer connectivity summaries (requires clustering labels)
+        if bool(getattr(self.config, "compute_within_layer_connectivity", False)):
+            try:
+                self.run_within_layer_connectivity()
+            except Exception as exc:
+                logger.warning("Within-layer connectivity computation failed (continuing): %s", exc)
         
         # 3. Halo analysis
         self.run_halo_analysis()
@@ -1951,33 +5061,80 @@ class ClusterAnalysisExperiment:
         self.run_cascade_test()
         
         # 5. Pruning experiments (optional)
-        if include_pruning and getattr(self.config, 'pruning_ratios', None):
-            # Check if fine-tuning is enabled
-            fine_tune_enabled = getattr(self.config, 'fine_tune_after_pruning', True)
-            fine_tune_epochs = getattr(self.config, 'fine_tune_epochs', 10) if fine_tune_enabled else 0
-            fine_tune_lr = getattr(self.config, 'fine_tune_lr', 0.0001)
-            fine_tune_max_batches = getattr(self.config, "fine_tune_max_batches", None)
-            fine_tune_weight_decay = float(getattr(self.config, "fine_tune_weight_decay", 0.0) or 0.0)
-            
-            logger.info(f"Fine-tuning after pruning: {'enabled' if fine_tune_epochs > 0 else 'disabled'}")
-            
-            self.run_pruning_experiments(
-                ratios=self.config.pruning_ratios,
-                methods=getattr(self.config, "pruning_methods", None),
-                fine_tune_epochs=fine_tune_epochs,
-                fine_tune_lr=fine_tune_lr,
-                fine_tune_max_batches=fine_tune_max_batches,
-                fine_tune_weight_decay=fine_tune_weight_decay,
-            )
+        # NOTE: `pruning_amounts` has a non-empty default; we gate pruning on the explicit flag.
+        if include_pruning and bool(self.config.do_pruning_experiments):
+            ratios_cfg = list(self.config.pruning_amounts)
+            if not ratios_cfg:
+                logger.warning("do_pruning_experiments=True but pruning_amounts is empty; skipping pruning")
+            else:
+                # Fine-tuning configuration
+                fine_tune_epochs = int(self.config.fine_tune_epochs) if bool(self.config.fine_tune_after_pruning) else 0
+                fine_tune_lr = (
+                    float(self.config.fine_tune_learning_rate)
+                    if self.config.fine_tune_learning_rate is not None
+                    else float(self.config.learning_rate) * 0.1
+                )
+                fine_tune_max_batches = self.config.fine_tune_max_batches
+                fine_tune_weight_decay = float(self.config.fine_tune_weight_decay or 0.0)
+
+                logger.info(f"Fine-tuning after pruning: {'enabled' if fine_tune_epochs > 0 else 'disabled'}")
+
+                self.run_pruning_experiments(
+                    ratios=ratios_cfg,
+                    methods=list(self.config.pruning_strategies) if self.config.pruning_strategies else None,
+                    fine_tune_epochs=fine_tune_epochs,
+                    fine_tune_lr=fine_tune_lr,
+                    fine_tune_max_batches=fine_tune_max_batches,
+                    fine_tune_weight_decay=fine_tune_weight_decay,
+                )
         
         # Save results (including centroids for visualization)
+        metadata = self._collect_run_metadata()
+        try:
+            with open(self.output_dir / "run_metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2, default=_json_default)
+        except Exception as exc:
+            logger.debug("Could not write run_metadata.json: %s", exc)
+
         results = {
+            "metadata": metadata,
             "config": {
                 "model_name": self.config.model_name,
                 "dataset_name": self.config.dataset_name,
                 "n_clusters": self.config.n_clusters,
-                "activation_samples": getattr(self.config, "activation_samples", "flatten_spatial"),
-                "spatial_samples_per_image": getattr(self.config, "spatial_samples_per_image", 16),
+                "n_calibration": int(self.config.n_calibration),
+                "activation_samples": str(self.config.activation_samples),
+                "task_activation_samples": self.config.task_activation_samples,
+                "activation_point": str(self.config.activation_point),
+                "spatial_samples_per_image": int(self.config.spatial_samples_per_image),
+                "seed": int(self.config.seed),
+                "calibration_indices_file": str(self._calibration_indices_path()),
+                "calibration_mode": str(self.config.calibration_mode),
+                "type_mapping_mode": str(self.config.type_mapping_mode),
+                "compute_loss_proxy": bool(self.config.compute_loss_proxy),
+                "loss_proxy_n_calibration": int(self.config.loss_proxy_n_calibration or 0),
+                "compute_within_layer_connectivity": bool(getattr(self.config, "compute_within_layer_connectivity", False)),
+                "within_layer_red_topk": int(getattr(self.config, "within_layer_red_topk", 0) or 0),
+                "within_layer_syn_topk": int(getattr(self.config, "within_layer_syn_topk", 0) or 0),
+                "pruning_distribution": str(self.config.pruning_distribution),
+                "pruning_min_per_layer": float(self.config.pruning_min_per_layer),
+                "pruning_max_per_layer": float(self.config.pruning_max_per_layer),
+                "pruning_max_per_layer_sparsity_cap": float(self.config.pruning_max_per_layer_sparsity_cap),
+                "fine_tune_type_aware_enabled": bool(getattr(self.config, "fine_tune_type_aware_enabled", False)),
+                "fine_tune_type_aware_methods": list(getattr(self.config, "fine_tune_type_aware_methods", []) or []),
+                "fine_tune_type_aware_lr_multipliers": dict(
+                    getattr(self.config, "fine_tune_type_aware_lr_multipliers", {}) or {}
+                ),
+                "fine_tune_type_aware_wd_multipliers": dict(
+                    getattr(self.config, "fine_tune_type_aware_wd_multipliers", {}) or {}
+                ),
+                "fine_tune_type_aware_scale_batchnorm": bool(
+                    getattr(self.config, "fine_tune_type_aware_scale_batchnorm", True)
+                ),
+                "fine_tune_type_aware_scale_classifier": bool(
+                    getattr(self.config, "fine_tune_type_aware_scale_classifier", False)
+                ),
+                "fine_tune_track_epoch_accuracy": bool(getattr(self.config, "fine_tune_track_epoch_accuracy", False)),
             },
             "layer_metrics": self.layer_metrics,
             "cluster_results": {
@@ -1988,17 +5145,20 @@ class ClusterAnalysisExperiment:
                     "centroids": v["centroids"].tolist() if hasattr(v["centroids"], 'tolist') else v["centroids"],
                     "type_mapping": {str(kk): vv for kk, vv in v["type_mapping"].items()},
                 }
-                for k, v in self.cluster_results.items()
+                for k, v in self.cluster_results.items() if not k.startswith("_")
             },
             "halo_results": self.halo_results,
             "halo_flow_results": self.halo_flow_results,
+            "within_layer_connectivity": self.within_layer_connectivity,
+            "permutation_results": getattr(self, 'permutation_results', {}),
+            "ablation_results": self.cluster_results.get("_ablation", {}),
             "cascade_results": self.cascade_results,
             "pruning_results": getattr(self, 'pruning_results', {}),
             "pruning_cluster_distributions": getattr(self, "pruning_cluster_distributions", {}),
         }
         
         with open(self.output_dir / "results.json", "w") as f:
-            json.dump(results, f, indent=2, default=str)
+            json.dump(results, f, indent=2, default=_json_default)
         
         logger.info(f"Results saved to {self.output_dir}")
         return results
@@ -2060,7 +5220,7 @@ class ClusterAnalysisExperiment:
             fig_dir = self.output_dir / "figures"
         fig_dir.mkdir(exist_ok=True, parents=True)
 
-        # Helper: keep backward-compatible root-level copies for paper scripts
+        # Helper: keep backward-compatible root-level copies for legacy consumers
         # while also writing into organized subfolders.
         try:
             import shutil
@@ -2175,7 +5335,7 @@ class ClusterAnalysisExperiment:
             )
             _copy_legacy(_p, fig_dir / "layer_metric_trends.png")
             
-            # NEW: Statistics table for paper/report
+            # NEW: Statistics table for report/summary
             _p = summary_dir / "metric_statistics_table.png"
             plot_metric_statistics_table(
                 layer_metrics=self.layer_metrics,
@@ -2205,7 +5365,7 @@ class ClusterAnalysisExperiment:
                 fig_dir / f"cluster_scatter_{name.replace('.', '_')}.png",
             )
 
-        # Representative 3D scatter for the paper (best-effort)
+        # Representative 3D scatter for quick inspection (best-effort)
         try:
             if self.cluster_results and self.layer_metrics:
                 rep_layer = None
@@ -2236,13 +5396,22 @@ class ClusterAnalysisExperiment:
         # ==================================================================
         # 6. Cluster evolution across depth
         # ==================================================================
-        layer_results = [
-            {"layer_name": k, "type_counts": v["type_counts"]}
-            for k, v in self.cluster_results.items()
-        ]
-        _p = clustering_dir / "cluster_evolution.png"
-        plot_cluster_evolution(layer_results, _p)
-        _copy_legacy(_p, fig_dir / "cluster_evolution.png")
+        layer_results = []
+        # Prefer the canonical layer order from self.layers to keep depth plots consistent
+        for lname, _layer in self.layers:
+            v = self.cluster_results.get(lname, {})
+            if not isinstance(v, dict):
+                continue
+            tc = v.get("type_counts", None)
+            if tc is None:
+                continue
+            layer_results.append({"layer_name": lname, "type_counts": tc})
+        if layer_results:
+            _p = clustering_dir / "cluster_evolution.png"
+            plot_cluster_evolution(layer_results, _p)
+            _copy_legacy(_p, fig_dir / "cluster_evolution.png")
+        else:
+            logger.debug("Skipping cluster evolution plot (missing type_counts for all layers).")
         
         # ==================================================================
         # 7. Cascade test results
@@ -2257,7 +5426,7 @@ class ClusterAnalysisExperiment:
                 }
                 _p = cascade_dir / f"cascade_{name.replace('.', '_')}.png"
                 plot_cascade_test(results, _p)
-                # Paper scripts glob fig_dir/"cascade_*.png" (non-recursive)
+                # Some downstream tooling globs fig_dir/"cascade_*.png" (non-recursive)
                 _copy_legacy(_p, fig_dir / f"cascade_{name.replace('.', '_')}.png")
         
         # ==================================================================
@@ -2288,7 +5457,7 @@ class ClusterAnalysisExperiment:
                     for ct, v in by_type.items()
                 ]
                 # Save into the organized halo subfolder, but also keep a
-                # root-level copy for backward compatibility (paper scripts expect it).
+                # root-level copy for backward compatibility (some external consumers expect it).
                 halo_props_path = halo_dir / "halo_properties.png"
                 plot_halo_properties(avg_halo, halo_props_path)
                 try:
@@ -2296,7 +5465,7 @@ class ClusterAnalysisExperiment:
                 except Exception:
                     pass
 
-        # Representative cluster-to-cluster influence matrix for the paper (best-effort)
+        # Representative cluster-to-cluster influence matrix for quick inspection (best-effort)
         try:
             if self.halo_flow_results:
                 rep_transition = None
@@ -2477,3 +5646,228 @@ class ClusterAnalysisExperiment:
 
 # Backward compatibility aliases
 VisionExperiment = ClusterAnalysisExperiment
+
+
+def aggregate_multi_seed_results(results_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Aggregate results from multiple seed runs into mean ± std statistics.
+    
+    This is the key function for robust statistical reporting. It computes
+    mean and standard deviation across seeds for all numeric metrics.
+    
+    Args:
+        results_list: List of result dictionaries from run_full_analysis(),
+                     one per seed.
+    
+    Returns:
+        Aggregated results with 'mean', 'std', 'seeds', and 'n_seeds' fields
+        for all numeric values.
+    
+    Example:
+        >>> seeds = [42, 123, 456]
+        >>> all_results = []
+        >>> for seed in seeds:
+        ...     config.seed = seed
+        ...     exp = ClusterAnalysisExperiment(config, model, train_loader, test_loader)
+        ...     all_results.append(exp.run_full_analysis())
+        >>> aggregated = aggregate_multi_seed_results(all_results)
+        >>> print(aggregated['pruning_results']['methods']['cluster_aware'][0.5])
+        # {'accuracy_mean': 0.923, 'accuracy_std': 0.004, 'n_seeds': 3}
+    """
+    if not results_list:
+        return {}
+    
+    if len(results_list) == 1:
+        # Single seed - just return with metadata
+        result = results_list[0].copy()
+        result["_aggregation"] = {"n_seeds": 1, "seeds": [result.get("config", {}).get("seed", 42)]}
+        return result
+    
+    seeds = [r.get("config", {}).get("seed", i) for i, r in enumerate(results_list)]
+    
+    def _aggregate_numeric(values: List[Any]) -> Dict[str, Any]:
+        """Aggregate a list of values into mean/std."""
+        numeric = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if not numeric:
+            return {"value": values[0] if values else None, "n_seeds": len(values)}
+        arr = np.array(numeric, dtype=np.float64)
+        return {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+            "min": float(np.min(arr)),
+            "max": float(np.max(arr)),
+            "n_seeds": len(numeric),
+        }
+    
+    def _aggregate_dict(dicts: List[Dict]) -> Dict:
+        """Recursively aggregate dictionaries."""
+        if not dicts or not all(isinstance(d, dict) for d in dicts):
+            return {}
+        
+        all_keys = set()
+        for d in dicts:
+            all_keys.update(d.keys())
+        
+        result = {}
+        for key in all_keys:
+            values = [d.get(key) for d in dicts if key in d]
+            
+            if not values:
+                continue
+            
+            # Check type of first non-None value
+            first = next((v for v in values if v is not None), None)
+            
+            if first is None:
+                result[key] = None
+            elif isinstance(first, dict):
+                result[key] = _aggregate_dict([v for v in values if isinstance(v, dict)])
+            elif isinstance(first, (int, float)) and not isinstance(first, bool):
+                result[key] = _aggregate_numeric(values)
+            elif isinstance(first, list) and all(isinstance(x, (int, float)) for x in first):
+                # List of numbers - aggregate element-wise
+                try:
+                    arr = np.array([v for v in values if isinstance(v, list)], dtype=np.float64)
+                    result[key] = {
+                        "mean": np.mean(arr, axis=0).tolist(),
+                        "std": np.std(arr, axis=0).tolist(),
+                        "n_seeds": len(arr),
+                    }
+                except Exception:
+                    result[key] = values[0]
+            else:
+                # Non-numeric - just take first value
+                result[key] = first
+        
+        return result
+    
+    # Aggregate main result sections
+    aggregated = {
+        "config": results_list[0].get("config", {}),
+        "_aggregation": {
+            "n_seeds": len(results_list),
+            "seeds": seeds,
+        },
+    }
+    
+    # Sections to aggregate
+    for section in ["pruning_results", "cascade_results", "halo_results", "permutation_results"]:
+        section_data = [r.get(section, {}) for r in results_list]
+        if any(section_data):
+            aggregated[section] = _aggregate_dict(section_data)
+    
+    # For cluster results, aggregate silhouette scores
+    cluster_sections = [r.get("cluster_results", {}) for r in results_list]
+    if any(cluster_sections):
+        aggregated["cluster_results"] = {}
+        all_layers = set()
+        for cs in cluster_sections:
+            all_layers.update(cs.keys())
+        
+        for layer in all_layers:
+            layer_data = [cs.get(layer, {}) for cs in cluster_sections if layer in cs]
+            if layer_data:
+                sil_values = [d.get("silhouette", 0.0) for d in layer_data]
+                aggregated["cluster_results"][layer] = {
+                    "silhouette": _aggregate_numeric(sil_values),
+                    "type_counts": layer_data[0].get("type_counts", {}),  # Take first
+                    "type_mapping": layer_data[0].get("type_mapping", {}),
+                }
+    
+    # Copy ablation results (typically don't vary much across seeds)
+    if "ablation_results" in results_list[0]:
+        aggregated["ablation_results"] = results_list[0]["ablation_results"]
+    
+    return aggregated
+
+
+def run_multi_seed_experiment(
+    config: ClusterAnalysisConfig,
+    model_fn,
+    train_loader,
+    test_loader,
+    seeds: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """
+    Run the full experiment across multiple seeds and aggregate results.
+    
+    Args:
+        config: Base configuration (seed field will be overwritten per run)
+        model_fn: Callable that returns a fresh model instance for each seed
+        train_loader: Training data loader
+        test_loader: Test data loader
+        seeds: List of random seeds (default: [42, 123, 456, 789, 1000])
+    
+    Returns:
+        Aggregated results with mean ± std across seeds
+    
+    Example:
+        >>> def make_model():
+        ...     return torchvision.models.resnet18(pretrained=True)
+        >>> config = ClusterAnalysisConfig(name="cluster_analysis", model_name="resnet18")
+        >>> results = run_multi_seed_experiment(
+        ...     config, make_model, train_loader, test_loader,
+        ...     seeds=[42, 123, 456]
+        ... )
+    """
+    import copy
+    
+    seeds = seeds or getattr(config, "seeds", None) or [42, 123, 456, 789, 1000]
+    
+    all_results = []
+    
+    for i, seed in enumerate(seeds):
+        logger.info(f"=== Running seed {seed} ({i+1}/{len(seeds)}) ===")
+        
+        # Create fresh config and model for this seed
+        seed_config = copy.deepcopy(config)
+        seed_config.seed = seed
+        base_dir = (
+            getattr(config, "experiment_dir", None)
+            or getattr(config, "output_dir", None)  # legacy
+            or getattr(config, "results_path", None)  # legacy
+            or "results/cluster_analysis"
+        )
+        seed_config.experiment_dir = str(Path(str(base_dir)) / f"seed_{seed}")
+        
+        # Set random seeds
+        if HAS_TORCH:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+        
+        # Create fresh model
+        model = model_fn()
+        
+        # Run experiment
+        exp = ClusterAnalysisExperiment(seed_config, model, train_loader, test_loader)
+        results = exp.run_full_analysis(
+            include_pruning=bool(getattr(config, "do_pruning_experiments", False))
+        )
+        all_results.append(results)
+        
+        # Clean up
+        del model, exp
+        if HAS_TORCH and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    # Aggregate results
+    aggregated = aggregate_multi_seed_results(all_results)
+    
+    # Save aggregated results
+    output_dir = Path(
+        str(
+            getattr(config, "experiment_dir", None)
+            or getattr(config, "output_dir", None)  # legacy
+            or getattr(config, "results_path", None)  # legacy
+            or "results/cluster_analysis"
+        )
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "results_aggregated.json", "w") as f:
+        json.dump(aggregated, f, indent=2, default=_json_default)
+    
+    logger.info(f"Aggregated results from {len(seeds)} seeds saved to {output_dir}")
+    
+    return aggregated

@@ -39,6 +39,8 @@ class ExperimentConfig:
     model_name: str = "resnet18"
     model_config: Dict[str, Any] = field(default_factory=dict)
     pretrained: bool = False
+    # Optional explicit checkpoint path (used by scripts/run_experiment.py)
+    model_checkpoint: Optional[str] = None
 
     # Dataset configuration
     dataset_name: str = "cifar10"
@@ -93,22 +95,174 @@ class ExperimentConfig:
     # ---------------------------------------------------------------------
     # Vision / cluster-analysis extras (used by ClusterAnalysisExperiment)
     # ---------------------------------------------------------------------
+    # Calibration loader selection:
+    # - "indices": deterministic Subset loader based on saved indices (recommended)
+    # - "train_loader": iterate the provided train_loader directly (non-reproducible; may include augmentation + shuffle)
+    calibration_mode: str = "indices"
+    calibration_num_workers: int = 0
+    # Number of calibration examples used for cluster metrics (RQ/Red/Syn/TaskMI, etc.)
+    n_calibration: int = 5000
+
+    # ---------------------------------------------------------------------
+    # Reproducibility helper for legacy runs (vision / cluster analysis)
+    # ---------------------------------------------------------------------
+    # Some historical runs performed training before metric computation, and then
+    # computed metrics by iterating a *shuffled* DataLoader (train_loader) for the
+    # first `n_calibration` samples. In that regime, the exact calibration subset
+    # depends on the RNG state after training because DataLoader/RandomSampler
+    # consumes torch RNG when creating each epoch iterator.
+    #
+    # When loading a checkpoint (do_train=false), you can optionally advance the
+    # torch RNG state to approximate the "post-training" shuffle state before
+    # computing calibration-based metrics in calibration_mode="train_loader".
+    #
+    # Default: 0 (disabled).
+    simulate_post_train_shuffle_epochs: int = 0
+    # Whether to also simulate the RNG consumption from creating a test_loader
+    # iterator once per epoch (common in training loops).
+    simulate_post_train_include_eval: bool = True
+
     # How to form channel samples from Conv outputs Y[B,C,H,W]
     # - "flatten_spatial": treat spatial positions as samples (subsample per image)
     # - "gap": global-average-pool per image (one sample per image)
+    # Where to read the channel signal for within-layer statistics:
+    # - "pre_bn": hook Conv2d outputs (pre-BN, pre-ReLU). (Backward compatible default.)
+    # - "post_bn": hook BatchNorm outputs when available (post-BN, pre-ReLU).
+    activation_point: str = "pre_bn"
     activation_samples: str = "flatten_spatial"
+    # How to form samples for task-level metrics (TaskMI, synergy).
+    # Default: None -> use GAP (avoids pseudo-replication).
+    # If you explicitly want to reuse the local sampling scheme, set to "match"
+    # (not recommended: it repeats the same image-level target across spatial samples).
+    task_activation_samples: Optional[str] = None
     spatial_samples_per_image: int = 16  # used when activation_samples="flatten_spatial"
     n_clusters: int = 4
     synergy_target: str = "logit_margin"  # logit_margin, correct_logit, logit_pc1
     synergy_candidate_pool: int = 50
     synergy_pairs: int = 10
+    # RQ estimator used in cluster-analysis metrics:
+    # - "equivalent_streaming": Eq. (Var(Y_i) / ||w_i||^2) from streamed output moments
+    # - "covariance_exact": explicit Eq. (w^T Σ_X w / ||w||^2) on sampled conv inputs
+    # - "both": compute both; use covariance_exact for downstream "rq" and store diagnostics
+    rq_definition: str = "both"
 
-    # Cluster-aware pruning score weights (paper sweeps)
+    # Cluster type mapping mode:
+    # - "greedy": greedy sequential assignment (semantically interpretable; default).
+    #   "critical" = highest (RQ - Red), "redundant" = highest Red, etc.
+    # - "global": permutation-based one-to-one assignment (stable across layers).
+    type_mapping_mode: str = "greedy"
+
+    # Ablation / permutation diagnostics (vision)
+    run_metric_ablation: bool = False
+    metric_ablations: List[str] = field(default_factory=lambda: ["all", "rq_red", "rq_syn", "red_syn"])
+    run_permutation_baseline: bool = False
+    n_permutations: int = 100
+    
+    # Clustering first metric: "rq" (default) or "ixy" (mutual information I(X;Y))
+    # When set to "ixy", clustering uses mi_in_proxy instead of rq as the first dimension
+    clustering_first_metric: str = "rq"
+
+    # Clustering importance mode: how types are assigned during channel clustering.
+    # - "geometric": Standard k-means, types by centroid coordinates (default)
+    # - "score_augmented": k-means on (Score, log_RQ, Red, Syn); types by mean importance
+    # - "importance_reassign": Standard k-means geometry, reassign types by mean score
+    # - "quantile": Partition by composite score quartiles (no k-means)
+    clustering_importance_mode: str = "geometric"
+
+    # Optional: compute per-channel loss proxy (Fisher/GN-style) on calibration data.
+    compute_loss_proxy: bool = False
+    loss_proxy_n_calibration: int = 1024
+
+    # Optional: within-layer connectivity summaries (vision).
+    # These are analysis artifacts to support within-layer organization claims (graph/community structure).
+    # When enabled, we compute lightweight adjacency summaries (top-k neighbors) and aggregate them into
+    # small type×type connectivity matrices per layer (stored in results.json).
+    compute_within_layer_connectivity: bool = False
+    within_layer_red_topk: int = 20
+    within_layer_syn_topk: int = 10
+
+    # Between-layer routing metrics (vision)
+    # These are computed from the same effective influence matrix used for halos.
+    routing_bottleneck_topk: int = 5  # top-k mass summaries for bottleneck metrics
+    outred_candidate_pool: int = 64   # candidate sources per channel when estimating outgoing overlap
+    outred_topm: int = 8              # average of top-m overlaps for OutRed
+    bottleneck_protect_percentile: float = 95.0  # used by bottleneck-protect pruning variants
+
+    # Cross-layer halo analysis parameters (vision)
+    halo_percentile: float = 90.0
+    use_activation_weight: bool = True
+
+    # Cascade/damage testing parameters (vision)
+    cascade_n_remove: int = 5
+    damage_sample_frac: float = 0.2
+
+    # Pruning-score baselines (vision)
+    taylor_samples: int = 1024
+    # Activation-based Taylor (Molchanov-style) uses the same calibration loader, but is
+    # heavier (stores activation grads). By default we reuse taylor_samples unless overridden.
+    taylor_act_samples: int = 1024
+    # Cap per-batch size for activation-based Taylor to bound peak memory when retaining grads.
+    taylor_act_batch_size: int = 16
+    geometric_median_iters: int = 10
+    geometric_median_eps: float = 1e-8
+    hrank_images: int = 256
+    hrank_pool: int = 8
+    hrank_sv_eps: float = 1e-3
+    # CHIP (Channel Independence-based Pruning, Sui et al. NeurIPS 2021)
+    chip_images: int = 256
+
+    # Cluster-aware pruning score weights (for sweeps / ablations)
     cluster_aware_alpha: float = 1.0
     cluster_aware_beta: float = 0.5
     cluster_aware_gamma: float = 0.3
     cluster_aware_lambda_halo: float = 0.5
     cluster_aware_protect_critical_frac: float = 0.3
+    # Annealing window used by the cluster-aware (annealed) variant
+    cluster_aware_anneal_start: float = 0.70
+    cluster_aware_anneal_end: float = 0.90
+    
+    # NEW: Additional cluster-aware method variants
+    # Weight for Taylor component in cluster_aware_taylor_blend method
+    cluster_aware_taylor_weight: float = 0.3
+    # Enable depth-adaptive score weights (early layers more conservative)
+    cluster_aware_depth_adaptive: bool = False
+    # Early/late layer weight profiles for depth-adaptive mode
+    cluster_aware_early_alpha: float = 1.5   # Higher RQ weight early
+    cluster_aware_early_gamma: float = 0.1   # Lower redundancy penalty early
+    cluster_aware_late_alpha: float = 0.8    # Lower RQ weight late
+    cluster_aware_late_gamma: float = 0.5    # Higher redundancy penalty late
+    # Fraction of layers considered "early"
+    cluster_aware_early_layer_frac: float = 0.3
+
+    # ---------------------------------------------------------------------
+    # Generalized Taylor pruning (vision)
+    # ---------------------------------------------------------------------
+    # These parameters control the analytically-motivated "generalized Taylor" family
+    # (see src/alignment/pruning/strategies/generalized_taylor.py). They are exposed
+    # here so they can be set in YAML and saved into experiment_config.yaml for
+    # reproducibility.
+    generalized_taylor_weight_rq: float = 1.0
+    generalized_taylor_weight_redundancy: float = 0.3
+    generalized_taylor_weight_synergy: float = 0.5
+    generalized_taylor_gradient_exponent: float = 1.0
+    generalized_taylor_activation_exponent: float = 1.0
+    generalized_taylor_redundancy_discount_beta: float = 1.0
+    generalized_taylor_synergy_boost_gamma: float = 0.5
+    generalized_taylor_critical_multiplier: float = 1.5
+    generalized_taylor_redundant_multiplier: float = 0.5
+    generalized_taylor_synergistic_multiplier: float = 1.2
+    generalized_taylor_background_multiplier: float = 0.8
+    generalized_taylor_gate_mode: str = "sigmoid"  # "linear" | "sigmoid"
+    generalized_taylor_gate_temperature: float = 6.0
+    generalized_taylor_gate_bias: float = 0.5
+    generalized_taylor_gate_eps: float = 0.05
+    generalized_taylor_gate_min: float = 0.0
+    generalized_taylor_gate_include_cluster_multiplier: bool = True
+    # Numerical stability knobs (kept explicit so they can be overridden in configs if needed)
+    generalized_taylor_structural_eps: float = 0.1
+    generalized_taylor_rq_log_eps: float = 1e-10
+    generalized_taylor_grad_over_act_eps: float = 1e-8
+    generalized_taylor_lp_optimal_l2_reg: float = 0.01
 
     # Analysis control flags
     do_dropout_analysis: bool = False
@@ -138,17 +292,54 @@ class ExperimentConfig:
     pruning_distribution: str = "uniform"
     pruning_min_per_layer: float = 0.0
     pruning_max_per_layer: float = 0.95
+    # Safety cap for per-layer sparsity when using global-threshold style distributions.
+    # Set to 1.0 to disable (legacy behavior).
+    pruning_max_per_layer_sparsity_cap: float = 1.00
+    # Optional strict global budget enforcement for structured channel pruning.
+    # When enabled, per-layer prune counts are adjusted so the total number of
+    # pruned channels matches round(target_sparsity * total_prunable_channels).
+    pruning_enforce_exact_global_channel_budget: bool = False
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     # Optional cap for post-pruning fine-tuning speed (useful for ImageNet-scale runs)
     # None => use the full training loader each epoch.
     fine_tune_max_batches: Optional[int] = None
     fine_tune_weight_decay: float = 0.0
+    # Optional type-aware post-pruning fine-tuning.
+    # When enabled, channel gradients can be scaled per cluster type.
+    fine_tune_type_aware_enabled: bool = False
+    # If non-empty, only these methods use type-aware fine-tuning. Method names may
+    # include explicit aliases such as "cluster_aware_typeft".
+    fine_tune_type_aware_methods: List[str] = field(default_factory=list)
+    fine_tune_type_aware_lr_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "critical": 0.5,
+            "synergistic": 1.0,
+            "redundant": 1.5,
+            "background": 1.5,
+        }
+    )
+    fine_tune_type_aware_wd_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "critical": 0.5,
+            "synergistic": 1.0,
+            "redundant": 1.25,
+            "background": 1.5,
+        }
+    )
+    fine_tune_type_aware_scale_batchnorm: bool = True
+    fine_tune_type_aware_scale_classifier: bool = False
+    # Record per-epoch test accuracy during post-pruning fine-tuning.
+    fine_tune_track_epoch_accuracy: bool = False
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
     dependency_aware_pruning: bool = False  # Propagate masks across dependent layers
     # Single-layer pruning: specify a layer name to prune only that layer
     # None = prune all layers, string = prune only that layer
     pruning_target_layer: Optional[str] = None
+
+    # Optional: restrict which convs are prunable (useful for MobileNet-style nets)
+    pruning_pointwise_only: bool = False  # prune only 1x1 conv layers
+    pruning_skip_depthwise: bool = False  # skip depthwise conv layers
 
     # Plotting and visualization
     generate_plots: bool = True
@@ -196,7 +387,8 @@ class ExperimentConfig:
     do_connectivity_pruning: bool = True
 
     # SCAR / supernode-specific options for LLMs
-    do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i)
+    do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i) for FFN
+    do_attention_scar_metrics: bool = False  # Whether to compute SCAR-style metrics for attention heads
     scar_num_samples: int = 0      # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
     scar_max_length: int = 512     # Max sequence length for SCAR calibration passes
 
@@ -208,6 +400,10 @@ class ExperimentConfig:
     generalized_importance: Dict[str, Any] = field(default_factory=dict)  # Generalized importance config
     do_halo_analysis: bool = False  # Flag for halo analysis
     do_generalized_importance: bool = False  # Flag for generalized importance
+    do_scar_optimal: bool = False  # Flag for SCAR-optimal (learned component weights)
+    do_random_supernode_ablation: bool = False  # Flag for random supernode ablation control
+    do_supernode_hit_rate_sweep: bool = False  # Flag for hit-rate dose-response sweep (random masks)
+    supernode_hit_rate_sweep: Dict[str, Any] = field(default_factory=dict)  # Config for hit-rate sweep (LLMs)
 
     # Performance optimization
     eval_batches: Optional[int] = None  # Limit evaluation to N batches (None = all)

@@ -176,7 +176,7 @@ class TransformerWrapperEnhanced(BaseModelWrapper):
 
         Returns:
             Per-head representation based on aggregation mode:
-                - sequence_mean: [B, Heads, Dh] → [B, Heads*Dh]
+                - sequence_mean: [B, Heads, Dh] -> [B, Heads*Dh]
                 - token_level: [B*T, Heads*Dh]
         """
         num_heads = num_heads or self.num_heads
@@ -191,10 +191,10 @@ class TransformerWrapperEnhanced(BaseModelWrapper):
             B, H, T, Dh = attention_output.shape
 
             if self.aggregation == "sequence_mean":
-                # Average over tokens: [B, Heads, Dh] → [B, Heads*Dh]
+                # Average over tokens: [B, Heads, Dh] -> [B, Heads*Dh]
                 return attention_output.mean(dim=2).reshape(B, H * Dh)
             else:
-                # Keep tokens: [B, T, Heads, Dh] → [B*T, Heads*Dh]
+                # Keep tokens: [B, T, Heads, Dh] -> [B*T, Heads*Dh]
                 return attention_output.permute(0, 2, 1, 3).reshape(B * T, H * Dh)
 
         elif attention_output.ndim == 3:
@@ -205,7 +205,7 @@ class TransformerWrapperEnhanced(BaseModelWrapper):
             reshaped = attention_output.reshape(B, T, num_heads, head_dim)
 
             if self.aggregation == "sequence_mean":
-                # [B, Heads, Dh] → [B, Heads*Dh]
+                # [B, Heads, Dh] -> [B, Heads*Dh]
                 return reshaped.mean(dim=1).reshape(B, num_heads * head_dim)
             else:
                 # [B*T, Heads*Dh]
@@ -244,8 +244,8 @@ class TransformerWrapperEnhanced(BaseModelWrapper):
         Get FFN (MLP) activations for transformer layer.
 
         For LLaMA-3 style models:
-        - up_proj: [hidden_size → intermediate_size] (e.g., 4096 → 11008)
-        - down_proj: [intermediate_size → hidden_size] (e.g., 11008 → 4096)
+        - up_proj: [hidden_size -> intermediate_size] (e.g., 4096 -> 11008)
+        - down_proj: [intermediate_size -> hidden_size] (e.g., 11008 -> 4096)
         - gate_proj: (if exists) gating mechanism
 
         Args:

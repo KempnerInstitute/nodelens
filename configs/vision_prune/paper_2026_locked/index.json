@@ -1,0 +1,61 @@
+{
+  "manifest": "drafts/alignment_notes/paper_artifacts/run_manifest.json",
+  "out_dir": "configs/vision_prune/paper_2026_locked",
+  "prefer_seed": 42,
+  "experiments": {
+    "alexnet_imagenet100_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/alexnet_imagenet100_cluster_analysis_20260126_132305_57092814",
+      "selected_slurm_job_id": "57092814",
+      "config_path": "configs/vision_prune/paper_2026_locked/alexnet_imagenet100_cluster_analysis.yaml"
+    },
+    "mobilenetv2_cifar100_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/mobilenetv2_cifar100_cluster_analysis_20260127_080037_57211589",
+      "selected_slurm_job_id": "57211589",
+      "config_path": "configs/vision_prune/paper_2026_locked/mobilenetv2_cifar100_cluster_analysis.yaml"
+    },
+    "mobilenetv2_cifar10_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/mobilenetv2_cifar10_cluster_analysis_20260126_123831_57082560",
+      "selected_slurm_job_id": "57082560",
+      "config_path": "configs/vision_prune/paper_2026_locked/mobilenetv2_cifar10_cluster_analysis.yaml"
+    },
+    "resnet18_cifar100_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/resnet18_cifar100_cluster_analysis_20260127_080032_57211546",
+      "selected_slurm_job_id": "57211546",
+      "config_path": "configs/vision_prune/paper_2026_locked/resnet18_cifar100_cluster_analysis.yaml"
+    },
+    "resnet18_cifar10_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/resnet18_cifar10_cluster_analysis_20260126_123830_57082553",
+      "selected_slurm_job_id": "57082553",
+      "config_path": "configs/vision_prune/paper_2026_locked/resnet18_cifar10_cluster_analysis.yaml"
+    },
+    "resnet50_imagenet100_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/resnet50_imagenet100_cluster_analysis_20260126_123831_57082563",
+      "selected_slurm_job_id": "57082563",
+      "config_path": "configs/vision_prune/paper_2026_locked/resnet50_imagenet100_cluster_analysis.yaml"
+    },
+    "vgg16_cifar100_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/vgg16_cifar100_cluster_analysis_20260127_080032_57211547",
+      "selected_slurm_job_id": "57211547",
+      "config_path": "configs/vision_prune/paper_2026_locked/vgg16_cifar100_cluster_analysis.yaml"
+    },
+    "vgg16_cifar10_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/vgg16_cifar10_cluster_analysis_20260126_123831_57082555",
+      "selected_slurm_job_id": "57082555",
+      "config_path": "configs/vision_prune/paper_2026_locked/vgg16_cifar10_cluster_analysis.yaml"
+    },
+    "vgg16_imagenet100_cluster_analysis": {
+      "selected_seed": 42,
+      "selected_run_path": "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER/vgg16_imagenet100_cluster_analysis_20260206_162917_59203901",
+      "selected_slurm_job_id": "59203901",
+      "config_path": "configs/vision_prune/paper_2026_locked/vgg16_imagenet100_cluster_analysis.yaml"
+    }
+  }
+}

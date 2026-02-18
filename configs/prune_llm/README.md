@@ -37,20 +37,20 @@ Each job creates a unique directory based on timestamp and SLURM job ID:
 ```
 /n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/
 ├── llama3_8b_paper_results_20241209_143052_12345678/
-│   ├── results/              # JSON results files
-│   │   ├── results_20241209_143052.json
-│   │   └── pruning_results.json
-│   ├── logs/                 # Experiment logs
-│   │   └── experiment.log
-│   ├── figures/              # All visualizations
-│   │   ├── fig1_supernode_distribution.pdf
-│   │   ├── fig2_halo_redundancy.pdf
-│   │   └── fig3_pruning_curves.pdf
-│   ├── checkpoints/          # Model checkpoints (if enabled)
-│   ├── analysis/             # Post-analysis outputs
-│   └── experiment_config.yaml
+|   ├── results/              # JSON results files
+|   |   ├── results_20241209_143052.json
+|   |   └── pruning_results.json
+|   ├── logs/                 # Experiment logs
+|   |   └── experiment.log
+|   ├── figures/              # All visualizations
+|   |   ├── fig1_supernode_distribution.pdf
+|   |   ├── fig2_halo_redundancy.pdf
+|   |   └── fig3_pruning_curves.pdf
+|   ├── checkpoints/          # Model checkpoints (if enabled)
+|   ├── analysis/             # Post-analysis outputs
+|   └── experiment_config.yaml
 ├── llama2_7b_paper_results_20241209_143100_12345679/
-│   └── ...
+|   └── ...
 ```
 
 **Directory naming convention:**

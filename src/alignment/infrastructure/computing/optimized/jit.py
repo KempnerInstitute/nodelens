@@ -2,6 +2,7 @@
 JIT-optimized implementations of alignment metrics.
 """
 
+import time
 from typing import Tuple
 
 import torch
@@ -318,7 +319,7 @@ def benchmark_jit_vs_regular(metric_name: str, input_shape: Tuple[int, ...], n_i
         jit_time: Time for JIT version
         regular_time: Time for regular version
     """
-    import time
+    is_cuda = str(device).startswith("cuda")
 
     # Create dummy data
     if metric_name == "rayleigh_quotient":
@@ -333,16 +334,44 @@ def benchmark_jit_vs_regular(metric_name: str, input_shape: Tuple[int, ...], n_i
             _ = jit_metric(inputs, weights)
 
         # Time JIT
-        torch.cuda.synchronize()
+        if is_cuda:
+            torch.cuda.synchronize()
         start = time.time()
         for _ in range(n_iterations):
             _ = jit_metric(inputs, weights)
-        torch.cuda.synchronize()
+        if is_cuda:
+            torch.cuda.synchronize()
         jit_time = time.time() - start
 
-        # Regular version would go here
-        # For now, we'll use the same time as placeholder
-        regular_time = jit_time * 1.5  # Assume 50% slower
+        def compute_rayleigh_quotient_regular(x: torch.Tensor, w: torch.Tensor, epsilon: float = 1e-8) -> torch.Tensor:
+            # Center inputs
+            x_centered = x - x.mean(dim=0, keepdim=True)
+
+            # Covariance
+            cov = (x_centered.T @ x_centered) / (x.shape[0] - 1)
+            cov = cov + epsilon * torch.eye(cov.shape[0], device=cov.device)
+
+            # RQ per neuron (Python loop -> expected to be slower than scripted loop)
+            out_dim = w.shape[0]
+            rq = torch.zeros(out_dim, device=w.device)
+            for i in range(out_dim):
+                wi = w[i]
+                rq[i] = (wi @ cov @ wi) / ((wi @ wi) + epsilon)
+            return rq
+
+        # Warmup regular
+        for _ in range(10):
+            _ = compute_rayleigh_quotient_regular(inputs, weights)
+
+        # Time regular
+        if is_cuda:
+            torch.cuda.synchronize()
+        start = time.time()
+        for _ in range(n_iterations):
+            _ = compute_rayleigh_quotient_regular(inputs, weights)
+        if is_cuda:
+            torch.cuda.synchronize()
+        regular_time = time.time() - start
 
     else:
         raise ValueError(f"Benchmark not implemented for: {metric_name}")

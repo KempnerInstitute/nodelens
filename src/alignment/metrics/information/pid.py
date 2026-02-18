@@ -1,8 +1,13 @@
 """
-Partial Information Decomposition (PID) metric using the BROJA 2PID algorithm.
+Partial Information Decomposition (PID) metrics.
 
-This metric decomposes the information that a pair of input features provides
-about the output into unique, redundant, and synergistic components.
+This module defines PID-based metrics that decompose information that a pair of 
+input features provides about the output into unique, redundant, and synergistic 
+components.
+
+Note: These metrics currently return zeros as a placeholder. For practical PID-based
+synergy analysis, use `gaussian_pid_synergy_mmi` which provides a fast Gaussian
+approximation. A proper BROJA-2PID solver could be integrated here in the future.
 """
 
 import logging
@@ -14,20 +19,10 @@ import torch
 from ...core.base import BaseMetric
 from ...core.registry import register_metric
 
+# BROJA solver not currently available - metrics return zeros as placeholder
+HAS_BROJA = False
+
 logger = logging.getLogger(__name__)
-
-# Try to import the BROJA 2PID module
-try:
-    # Add the external module to path if needed
-    from ...external.BROJA_2PID import BROJA_2PID
-
-    HAS_BROJA = True
-except ImportError:
-    HAS_BROJA = False
-    logger.warning(
-        "BROJA_2PID module not found. PID metric will use a simplified approximation. "
-        "For accurate PID computation, please ensure the BROJA_2PID module is available."
-    )
 
 
 class BasePIDMetric(BaseMetric):

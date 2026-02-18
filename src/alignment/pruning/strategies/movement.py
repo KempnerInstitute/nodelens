@@ -192,7 +192,7 @@ class AdaptiveMovementPruning(MovementPruning):
         toward_zero = (movement < 0).float().mean().item()
 
         # Adapt pruning amount
-        # More weights moving toward zero → prune more aggressively
+        # More weights moving toward zero -> prune more aggressively
         adapted_amount = self.base_amount + self.adaptation_strength * (toward_zero - 0.5)
 
         # Clip to valid range

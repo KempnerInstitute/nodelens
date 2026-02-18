@@ -66,6 +66,14 @@ calibration:
 # METRICS
 # -----------------------------------------------------------------------------
 metrics:
+  # Where to read activations for within-layer statistics:
+  # - pre_bn: Conv output before BatchNorm (backward compatible)
+  # - post_bn: BatchNorm output before ReLU (recommended; matches what downstream layers consume)
+  activation_point: "pre_bn"
+  task_activation_samples: "match"
+  # Optional: compute per-channel Fisher/Gauss-Newton loss proxy on calibration data.
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 512
   # Optimization options for faster metric computation
   optimization:
     use_jit: false                 # Enable JIT-compiled computations (20-50% faster)
@@ -143,11 +151,13 @@ cascade_analysis:
 # ResNet-50 on ImageNet: larger model, more channels, tests scalability
 pruning:
   enabled: true
-  distribution: "global_threshold"   # uniform, global_threshold, adaptive_sensitivity
+  # NOTE: global_threshold can cause layer collapse at high sparsity for deep networks.
+  # "uniform" is safer and still allows cluster-aware to shine at extreme sparsity.
+  distribution: "uniform"            # uniform, global_threshold (use uniform for deep nets)
   dependency_aware: true             # ResNet has skip connections
   min_per_layer: 0.0
-  max_per_layer: 0.95
-  ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+  max_per_layer: 0.90                # Never prune more than 90% of a single layer
+  ratios: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
   
   # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:
@@ -158,9 +168,11 @@ pruning:
     - "magnitude"           # Standard magnitude pruning (prune low)
     - "activation_mean"     # Mean |activation| baseline
     - "taylor"              # Gradient-based importance
+    - "taylor_act"          # Activation-based Taylor: E[|a * dL/da|]
     - "network_slimming"    # Network Slimming (BN gamma) baseline
     - "geometric_median"    # FPGM-style geometric median baseline
     - "hrank"               # HRank feature-rank baseline
+    - "chip"
     
     # =========================================================================
     # SINGLE METRICS - Prune LOW (assumes low = unimportant)
@@ -195,6 +207,7 @@ pruning:
     - "network_slimming"
     - "geometric_median"
     - "hrank"
+    - "chip"
     - "rq_low"
     - "rq_high"
     - "redundancy_low"
@@ -338,6 +351,7 @@ extra:
     - "network_slimming"
     - "geometric_median"
     - "hrank"  # HRank pruning for ResNet
+    - "chip"
   
   analysis:
     layer_indices: "all"
@@ -444,6 +458,7 @@ extra:
         - "cluster_aware"
         - "network_slimming"
         - "hrank"
+    - "chip"
       
     layer_importance:
       enabled: true

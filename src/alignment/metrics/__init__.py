@@ -2,7 +2,7 @@
 Metrics for measuring neural network alignment, redundancy, and synergy.
 
 =============================================================================
-METRIC TAXONOMY (paper-aligned definitions)
+METRIC TAXONOMY (library definitions)
 =============================================================================
 
 1. ALIGNMENT METRICS (Rayleigh Quotient based)
@@ -202,7 +202,7 @@ def get_metric(name: str, **kwargs):
     Returns:
         Instantiated metric object
         
-    Recommended metrics for pruning (from paper):
+    Common metrics for pruning and analysis:
         - rayleigh_quotient: Alignment with input covariance
         - gaussian_mi_analytic: MI directly related to RQ
         - pairwise_redundancy_gaussian: Target-free redundancy
@@ -226,7 +226,7 @@ def get_recommended_metrics():
     """
     Get the recommended core metrics for alignment analysis and pruning.
     
-    Based on the analytical framework in the alignment notes:
+    Based on the library's alignment framework:
     1. rayleigh_quotient - Alignment proxy
     2. gaussian_mi_analytic - MI (RQ-related)
     3. pairwise_redundancy_gaussian - Redundancy

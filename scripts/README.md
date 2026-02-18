@@ -41,7 +41,4 @@ Options:
 - `--analyses LIST` - Specific analyses to run
 - `--quick` - Run all analyses with defaults
 
-## Paper-specific helpers
 
-The SCAR/LLM-pruning paper batch scripts and artifact collectors live under:
-- `drafts/LLM_prune/paper/`

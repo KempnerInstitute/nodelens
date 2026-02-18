@@ -27,7 +27,6 @@ This section contains the complete API reference for the alignment framework.
    :caption: Utilities
    
    utils
-   external
 
 Module Overview
 ---------------

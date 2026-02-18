@@ -480,7 +480,7 @@ class PruningVisualizer:
         y_label: Optional[str] = None,
     ) -> None:
         """
-        Plot sparsity–metric curves from a tidy dataframe.
+        Plot sparsity-metric curves from a tidy dataframe.
 
         This is written generically so it can be used for both perplexity
         (language models) and accuracy or loss (vision models) by changing

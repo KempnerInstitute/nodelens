@@ -39,7 +39,7 @@ dataset:
 #   - delta_rq: Δ_RQ = RQ_unconditional - RQ_conditional
 #
 # MUTUAL INFORMATION (Gaussian):
-#   - gaussian_mi_analytic: I(X; y) ≈ 0.5 * log(1 + RQ/σ²)
+#   - gaussian_mi_analytic: I(X; y) ~ 0.5 * log(1 + RQ/σ²)
 #     This is the MI directly related to RQ from the paper
 #   - mi_about_class: I(Z; Y) - MI between activations and class labels
 #

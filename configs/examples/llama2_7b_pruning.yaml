@@ -12,10 +12,10 @@
 #
 # From SCAR paper Table 5 (Cross-Model Generalization at 50% sparsity):
 # ┌─────────────────┬──────────────┬──────────────────┐
-# │ Model           │ Method       │ PPL↓  │ Acc.↑   │
+# | Model           | Method       | PPLdown  | Acc.up   |
 # ├─────────────────┼──────────────┼───────┼─────────┤
-# │ Llama-2-7B      │ Wanda        │ 19.4  │ 62.3%   │
-# │                 │ SCAR         │ 13.1  │ 66.8%   │
+# | Llama-2-7B      | Wanda        | 19.4  | 62.3%   |
+# |                 | SCAR         | 13.1  | 66.8%   |
 # └─────────────────┴──────────────┴───────┴─────────┘
 #
 # EXPECTED RUNTIME: ~6-10 hours on H100
@@ -139,7 +139,7 @@ supernode_summary:
 pruning:
   enabled: true
   
-  sparsity_levels: [0.25, 0.5, 0.75]
+  sparsity_levels: [0, 0.25, 0.5, 0.75]
   
   selection_modes: ["low", "high"]
   

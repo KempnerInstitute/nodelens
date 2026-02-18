@@ -7,17 +7,17 @@ configs/
 ├── template.yaml              # Complete template with all options
 ├── unified_template.yaml      # Unified format template
 ├── vision_prune/              # Vision model pruning configs
-│   ├── resnet18_cifar10_full.yaml
-│   ├── resnet18_cifar10_unified.yaml  # Unified format version
-│   ├── resnet50_imagenet100.yaml
-│   ├── vgg16_cifar10_full.yaml
-│   └── mobilenetv2_cifar10_full.yaml
+|   ├── resnet18_cifar10_full.yaml
+|   ├── resnet18_cifar10_unified.yaml  # Unified format version
+|   ├── resnet50_imagenet100.yaml
+|   ├── vgg16_cifar10_full.yaml
+|   └── mobilenetv2_cifar10_full.yaml
 ├── prune_llm/                 # LLM pruning configs
-│   ├── llama3_8b_full.yaml
-│   ├── llama3_8b_unified.yaml  # Unified format version
-│   ├── llama2_7b_full.yaml
-│   ├── mistral_7b_full.yaml
-│   └── qwen2_7b_full.yaml
+|   ├── llama3_8b_full.yaml
+|   ├── llama3_8b_unified.yaml  # Unified format version
+|   ├── llama2_7b_full.yaml
+|   ├── mistral_7b_full.yaml
+|   └── qwen2_7b_full.yaml
 └── examples/                  # Example configs
     ├── mnist_basic.yaml
     ├── resnet_pruning.yaml

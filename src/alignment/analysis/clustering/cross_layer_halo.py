@@ -1,7 +1,7 @@
 """Cross-layer halo analysis."""
 import numpy as np
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -150,8 +150,125 @@ class CrossLayerHaloAnalysis:
                 tgt_mask = target_labels == tgt_id
                 if tgt_mask.sum() > 0:
                     # Fraction of total outgoing influence mass from src cluster
-                    flow[src_type][tgt_type] = float(src_infl[tgt_mask].sum()) / denom
+                                flow[src_type][tgt_type] = float(src_infl[tgt_mask].sum()) / denom
                 else:
                     flow[src_type][tgt_type] = 0.0
         
         return flow
+
+    def permutation_baseline(
+        self,
+        influence: np.ndarray,
+        labels: np.ndarray,
+        type_mapping: Dict[int, str],
+        redundancy: np.ndarray,
+        synergy: np.ndarray,
+        n_permutations: int = 100,
+        seed: int = 42,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Compute null distribution of halo effects by shuffling cluster labels.
+        
+        This establishes a baseline to determine if observed halo effects
+        are statistically significant beyond random assignment.
+        
+        Args:
+            influence: Influence matrix [out, in]
+            labels: Original cluster labels for source layer
+            type_mapping: Cluster ID to type name mapping
+            redundancy: Per-channel redundancy in target layer
+            synergy: Per-channel synergy in target layer
+            n_permutations: Number of random permutations
+            seed: Random seed for reproducibility
+        
+        Returns:
+            Dict mapping cluster type to:
+                - 'observed_red': Actual halo redundancy
+                - 'observed_syn': Actual halo synergy
+                - 'null_red_mean': Mean halo redundancy under null
+                - 'null_red_std': Std of null distribution
+                - 'null_syn_mean': Mean halo synergy under null
+                - 'null_syn_std': Std of null distribution
+                - 'z_red': Z-score of observed vs null for redundancy
+                - 'z_syn': Z-score of observed vs null for synergy
+                - 'p_red': Proportion of null >= observed (one-tailed)
+                - 'p_syn': Proportion of null >= observed
+        """
+        rng = np.random.default_rng(seed)
+        n_in = labels.size
+        
+        # Compute observed halo effects
+        observed = {}
+        for cid, ctype in type_mapping.items():
+            cluster_idx = np.where(labels == cid)[0]
+            if len(cluster_idx) == 0 or cluster_idx.max() >= influence.shape[1]:
+                continue
+            
+            halo_idx, _ = self.find_halo(influence, cluster_idx)
+            if len(halo_idx) == 0:
+                continue
+            
+            observed[ctype] = {
+                'halo_red': float(np.mean(redundancy[halo_idx])),
+                'halo_syn': float(np.mean(synergy[halo_idx])),
+                'halo_size': len(halo_idx),
+            }
+        
+        # Run permutations
+        null_results = {ctype: {'red': [], 'syn': []} for ctype in observed.keys()}
+        
+        for _ in range(n_permutations):
+            # Shuffle labels while preserving cluster sizes
+            perm_labels = rng.permutation(labels)
+            
+            for cid, ctype in type_mapping.items():
+                if ctype not in null_results:
+                    continue
+                
+                cluster_idx = np.where(perm_labels == cid)[0]
+                if len(cluster_idx) == 0 or cluster_idx.max() >= influence.shape[1]:
+                    continue
+                
+                halo_idx, _ = self.find_halo(influence, cluster_idx)
+                if len(halo_idx) > 0:
+                    null_results[ctype]['red'].append(float(np.mean(redundancy[halo_idx])))
+                    null_results[ctype]['syn'].append(float(np.mean(synergy[halo_idx])))
+        
+        # Compute statistics
+        results = {}
+        for ctype, obs in observed.items():
+            null_red = np.array(null_results[ctype]['red'])
+            null_syn = np.array(null_results[ctype]['syn'])
+            
+            null_red_mean = float(np.mean(null_red)) if len(null_red) > 0 else 0.0
+            null_red_std = float(np.std(null_red)) if len(null_red) > 0 else 1.0
+            null_syn_mean = float(np.mean(null_syn)) if len(null_syn) > 0 else 0.0
+            null_syn_std = float(np.std(null_syn)) if len(null_syn) > 0 else 1.0
+            
+            # Avoid division by zero
+            null_red_std = max(null_red_std, 1e-10)
+            null_syn_std = max(null_syn_std, 1e-10)
+            
+            z_red = (obs['halo_red'] - null_red_mean) / null_red_std
+            z_syn = (obs['halo_syn'] - null_syn_mean) / null_syn_std
+            
+            # One-tailed p-value: proportion of null >= observed
+            p_red = float(np.mean(null_red >= obs['halo_red'])) if len(null_red) > 0 else 1.0
+            p_syn = float(np.mean(null_syn >= obs['halo_syn'])) if len(null_syn) > 0 else 1.0
+            
+            results[ctype] = {
+                'observed_red': obs['halo_red'],
+                'observed_syn': obs['halo_syn'],
+                'halo_size': obs['halo_size'],
+                'null_red_mean': null_red_mean,
+                'null_red_std': null_red_std,
+                'null_syn_mean': null_syn_mean,
+                'null_syn_std': null_syn_std,
+                'z_red': float(z_red),
+                'z_syn': float(z_syn),
+                'p_red': p_red,
+                'p_syn': p_syn,
+                'n_permutations': n_permutations,
+            }
+        
+        return results

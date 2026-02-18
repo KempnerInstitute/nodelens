@@ -15,13 +15,13 @@ This module works for both vision (ResNet, VGG) and LLM (Qwen, Llama) experiment
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-import numpy as np
 
-logger = logging.getLogger(__name__)
+import numpy as np
 
 try:
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+
     HAS_MPL = True
 except ImportError:
     HAS_MPL = False
@@ -43,6 +43,8 @@ from .metric_plots import (
     plot_top_neurons_bar,
     METRIC_COLORS,
 )
+
+logger = logging.getLogger(__name__)
 
 
 CLUSTER_COLORS = {
@@ -117,7 +119,8 @@ def plot_metric_scatter_3d(
     """
     Plot a 3D scatter in (log(RQ), Redundancy, Synergy) space.
 
-    This is primarily intended for the vision paper's representative "cluster_3d_scatter.png".
+    This helper is intended for producing a representative 3D cluster scatter plot
+    (e.g., "cluster_3d_scatter.png") for quick inspection.
     """
     if not HAS_MPL:
         return None

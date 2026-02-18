@@ -94,6 +94,18 @@ class TaylorSaliency(BaseMetric):
             else:
                 raise ValueError(f"Shape mismatch: outputs {outputs.shape}, gradients {gradients.shape}")
 
+        # CNN conv outputs: [B, C, H, W] (or similar). Here the neuron/channel dimension is 1.
+        # Compute per-channel saliency by reducing over batch + spatial dims.
+        if outputs.ndim == 4:
+            product = outputs * gradients
+            if self.mode == "abs_mean":
+                return product.abs().mean(dim=(0, 2, 3))
+            if self.mode == "mean_abs":
+                return product.mean(dim=(0, 2, 3)).abs()
+            if self.mode == "sq_mean":
+                return (product ** 2).mean(dim=(0, 2, 3))
+            raise ValueError(f"Unknown Taylor Saliency mode: {self.mode}")
+
         # Flatten batch dimension if needed, keep neuron dimension
         # Assuming [batch, neurons] or [batch, tokens, neurons]
         if outputs.ndim > 2:

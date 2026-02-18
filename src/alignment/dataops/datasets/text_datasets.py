@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterator, List, Optional
 import torch
 from torch.utils.data import Dataset, IterableDataset
 
+from alignment.core.registry import register_dataset
+
 logger = logging.getLogger(__name__)
 
 
@@ -258,25 +260,77 @@ def load_text_dataset(
             texts = texts[:max_samples]
         return TextDataset(texts, tokenizer, max_length)
 
+    elif dataset_name in {"arxiv", "scientific", "scientific_papers", "scientific_arxiv"}:
+        # Scientific Papers (ArXiv) - long-form scientific text.
+        from datasets import load_dataset
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+        if isinstance(tokenizer, PreTrainedTokenizerBase):
+            hf_tokenizer = tokenizer
+        elif isinstance(tokenizer, str):
+            hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        else:
+            raise TypeError(f"tokenizer must be a string or PreTrainedTokenizerBase, got {type(tokenizer)}")
+
+        if hf_tokenizer.pad_token is None:
+            hf_tokenizer.pad_token = hf_tokenizer.eos_token
+
+        logger.info(f"Loading scientific_papers (arxiv) dataset ({split})")
+        # `scientific_papers` uses custom dataset code on HuggingFace.
+        dataset = load_dataset("scientific_papers", "arxiv", split=split, trust_remote_code=True)
+        texts: List[str] = []
+        for item in dataset:
+            t = item.get("article") or item.get("text") or item.get("abstract")
+            if not t or len(str(t).strip()) == 0:
+                continue
+            texts.append(str(t))
+            if max_samples and len(texts) >= int(max_samples):
+                break
+        return TextDataset(texts, hf_tokenizer, max_length=max_length)
+
+    elif dataset_name in {"code", "code_search_net", "codesearchnet", "code-search-net"}:
+        # CodeSearchNet (python) - code-heavy calibration domain.
+        from datasets import load_dataset
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+        if isinstance(tokenizer, PreTrainedTokenizerBase):
+            hf_tokenizer = tokenizer
+        elif isinstance(tokenizer, str):
+            hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        else:
+            raise TypeError(f"tokenizer must be a string or PreTrainedTokenizerBase, got {type(tokenizer)}")
+
+        if hf_tokenizer.pad_token is None:
+            hf_tokenizer.pad_token = hf_tokenizer.eos_token
+
+        language = str(kwargs.get("language", "python"))
+        logger.info(f"Loading code_search_net ({language}) dataset ({split})")
+        # `code_search_net` uses custom dataset code on HuggingFace.
+        dataset = load_dataset("code_search_net", language, split=split, trust_remote_code=True)
+        texts: List[str] = []
+        for item in dataset:
+            t = item.get("code") or item.get("func_code_string") or item.get("content")
+            if not t or len(str(t).strip()) == 0:
+                continue
+            texts.append(str(t))
+            if max_samples and len(texts) >= int(max_samples):
+                break
+        return TextDataset(texts, hf_tokenizer, max_length=max_length)
+
     else:
         raise ValueError(
-            f"Unknown dataset: {dataset_name}. Supported: wikitext, c4, ptb, mixed_wikitext_c4"
+            f"Unknown dataset: {dataset_name}. Supported: wikitext, c4, ptb, mixed_wikitext_c4, arxiv, code"
         )
 
 
-# Register datasets in alignment registry if needed
-try:
-    from ...core.registry import register_dataset
+# Register datasets in the alignment registry.
+@register_dataset("wikitext-2-v1")
+def create_wikitext(**kwargs):
+    """Create a WikiText dataset from config."""
+    return WikiTextDataset(**kwargs)
 
-    @register_dataset("wikitext-2-v1")
-    def create_wikitext(**kwargs):
-        """Create WikiText dataset from config."""
-        return WikiTextDataset(**kwargs)
 
-    @register_dataset("c4")
-    def create_c4(**kwargs):
-        """Create C4 dataset from config."""
-        return C4Dataset(**kwargs)
-
-except ImportError:
-    pass
+@register_dataset("c4")
+def create_c4(**kwargs):
+    """Create a C4 dataset from config."""
+    return C4Dataset(**kwargs)

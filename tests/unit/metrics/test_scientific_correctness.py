@@ -5,6 +5,8 @@ These tests validate metrics against known ground truth on synthetic data,
 proving that the implementations match theoretical predictions.
 """
 
+import sys
+
 import pytest
 import torch
 
@@ -18,9 +20,9 @@ class TestRedundancyCorrectness:
 
     def test_orthogonal_weights_low_redundancy(self):
         """
-        GROUND TRUTH: Orthogonal weight vectors → LOW redundancy.
+        GROUND TRUTH: Orthogonal weight vectors -> LOW redundancy.
 
-        Theory: If w_i ⊥ w_j, then ρ(Yi, Yj) ≈ 0 → R ≈ 0
+        Theory: If w_i ⊥ w_j, then ρ(Yi, Yj) ~ 0 -> R ~ 0
         """
         # Create orthogonal weights (standard basis vectors)
         D = 20
@@ -37,13 +39,13 @@ class TestRedundancyCorrectness:
         # ASSERT: Should be near zero
         assert redundancy.mean() < 0.15, f"Orthogonal weights should have low redundancy, got {redundancy.mean():.4f}"
 
-        print(f"✓ Orthogonal weights → redundancy = {redundancy.mean():.4f} (expected < 0.15)")
+        print(f"OK Orthogonal weights -> redundancy = {redundancy.mean():.4f} (expected < 0.15)")
 
     def test_colinear_weights_high_redundancy(self):
         """
-        GROUND TRUTH: Colinear (parallel) weights → HIGH redundancy.
+        GROUND TRUTH: Colinear (parallel) weights -> HIGH redundancy.
 
-        Theory: If w_i ≈ w_j, then ρ ≈ 1 → R = -0.5·log(1-1) → large
+        Theory: If w_i ~ w_j, then ρ ~ 1 -> R = -0.5·log(1-1) -> large
         """
         # Create nearly identical weights
         base_weight = torch.randn(1, 20)
@@ -58,7 +60,7 @@ class TestRedundancyCorrectness:
         # ASSERT: Should be high
         assert redundancy.mean() > 0.8, f"Colinear weights should have high redundancy, got {redundancy.mean():.4f}"
 
-        print(f"✓ Colinear weights → redundancy = {redundancy.mean():.4f} (expected > 0.8)")
+        print(f"OK Colinear weights -> redundancy = {redundancy.mean():.4f} (expected > 0.8)")
 
     def test_output_based_matches_covariance_based(self):
         """
@@ -83,7 +85,7 @@ class TestRedundancyCorrectness:
 
         assert correlation > 0.95, f"Output-based and covariance-based should match, correlation = {correlation:.4f}"
 
-        print(f"✓ Output-based vs covariance-based correlation = {correlation:.4f}")
+        print(f"OK Output-based vs covariance-based correlation = {correlation:.4f}")
 
 
 class TestDeltaRQCorrectness:
@@ -91,7 +93,7 @@ class TestDeltaRQCorrectness:
 
     def test_class_separated_data_high_delta_rq(self):
         """
-        GROUND TRUTH: Dimension that separates classes → HIGH ΔRQ.
+        GROUND TRUTH: Dimension that separates classes -> HIGH ΔRQ.
 
         Theory: ΔRQ = RQ(overall) - E[RQ|class]
         If dimension k separates classes:
@@ -134,14 +136,14 @@ class TestDeltaRQCorrectness:
         # Should be significantly positive
         assert results["delta_rq"][0] > 0.01, f"Expected positive ΔRQ for separating dim, got {results['delta_rq'][0]:.4f}"
 
-        print(f"✓ Separating dimension → ΔRQ = {results['delta_rq'][0]:.4f} (vs {results['delta_rq'][1]:.4f})")
+        print(f"OK Separating dimension -> ΔRQ = {results['delta_rq'][0]:.4f} (vs {results['delta_rq'][1]:.4f})")
 
     def test_single_class_zero_delta_rq(self):
         """
-        GROUND TRUTH: Single class → ΔRQ ≈ 0.
+        GROUND TRUTH: Single class -> ΔRQ ~ 0.
 
         Theory: If all samples from one class:
-          RQ(overall) = RQ(class 0) → ΔRQ = 0
+          RQ(overall) = RQ(class 0) -> ΔRQ = 0
         """
         B, D, N = 100, 15, 5
 
@@ -153,9 +155,9 @@ class TestDeltaRQCorrectness:
         results = rq.compute_class_conditioned(inputs, weights, targets, return_delta_rq=True)
 
         # ΔRQ should be very small
-        assert torch.abs(results["delta_rq"]).mean() < 0.01, f"Single class should give ΔRQ ≈ 0, got {results['delta_rq'].mean():.4f}"
+        assert torch.abs(results["delta_rq"]).mean() < 0.01, f"Single class should give ΔRQ ~ 0, got {results['delta_rq'].mean():.4f}"
 
-        print(f"✓ Single class → ΔRQ ≈ {results['delta_rq'].mean():.4f} (expected ≈ 0)")
+        print(f"OK Single class -> ΔRQ ~ {results['delta_rq'].mean():.4f} (expected ~ 0)")
 
 
 class TestMutualInformationCorrectness:
@@ -163,7 +165,7 @@ class TestMutualInformationCorrectness:
 
     def test_independent_variables_zero_mi(self):
         """
-        GROUND TRUTH: Independent variables → MI ≈ 0.
+        GROUND TRUTH: Independent variables -> MI ~ 0.
 
         Theory: If Y ⊥ Z, then I(Y; Z) = 0
         """
@@ -178,13 +180,13 @@ class TestMutualInformationCorrectness:
         mi = synergy_metric._gaussian_mi_categorical(Y, Z)
 
         # Should be near zero (some noise expected due to finite sample)
-        assert mi < 0.15, f"Independent variables should have MI ≈ 0, got {mi:.4f}"
+        assert mi < 0.15, f"Independent variables should have MI ~ 0, got {mi:.4f}"
 
-        print(f"✓ Independent variables → MI = {mi:.4f} (expected < 0.15)")
+        print(f"OK Independent variables -> MI = {mi:.4f} (expected < 0.15)")
 
     def test_correlated_variables_positive_mi(self):
         """
-        GROUND TRUTH: Correlated variables → MI > 0.
+        GROUND TRUTH: Correlated variables -> MI > 0.
 
         Theory: If Y depends on Z, then I(Y; Z) > 0
         """
@@ -201,11 +203,11 @@ class TestMutualInformationCorrectness:
         # Should be positive
         assert mi > 0.5, f"Correlated variables should have MI > 0.5, got {mi:.4f}"
 
-        print(f"✓ Correlated variables → MI = {mi:.4f} (expected > 0.5)")
+        print(f"OK Correlated variables -> MI = {mi:.4f} (expected > 0.5)")
 
     def test_deterministic_relationship_high_mi(self):
         """
-        GROUND TRUTH: Deterministic relationship → High MI.
+        GROUND TRUTH: Deterministic relationship -> High MI.
         """
         B = 1000
 
@@ -219,7 +221,7 @@ class TestMutualInformationCorrectness:
         # Should be high
         assert mi > 1.0, f"Deterministic relationship should have high MI, got {mi:.4f}"
 
-        print(f"✓ Deterministic relationship → MI = {mi:.4f} (expected > 1.0)")
+        print(f"OK Deterministic relationship -> MI = {mi:.4f} (expected > 1.0)")
 
 
 class TestRayleighQuotientCorrectness:
@@ -239,11 +241,11 @@ class TestRayleighQuotientCorrectness:
         assert (scores >= 0).all(), "RQ should be non-negative"
         assert (scores <= 1.0 + 1e-4).all(), "Relative RQ should be ≤ 1.0"
 
-        print(f"✓ RQ in valid range: [{scores.min():.4f}, {scores.max():.4f}]")
+        print(f"OK RQ in valid range: [{scores.min():.4f}, {scores.max():.4f}]")
 
     def test_rq_top_eigenvector_maximum(self):
         """
-        GROUND TRUTH: Weight aligned with top eigenvector → maximum RQ.
+        GROUND TRUTH: Weight aligned with top eigenvector -> maximum RQ.
 
         Theory: RQ(w) is maximized when w = v_1 (top eigenvector of Σ)
         """
@@ -273,7 +275,7 @@ class TestRayleighQuotientCorrectness:
         # ASSERT: Top eigenvector should have highest RQ
         assert scores[0] > scores[1], f"Top eigenvector should have highest RQ: {scores[0]:.4f} vs {scores[1]:.4f}"
 
-        print(f"✓ Top eigenvector → RQ = {scores[0]:.4f} (vs random: {scores[1]:.4f})")
+        print(f"OK Top eigenvector -> RQ = {scores[0]:.4f} (vs random: {scores[1]:.4f})")
 
 
 class TestSynergyCorrectness:
@@ -281,7 +283,7 @@ class TestSynergyCorrectness:
 
     def test_identical_neurons_zero_synergy(self):
         """
-        GROUND TRUTH: Identical neurons → synergy ≈ 0.
+        GROUND TRUTH: Identical neurons -> synergy ~ 0.
 
         Theory: If Yi = Yj, then I(Z; Yi, Yj) = I(Z; Yi) = I(Z; Yj)
         So S = I(Z; Yi,Yj) - I(Z; Yi) - I(Z; Yj) + min(...) = 0
@@ -307,11 +309,11 @@ class TestSynergyCorrectness:
         # Should be near zero (some noise due to finite sample)
         assert torch.abs(synergy).mean() < 0.2, f"Identical neurons should have near-zero synergy, got {synergy.mean():.4f}"
 
-        print(f"✓ Identical neurons → synergy ≈ {synergy.mean():.4f} (expected ≈ 0)")
+        print(f"OK Identical neurons -> synergy ~ {synergy.mean():.4f} (expected ~ 0)")
 
     def test_complementary_features_positive_synergy(self):
         """
-        GROUND TRUTH: Complementary features → positive synergy (in some cases).
+        GROUND TRUTH: Complementary features -> positive synergy (in some cases).
 
         This is a softer test since synergy depends heavily on the specific
         relationship between features and target.
@@ -343,7 +345,7 @@ class TestSynergyCorrectness:
         # Just check it's computed without errors
         assert not torch.isnan(synergy).any(), "Synergy should not be NaN"
 
-        print(f"✓ Complementary features → synergy = {synergy.mean():.4f}")
+        print(f"OK Complementary features -> synergy = {synergy.mean():.4f}")
 
 
 class TestNumericalStability:
@@ -364,7 +366,7 @@ class TestNumericalStability:
         assert not torch.isnan(scores).any()
         assert not torch.isinf(scores).any()
 
-        print(f"✓ Zero variance handled: RQ = {scores.mean():.4f}")
+        print(f"OK Zero variance handled: RQ = {scores.mean():.4f}")
 
     def test_small_batch_with_shrinkage(self):
         """Test that shrinkage helps with small batches."""
@@ -382,7 +384,7 @@ class TestNumericalStability:
         assert not torch.isnan(scores).any()
         assert not torch.isinf(scores).any()
 
-        print(f"✓ Small batch (B={B}, D={D}) handled with regularization")
+        print(f"OK Small batch (B={B}, D={D}) handled with regularization")
 
     def test_high_dimensional_inputs(self):
         """Test on high-dimensional inputs (like LLMs)."""
@@ -399,7 +401,7 @@ class TestNumericalStability:
         assert redundancy.shape == (N,)
         assert not torch.isnan(redundancy).any()
 
-        print(f"✓ High-dimensional (D={D}, N={N}) handled: redundancy mean = {redundancy.mean():.4f}")
+        print(f"OK High-dimensional (D={D}, N={N}) handled: redundancy mean = {redundancy.mean():.4f}")
 
 
 class TestScaleInvariance:
@@ -431,7 +433,7 @@ class TestScaleInvariance:
         # Should be identical
         assert torch.allclose(scores1, scores2, rtol=1e-4), "RQ should be invariant to weight scaling"
 
-        print(f"✓ RQ scale-invariant: max diff = {(scores1 - scores2).abs().max():.6f}")
+        print(f"OK RQ scale-invariant: max diff = {(scores1 - scores2).abs().max():.6f}")
 
     def test_delta_rq_scale_invariance(self):
         """ΔRQ should also be scale-invariant."""
@@ -451,7 +453,7 @@ class TestScaleInvariance:
         # ΔRQ should be invariant
         assert torch.allclose(results1["delta_rq"], results2["delta_rq"], rtol=1e-3), "ΔRQ should be invariant to scaling"
 
-        print("✓ ΔRQ scale-invariant")
+        print("OK ΔRQ scale-invariant")
 
 
 def run_all_validation_tests():
@@ -478,9 +480,9 @@ def run_all_validation_tests():
                     method()
                     passed_tests += 1
                 except AssertionError as e:
-                    print(f"  ✗ {method_name}: {e}")
+                    print(f"  FAIL {method_name}: {e}")
                 except Exception as e:
-                    print(f"  ✗ {method_name}: ERROR - {e}")
+                    print(f"  FAIL {method_name}: ERROR - {e}")
 
     print("\n" + "=" * 80)
     print(f"SUMMARY: {passed_tests}/{total_tests} tests passed")
@@ -491,8 +493,6 @@ def run_all_validation_tests():
 
 if __name__ == "__main__":
     # Can run directly or via pytest
-    import sys
-
     if "--pytest" in sys.argv:
         pytest.main([__file__, "-v"])
     else:

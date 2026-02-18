@@ -145,6 +145,7 @@ General cluster-based analysis for any architecture.
 from alignment.experiments import ClusterAnalysisExperiment, ClusterAnalysisConfig
 
 config = ClusterAnalysisConfig(
+    name="resnet18_cifar10_cluster_analysis",
     model_name="resnet18",
     dataset_name="cifar10",
     n_clusters=4,

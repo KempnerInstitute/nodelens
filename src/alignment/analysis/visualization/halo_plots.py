@@ -261,21 +261,21 @@ def plot_halo_redundancy_comprehensive(
     
     # Interpretation
     if avg_halo > avg_non_halo * 1.2:
-        halo_interpret = "✓ Halo neurons MORE redundant → Current approach VALID"
+        halo_interpret = "OK Halo neurons MORE redundant -> Current approach VALID"
     elif avg_halo < avg_non_halo * 0.8:
-        halo_interpret = "✗ Non-halo MORE redundant → Revise halo definition"
+        halo_interpret = "FAIL Non-halo MORE redundant -> Revise halo definition"
     else:
-        halo_interpret = "≈ Similar redundancy → May need different criteria"
+        halo_interpret = "~ Similar redundancy -> May need different criteria"
     
     if avg_cross < avg_halo * 0.8:
-        cross_interpret = "✓ Cross-group LOW → Groups carry different info"
+        cross_interpret = "OK Cross-group LOW -> Groups carry different info"
     else:
-        cross_interpret = "≈ Cross-group similar → Info not well separated"
+        cross_interpret = "~ Cross-group similar -> Info not well separated"
     
     if avg_halo > avg_non_halo * 1.1 and avg_cross < avg_halo * 0.9:
-        echo_interpret = "✓ Halo is 'echo chamber' → Safe to prune redundant halo"
+        echo_interpret = "OK Halo is 'echo chamber' -> Safe to prune redundant halo"
     else:
-        echo_interpret = "≈ Halo structure not clearly separated"
+        echo_interpret = "~ Halo structure not clearly separated"
     
     summary_text = f"""
 HALO REDUNDANCY ANALYSIS SUMMARY

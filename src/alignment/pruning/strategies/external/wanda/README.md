@@ -5,8 +5,8 @@ This directory vendors a reference implementation of **Wanda** (Sun et al., 2023
 ### Purpose
 
 - **Reference-only**: this code is kept to make it easy to audit our internal Wanda baseline against a known implementation.
-- Our paper’s comparisons use **channel-adapted baselines** implemented in `src/alignment/pruning/strategies/llm_baselines.py`.
-- When we run the paper-faithful *unstructured* Wanda reproduction baseline, we also use the internal implementation (for integration/consistency), but keep this reference code for cross-checking.
+- Our comparisons use **channel-adapted baselines** implemented in `src/alignment/pruning/strategies/llm_baselines.py`.
+- When we run a *reference-faithful* unstructured Wanda reproduction baseline, we use the internal implementation (for integration/consistency), but keep this reference code for cross-checking.
 
 ### Provenance
 

@@ -176,8 +176,8 @@ Supernode analysis identifies high-importance neurons and traces their influence
 ### Architecture Context (LLaMA FFN)
 
 ```
-input(4096) → gate_proj/up_proj(14336) → down_proj → output(4096) → next layer
-              ↑                          ↑
+input(4096) -> gate_proj/up_proj(14336) -> down_proj -> output(4096) -> next layer
+              up                          up
               INTERMEDIATE neurons       OUTPUT to residual stream
               (supernodes identified)    (cross-layer analysis)
 ```

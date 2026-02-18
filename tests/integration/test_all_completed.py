@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Test script to verify all placeholders have been properly implemented.
+Integration sanity checks for the `alignment` package.
+
+This is a lightweight script (not a pytest suite) intended to:
+- verify core modules import cleanly
+- smoke-test a few key APIs (metrics, pruning utils, tracking)
 """
 
 import logging
@@ -19,14 +23,23 @@ def test_imports():
     logger.info("Testing imports...")
 
     try:
-        # Core imports
+        import alignment
 
-        # Utils imports
+        # Core / registry
+        from alignment.core import ModelWrapper  # noqa: F401
+        from alignment.metrics import METRIC_REGISTRY  # noqa: F401
+        from alignment.metrics.base import MetricComputer  # noqa: F401
 
-        logger.info("✓ All imports successful")
+        # Pruning + services
+        from alignment.pruning import get_pruning_strategy  # noqa: F401
+        from alignment.services import MaskOperations  # noqa: F401
+
+        logger.info(f"OK alignment imports OK (version={getattr(alignment, '__version__', 'unknown')})")
+
+        logger.info("OK All imports successful")
         return True
     except Exception as e:
-        logger.error(f"✗ Import error: {e}")
+        logger.error(f"FAIL Import error: {e}")
         return False
 
 
@@ -57,10 +70,10 @@ def test_metric_computer():
         assert "rayleigh_quotient" in results
         assert "mutual_information" in results
 
-        logger.info("✓ MetricComputer is functional")
+        logger.info("OK MetricComputer is functional")
         return True
     except Exception as e:
-        logger.error(f"✗ MetricComputer test failed: {e}")
+        logger.error(f"FAIL MetricComputer test failed: {e}")
         return False
 
 
@@ -89,10 +102,10 @@ def test_parallel_processing():
         results = compute_metrics_parallel(wrapper, dataloader, metrics, num_workers=2)
 
         assert isinstance(results, dict)
-        logger.info("✓ Parallel processing is implemented")
+        logger.info("OK Parallel processing is implemented")
         return True
     except Exception as e:
-        logger.error(f"✗ Parallel processing test failed: {e}")
+        logger.error(f"FAIL Parallel processing test failed: {e}")
         return False
 
 
@@ -118,19 +131,19 @@ def test_pruning_utilities():
             mask = method(layer.weight.data, amount=0.5)
             assert mask.shape == layer.weight.shape
             assert 0.4 < (mask == 0).float().mean() < 0.6  # Roughly 50% pruned
-            logger.info(f"  ✓ {name} pruning works")
+            logger.info(f"  OK {name} pruning works")
 
         # Test pruning schedule
         schedule = create_pruning_schedule(0.0, 0.9, 0, 100, 10, "polynomial")
         assert schedule(0) == 0.0
         assert schedule(100) == 0.9
         assert 0.0 < schedule(50) < 0.9
-        logger.info("  ✓ Pruning schedules work")
+        logger.info("  OK Pruning schedules work")
 
-        logger.info("✓ All pruning utilities functional")
+        logger.info("OK All pruning utilities functional")
         return True
     except Exception as e:
-        logger.error(f"✗ Pruning utilities test failed: {e}")
+        logger.error(f"FAIL Pruning utilities test failed: {e}")
         return False
 
 
@@ -148,17 +161,17 @@ def test_experiment_tracking():
         tracker.log_image("sample", torch.randn(3, 32, 32).numpy(), step=0)
         tracker.finish()
 
-        logger.info("  ✓ Base ExperimentTracker works")
+        logger.info("  OK Base ExperimentTracker works")
 
         # Test tracker creation
         dummy_tracker = create_tracker("tensorboard", "test_exp", {})
         assert dummy_tracker is not None
-        logger.info("  ✓ Tracker creation works")
+        logger.info("  OK Tracker creation works")
 
-        logger.info("✓ Experiment tracking functional")
+        logger.info("OK Experiment tracking functional")
         return True
     except Exception as e:
-        logger.error(f"✗ Experiment tracking test failed: {e}")
+        logger.error(f"FAIL Experiment tracking test failed: {e}")
         return False
 
 
@@ -171,9 +184,9 @@ def test_examples_exist():
     all_exist = True
     for file in example_files:
         if Path(file).exists():
-            logger.info(f"  ✓ {file} exists")
+            logger.info(f"  OK {file} exists")
         else:
-            logger.error(f"  ✗ {file} missing")
+            logger.error(f"  FAIL {file} missing")
             all_exist = False
 
     return all_exist
@@ -211,14 +224,14 @@ def main():
     total = len(results)
 
     for name, result in results.items():
-        status = "✓ PASS" if result else "✗ FAIL"
+        status = "PASS" if result else "FAIL"
         logger.info(f"{name}: {status}")
 
     logger.info(f"\nTotal: {passed}/{total} passed")
 
     if passed == total:
-        logger.info("\n🎉 ALL PLACEHOLDERS HAVE BEEN PROPERLY IMPLEMENTED! 🎉")
-        logger.info("\nThe alignment module is now complete with:")
+        logger.info("\nAll integration sanity checks passed.")
+        logger.info("\nAlignment module capabilities validated:")
         logger.info("- 17+ functional metrics")
         logger.info("- Comprehensive pruning utilities")
         logger.info("- Batch and parallel processing")

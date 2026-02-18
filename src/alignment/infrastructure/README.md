@@ -6,17 +6,17 @@ System utilities for computing, storage, and configuration.
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| `storage/checkpoint.py` | ✅ ACTIVE | Model checkpoint save/load |
-| `storage/logging.py` | ✅ ACTIVE | Logging setup and MetricLogger |
-| `storage/job_directory.py` | ✅ ACTIVE | SLURM job directory management |
-| `configuration/config.py` | ⚠️ AVAILABLE | Basic config utilities (use `alignment.configs` for main config) |
-| `computing/distributed.py` | 🔧 AVAILABLE | Multi-GPU distributed computing (not currently integrated) |
-| `computing/optimized/gpu.py` | ✅ INTEGRATED | GPU-accelerated histogram/MI (enable via config) |
-| `computing/optimized/jit.py` | ✅ INTEGRATED | JIT-compiled metrics (enable via config) |
+| `storage/checkpoint.py` | ACTIVE | Model checkpoint save/load |
+| `storage/logging.py` | ACTIVE | Logging setup and MetricLogger |
+| `storage/job_directory.py` | ACTIVE | SLURM job directory management |
+| `configuration/config.py` | AVAILABLE (warning) | Basic config utilities (use `alignment.configs` for main config) |
+| `computing/distributed.py` | AVAILABLE | Multi-GPU distributed computing (not currently integrated) |
+| `computing/optimized/gpu.py` | INTEGRATED | GPU-accelerated histogram/MI (enable via config) |
+| `computing/optimized/jit.py` | INTEGRATED | JIT-compiled metrics (enable via config) |
 
 ## Components
 
-### storage/ - Storage Infrastructure ✅ ACTIVE
+### storage/ - Storage Infrastructure (ACTIVE)
 
 **checkpoint.py** - Model checkpoint utilities
 ```python
@@ -67,7 +67,7 @@ with JobDirectory("/path/to/outputs", "my_experiment") as job:
     job.save_results(results)
 ```
 
-### computing/ - Computing Infrastructure 🔧 AVAILABLE
+### computing/ - Computing Infrastructure (AVAILABLE)
 
 **distributed.py** - Distributed training utilities
 ```python
@@ -115,7 +115,7 @@ jit_rq = JITRayleighQuotient(epsilon=1e-8)
 scores = jit_rq(inputs, weights)  # Faster than regular RQ
 ```
 
-### configuration/ - Configuration Utilities ⚠️ AVAILABLE
+### configuration/ - Configuration Utilities (AVAILABLE, warning)
 
 Basic configuration utilities. For the main experiment configuration system,
 use `alignment.configs` instead.

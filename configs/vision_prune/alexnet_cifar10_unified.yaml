@@ -1,0 +1,134 @@
+# =============================================================================
+# AlexNet on CIFAR-10 - UNIFIED FORMAT
+# =============================================================================
+# Classic AlexNet architecture for broader architecture coverage.
+# AlexNet has distinct layer structure (no skip connections, no BN originally)
+# which provides a different test case for the functional taxonomy.
+#
+# Usage: python scripts/run_experiment.py --config configs/vision_prune/alexnet_cifar10_unified.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXPERIMENT
+# -----------------------------------------------------------------------------
+experiment:
+  name: "alexnet_cifar10_cluster_analysis"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/vision/alexnet_cifar10"
+
+# -----------------------------------------------------------------------------
+# MODEL
+# -----------------------------------------------------------------------------
+model:
+  name: "alexnet"
+  pretrained: true
+  num_classes: 10
+
+# -----------------------------------------------------------------------------
+# DATASET
+# -----------------------------------------------------------------------------
+dataset:
+  name: "cifar10"
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+# -----------------------------------------------------------------------------
+# TRAINING
+# -----------------------------------------------------------------------------
+training:
+  enabled: true
+  epochs: 50
+  learning_rate: 0.01
+  optimizer: "sgd"
+  scheduler: "cosine"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+# -----------------------------------------------------------------------------
+# CALIBRATION
+# -----------------------------------------------------------------------------
+calibration:
+  num_samples: 5000
+
+# -----------------------------------------------------------------------------
+# METRICS
+# -----------------------------------------------------------------------------
+metrics:
+  activation_point: "pre_bn"  # AlexNet doesn't have BN, but we handle gracefully
+  task_activation_samples: "match"
+  optimization:
+    use_jit: false
+    use_gpu_acceleration: false
+    force_cpu_for_large_ops: true
+  compute:
+    - rayleigh_quotient
+    - redundancy
+    - synergy
+    - magnitude
+    - taylor
+
+# -----------------------------------------------------------------------------
+# CLUSTERING
+# -----------------------------------------------------------------------------
+clustering:
+  n_clusters: 4
+  method: "kmeans"
+  features:
+    - "log_rq"
+    - "redundancy"
+    - "synergy"
+  standardize: true
+  assign_types: true
+  type_mapping_strategy: "centroid_ranking"
+
+# -----------------------------------------------------------------------------
+# HALO ANALYSIS
+# -----------------------------------------------------------------------------
+halo_analysis:
+  enabled: true
+  threshold_percentile: 90
+  influence_type: "activation_weighted"
+  skip_residual_edges: true
+
+# -----------------------------------------------------------------------------
+# PRUNING
+# -----------------------------------------------------------------------------
+pruning:
+  enabled: true
+  methods:
+    - random
+    - magnitude
+    - activation_mean
+    - taylor
+    - network_slimming
+    - geometric_median
+    - hrank
+    - composite
+    - cluster_aware
+    - cluster_aware_annealed
+  sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95]
+  distribution: "global_threshold"
+  fine_tuning:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.001
+    optimizer: "sgd"
+    scheduler: "cosine"
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION
+# -----------------------------------------------------------------------------
+visualization:
+  enabled: true
+  save_format: "png"
+  dpi: 150
+  generate:
+    - metric_distributions
+    - cluster_scatter
+    - cluster_evolution
+    - halo_influence_matrix
+    - pruning_curves
+    - cascade_damage

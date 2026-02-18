@@ -95,6 +95,33 @@ DATASET_CONFIGS = {
             "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
         },
     },
+    "imagenet100": {
+        "dataset_class": datasets.ImageFolder,
+        "folder_based": True,  # Uses {root}/train and {root}/val subdirectories
+        "mean": [0.485, 0.456, 0.406],
+        "std": [0.229, 0.224, 0.225],
+        "num_classes": 100,
+        "input_shape": (3, 224, 224),
+        "augmentation": {
+            "random_resized_crop": 224,
+            "horizontal_flip": True,
+        },
+        "val_transforms": {"resize": 256, "center_crop": 224},
+    },
+    "tinyimagenet": {
+        "dataset_class": datasets.ImageFolder,
+        "folder_based": True,  # Uses {root}/train and {root}/val subdirectories
+        "mean": [0.4802, 0.4481, 0.3975],
+        "std": [0.2770, 0.2691, 0.2821],
+        "num_classes": 200,
+        "input_shape": (3, 64, 64),
+        "augmentation": {
+            "crop": 64,
+            "padding": 8,
+            "horizontal_flip": True,
+            "color_jitter": {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.1},
+        },
+    },
 }
 
 
@@ -164,26 +191,38 @@ class UnifiedDataset(BaseDataset):
     def _initialize_dataset(self, **kwargs):
         """Initialize the underlying dataset."""
         dataset_class = self.dataset_config["dataset_class"]
+        is_folder_based = self.dataset_config.get("folder_based", False)
 
         # Prepare dataset arguments
         dataset_args = {
-            "root": self._data_path,
             "transform": self.get_transform(),
             "target_transform": self.target_transform,
-            "download": self.download,
         }
 
-        # Handle dataset-specific arguments
-        if self.dataset_type == "svhn":
+        if is_folder_based:
+            # ImageFolder-based datasets: root points to {base}/train or {base}/val
+            split_dir = "train" if self.train else "val"
+            split_path = Path(self._data_path) / split_dir
+            if not split_path.exists():
+                raise FileNotFoundError(
+                    f"{self.dataset_type} split directory not found: {split_path}. "
+                    f"Expected ImageFolder layout at {self._data_path}/{{train,val}}/."
+                )
+            dataset_args["root"] = str(split_path)
+        elif self.dataset_type == "svhn":
             # SVHN uses 'split' instead of 'train'
+            dataset_args["root"] = self._data_path
             dataset_args["split"] = "train" if self.train else "test"
+            dataset_args["download"] = self.download
         elif self.dataset_type == "imagenet":
             # ImageNet uses 'split' parameter and doesn't support 'download'
+            dataset_args["root"] = self._data_path
             dataset_args["split"] = "train" if self.train else "val"
-            dataset_args.pop("download", None)  # ImageNet doesn't support download
         else:
             # Most datasets use 'train' parameter
+            dataset_args["root"] = self._data_path
             dataset_args["train"] = self.train
+            dataset_args["download"] = self.download
 
         # Add any additional kwargs
         dataset_args.update(kwargs)
@@ -228,16 +267,19 @@ class UnifiedDataset(BaseDataset):
         """Get basic transforms based on dataset type."""
         transforms_list = []
 
-        # Add dataset-specific basic transforms
-        if self.dataset_type == "imagenet":
+        # Datasets with val_transforms need resize + center crop for validation
+        val_config = self.dataset_config.get("val_transforms", {})
+        has_val_transforms = bool(val_config)
+
+        if has_val_transforms:
             if self.train and not self.augment:
-                # ImageNet training without augmentation: use resize + center crop
-                # (augmentation would use RandomResizedCrop instead)
-                transforms_list.append(transforms.Resize(256))
-                transforms_list.append(transforms.CenterCrop(224))
+                # Training without augmentation: use resize + center crop
+                if "resize" in val_config:
+                    transforms_list.append(transforms.Resize(val_config["resize"]))
+                if "center_crop" in val_config:
+                    transforms_list.append(transforms.CenterCrop(val_config["center_crop"]))
             elif not self.train:
-                # ImageNet validation needs resize and center crop
-                val_config = self.dataset_config.get("val_transforms", {})
+                # Validation: resize and center crop
                 if "resize" in val_config:
                     transforms_list.append(transforms.Resize(val_config["resize"]))
                 if "center_crop" in val_config:

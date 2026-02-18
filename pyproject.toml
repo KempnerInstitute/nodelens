@@ -95,3 +95,12 @@ extend-ignore = ["E402", "E721", "E722"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__ files (used for exports)
 "src/alignment/external/**" = ["E721", "E722"]  # Allow in external code
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "gpu: marks tests that require GPU",
+    "paper_critical: marks tests for paper-critical modules",
+]

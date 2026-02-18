@@ -7,7 +7,7 @@ This directory contains configurations for **cluster-based neural network analys
 The cluster-based analysis pipeline identifies functional types of neurons/channels by clustering them in metric space:
 
 1. **Metric Computation**: RQ (alignment), Redundancy (Gaussian MI), Synergy (with continuous target)
-2. **Clustering**: K-means in metric space → 4 functional types
+2. **Clustering**: K-means in metric space -> 4 functional types
 3. **Cross-Layer Halo Analysis**: Track downstream dependencies
 4. **Cascade Testing**: Validate cluster damage predictions
 5. **Pruning Experiments**: Compare cluster-aware vs baselines
@@ -83,17 +83,36 @@ pruning:
     - cluster_aware             # Full cluster + halo aware
 ```
 
+### Type-aware fine-tuning (optional)
+```yaml
+pruning:
+  methods:
+    - cluster_aware
+    - cluster_aware_typeft      # Same pruning, enables type-aware FT alias
+  fine_tune:
+    enabled: true
+    epochs: 10
+    learning_rate: 0.0001
+    track_epoch_accuracy: true
+    type_aware:
+      enabled: true
+      methods: ["cluster_aware", "cluster_aware_typeft"]
+      lr_multipliers: {critical: 0.5, synergistic: 1.0, redundant: 1.5, background: 1.5}
+      wd_multipliers: {critical: 0.5, synergistic: 1.0, redundant: 1.25, background: 1.5}
+      scale_batchnorm: true
+```
+
 ## Output Structure
 
 ```
 results/cluster_analysis/resnet18_cifar10/
 ├── results.json               # Full results
 ├── figures/
-│   ├── cluster_scatter_*.png  # Metric space plots
-│   ├── cluster_evolution.png  # Composition by depth
-│   ├── influence_matrix_*.png # Cross-layer influence
-│   ├── cascade_*.png          # Damage by cluster type
-│   └── halo_properties_*.png  # Halo redundancy/synergy
+|   ├── cluster_scatter_*.png  # Metric space plots
+|   ├── cluster_evolution.png  # Composition by depth
+|   ├── influence_matrix_*.png # Cross-layer influence
+|   ├── cascade_*.png          # Damage by cluster type
+|   └── halo_properties_*.png  # Halo redundancy/synergy
 └── metrics/
     └── layer_metrics.npz      # Raw per-channel metrics
 ```

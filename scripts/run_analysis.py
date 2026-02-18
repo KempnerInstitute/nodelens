@@ -41,10 +41,12 @@ import logging
 import sys
 from pathlib import Path
 
-# Add src to path for development
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from alignment.analysis import AnalysisRunner, AnalysisConfig
+try:
+    from alignment.analysis import AnalysisRunner, AnalysisConfig
+except ImportError:
+    # Add src to path for development (repo-local runs without installing the package)
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from alignment.analysis import AnalysisRunner, AnalysisConfig
 
 logging.basicConfig(
     level=logging.INFO,

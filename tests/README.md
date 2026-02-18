@@ -16,9 +16,9 @@ pytest tests/ --cov=alignment
 ```
 tests/
 ├── unit/
-│   ├── test_models.py
-│   ├── test_metrics.py
-│   ├── test_experiments.py
-│   └── metrics/
+|   ├── test_models.py
+|   ├── test_metrics.py
+|   ├── test_experiments.py
+|   └── metrics/
 └── integration/
 ```

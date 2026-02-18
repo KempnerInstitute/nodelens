@@ -18,11 +18,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
-
 try:
     import matplotlib.pyplot as plt
     from matplotlib.figure import Figure
+
     HAS_MPL = True
 except ImportError:
     HAS_MPL = False
@@ -33,6 +32,8 @@ try:
     HAS_SEABORN = True
 except (ImportError, AttributeError):
     HAS_SEABORN = False
+
+logger = logging.getLogger(__name__)
 
 
 # Standard color scheme for metrics
