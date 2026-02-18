@@ -14,7 +14,7 @@ model:
   name: "cnn2p2"
   pretrained: false
   tracked_layers: null
-  
+
   # CNN2P2 for CIFAR-10 (3 channels, moderate size)
   cnn2p2_params:
     in_channels: 3                # RGB images
@@ -71,7 +71,7 @@ metrics:
 
 cnn:
   mode: "unfold"
-  
+
 # Pruning experiments
 pruning:
   enabled: true
@@ -80,7 +80,7 @@ pruning:
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   fine_tune:
     enabled: true
     epochs: 10
@@ -101,4 +101,3 @@ analysis:
 visualization:
   format: "png"
   dpi: 300
-

@@ -5,18 +5,12 @@ Tests for metrics/conditional_metrics.py: class-conditioned metrics.
 import pytest
 import torch
 
-from alignment.metrics.conditional_metrics import (
-    ConditionalRayleighQuotient,
-    MIAboutClass,
-    ConditionalActivationNorm,
-    DeltaRQ,
-    ConditionalMIGaussian,
-)
-
+from alignment.metrics.conditional_metrics import ConditionalActivationNorm, ConditionalMIGaussian, ConditionalRayleighQuotient, DeltaRQ, MIAboutClass
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_class_data(n_per_class=20, n_features=8, n_classes=3, seed=42):
     """Create synthetic class-separated data."""
@@ -186,7 +180,7 @@ class TestMIAboutClass:
         metric = MIAboutClass(method="gaussian", min_samples_per_class=5)
         scores = metric.compute(outputs=outputs, targets=targets)
         # Neuron 0 should have highest MI
-        assert scores[0] > scores[1:]  .mean()
+        assert scores[0] > scores[1:].mean()
 
     def test_properties(self):
         metric = MIAboutClass()
@@ -322,9 +316,7 @@ class TestConditionalMIGaussian:
         targets = torch.randint(0, 2, (30,))
         target_outputs = torch.randn(30, 1)
         metric = ConditionalMIGaussian(use_pc_reference=False)
-        scores = metric.compute(
-            outputs=outputs, targets=targets, target_outputs=target_outputs
-        )
+        scores = metric.compute(outputs=outputs, targets=targets, target_outputs=target_outputs)
         assert scores.shape == (8,)
 
     def test_properties(self):

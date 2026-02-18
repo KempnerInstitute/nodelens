@@ -3,14 +3,7 @@ Tests for configs/config_validator.py (validate_config, validate_experiment_conf
 check_compatibility).
 """
 
-import pytest
-
-from alignment.configs.config_validator import (
-    check_compatibility,
-    validate_config,
-    validate_experiment_config,
-)
-
+from alignment.configs.config_validator import check_compatibility, validate_config, validate_experiment_config
 
 # =========================================================================
 # validate_config
@@ -107,25 +100,31 @@ class TestValidateExperimentConfig:
 
 class TestCheckCompatibility:
     def test_cnn2p2_mnist_wrong_channels(self):
-        warnings = check_compatibility({
-            "model_name": "cnn2p2",
-            "dataset_name": "mnist",
-            "model_config": {"in_channels": 3},
-        })
+        warnings = check_compatibility(
+            {
+                "model_name": "cnn2p2",
+                "dataset_name": "mnist",
+                "model_config": {"in_channels": 3},
+            }
+        )
         assert any("in_channels" in w for w in warnings)
 
     def test_large_batch_cpu(self):
-        warnings = check_compatibility({
-            "batch_size": 1024,
-            "device": "cpu",
-        })
+        warnings = check_compatibility(
+            {
+                "batch_size": 1024,
+                "device": "cpu",
+            }
+        )
         assert any("batch" in w.lower() for w in warnings)
 
     def test_no_warnings_for_normal_config(self):
-        warnings = check_compatibility({
-            "model_name": "resnet18",
-            "dataset_name": "cifar10",
-            "batch_size": 64,
-            "device": "cuda:0",
-        })
+        warnings = check_compatibility(
+            {
+                "model_name": "resnet18",
+                "dataset_name": "cifar10",
+                "batch_size": 64,
+                "device": "cuda:0",
+            }
+        )
         assert warnings == []

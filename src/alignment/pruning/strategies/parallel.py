@@ -207,7 +207,7 @@ class TensorizedPruning(BasePruningStrategy):
         for i, mode in enumerate(modes):
             for j, amount in enumerate(amounts):
                 k = int(amount * n_params)
-                
+
                 if k == 0:
                     # No pruning
                     pruning_tensor[i, j] = torch.ones_like(importance_scores)
@@ -217,7 +217,7 @@ class TensorizedPruning(BasePruningStrategy):
                 else:
                     # Use topk-based selection for exact k pruning (avoids threshold tie issues)
                     mask = torch.ones(n_params, dtype=torch.bool, device=importance_scores.device)
-                    
+
                     if mode == "low":
                         # Prune k neurons with LOWEST scores
                         indices_to_prune = sorted_indices_asc[:k]
@@ -228,7 +228,7 @@ class TensorizedPruning(BasePruningStrategy):
                         indices_to_prune = torch.randperm(n_params, device=scores_flat.device)[:k]
                     else:
                         continue
-                    
+
                     mask[indices_to_prune] = False
                     pruning_tensor[i, j] = mask.view(weight_shape).float()
 

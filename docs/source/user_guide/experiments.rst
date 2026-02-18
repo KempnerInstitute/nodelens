@@ -199,7 +199,7 @@ From Python
     # Load configuration
     with open("configs/my_experiment.yaml", "r") as f:
         config_dict = yaml.safe_load(f)
-    
+
     # Create and run experiment
     experiment = create_experiment_from_config(config_dict)
     results = experiment.run()
@@ -219,16 +219,16 @@ All experiments return a results dictionary containing:
 
     # Access results
     results = experiment.run()
-    
+
     # Training history
     train_loss = results['training_history']['train_loss']
     val_accuracy = results['training_history']['val_accuracy']
-    
+
     # Alignment metrics
     if 'alignment_metrics' in results:
         rq_scores = results['alignment_metrics']['rayleigh_quotient']
         mi_scores = results['alignment_metrics']['mutual_information']
-    
+
     # Pruning results
     if 'pruning_results' in results:
         for ratio, metrics in results['pruning_results'].items():
@@ -296,4 +296,4 @@ See Also
 
 - :doc:`configuration` - Detailed configuration options
 - :doc:`metrics` - Available alignment metrics
-- :doc:`pruning` - Pruning strategies and concepts 
+- :doc:`pruning` - Pruning strategies and concepts

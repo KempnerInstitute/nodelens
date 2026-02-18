@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 
 class BaseMetric(ABC):
     """Base class for all alignment metrics.
-    
+
     Common Configuration Options:
         name: Optional custom name for the metric
         force_cpu_for_large_ops: bool = True - Move to CPU for large tensors
         cpu_threshold: int = 1e8 - Element count threshold for CPU fallback
         use_jit: bool = False - Use JIT-compiled implementations when available
         use_gpu_acceleration: bool = False - Use GPU-accelerated implementations
-        
+
     Note: JIT and GPU acceleration provide 20-50% speedup but require:
         - use_jit: PyTorch JIT compilation support
         - use_gpu_acceleration: CUDA-enabled GPU
@@ -46,11 +46,11 @@ class BaseMetric(ABC):
         self.config = config
         self._force_cpu_for_large_ops = config.get("force_cpu_for_large_ops", True)
         self._cpu_threshold = config.get("cpu_threshold", 1e8)  # 100M elements
-        
+
         # Optimization options
         self._use_jit = config.get("use_jit", False)
         self._use_gpu_acceleration = config.get("use_gpu_acceleration", False)
-        
+
         # Initialize JIT/GPU accelerated functions if requested
         self._jit_compute = None
         self._gpu_functions = None
@@ -142,18 +142,19 @@ class BaseMetric(ABC):
     def _setup_optimizations(self) -> None:
         """
         Setup JIT and GPU optimized functions if available.
-        
+
         Override this in subclasses to enable metric-specific optimizations.
         """
         # Import optimization modules lazily
         if self._use_jit:
             try:
                 from ..infrastructure.computing.optimized.jit import (
-                    compute_rayleigh_quotient_jit,
+                    compute_cosine_similarity_matrix_jit,
                     compute_mutual_information_gaussian_jit,
                     compute_node_correlation_jit,
-                    compute_cosine_similarity_matrix_jit,
+                    compute_rayleigh_quotient_jit,
                 )
+
                 self._jit_functions = {
                     "rayleigh_quotient": compute_rayleigh_quotient_jit,
                     "mutual_information": compute_mutual_information_gaussian_jit,
@@ -166,16 +167,17 @@ class BaseMetric(ABC):
                 self._jit_functions = {}
         else:
             self._jit_functions = {}
-            
+
         if self._use_gpu_acceleration:
             try:
                 from ..infrastructure.computing.optimized.gpu import (
+                    GPUAcceleratedMetrics,
+                    gpu_entropy,
                     gpu_histogram1d,
                     gpu_histogram2d,
                     gpu_mutual_information,
-                    gpu_entropy,
-                    GPUAcceleratedMetrics,
                 )
+
                 self._gpu_functions = {
                     "histogram1d": gpu_histogram1d,
                     "histogram2d": gpu_histogram2d,

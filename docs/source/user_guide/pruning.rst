@@ -25,7 +25,7 @@ Prunes weights or neurons based on their magnitude:
 .. code-block:: python
 
     from alignment.pruning.strategies import MagnitudePruning
-    
+
     strategy = MagnitudePruning()
     masks = strategy.compute_masks(model, pruning_ratio=0.5)
 
@@ -37,7 +37,7 @@ Uses gradient information to determine importance:
 .. code-block:: python
 
     from alignment.pruning.strategies import GradientPruning
-    
+
     strategy = GradientPruning()
     masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
 
@@ -49,7 +49,7 @@ Baseline strategy that randomly prunes connections:
 .. code-block:: python
 
     from alignment.pruning.strategies import RandomPruning
-    
+
     strategy = RandomPruning(seed=42)
     masks = strategy.compute_masks(model, pruning_ratio=0.5)
 
@@ -61,7 +61,7 @@ Uses alignment metrics to guide pruning decisions:
 .. code-block:: python
 
     from alignment.pruning.strategies import AlignmentPruning
-    
+
     strategy = AlignmentPruning(metric="rayleigh_quotient")
     masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
 
@@ -76,7 +76,7 @@ Applies the same pruning rate across all layers:
 .. code-block:: python
 
     from alignment.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
-    
+
     config = GlobalDropoutConfig(
         experiment_name="global_pruning_mnist",
         dataset_name="mnist",
@@ -85,7 +85,7 @@ Applies the same pruning rate across all layers:
         dropout_rates=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
         dropout_structure="magnitude"
     )
-    
+
     experiment = GlobalDropoutExperiment(config)
     results = experiment.run()
 
@@ -97,7 +97,7 @@ Analyzes the effect of pruning individual layers:
 .. code-block:: python
 
     from alignment.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
-    
+
     config = LayerIsolatedConfig(
         experiment_name="layer_analysis",
         dataset_name="mnist",
@@ -106,7 +106,7 @@ Analyzes the effect of pruning individual layers:
         pruning_strategy="magnitude",
         layers_to_prune=["fc1", "fc2"]  # Specific layers
     )
-    
+
     experiment = LayerIsolatedPruningExperiment(config)
     results = experiment.run()
 
@@ -118,7 +118,7 @@ Progressive pruning that cascades through network layers:
 .. code-block:: python
 
     from alignment.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
-    
+
     config = CascadingConfig(
         experiment_name="cascading_analysis",
         dataset_name="mnist",
@@ -127,7 +127,7 @@ Progressive pruning that cascades through network layers:
         base_pruning_ratio=0.2,
         cascade_factor=1.5  # Increase pruning by 50% each layer
     )
-    
+
     experiment = CascadingLayerPruningExperiment(config)
     results = experiment.run()
 
@@ -139,7 +139,7 @@ Uses spectral analysis for pruning:
 .. code-block:: python
 
     from alignment.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
-    
+
     config = EigenvectorConfig(
         experiment_name="eigenvector_pruning",
         dataset_name="mnist",
@@ -148,7 +148,7 @@ Uses spectral analysis for pruning:
         component_selection="top",  # or "bottom"
         pruning_ratios=[0.1, 0.3, 0.5]
     )
-    
+
     experiment = EigenvectorDropoutExperiment(config)
     results = experiment.run()
 
@@ -194,14 +194,14 @@ The experiments return comprehensive results:
 .. code-block:: python
 
     results = experiment.run()
-    
+
     # Pruning performance
     for ratio in results['pruning_ratios']:
         metrics = results['pruning_results'][ratio]
         print(f"Pruning {ratio*100}%:")
         print(f"  Accuracy: {metrics['accuracy']:.2f}%")
         print(f"  Remaining params: {metrics['remaining_params']}")
-    
+
     # Layer-wise analysis (for layer-wise experiments)
     if 'layer_results' in results:
         for layer, data in results['layer_results'].items():
@@ -227,7 +227,7 @@ Implement custom strategies by extending the base class:
 .. code-block:: python
 
     from alignment.pruning.strategies import BasePruningStrategy
-    
+
     class MyCustomPruning(BasePruningStrategy):
         def compute_importance_scores(self, model, dataloader=None):
             """Compute importance scores for each parameter."""
@@ -237,7 +237,7 @@ Implement custom strategies by extending the base class:
                     # Your custom importance calculation
                     scores[name] = custom_importance(param)
             return scores
-        
+
         def create_masks(self, scores, pruning_ratio):
             """Create binary masks from scores."""
             masks = {}
@@ -298,4 +298,4 @@ See Also
 
 - :doc:`experiments` - Overview of experiment types
 - :doc:`metrics` - Alignment metrics for pruning
-- :doc:`configuration` - Detailed configuration options 
+- :doc:`configuration` - Detailed configuration options

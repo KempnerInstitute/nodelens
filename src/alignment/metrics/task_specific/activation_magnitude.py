@@ -74,15 +74,15 @@ class ActivationL2Norm(BaseMetric):
                 # weights: [out_channels, in_channels, kH, kW]
                 # We need to compute per-output-channel importance
                 # Use weight magnitude combined with input activation as proxy
-                batch_size = inputs.shape[0]
-                out_channels = weights.shape[0]
-                
+                inputs.shape[0]
+                weights.shape[0]
+
                 # Compute input activation magnitude per input channel
                 input_mag = inputs.abs().mean(dim=(0, 2, 3))  # [in_channels]
-                
+
                 # Weight magnitude per output channel (sum over in_channels and kernel)
                 weight_mag = weights.abs().sum(dim=(1, 2, 3))  # [out_channels]
-                
+
                 # Combine: scale weight magnitude by mean input magnitude
                 # This gives a proxy for output activation magnitude per output channel
                 mean_input_mag = input_mag.mean()
@@ -94,8 +94,9 @@ class ActivationL2Norm(BaseMetric):
             # Only inputs available - compute importance from input activations
             # For CNN, this gives per-input-channel scores, which is wrong for pruning
             # Log a warning
-            logger.warning("ActivationL2Norm: No weights provided, using input activations only. "
-                          "Scores will be per input channel, not per output channel.")
+            logger.warning(
+                "ActivationL2Norm: No weights provided, using input activations only. " "Scores will be per input channel, not per output channel."
+            )
             activations = inputs
         else:
             raise ValueError("Must provide either outputs or (inputs + weights)")
@@ -108,7 +109,7 @@ class ActivationL2Norm(BaseMetric):
                 activations = activations.abs()
             # Average over spatial dimensions (H, W), keep batch and channels
             activations = activations.mean(dim=(2, 3))  # [batch, channels]
-            
+
         elif activations.ndim == 3:
             # [seq_len, batch_size, num_neurons] - typical for transformers
             # This matches PruneLLM's format

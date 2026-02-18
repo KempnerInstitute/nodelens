@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import Union
 
 import pandas as pd
 

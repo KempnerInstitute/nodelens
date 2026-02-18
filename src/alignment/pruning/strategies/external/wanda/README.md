@@ -23,4 +23,3 @@ This code was merged via `origin/iss117_acllm_v3` (see merge commit on the targe
   - Pruning uses `W_metric = |W| * sqrt(scaler_row)`.
 - Row-wise, stable sorting:
   - `sort_res = torch.sort(W_metric, dim=-1, stable=True)`.
-

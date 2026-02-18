@@ -14,16 +14,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.strategies.cluster_aware import (
-    ClusterAwarePruning,
-    ClusterAwarePruningConfig,
-    CompositePruning,
-)
-
+from alignment.pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig, CompositePruning
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_precomputed(n_channels: int = 32, seed: int = 42):
     """Create precomputed metrics + clusters for a layer."""
@@ -31,34 +27,42 @@ def _make_precomputed(n_channels: int = 32, seed: int = 42):
 
     # Split into 4 roughly equal groups
     q = n_channels // 4
-    rq = np.concatenate([
-        rng.uniform(5.0, 10.0, q),   # critical
-        rng.uniform(0.1, 1.0, q),    # redundant
-        rng.uniform(2.0, 4.0, q),    # synergistic
-        rng.uniform(0.1, 0.5, n_channels - 3 * q),  # background
-    ])
-    red = np.concatenate([
-        rng.uniform(0.0, 0.1, q),
-        rng.uniform(0.7, 1.0, q),
-        rng.uniform(0.0, 0.1, q),
-        rng.uniform(0.0, 0.2, n_channels - 3 * q),
-    ])
-    syn = np.concatenate([
-        rng.uniform(0.2, 0.4, q),
-        rng.uniform(0.0, 0.1, q),
-        rng.uniform(0.7, 1.0, q),
-        rng.uniform(0.0, 0.1, n_channels - 3 * q),
-    ])
+    rq = np.concatenate(
+        [
+            rng.uniform(5.0, 10.0, q),  # critical
+            rng.uniform(0.1, 1.0, q),  # redundant
+            rng.uniform(2.0, 4.0, q),  # synergistic
+            rng.uniform(0.1, 0.5, n_channels - 3 * q),  # background
+        ]
+    )
+    red = np.concatenate(
+        [
+            rng.uniform(0.0, 0.1, q),
+            rng.uniform(0.7, 1.0, q),
+            rng.uniform(0.0, 0.1, q),
+            rng.uniform(0.0, 0.2, n_channels - 3 * q),
+        ]
+    )
+    syn = np.concatenate(
+        [
+            rng.uniform(0.2, 0.4, q),
+            rng.uniform(0.0, 0.1, q),
+            rng.uniform(0.7, 1.0, q),
+            rng.uniform(0.0, 0.1, n_channels - 3 * q),
+        ]
+    )
 
     metrics = {"rq": rq, "redundancy": red, "synergy": syn}
 
     # Build matching cluster labels
-    labels = np.concatenate([
-        np.full(q, 0),        # critical
-        np.full(q, 1),        # redundant
-        np.full(q, 2),        # synergistic
-        np.full(n_channels - 3 * q, 3),  # background
-    ]).astype(int)
+    labels = np.concatenate(
+        [
+            np.full(q, 0),  # critical
+            np.full(q, 1),  # redundant
+            np.full(q, 2),  # synergistic
+            np.full(n_channels - 3 * q, 3),  # background
+        ]
+    ).astype(int)
 
     clusters = {
         "labels": labels,
@@ -74,8 +78,8 @@ def _make_precomputed(n_channels: int = 32, seed: int = 42):
 # Tests: importance score computation
 # ---------------------------------------------------------------------------
 
-class TestComputeImportanceScores:
 
+class TestComputeImportanceScores:
     def test_output_shape_and_finiteness(self):
         n_channels = 32
         conv = nn.Conv2d(16, n_channels, 3, padding=1)
@@ -124,18 +128,16 @@ class TestComputeImportanceScores:
 
         scores = cap.compute_importance_scores(module=conv, layer_name="conv1")
         critical_mean = scores[:q].mean()
-        redundant_mean = scores[q:2*q].mean()
-        assert critical_mean > redundant_mean, (
-            f"Critical mean ({critical_mean:.3f}) should exceed redundant mean ({redundant_mean:.3f})"
-        )
+        redundant_mean = scores[q : 2 * q].mean()
+        assert critical_mean > redundant_mean, f"Critical mean ({critical_mean:.3f}) should exceed redundant mean ({redundant_mean:.3f})"
 
 
 # ---------------------------------------------------------------------------
 # Tests: channel selection with constraints
 # ---------------------------------------------------------------------------
 
-class TestSelectChannelsToPrune:
 
+class TestSelectChannelsToPrune:
     def test_correct_number_pruned(self):
         n_channels = 32
         metrics, clusters = _make_precomputed(n_channels)
@@ -181,9 +183,7 @@ class TestSelectChannelsToPrune:
 
         critical_pruned = sum(1 for idx in selected if idx < q)
         max_allowed = int(q * protect_frac)
-        assert critical_pruned <= max_allowed, (
-            f"Pruned {critical_pruned} critical channels, max allowed {max_allowed}"
-        )
+        assert critical_pruned <= max_allowed, f"Pruned {critical_pruned} critical channels, max allowed {max_allowed}"
 
     def test_target_redundant_prunes_redundant_first(self):
         """With target_redundant=True, redundant/background should be pruned before others."""
@@ -211,12 +211,10 @@ class TestSelectChannelsToPrune:
         selected = cap.select_channels_to_prune(scores, n_prune, layer_name="conv1")
 
         # All pruned should be redundant (idx q..2q) or background (idx 3q..)
-        redundant_bg_idx = set(range(q, 2*q)) | set(range(3*q, n_channels))
+        redundant_bg_idx = set(range(q, 2 * q)) | set(range(3 * q, n_channels))
         pruned_from_target = sum(1 for idx in selected if idx in redundant_bg_idx)
         # Most should come from redundant/background
-        assert pruned_from_target >= n_prune * 0.8, (
-            f"Expected ≥{int(n_prune*0.8)} from redundant/bg, got {pruned_from_target}"
-        )
+        assert pruned_from_target >= n_prune * 0.8, f"Expected ≥{int(n_prune*0.8)} from redundant/bg, got {pruned_from_target}"
 
     def test_protected_indices_respected(self):
         n_channels = 16
@@ -237,7 +235,10 @@ class TestSelectChannelsToPrune:
         scores = torch.randn(n_channels)
         protected = [0, 1, 2]
         selected = cap.select_channels_to_prune(
-            scores, 5, layer_name="conv1", protected_indices=protected,
+            scores,
+            5,
+            layer_name="conv1",
+            protected_indices=protected,
         )
         for p in protected:
             assert p not in selected, f"Protected index {p} should not be pruned"
@@ -247,8 +248,8 @@ class TestSelectChannelsToPrune:
 # Tests: normalize helper
 # ---------------------------------------------------------------------------
 
-class TestNormalize:
 
+class TestNormalize:
     def test_known_values(self):
         cap = ClusterAwarePruning()
         result = cap._normalize(np.array([1.0, 2.0, 3.0]))
@@ -270,8 +271,8 @@ class TestNormalize:
 # Tests: CompositePruning baseline
 # ---------------------------------------------------------------------------
 
-class TestCompositePruning:
 
+class TestCompositePruning:
     def test_constraints_disabled(self):
         cp = CompositePruning()
         assert cp.config.protect_critical_frac == 1.0
@@ -290,7 +291,9 @@ class TestCompositePruning:
         cp = CompositePruning()
         scores = torch.arange(16, dtype=torch.float)
         selected = cp.select_channels_to_prune(
-            scores, n_prune=4, protected_indices=[0, 1],
+            scores,
+            n_prune=4,
+            protected_indices=[0, 1],
         )
         assert 0 not in selected
         assert 1 not in selected

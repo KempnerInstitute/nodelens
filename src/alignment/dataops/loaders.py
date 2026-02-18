@@ -11,8 +11,7 @@ from typing import Any, Dict, Optional, Union
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
-from torch.utils.data import IterableDataset
+from torch.utils.data import DataLoader, DistributedSampler, IterableDataset, SequentialSampler
 
 logger = logging.getLogger(__name__)
 

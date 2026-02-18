@@ -42,4 +42,4 @@ Model Utilities
 .. automodule:: alignment.models.utils
    :members:
    :undoc-members:
-   :show-inheritance: 
+   :show-inheritance:

@@ -15,7 +15,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # Track MLP layers for pruning
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
@@ -35,7 +35,7 @@ metrics:
     - "gaussian_mi_analytic"    # MI analytically related to RQ (fast)
     - "average_redundancy"
   num_samples: 64
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -46,7 +46,7 @@ llm:
   scar_metrics: true
   scar_num_samples: 32
   scar_max_length: 512
-  
+
   # Evaluation settings
   evaluate_perplexity: true
   evaluation_num_samples: 50
@@ -89,7 +89,7 @@ supernode:
     - "rayleigh_quotient"
     - "mutual_information"
     - "redundancy"
-    
+
 # Pruning experiments with SCAR metrics
 pruning:
   enabled: true
@@ -98,7 +98,7 @@ pruning:
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   # Pruning strategies to use - these metrics will be used to rank neurons for pruning
   algorithms:
     - "activation_l2_norm"           # L2 norm (magnitude-based pruning)
@@ -111,10 +111,10 @@ pruning:
     # State-of-the-art LLM pruning baselines:
     - "wanda"                        # Weight × Activation (Sun et al., 2023) https://arxiv.org/abs/2306.11695
     - "sparsegpt"                    # Second-order one-shot (Frantar & Alistarh, 2023) https://arxiv.org/abs/2301.00774
-  
+
   # For LLMs: limit to single strategy to reduce memory usage (or null for all)
   single_strategy: null
-  
+
   fine_tune:
     enabled: false
     epochs: 1
@@ -145,4 +145,3 @@ analysis:
 visualization:
   format: "png"
   dpi: 300
-

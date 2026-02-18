@@ -21,29 +21,29 @@ ExperimentConfig
 .. autoclass:: alignment.experiments.base.ExperimentConfig
    :members:
    :undoc-members:
-   
+
    **Core Configuration Options:**
-   
+
    .. attribute:: name
       :type: str
-      
+
       Unique identifier for the experiment
-      
+
    .. attribute:: model_name
       :type: str
-      
+
       Name of the model architecture to use (e.g., "resnet18", "mlp", "cnn2p2")
-      
+
    .. attribute:: dataset_name
       :type: str
-      
+
       Dataset to use (e.g., "cifar10", "mnist", "imagenet")
-      
+
    .. attribute:: metrics
       :type: List[str]
-      
+
       List of metrics to compute. Available metrics:
-      
+
       - ``"rayleigh_quotient"``: Neuron alignment with input variance
       - ``"mutual_information"``: Information shared between layers
       - ``"pid_shared"``: Shared information (PID)
@@ -53,17 +53,17 @@ ExperimentConfig
       - ``"cca"``: Canonical Correlation Analysis
       - ``"weight_cosine_similarity"``: Cosine similarity between weights
       - ``"node_redundancy"``: Redundancy between neurons
-      
+
    .. attribute:: device
       :type: str
       :default: "cuda" if available else "cpu"
-      
+
       Device to run experiments on
-      
+
    .. attribute:: seed
       :type: int
       :default: 42
-      
+
       Random seed for reproducibility
 
 Progressive Dropout Experiment
@@ -77,69 +77,69 @@ Progressive Dropout Experiment
 .. autoclass:: alignment.experiments.progressive_dropout.ProgressiveDropoutExperiment
    :members:
    :undoc-members:
-   
+
    **Description:**
-   
-   This experiment gradually increases dropout rates during evaluation to study how networks 
-   degrade as neurons are progressively removed. It's useful for understanding network 
+
+   This experiment gradually increases dropout rates during evaluation to study how networks
+   degrade as neurons are progressively removed. It's useful for understanding network
    robustness and identifying critical neurons.
-   
+
    **Key Configuration Options:**
-   
+
    .. attribute:: dropout_rates
       :type: List[float]
       :default: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-      
+
       List of dropout rates to evaluate
-      
+
    .. attribute:: dropout_mode
       :type: str
       :default: "scaled"
-      
+
       How to apply dropout:
-      
+
       - ``"scaled"``: Scale remaining activations by 1/(1-p)
       - ``"unscaled"``: No scaling (true dropout)
-      
+
    .. attribute:: pruning_mode
       :type: str
       :default: "global_joint"
-      
+
       Pruning strategy:
-      
+
       - ``"global_joint"``: Prune globally across all layers
       - ``"layer_wise"``: Prune each layer independently
       - ``"structured"``: Remove entire channels/filters
-      
+
    .. attribute:: pruning_strategy
       :type: str
       :default: "low"
-      
+
       Which neurons to prune:
-      
+
       - ``"low"``: Remove low-scoring neurons
       - ``"high"``: Remove high-scoring neurons
       - ``"random"``: Random pruning
-      
+
    .. attribute:: pruning_metric
       :type: str
       :default: "rayleigh_quotient"
-      
+
       Metric to use for importance scoring
-      
+
    .. attribute:: exclude_classification_layer
       :type: bool
       :default: True
-      
+
       Whether to exclude the final classification layer from pruning
-   
+
    **Example Usage:**
-   
+
    .. code-block:: python
-   
+
       from alignment.experiments import ProgressiveDropoutExperiment
       from alignment.experiments.base import ExperimentConfig
-      
+
       config = ExperimentConfig(
           name="progressive_dropout_resnet",
           model_name="resnet18",
@@ -151,10 +151,10 @@ Progressive Dropout Experiment
           pruning_strategy="low",
           pruning_metric="rayleigh_quotient"
       )
-      
+
       experiment = ProgressiveDropoutExperiment(config)
       results = experiment.run()
-      
+
       # Results contain:
       # - Accuracy at each dropout rate
       # - Metric values for remaining neurons
@@ -171,30 +171,30 @@ Experiment Runner
 .. autoclass:: alignment.experiments.runner.ExperimentRunner
    :members:
    :undoc-members:
-   
+
    **Description:**
-   
-   The ExperimentRunner manages multiple experiments, handling parallel execution, 
+
+   The ExperimentRunner manages multiple experiments, handling parallel execution,
    result aggregation, and resource management.
-   
+
    **Key Features:**
-   
+
    - Parallel experiment execution
    - Automatic result saving and loading
    - Progress tracking and logging
    - Resource management (GPU allocation)
    - Experiment resumption on failure
-   
+
    **Example Usage:**
-   
+
    .. code-block:: python
-   
+
       from alignment.experiments import ExperimentRunner
       from alignment.experiments.base import ExperimentConfig
-      
+
       # Define multiple experiments
       configs = []
-      
+
       # Progressive dropout with different strategies
       for strategy in ["low", "high", "random"]:
           configs.append(ExperimentConfig(
@@ -204,7 +204,7 @@ Experiment Runner
               metrics=["rayleigh_quotient"],
               pruning_strategy=strategy
           ))
-      
+
       # Different dropout rates
       for rate in [0.3, 0.5, 0.7]:
           configs.append(ExperimentConfig(
@@ -213,7 +213,7 @@ Experiment Runner
               dataset_name="cifar10",
               dropout_rates=[0.0, rate]
           ))
-      
+
       # Run all experiments
       runner = ExperimentRunner(
           configs=configs,
@@ -222,9 +222,9 @@ Experiment Runner
           max_workers=4,
           gpu_per_worker=0.25  # Share GPUs
       )
-      
+
       all_results = runner.run()
-      
+
       # Analyze results
       runner.generate_report(output_path="./report.html")
 
@@ -363,4 +363,4 @@ See Also
 
 - :doc:`/user_guide/experiments` - User guide for experiments
 - :doc:`/api/metrics` - Available metrics documentation
-- :doc:`/api/pruning` - Pruning strategies documentation 
+- :doc:`/api/pruning` - Pruning strategies documentation

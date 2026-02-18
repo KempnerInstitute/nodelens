@@ -15,7 +15,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # Track MLP layers for pruning
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
@@ -35,7 +35,7 @@ metrics:
     - "gaussian_mi_analytic"    # MI analytically related to RQ (fast)
     - "average_redundancy"
   num_samples: 64
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -46,11 +46,11 @@ llm:
   scar_metrics: true
   scar_num_samples: 32
   scar_max_length: 512
-  
+
   # Evaluation settings
   evaluate_perplexity: true
   evaluation_num_samples: 100  # Use 100 samples per benchmark for reliability
-  
+
   # FULL BENCHMARK SUITE including NVIDIA Minitron benchmarks
   # Total: 10 metrics covering language modeling + 8 downstream tasks
   evaluation_metrics:
@@ -58,7 +58,7 @@ llm:
     - "perplexity"           # WikiText perplexity (lower is better)
     - "loss"                 # Cross-entropy loss (lower is better)
     - "bits_per_byte"        # Compression efficiency (lower is better)
-    
+
     # NVIDIA Minitron benchmark suite (https://arxiv.org/abs/2407.14679)
     - "accuracy_mmlu"        # MMLU - Massive Multitask LU (~20min)
     - "accuracy_hellaswag"   # HellaSwag - Commonsense reasoning (~10min)
@@ -66,11 +66,11 @@ llm:
     - "accuracy_winogrande"  # WinoGrande - Winograd schemas (~10min)
     - "accuracy_piqa"        # PIQA - Physical intuition (~5min)
     - "accuracy_truthfulqa"  # TruthfulQA - Truthfulness (~10min)
-    
+
     # Additional benchmarks
     - "accuracy_arc_easy"    # ARC-Easy - Science questions (~5min)
     - "accuracy_boolq"       # BoolQ - Boolean questions (~5min)
-    
+
     # Math and Code benchmarks (NVIDIA Minitron)
     - "accuracy_gsm8k"       # GSM8k - Grade school math (~15min)
     - "accuracy_mbpp"        # MBPP - Python code (~10min)
@@ -90,7 +90,7 @@ supernode:
     - "rayleigh_quotient"
     - "mutual_information"
     - "redundancy"
-  
+
 # Pruning experiments with ALL strategies including baselines
 pruning:
   enabled: true
@@ -99,7 +99,7 @@ pruning:
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   # ALL pruning strategies including SOTA baselines
   algorithms:
     - "activation_l2_norm"           # L2 norm (magnitude-based pruning)
@@ -112,9 +112,9 @@ pruning:
     # State-of-the-art LLM pruning baselines (NVIDIA Minitron comparison):
     - "wanda"                        # Weight × Activation (Sun et al., 2023)
     - "sparsegpt"                    # Second-order one-shot (Frantar & Alistarh, 2023)
-  
+
   single_strategy: null
-  
+
   fine_tune:
     enabled: false
     epochs: 1
@@ -145,4 +145,3 @@ analysis:
 visualization:
   format: "png"
   dpi: 300
-

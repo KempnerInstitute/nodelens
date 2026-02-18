@@ -171,4 +171,3 @@ output:
   save_figures: true
   save_checkpoints: true
   save_per_layer: true
-

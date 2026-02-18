@@ -3,13 +3,12 @@ Tests for aggregation modules: MetricAggregator, LayerAggregator, ResultAggregat
 """
 
 import json
+
 import pytest
-import numpy as np
 
-from alignment.analysis.aggregation.metrics import MetricAggregator
 from alignment.analysis.aggregation.layers import LayerAggregator
+from alignment.analysis.aggregation.metrics import MetricAggregator
 from alignment.analysis.aggregation.results import ResultAggregator
-
 
 # =========================================================================
 # MetricAggregator
@@ -119,9 +118,7 @@ class TestLayerAggregator:
         # enough layers, but only 1 value per layer is fine since the code uses
         # means across layers. Use 4 normal + 1 outlier with sufficient separation.
         for _ in range(3):
-            agg.add_metrics({
-                "rq": {"a": 1.0, "b": 1.1, "c": 0.9, "d": 1.05, "outlier": 100.0}
-            })
+            agg.add_metrics({"rq": {"a": 1.0, "b": 1.1, "c": 0.9, "d": 1.05, "outlier": 100.0}})
         anomalous = agg.find_anomalous_layers("rq", threshold_std=1.5)
         assert "outlier" in anomalous
 

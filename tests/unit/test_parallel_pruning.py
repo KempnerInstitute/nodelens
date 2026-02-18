@@ -6,17 +6,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.strategies.parallel import (
-    ParallelPruningResult,
-    ParallelModePruning,
-    TensorizedPruning,
-    AsyncParallelPruning,
-)
-
+from alignment.pruning.strategies.parallel import AsyncParallelPruning, ParallelModePruning, ParallelPruningResult, TensorizedPruning
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _TinyModel(nn.Module):
     def __init__(self):
@@ -136,17 +131,13 @@ class TestTensorizedPruning:
     def test_compute_pruning_tensor_shape(self):
         model = _TinyModel()
         tp = TensorizedPruning()
-        tensor = tp.compute_pruning_tensor(
-            model.fc1, modes=["low", "high"], amounts=[0.3, 0.5]
-        )
+        tensor = tp.compute_pruning_tensor(model.fc1, modes=["low", "high"], amounts=[0.3, 0.5])
         assert tensor.shape == (2, 2, 16, 8)  # [modes, amounts, out, in]
 
     def test_pruning_tensor_values(self):
         model = _TinyModel()
         tp = TensorizedPruning()
-        tensor = tp.compute_pruning_tensor(
-            model.fc1, modes=["low"], amounts=[0.0, 0.5]
-        )
+        tensor = tp.compute_pruning_tensor(model.fc1, modes=["low"], amounts=[0.0, 0.5])
         # amount=0.0 -> all ones
         assert tensor[0, 0].sum() == 16 * 8
         # amount=0.5 -> about half pruned
@@ -157,17 +148,13 @@ class TestTensorizedPruning:
     def test_pruning_tensor_random(self):
         model = _TinyModel()
         tp = TensorizedPruning()
-        tensor = tp.compute_pruning_tensor(
-            model.fc1, modes=["random"], amounts=[0.5]
-        )
+        tensor = tp.compute_pruning_tensor(model.fc1, modes=["random"], amounts=[0.5])
         assert tensor.shape[0] == 1
 
     def test_analyze_pruning_patterns(self):
         model = _TinyModel()
         tp = TensorizedPruning()
-        tensor = tp.compute_pruning_tensor(
-            model.fc1, modes=["low", "high"], amounts=[0.3, 0.5, 0.7]
-        )
+        tensor = tp.compute_pruning_tensor(model.fc1, modes=["low", "high"], amounts=[0.3, 0.5, 0.7])
         analysis = tp.analyze_pruning_patterns(tensor)
         assert "sparsity_progression" in analysis
         assert "mode_overlap" in analysis

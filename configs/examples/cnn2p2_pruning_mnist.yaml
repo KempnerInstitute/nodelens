@@ -14,7 +14,7 @@ model:
   name: "cnn2p2"
   pretrained: false
   tracked_layers: null
-  
+
   # CNN2P2 specific parameters - SMALLER model to avoid saturation
   cnn2p2_params:
     in_channels: 1                # Grayscale images
@@ -71,7 +71,7 @@ metrics:
 
 cnn:
   mode: "unfold"
-  
+
 # Pruning experiments - includes random baseline
 pruning:
   enabled: true
@@ -80,7 +80,7 @@ pruning:
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   fine_tune:
     enabled: false
     epochs: 5                     # Fewer fine-tune epochs

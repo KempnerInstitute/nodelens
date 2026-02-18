@@ -6,7 +6,6 @@ specific to the models module.
 """
 
 import logging
-from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -84,7 +83,7 @@ class BaseModelWrapper(BaseModel):
             # Use generic detector (model-agnostic)
             trackable_layers = detect_trackable_layers(self._model, min_neurons=1)
 
-            logger.info(f"Used generic LayerDetector (model-agnostic)")
+            logger.info("Used generic LayerDetector (model-agnostic)")
 
         else:
             # Fallback to simple type-based detection
@@ -315,7 +314,6 @@ class BaseModelWrapper(BaseModel):
                 outputs = self._model(inputs, **kwargs)
 
         return outputs, activations.copy()
-
 
     def capture_activations_safe(self, inputs: torch.Tensor, layers: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """

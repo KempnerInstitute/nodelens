@@ -13,7 +13,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # LLaMA MLP: up_proj has 14336 intermediate neurons (pruning target)
   # Note: HFCausalLM wraps LlamaForCausalLM, so paths include 'model.model.'
   tracked_layers:
@@ -33,7 +33,7 @@ metrics:
     - "rayleigh_quotient"
     - "activation_outlier_index"
   num_samples: 128
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -57,26 +57,26 @@ supernode:
 # Pruning experiments
 pruning:
   enabled: true
-  
+
   # Sparsity levels to test (fraction of neurons to remove)
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5]
-  
+
   # Selection modes: WHICH neurons to prune based on their scores
   #   "low"    - prune neurons with LOWEST scores (remove least important)
   #   "high"   - prune neurons with HIGHEST scores (ablation study)
   #   "random" - prune randomly (baseline comparison)
   selection_modes: ["low", "high"]
-  
+
   # Distribution: HOW to allocate sparsity across layers
   #   "uniform"              - same % per layer (simple, default)
   #   "global_threshold"     - global score threshold
   #   "adaptive_sensitivity" - prune robust layers more
   #   "cascading"            - sequential layer-by-layer
   distribution: "uniform"
-  
+
   # Structured: prune entire neurons/channels
   structured: true
-  
+
   fine_tune:
     enabled: false
     epochs: 1

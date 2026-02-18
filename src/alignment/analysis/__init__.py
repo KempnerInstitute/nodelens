@@ -13,20 +13,14 @@ The module has been simplified to provide unified interfaces for common tasks.
 # Aggregation
 from .aggregation import LayerAggregator, MetricAggregator, ResultAggregator
 
-# Unified Reporting
-from .unified_reporter import UnifiedReporter, generate_quick_report
-
-# Unified Visualization
-from .visualization.unified_visualizer import UnifiedVisualizer, plot_quick_summary
-
 # Unified Analysis Runner
-from .analysis_runner import AnalysisRunner, AnalysisConfig, run_analysis_from_config
-
-# Clustering Analysis
-from .clustering import MetricSpaceClustering, ClusterResult, CrossLayerHaloAnalysis, HaloResult
+from .analysis_runner import AnalysisConfig, AnalysisRunner, run_analysis_from_config
 
 # Cascade Analysis
-from .cascade_analysis import CascadeAnalysis, DamagePrediction, CascadeResult, DamageResult
+from .cascade_analysis import CascadeAnalysis, CascadeResult, DamagePrediction, DamageResult
+
+# Clustering Analysis
+from .clustering import ClusterResult, CrossLayerHaloAnalysis, HaloResult, MetricSpaceClustering
 
 # Mechanism validation (general-purpose; reused across experiments)
 from .mechanism_validation import (
@@ -38,6 +32,12 @@ from .mechanism_validation import (
 
 # Semantic hooks (non-pruning interpretability-facing analyses)
 from .semantic_hooks import ClassSelectivityResult, compute_class_selectivity
+
+# Unified Reporting
+from .unified_reporter import UnifiedReporter, generate_quick_report
+
+# Unified Visualization
+from .visualization.unified_visualizer import UnifiedVisualizer, plot_quick_summary
 
 __all__ = [
     # Aggregation

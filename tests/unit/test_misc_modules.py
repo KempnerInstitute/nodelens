@@ -3,22 +3,16 @@ Tests for miscellaneous modules: dynamic_scoring, reporters, delta_alignment, pa
 """
 
 import json
+
+import pandas as pd
 import pytest
 import torch
-import pandas as pd
 
-from alignment.analysis.dynamic_scoring import (
-    DynamicScoreAggregator,
-    compute_dynamic_importance,
-)
+from alignment.analysis.dynamic_scoring import DynamicScoreAggregator, compute_dynamic_importance
 from alignment.analysis.reporting.json_reporter import JSONReporter
 from alignment.analysis.reporting.markdown import MarkdownReporter
-from alignment.metrics.rayleigh.delta_alignment import (
-    DeltaAlignment,
-    NormalizedDeltaAlignment,
-)
 from alignment.metrics.pairwise_base import PairwiseMetric
-
+from alignment.metrics.rayleigh.delta_alignment import DeltaAlignment, NormalizedDeltaAlignment
 
 # =========================================================================
 # DynamicScoreAggregator
@@ -27,8 +21,7 @@ from alignment.metrics.pairwise_base import PairwiseMetric
 
 class TestDynamicScoreAggregator:
     def test_init_weights_normalized(self):
-        agg = DynamicScoreAggregator(weight_final=0.4, weight_trend=0.2,
-                                      weight_loss_corr=0.3, weight_stability=0.1)
+        agg = DynamicScoreAggregator(weight_final=0.4, weight_trend=0.2, weight_loss_corr=0.3, weight_stability=0.1)
         total = agg.weight_final + agg.weight_trend + agg.weight_loss_corr + agg.weight_stability
         assert total == pytest.approx(1.0)
 
@@ -111,9 +104,7 @@ class TestDynamicScoreAggregator:
         assert result == [1.0, 2.0, 3.0]
 
     def test_align_loss_history_with_steps(self):
-        result = DynamicScoreAggregator._align_loss_history(
-            {"steps": [0, 5, 10]}, list(range(20)), 3
-        )
+        result = DynamicScoreAggregator._align_loss_history({"steps": [0, 5, 10]}, list(range(20)), 3)
         assert len(result) == 3
 
     def test_align_loss_history_fallback_uniform(self):
@@ -219,9 +210,7 @@ class TestDeltaAlignment:
         inputs = torch.randn(20, 8)
         weights = torch.randn(4, 8)
         initial_weights = torch.zeros(4, 8)
-        scores = metric.compute(
-            inputs=inputs, weights=weights, initial_weights=initial_weights
-        )
+        scores = metric.compute(inputs=inputs, weights=weights, initial_weights=initial_weights)
         assert scores.shape == (4,)
         assert torch.isfinite(scores).all()
 
@@ -264,9 +253,7 @@ class TestNormalizedDeltaAlignment:
         inputs = torch.randn(20, 8)
         weights = torch.randn(4, 8)
         initial_weights = torch.zeros(4, 8)
-        scores = metric.compute(
-            inputs=inputs, weights=weights, initial_weights=initial_weights
-        )
+        scores = metric.compute(inputs=inputs, weights=weights, initial_weights=initial_weights)
         assert scores.shape == (4,)
         assert torch.isfinite(scores).all()
 

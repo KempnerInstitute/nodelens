@@ -227,7 +227,7 @@ class GaussianMIAnalytic(BaseMetric):
 
         Uses the relationship: MI(X; y_i) = -0.5 * log(1 - R²_i)
         where R²_i = (w_i^T Σ_x w_i) / var(y_i)
-        
+
         This is computed efficiently using the same covariance-based approach as RQ.
 
         Args:
@@ -239,17 +239,17 @@ class GaussianMIAnalytic(BaseMetric):
             MI scores for each neuron [output_dim] or single score
         """
         original_device = inputs.device
-        
+
         # Handle CNN inputs [B, C, H, W] -> flatten properly
         if inputs.ndim == 4:
             B, C, H, W = inputs.shape
             inputs = inputs.permute(0, 2, 3, 1).reshape(B * H * W, C)
         elif inputs.ndim > 2:
             inputs = inputs.reshape(inputs.shape[0], -1)
-            
+
         if weights.ndim > 2:
             weights = weights.reshape(weights.shape[0], -1)
-            
+
         n_samples, input_dim = inputs.shape
         output_dim, weight_dim = weights.shape
 
@@ -268,23 +268,23 @@ class GaussianMIAnalytic(BaseMetric):
             if use_cpu:
                 inputs = inputs.cpu()
                 weights = weights.cpu()
-            
+
             # Convert to float32 for numerical stability
             inputs_f = inputs.float()
             weights_f = weights.float()
-            
+
             # Compute covariance matrix (same as RQ)
             inputs_centered = inputs_f - inputs_f.mean(dim=0, keepdim=True)
             cov = torch.matmul(inputs_centered.T, inputs_centered) / (n_samples - 1)
-            
+
             # Add regularization
             cov = cov + self.regularization * torch.eye(cov.shape[0], device=cov.device, dtype=cov.dtype)
-            
+
             # Compute w^T Σ_x w for all neurons efficiently
             # This is the SIGNAL VARIANCE captured by each neuron
             wc = torch.matmul(weights_f, cov)  # [output_dim, input_dim]
             w_cov_w = torch.sum(wc * weights_f, dim=1)  # [output_dim] = signal variance
-            
+
             # KEY DIFFERENCE FROM RQ:
             # - RQ = (w^T Σ_x w) / (w^T w)  -- normalizes by weight norm (scale-invariant)
             # - MI = 0.5 * log(1 + (w^T Σ_x w) / σ_n²)  -- uses raw signal variance!
@@ -296,21 +296,21 @@ class GaussianMIAnalytic(BaseMetric):
             # The w^T w term is NOT in MI! That's what makes MI and RQ different.
             # Neurons with large weights but low efficiency (low RQ) can still have
             # high MI because they capture lots of absolute signal variance.
-            
+
             # Estimate noise variance as a fraction of average signal variance
             # or use the configured noise_std
-            noise_var = self.noise_std ** 2
-            
+            noise_var = self.noise_std**2
+
             # Compute SNR = signal_variance / noise_variance
             # signal_variance = w^T Σ_x w (NOT divided by w^T w!)
             snr = w_cov_w / (noise_var + 1e-10)
-            
+
             # MI = 0.5 * log(1 + SNR) in nats
             mi_scores = 0.5 * torch.log1p(snr)
-            
+
             # Clamp to reasonable range (no clamping needed if formula is correct)
             mi_scores = torch.clamp(mi_scores, min=0.0)
-            
+
             return mi_scores.to(original_device)
 
         else:
@@ -318,12 +318,12 @@ class GaussianMIAnalytic(BaseMetric):
             # Move to CPU for heavy covariance computation
             inputs_f = inputs.float().cpu()
             weights_f = weights.float().cpu()
-            
+
             if outputs is None:
                 outputs_f = inputs_f @ weights_f.T
             else:
                 outputs_f = outputs.float().cpu()
-                
+
             inputs_centered = inputs_f - inputs_f.mean(dim=0, keepdim=True)
             outputs_centered = outputs_f - outputs_f.mean(dim=0, keepdim=True)
 

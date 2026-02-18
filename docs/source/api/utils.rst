@@ -54,4 +54,4 @@ Experiment Tracking
 .. automodule:: alignment.experiments.tracking
    :members:
    :undoc-members:
-   :show-inheritance: 
+   :show-inheritance:

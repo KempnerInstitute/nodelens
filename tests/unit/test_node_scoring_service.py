@@ -10,16 +10,12 @@ Tests validate:
 import pytest
 import torch
 
-from alignment.services.scoring import (
-    NodeScoringService,
-    CompositeScores,
-    create_scoring_service,
-)
-
+from alignment.services.scoring import CompositeScores, NodeScoringService, create_scoring_service
 
 # ---------------------------------------------------------------------------
 # Mock metric
 # ---------------------------------------------------------------------------
+
 
 class _MockMetric:
     """Returns a fixed tensor when compute() is called."""
@@ -39,8 +35,8 @@ class _MockMetric:
 # Tests: _normalize_scores
 # ---------------------------------------------------------------------------
 
-class TestNormalizeScores:
 
+class TestNormalizeScores:
     def test_known_values(self):
         result = NodeScoringService._normalize_scores(torch.tensor([1.0, 2.0, 3.0]))
         torch.testing.assert_close(result, torch.tensor([0.0, 0.5, 1.0]), atol=1e-5, rtol=1e-5)
@@ -63,8 +59,8 @@ class TestNormalizeScores:
 # Tests: compute_composite_scores
 # ---------------------------------------------------------------------------
 
-class TestComputeCompositeScores:
 
+class TestComputeCompositeScores:
     def test_basic_composite(self):
         n = 8
         rq_vals = torch.linspace(0.1, 1.0, n)
@@ -74,8 +70,7 @@ class TestComputeCompositeScores:
             "rq": _MockMetric(rq_vals),
             "mi": _MockMetric(mi_vals),
         }
-        scorer = NodeScoringService(metrics, alpha_mi=0.5, delta_rq=0.5,
-                                     beta_synergy=0.0, gamma_redundancy=0.0)
+        scorer = NodeScoringService(metrics, alpha_mi=0.5, delta_rq=0.5, beta_synergy=0.0, gamma_redundancy=0.0)
         inputs = torch.randn(20, 8)
         weights = torch.randn(n, 8)
         targets = torch.randint(0, 5, (20,))
@@ -98,11 +93,15 @@ class TestComputeCompositeScores:
             "redundancy": _MockMetric(red_vals),
         }
         scorer = NodeScoringService(
-            metrics, alpha_mi=0.0, beta_synergy=0.0,
-            gamma_redundancy=0.5, delta_rq=0.5,
+            metrics,
+            alpha_mi=0.0,
+            beta_synergy=0.0,
+            gamma_redundancy=0.5,
+            delta_rq=0.5,
         )
         result = scorer.compute_composite_scores(
-            torch.randn(20, 4), torch.randn(n, 4),
+            torch.randn(20, 4),
+            torch.randn(n, 4),
         )
         # Channels 0,1 (low redundancy) should score higher than 2,3
         assert result.composite[:2].mean() > result.composite[2:].mean()
@@ -113,7 +112,8 @@ class TestComputeCompositeScores:
         metrics = {"rq": _MockMetric(torch.ones(n))}
         scorer = NodeScoringService(metrics)
         result = scorer.compute_composite_scores(
-            torch.randn(20, 4), torch.randn(n, 4),
+            torch.randn(20, 4),
+            torch.randn(n, 4),
         )
         assert result.mi is None
         assert result.redundancy is None
@@ -124,8 +124,8 @@ class TestComputeCompositeScores:
 # Tests: rank_neurons_globally
 # ---------------------------------------------------------------------------
 
-class TestRankNeuronsGlobally:
 
+class TestRankNeuronsGlobally:
     def test_sorted_descending(self):
         n = 4
         metrics = {"rq": _MockMetric(torch.ones(n))}
@@ -158,8 +158,8 @@ class TestRankNeuronsGlobally:
 # Tests: factory
 # ---------------------------------------------------------------------------
 
-class TestFactory:
 
+class TestFactory:
     def test_create_scoring_service(self):
         metrics = {"rq": _MockMetric(torch.ones(4))}
         scorer = create_scoring_service(metrics, alpha_mi=0.4, delta_rq=0.6)

@@ -24,4 +24,4 @@ clean:
 	rm -rf $(BUILDDIR)/*
 
 livehtml:
-	sphinx-autobuild "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O) 
+	sphinx-autobuild "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)

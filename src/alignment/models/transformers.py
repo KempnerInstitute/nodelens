@@ -14,7 +14,7 @@ Works with:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -523,7 +523,7 @@ class LLaMAWrapper(TransformerWrapperEnhanced):
                     elif "o" in layer_info.name.lower() or "out" in layer_info.name.lower():
                         attn["o"].append(layer_info.name)
 
-            logger.info(f"Attention layers discovered generically")
+            logger.info("Attention layers discovered generically")
             return attn
 
         except ImportError:

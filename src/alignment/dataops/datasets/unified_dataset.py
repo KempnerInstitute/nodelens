@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
-from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 
 from alignment.core.registry import register_dataset

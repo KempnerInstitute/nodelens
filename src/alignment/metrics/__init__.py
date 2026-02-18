@@ -8,10 +8,10 @@ METRIC TAXONOMY (library definitions)
 1. ALIGNMENT METRICS (Rayleigh Quotient based)
    - rayleigh_quotient (RQ): Measures alignment with input covariance
      RQ(w) = w^T Σ_X w / w^T w
-     
+
    - conditional_rayleigh_quotient: Class-conditioned RQ
      RQ(w; Σ_{X|y}) for each class y, then averaged
-     
+
    - delta_rq: Difference between unconditional and conditional RQ
      Δ_RQ(w) = RQ(w; Σ_X) - E_y[RQ(w; Σ_{X|y})]
 
@@ -19,7 +19,7 @@ METRIC TAXONOMY (library definitions)
    - gaussian_mi_analytic: MI between inputs and outputs (RQ-related)
      I(X; y) = 0.5 * log(1 + w^T Σ_X w / σ_n^2)
      For linear-Gaussian: log RQ is a proxy for MI
-     
+
    - mi_about_class: I(Z; Y) - MI between activations and class labels
      Uses Gaussian conditional variance formula
 
@@ -27,26 +27,26 @@ METRIC TAXONOMY (library definitions)
    - pairwise_redundancy_gaussian: Target-free redundancy between neurons
      I(Y_i; Y_j) = -0.5 * log(1 - ρ²)
      where ρ = (w_i^T Σ_X w_j) / sqrt((w_i^T Σ_X w_i)(w_j^T Σ_X w_j))
-     
+
    - average_redundancy: Per-neuron redundancy averaged over partners
      R(i) = (1/K) Σ_j I(Y_i; Y_j)
-     
+
    - halo_redundancy: Redundancy analysis by neuron groups (halo vs non-halo)
-   
+
    - cross_layer_redundancy: Redundancy with previous layer neurons
      R(Y_i^l || Y^{l-1}) = mean_j I(Y_i^l; Y_j^{l-1})
 
 4. SYNERGY METRICS (PID with MMI redundancy)
    - gaussian_pid_synergy_mmi: Target-conditional synergy
      S_MMI(Z; Y_i, Y_j) = I(Z; [Y_i,Y_j]) - I(Z; Y_i) - I(Z; Y_j) + min(I(Z; Y_i), I(Z; Y_j))
-     
+
    - synergy_gaussian_mmi: Alternative implementation (same formula)
 
 5. COMPOSITE SCORE (for pruning)
    Score(i) = α * log RQ(w_i) + β * I(Z; Y_i) + γ * S(i) - δ * R(i)
-   
+
    High RQ + High target MI + High synergy + Low redundancy = Important neuron
-   
+
    Extended with cross-layer term:
    Score(Y_i^l) = α·RQ + β·MI - γ·R_within - δ·R_cross
 
@@ -62,7 +62,7 @@ METRIC TAXONOMY (library definitions)
    - cross_layer_redundancy: Downstream importance (how much next layer depends on each neuron)
    - cross_layer_importance: RQ + Downstream_Importance - Redundancy (SCAR logic)
    - layer_transition_efficiency: Downstream_Importance / (1 + Redundancy)
-   
+
 =============================================================================
 METRIC CONFIGURATION OPTIONS
 =============================================================================
@@ -74,24 +74,24 @@ All metrics share these common options (via BaseMetric):
 CNN Input Handling Modes (for convolutional layers):
   Metrics handle 4D inputs [B, C, H, W] differently. The recommended approach
   depends on the metric and use case:
-  
+
   1. "unfold" - Unfold spatial dims into patches [B*P, C*K*K]
      - Most accurate for RQ/covariance metrics
      - Memory: O(B * P * C * K^2) where P = H*W patches
      - Use for: RQ, MI (when weights have kernel shape)
-     
-  2. "spatial" - Reshape [B, C, H, W] -> [B*H*W, C]  
+
+  2. "spatial" - Reshape [B, C, H, W] -> [B*H*W, C]
      - Treats each spatial location as a sample
      - Preserves spatial variance information
      - Memory: O(B * H * W * C)
      - Use for: Fast covariance estimation
-     
+
   3. "gap" (Global Average Pooling) - [B, C, H, W] -> [B, C]
      - Fastest, lowest memory
      - Loses spatial information
      - Memory: O(B * C)
      - Use for: Quick experiments, early conv layers
-     
+
   4. "channel" - Per-channel statistics only
      - Aggregates over spatial dims
      - Memory: O(C)
@@ -174,21 +174,18 @@ halo_redundancy:
 
 from ..core.registry import METRIC_REGISTRY
 
+# Import halo and multi-supernode metrics (extensions)
+# Import composite metrics (combinations for pruning)
+# Import conditional metrics (class-conditioned versions)
 # Import all metric modules to register them
+from . import composite  # Register composite_importance, alignment_minus_redundancy, etc.
+from . import conditional_metrics  # Register conditional RQ, MI about class, etc.
+from . import cross_layer  # Register cross_layer_redundancy, cross_layer_importance, layer_transition_efficiency
+from . import halo_redundancy  # Register halo_redundancy
+from . import multi_supernode  # Register multi_supernode, multi_supernode_importance
 from . import information, rayleigh, similarity, spectral, task_specific
 from .information import gaussian_pid  # Register gaussian PID synergy
 from .information import pairwise_gaussian  # Ensure registration side-effects
-
-# Import conditional metrics (class-conditioned versions)
-from . import conditional_metrics  # Register conditional RQ, MI about class, etc.
-
-# Import composite metrics (combinations for pruning)
-from . import composite  # Register composite_importance, alignment_minus_redundancy, etc.
-
-# Import halo and multi-supernode metrics (extensions)
-from . import halo_redundancy  # Register halo_redundancy
-from . import multi_supernode  # Register multi_supernode, multi_supernode_importance
-from . import cross_layer  # Register cross_layer_redundancy, cross_layer_importance, layer_transition_efficiency
 
 
 def get_metric(name: str, **kwargs):
@@ -201,7 +198,7 @@ def get_metric(name: str, **kwargs):
 
     Returns:
         Instantiated metric object
-        
+
     Common metrics for pruning and analysis:
         - rayleigh_quotient: Alignment with input covariance
         - gaussian_mi_analytic: MI directly related to RQ
@@ -225,20 +222,20 @@ def list_metrics():
 def get_recommended_metrics():
     """
     Get the recommended core metrics for alignment analysis and pruning.
-    
+
     Based on the library's alignment framework:
     1. rayleigh_quotient - Alignment proxy
     2. gaussian_mi_analytic - MI (RQ-related)
     3. pairwise_redundancy_gaussian - Redundancy
     4. gaussian_pid_synergy_mmi - Synergy
     5. mi_about_class - Class information
-    
+
     Returns:
         List of recommended metric names
     """
     return [
         "rayleigh_quotient",
-        "gaussian_mi_analytic", 
+        "gaussian_mi_analytic",
         "pairwise_redundancy_gaussian",
         "gaussian_pid_synergy_mmi",
         "mi_about_class",
@@ -248,14 +245,14 @@ def get_recommended_metrics():
 def get_extended_metrics():
     """
     Get extended metrics for advanced analysis.
-    
+
     These include:
     1. halo_redundancy - Redundancy by neuron groups
     2. multi_supernode - Cluster-based supernode analysis
     3. cross_layer_redundancy - Inter-layer redundancy
     4. cross_layer_importance - Combined score with cross-layer terms
     5. layer_transition_efficiency - New information per layer
-    
+
     Returns:
         List of extended metric names
     """
@@ -272,33 +269,33 @@ def get_extended_metrics():
 def get_metric_category(name: str) -> str:
     """
     Get the category of a metric.
-    
+
     Args:
         name: Metric name
-        
+
     Returns:
         Category string: 'alignment', 'mi', 'redundancy', 'synergy', 'activation', 'other'
     """
     name_lower = name.lower()
-    
-    if 'rayleigh' in name_lower or 'rq' in name_lower:
-        return 'alignment'
-    elif 'synergy' in name_lower or 'pid' in name_lower:
-        return 'synergy'
-    elif 'redundancy' in name_lower:
-        return 'redundancy'
-    elif 'mi' in name_lower or 'mutual' in name_lower or 'information' in name_lower:
-        return 'mi'
-    elif 'activation' in name_lower or 'norm' in name_lower or 'variance' in name_lower:
-        return 'activation'
+
+    if "rayleigh" in name_lower or "rq" in name_lower:
+        return "alignment"
+    elif "synergy" in name_lower or "pid" in name_lower:
+        return "synergy"
+    elif "redundancy" in name_lower:
+        return "redundancy"
+    elif "mi" in name_lower or "mutual" in name_lower or "information" in name_lower:
+        return "mi"
+    elif "activation" in name_lower or "norm" in name_lower or "variance" in name_lower:
+        return "activation"
     else:
-        return 'other'
+        return "other"
 
 
 def get_optimization_status() -> dict:
     """
     Check availability of metric optimizations (JIT, GPU).
-    
+
     Returns:
         Dictionary with optimization availability status:
         {
@@ -310,75 +307,68 @@ def get_optimization_status() -> dict:
         }
     """
     import torch
-    
+
     status = {
-        'jit_available': False,
-        'gpu_available': False,
-        'cuda_available': torch.cuda.is_available(),
-        'available_jit_functions': [],
-        'available_gpu_functions': [],
+        "jit_available": False,
+        "gpu_available": False,
+        "cuda_available": torch.cuda.is_available(),
+        "available_jit_functions": [],
+        "available_gpu_functions": [],
     }
-    
+
     # Check JIT functions
     try:
         from ..infrastructure.computing.optimized.jit import (
-            compute_rayleigh_quotient_jit,
             compute_mutual_information_gaussian_jit,
             compute_node_correlation_jit,
+            compute_rayleigh_quotient_jit,
         )
-        status['jit_available'] = True
-        status['available_jit_functions'] = [
-            'rayleigh_quotient',
-            'mutual_information',
-            'node_correlation',
-            'cosine_similarity',
-            'eigenvalue_entropy',
-            'spectral_norm',
+
+        status["jit_available"] = True
+        status["available_jit_functions"] = [
+            "rayleigh_quotient",
+            "mutual_information",
+            "node_correlation",
+            "cosine_similarity",
+            "eigenvalue_entropy",
+            "spectral_norm",
         ]
     except ImportError:
         pass
-    
+
     # Check GPU functions
     try:
-        from ..infrastructure.computing.optimized.gpu import (
-            gpu_histogram1d,
-            gpu_mutual_information,
-            GPUAcceleratedMetrics,
-        )
-        status['gpu_available'] = True
-        status['available_gpu_functions'] = [
-            'histogram1d',
-            'histogram2d', 
-            'mutual_information',
-            'entropy',
-            'conditional_entropy',
-            'fast_covariance',
-            'fast_correlation',
+        from ..infrastructure.computing.optimized.gpu import GPUAcceleratedMetrics, gpu_histogram1d, gpu_mutual_information
+
+        status["gpu_available"] = True
+        status["available_gpu_functions"] = [
+            "histogram1d",
+            "histogram2d",
+            "mutual_information",
+            "entropy",
+            "conditional_entropy",
+            "fast_covariance",
+            "fast_correlation",
         ]
     except ImportError:
         pass
-    
+
     return status
 
 
-def get_metric_with_optimizations(
-    name: str,
-    use_jit: bool = False,
-    use_gpu_acceleration: bool = False,
-    **kwargs
-):
+def get_metric_with_optimizations(name: str, use_jit: bool = False, use_gpu_acceleration: bool = False, **kwargs):
     """
     Get a metric instance with optimization options.
-    
+
     Args:
         name: Name of the metric
         use_jit: Enable JIT-compiled computations (20-50% faster)
         use_gpu_acceleration: Enable GPU-accelerated functions
         **kwargs: Additional metric parameters
-        
+
     Returns:
         Instantiated metric object with optimizations enabled
-        
+
     Example:
         >>> metric = get_metric_with_optimizations(
         ...     "rayleigh_quotient",
@@ -386,18 +376,13 @@ def get_metric_with_optimizations(
         ...     relative=True
         ... )
     """
-    return METRIC_REGISTRY.create(
-        name,
-        use_jit=use_jit,
-        use_gpu_acceleration=use_gpu_acceleration,
-        **kwargs
-    )
+    return METRIC_REGISTRY.create(name, use_jit=use_jit, use_gpu_acceleration=use_gpu_acceleration, **kwargs)
 
 
 # For convenience, expose the registry and functions
 __all__ = [
-    "METRIC_REGISTRY", 
-    "get_metric", 
+    "METRIC_REGISTRY",
+    "get_metric",
     "list_metrics",
     "get_recommended_metrics",
     "get_extended_metrics",

@@ -6,28 +6,25 @@ import pytest
 import yaml
 
 from alignment.configs.unified_config import (
-    ExperimentConfig,
-    ModelConfig,
-    DatasetConfig,
     CalibrationConfig,
-    MetricItemConfig,
-    MetricsConfig,
-    ClusteringConfig,
-    SupernodeConfig,
-    HaloConfig,
     CascadeConfig,
-    PruningMethodConfig,
-    PruningConfig,
+    ClusteringConfig,
+    DatasetConfig,
     EvaluationConfig,
-    VisualizationConfig,
+    ExperimentConfig,
+    HaloConfig,
+    MetricsConfig,
+    ModelConfig,
     OutputConfig,
+    PruningConfig,
+    SupernodeConfig,
     UnifiedConfig,
-    _normalize_metric_name,
+    VisualizationConfig,
     _deep_merge,
-    load_unified_config,
+    _normalize_metric_name,
     create_config_template,
+    load_unified_config,
 )
-
 
 # =========================================================================
 # ExperimentConfig
@@ -48,10 +45,12 @@ class TestExperimentConfig:
         assert cfg.seed == 123
 
     def test_from_dict_old_style(self):
-        cfg = ExperimentConfig.from_dict({
-            "experiment_name": "old_exp",
-            "experiment_type": "cluster_analysis",
-        })
+        cfg = ExperimentConfig.from_dict(
+            {
+                "experiment_name": "old_exp",
+                "experiment_type": "cluster_analysis",
+            }
+        )
         assert cfg.name == "old_exp"
         assert cfg.type == "cluster_analysis"
 
@@ -129,31 +128,39 @@ class TestMetricsConfig:
         assert cfg.rayleigh_quotient.enabled is True
 
     def test_from_dict_individual_configs(self):
-        cfg = MetricsConfig.from_dict({
-            "rayleigh_quotient": {"relative": False},
-        })
+        cfg = MetricsConfig.from_dict(
+            {
+                "rayleigh_quotient": {"relative": False},
+            }
+        )
         assert cfg.rayleigh_quotient.params.get("relative") is False
 
     def test_from_dict_boolean_flags(self):
-        cfg = MetricsConfig.from_dict({
-            "rayleigh_quotient": False,
-        })
+        cfg = MetricsConfig.from_dict(
+            {
+                "rayleigh_quotient": False,
+            }
+        )
         assert cfg.rayleigh_quotient.enabled is False
 
     def test_from_dict_old_style_flags(self):
-        cfg = MetricsConfig.from_dict({
-            "compute_rq": True,
-            "compute_redundancy": True,
-            "compute_synergy": True,
-        })
+        cfg = MetricsConfig.from_dict(
+            {
+                "compute_rq": True,
+                "compute_redundancy": True,
+                "compute_synergy": True,
+            }
+        )
         assert cfg.rayleigh_quotient.enabled is True
         assert cfg.redundancy.enabled is True
         assert cfg.synergy.enabled is True
 
     def test_composite_weights(self):
-        cfg = MetricsConfig.from_dict({
-            "composite_weights": {"rayleigh_quotient": 0.5},
-        })
+        cfg = MetricsConfig.from_dict(
+            {
+                "composite_weights": {"rayleigh_quotient": 0.5},
+            }
+        )
         assert cfg.composite_weights["rayleigh_quotient"] == 0.5
 
 
@@ -246,16 +253,20 @@ class TestPruningConfig:
         assert cfg.methods[0].name == "magnitude"
 
     def test_from_dict_methods_dicts(self):
-        cfg = PruningConfig.from_dict({
-            "methods": [{"name": "cap", "selection": "high"}],
-        })
+        cfg = PruningConfig.from_dict(
+            {
+                "methods": [{"name": "cap", "selection": "high"}],
+            }
+        )
         assert cfg.methods[0].name == "cap"
         assert cfg.methods[0].selection == "high"
 
     def test_from_dict_fine_tune(self):
-        cfg = PruningConfig.from_dict({
-            "fine_tune": {"enabled": True, "epochs": 5, "lr": 0.001},
-        })
+        cfg = PruningConfig.from_dict(
+            {
+                "fine_tune": {"enabled": True, "epochs": 5, "lr": 0.001},
+            }
+        )
         assert cfg.fine_tune_enabled is True
         assert cfg.fine_tune_epochs == 5
         assert cfg.fine_tune_lr == 0.001
@@ -273,27 +284,33 @@ class TestEvaluationConfig:
         assert cfg.benchmarks_enabled is False
 
     def test_from_dict_perplexity(self):
-        cfg = EvaluationConfig.from_dict({
-            "perplexity": {"enabled": True, "datasets": ["wikitext", "c4"]},
-        })
+        cfg = EvaluationConfig.from_dict(
+            {
+                "perplexity": {"enabled": True, "datasets": ["wikitext", "c4"]},
+            }
+        )
         assert cfg.perplexity_enabled is True
         assert "wikitext" in cfg.perplexity_datasets
         assert "c4" in cfg.perplexity_datasets
 
     def test_from_dict_benchmarks(self):
-        cfg = EvaluationConfig.from_dict({
-            "benchmarks": ["hellaswag", "arc"],
-        })
+        cfg = EvaluationConfig.from_dict(
+            {
+                "benchmarks": ["hellaswag", "arc"],
+            }
+        )
         assert cfg.benchmarks_enabled is True
         assert "hellaswag" in cfg.benchmark_tasks
 
     def test_from_dict_perplexity_dict_datasets(self):
-        cfg = EvaluationConfig.from_dict({
-            "perplexity": {
-                "enabled": True,
-                "datasets": [{"name": "wikitext"}, {"name": "c4"}],
-            },
-        })
+        cfg = EvaluationConfig.from_dict(
+            {
+                "perplexity": {
+                    "enabled": True,
+                    "datasets": [{"name": "wikitext"}, {"name": "c4"}],
+                },
+            }
+        )
         assert "wikitext" in cfg.perplexity_datasets
 
 
@@ -315,16 +332,20 @@ class TestVisualizationConfig:
         assert cfg.dpi == 150
 
     def test_from_dict_plots_nested(self):
-        cfg = VisualizationConfig.from_dict({
-            "plots": {"histograms": False, "violin_plots": False},
-        })
+        cfg = VisualizationConfig.from_dict(
+            {
+                "plots": {"histograms": False, "violin_plots": False},
+            }
+        )
         assert cfg.histograms is False
         assert cfg.violin_plots is False
 
     def test_from_dict_figures_list(self):
-        cfg = VisualizationConfig.from_dict({
-            "figures": ["correlation-heatmap", "cluster-scatter"],
-        })
+        cfg = VisualizationConfig.from_dict(
+            {
+                "figures": ["correlation-heatmap", "cluster-scatter"],
+            }
+        )
         assert cfg.correlation_heatmap is True
         assert cfg.cluster_scatter is True
 
@@ -342,33 +363,39 @@ class TestUnifiedConfig:
         assert cfg.clustering.enabled is True
 
     def test_from_dict_minimal(self):
-        cfg = UnifiedConfig.from_dict({
-            "experiment": {"name": "test_exp"},
-        })
+        cfg = UnifiedConfig.from_dict(
+            {
+                "experiment": {"name": "test_exp"},
+            }
+        )
         assert cfg.experiment.name == "test_exp"
 
     def test_from_dict_flat_style(self):
-        cfg = UnifiedConfig.from_dict({
-            "experiment_name": "flat_exp",
-        })
+        cfg = UnifiedConfig.from_dict(
+            {
+                "experiment_name": "flat_exp",
+            }
+        )
         assert cfg.experiment.name == "flat_exp"
 
     def test_from_dict_all_sections(self):
-        cfg = UnifiedConfig.from_dict({
-            "experiment": {"name": "full", "type": "cluster_analysis"},
-            "model": {"name": "vgg16"},
-            "dataset": {"name": "cifar100", "batch_size": 64},
-            "calibration": {"num_samples": 1000},
-            "metrics": {"rayleigh_quotient": {"relative": True}},
-            "clustering": {"n_clusters": 3},
-            "supernode": {"enabled": True},
-            "halo_analysis": {"percentile": 95.0},
-            "cascade_analysis": {"n_remove_per_group": 3},
-            "pruning": {"ratios": [0.3, 0.5]},
-            "evaluation": {"perplexity": {"enabled": True}},
-            "visualization": {"format": "pdf"},
-            "output": {"dir": "/tmp/out"},
-        })
+        cfg = UnifiedConfig.from_dict(
+            {
+                "experiment": {"name": "full", "type": "cluster_analysis"},
+                "model": {"name": "vgg16"},
+                "dataset": {"name": "cifar100", "batch_size": 64},
+                "calibration": {"num_samples": 1000},
+                "metrics": {"rayleigh_quotient": {"relative": True}},
+                "clustering": {"n_clusters": 3},
+                "supernode": {"enabled": True},
+                "halo_analysis": {"percentile": 95.0},
+                "cascade_analysis": {"n_remove_per_group": 3},
+                "pruning": {"ratios": [0.3, 0.5]},
+                "evaluation": {"perplexity": {"enabled": True}},
+                "visualization": {"format": "pdf"},
+                "output": {"dir": "/tmp/out"},
+            }
+        )
         assert cfg.experiment.name == "full"
         assert cfg.model.name == "vgg16"
         assert cfg.dataset.batch_size == 64
@@ -377,10 +404,12 @@ class TestUnifiedConfig:
         assert cfg.output.dir == "/tmp/out"
 
     def test_extra_fields_captured(self):
-        cfg = UnifiedConfig.from_dict({
-            "experiment": {"name": "test"},
-            "custom_field": {"key": "value"},
-        })
+        cfg = UnifiedConfig.from_dict(
+            {
+                "experiment": {"name": "test"},
+                "custom_field": {"key": "value"},
+            }
+        )
         assert "custom_field" in cfg.extra
         assert cfg.extra["custom_field"]["key"] == "value"
 

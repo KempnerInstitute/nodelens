@@ -81,33 +81,33 @@ metrics:
     use_gpu_acceleration: false    # Enable GPU-accelerated functions
     force_cpu_for_large_ops: true  # Prevent OOM for large covariance matrices
     cpu_threshold: 100000000       # 1e8 elements threshold
-  
+
   rayleigh_quotient:
     enabled: true
     relative: false  # Standard Rayleigh quotient (no trace-normalization)
     shrinkage: true
-  
+
   redundancy:
     enabled: true
     sampling: "all"
-  
+
   synergy:
     enabled: true
     target: "logit_margin"
     num_pairs: 10
     sampling: "top_k"
-  
+
   magnitude:
     enabled: true
-  
+
   taylor:
     enabled: true
     criterion: "gradient_weight"
-  
+
   activation_sparsity:
     enabled: true
     threshold: 0.01
-  
+
   composite_weights:
     rayleigh_quotient: 0.33
     redundancy: -0.33
@@ -122,7 +122,7 @@ clustering:
   type_names: ["critical", "redundant", "synergistic", "background"]
   normalize_features: true
   features: ["rayleigh_quotient", "redundancy", "synergy"]
-  
+
   stability_enabled: true
   n_bootstrap: 50
 
@@ -160,7 +160,7 @@ pruning:
   # Set to 1.0 to disable (legacy behavior); set to e.g. 0.90 to limit per-layer sparsity.
   max_per_layer_sparsity_cap: 1.0
   ratios: [0.1, 0.3, 0.4, 0.5, 0.7, 0.8]  # Add 40% point for paper curves
-  
+
   # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:
     # =========================================================================
@@ -175,7 +175,7 @@ pruning:
     - "geometric_median"    # FPGM-style geometric median baseline
     - "hrank"               # HRank feature-rank baseline
     - "chip"
-    
+
     # =========================================================================
     # SINGLE METRICS - Prune LOW (assumes low = unimportant)
     # =========================================================================
@@ -184,7 +184,7 @@ pruning:
     - "synergy_low"         # Prune low synergy
     - "redundancy_high"     # Control: prune high redundancy
     - "synergy_high"        # Control: prune high synergy
-    
+
     # =========================================================================
     # COMPOSITE COMBINATIONS
     # =========================================================================
@@ -195,7 +195,7 @@ pruning:
     - "magnitude_plus_rq"   # score = magnitude + RQ
     - "magnitude_minus_red" # score = magnitude - redundancy
     - "magnitude_plus_red"  # score = magnitude + redundancy
-    
+
     # =========================================================================
     # CLUSTER-AWARE
     # =========================================================================
@@ -229,34 +229,34 @@ pruning:
 # -----------------------------------------------------------------------------
 evaluation:
   enabled: true
-  
+
   # Classification metrics
   accuracy: true
   top1_accuracy: true
   top5_accuracy: true
   loss: true
-  
+
   # Per-class analysis
   per_class_accuracy: true
   confusion_matrix: true
-  
+
   # Calibration metrics
   calibration_enabled: true
   expected_calibration_error: true
   reliability_diagram: true
-  
+
   # Efficiency metrics
   compute_flops: true
   compute_params: true
   compute_memory: true
   measure_latency: true
   latency_batch_sizes: [1, 8, 32, 128]
-  
+
   # Robustness (optional)
   robustness_enabled: false
   corruption_types: ["gaussian_noise", "shot_noise", "gaussian_blur", "contrast", "brightness"]
   corruption_severities: [1, 3, 5]
-  
+
   # Transfer evaluation (optional)
   transfer_enabled: false
   transfer_datasets: ["cifar100", "svhn"]
@@ -266,24 +266,24 @@ evaluation:
 # -----------------------------------------------------------------------------
 benchmarks:
   enabled: true
-  
+
   tasks:
     - name: "cifar10_test"
       dataset: "cifar10"
       split: "test"
       enabled: true
-    
+
     - name: "cifar100_transfer"
       dataset: "cifar100"
       split: "test"
       enabled: false
-  
+
   inference:
     warmup_iterations: 10
     benchmark_iterations: 100
     batch_sizes: [1, 8, 32, 128]
     devices: ["cuda"]
-  
+
   adversarial:
     enabled: false
     attacks: ["fgsm", "pgd"]
@@ -297,7 +297,7 @@ visualization:
   format: "pdf"
   dpi: 300
   style: "seaborn-v0_8-paper"
-  
+
   histograms: true
   violin_plots: true
   correlation_heatmap: true
@@ -308,13 +308,13 @@ visualization:
   pruning_comparison: true
   pruning_recovery: true
   cascade_test: true
-  
+
   # Additional analysis plots
   metric_distributions: true
   layer_importance_heatmap: true
   sensitivity_curves: true
   efficiency_tradeoffs: true
-  
+
   scatter_pairs:
     - ["rayleigh_quotient", "redundancy"]
     - ["rayleigh_quotient", "synergy"]
@@ -341,18 +341,18 @@ output:
 extra:
   pretrain_epochs: 20
   pretrain_lr: 0.001
-  
+
   baselines:
     - "magnitude"
     - "taylor"
     - "network_slimming"
     - "geometric_median"
-  
+
   analysis:
     layer_indices: "all"
     save_scores: true
     generate_plots: true
-    
+
     metrics:
       - "rayleigh_quotient"
       - "redundancy"
@@ -360,27 +360,27 @@ extra:
       - "magnitude"
       - "taylor"
       - "activation_sparsity"
-    
+
     plots:
       histograms: true
       scatter_plots: true
       pruning_curves: true
       layer_comparison: true
       filter_correlation: true
-    
+
     scatter_pairs:
       - ["rayleigh_quotient", "redundancy"]
       - ["rayleigh_quotient", "synergy"]
       - ["magnitude", "taylor"]
       - ["redundancy", "synergy"]
-  
+
   sensitivity_analysis:
     enabled: true
     per_layer: true
     ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]  # More ratios for VGG
     metric: "accuracy"
     output_dir: "sensitivity"
-  
+
   structured_pruning:
     enabled: true
     granularity: "filter"
@@ -389,38 +389,38 @@ extra:
       - "l2_norm"
       - "taylor"
       - "alignment"
-  
+
   feature_analysis:
     enabled: true
     compute_feature_rank: true
     compute_channel_redundancy: true
     visualize_filters: false
     num_samples_to_visualize: 10
-  
+
   efficiency:
     track_flops: true
     track_params: true
     track_memory: true
     track_latency: true
     baseline_comparison: true
-  
+
   visualization:
     save_plots: true
     format: "pdf"
     dpi: 300
     style: "seaborn-v0_8-paper"
-    
+
     metric_distributions:
       enabled: true
       by_layer: true
       by_cluster: true
-      
+
     cluster_analysis:
       enabled: true
       scatter_3d: true
       cluster_evolution_by_layer: true
       cluster_purity: true
-      
+
     pruning_comparison:
       enabled: true
       accuracy_vs_sparsity: true
@@ -433,17 +433,17 @@ extra:
         - "composite"
         - "cluster_aware"
         - "network_slimming"
-      
+
     layer_importance:
       enabled: true
       heatmap: true
       bar_chart: true
-      
+
     fine_tuning_recovery:
       enabled: true
       by_method: true
       by_sparsity: true
-      
+
     efficiency_tradeoffs:
       enabled: true
       accuracy_vs_flops: true

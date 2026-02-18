@@ -91,7 +91,7 @@ Parallel Strategies
    :members:
    :undoc-members:
    :show-inheritance:
-   
+
    .. automethod:: prune_parallel
    .. automethod:: combine_masks
 
@@ -99,7 +99,7 @@ Parallel Strategies
    :members:
    :undoc-members:
    :show-inheritance:
-   
+
    .. automethod:: compute_pruning_tensor
    .. automethod:: analyze_pruning_patterns
 
@@ -107,7 +107,7 @@ Parallel Strategies
    :members:
    :undoc-members:
    :show-inheritance:
-   
+
    .. automethod:: prune_modules_parallel
 
 .. autoclass:: alignment.pruning.strategies.ParallelPruningResult
@@ -136,4 +136,4 @@ Pruning Experiments
 .. autoclass:: alignment.pruning.experiments.EigenvectorDropoutExperiment
    :members:
    :undoc-members:
-   :show-inheritance: 
+   :show-inheritance:

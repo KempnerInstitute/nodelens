@@ -14,7 +14,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # Track BOTH MLP and Attention layers
   tracked_layers:
     # MLP layers (SwiGLU)
@@ -77,4 +77,3 @@ pruning:
 analysis:
   save_scores: true
   generate_plots: true
-

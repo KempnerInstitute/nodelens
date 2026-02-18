@@ -16,9 +16,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from ..services.mask_ops import MaskOperations
 from .dependency_aware import DependencyAwarePruning
 from .distribution import PruningDistributionManager
-from ..services.mask_ops import MaskOperations
 
 logger = logging.getLogger(__name__)
 

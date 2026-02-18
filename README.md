@@ -2,6 +2,12 @@
 
 Neural network analysis and structured pruning using alignment metrics and information theory.
 
+[![Lint](https://github.com/KempnerInstitute/alignment/actions/workflows/lint.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/lint.yml)
+[![Pre-commit](https://github.com/KempnerInstitute/alignment/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/pre-commit.yml)
+[![Code Lines](https://img.shields.io/tokei/lines/github/KempnerInstitute/alignment?logo=files&logoColor=white)](https://github.com/KempnerInstitute/alignment)
+[![CLI](https://img.shields.io/badge/CLI-scripts%2Frun_experiment.py-121011?logo=gnubash&logoColor=white)](scripts/run_experiment.py)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.8-3776AB?logo=python&logoColor=white)](pyproject.toml)
+
 ## Overview
 
 This framework provides tools for analyzing and pruning neural networks through:

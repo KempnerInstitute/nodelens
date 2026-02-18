@@ -21,4 +21,3 @@ def test_synergy_continuous_target_aggregates_unfolded_outputs(device):
     s_unfolded = metric.compute(outputs=outputs_unfolded, logits=logits, labels=labels)
 
     torch.testing.assert_close(s_base, s_unfolded, rtol=1e-5, atol=1e-6)
-

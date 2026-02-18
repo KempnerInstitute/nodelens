@@ -14,7 +14,7 @@ model:
   name: "cnn2p2"
   pretrained: false
   tracked_layers: null
-  
+
   # CNN2P2 parameters for MNIST
   cnn2p2_params:
     in_channels: 1
@@ -56,21 +56,21 @@ metrics:
     - "rayleigh_quotient"              # Standard RQ - alignment to input covariance
     - "conditional_rayleigh_quotient"  # Class-conditioned RQ
     - "delta_rq"                       # ΔRQ = RQ - cond_RQ (measures class dependency)
-    
+
     # 2. MUTUAL INFORMATION METRICS
     - "gaussian_mi_analytic"           # MI between inputs and outputs (RQ-related)
     - "mi_about_class"                 # I(Z; Y) - MI with class labels
-    
+
     # 3. REDUNDANCY METRICS (for identifying redundant neurons)
     - "average_redundancy"             # Per-neuron average redundancy
     - "pairwise_redundancy_gaussian"   # Pairwise redundancy for matrix viz
-    
+
     # 4. ACTIVATION STATISTICS
     - "activation_l2_norm"             # Activation magnitude
     - "activation_variance"            # Activation variance
-  
+
   num_samples: 256
-  
+
   # Pairwise redundancy configuration
   pairwise_redundancy_gaussian:
     num_pairs: 20
@@ -97,7 +97,7 @@ cnn:
 
 pruning:
   enabled: true
-  
+
   # Test these strategies individually
   strategies:
     # Basic metrics
@@ -105,32 +105,32 @@ pruning:
     - "activation_l2_norm"
     - "magnitude"
     - "random"
-    
+
     # Conditional/class-aware metrics
     - "conditional_rayleigh_quotient"
     - "mi_about_class"
-    
+
     # Redundancy (NOTE: for redundancy, "high" selection removes redundant neurons)
     - "average_redundancy"
-    
+
     # Composite scores (combine multiple metrics)
     - "composite_importance"           # RQ + class_MI - redundancy
     - "alignment_minus_redundancy"     # RQ - αR
     - "class_informative_score"        # MI_class + cond_RQ + delta_RQ
-  
+
   # Sparsity levels to test
   sparsity_levels: [0.1, 0.3, 0.5, 0.7, 0.9]
-  
+
   # Selection modes to test for each strategy
   # "low" = prune neurons with LOW scores (keep high scorers)
   # "high" = prune neurons with HIGH scores (for redundancy: high = more redundant = prune)
   # "random" = random pruning baseline
   selection_modes: ["low", "high", "random"]
-  
+
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   fine_tune:
     enabled: true
     epochs: 5
@@ -151,13 +151,13 @@ composite_weights:
 analysis:
   save_scores: true
   generate_plots: true
-  
+
   # Pairwise redundancy matrix visualization
   pairwise_analysis:
     enabled: true
     save_matrices: true
     plot_heatmaps: true
-  
+
   plots:
     histograms: true                   # Score distributions per layer
     scatter_plots: true                # Correlations between metrics

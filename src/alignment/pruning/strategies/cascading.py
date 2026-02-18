@@ -165,14 +165,14 @@ class CascadingAlignmentPruning(BasePruningStrategy):
                 else:
                     # Use topk for exact k selection (avoids threshold tie issues)
                     keep_mask = torch.ones(num_neurons, dtype=torch.bool, device=alignment_scores.device)
-                    
+
                     if self.config.pruning_mode == "low":
                         # Prune k neurons with LOWEST scores
                         _, indices_to_prune = torch.topk(alignment_scores, k, largest=False)
                     else:  # 'high' mode
                         # Prune k neurons with HIGHEST scores
                         _, indices_to_prune = torch.topk(alignment_scores, k, largest=True)
-                    
+
                     keep_mask[indices_to_prune] = False
 
                     # Expand to weight dimensions

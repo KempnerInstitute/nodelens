@@ -178,7 +178,7 @@ class AlignmentPruning(BasePruningStrategy):
             # Handle different pruning modes using topk for exact k selection
             # This avoids non-monotonic behavior from ties at threshold values
             keep_mask = torch.ones(importance_scores.numel(), dtype=torch.bool, device=importance_scores.device)
-            
+
             if self.config.pruning_mode == "random":
                 # Random selection of neurons to prune
                 indices_to_prune = torch.randperm(importance_scores.numel(), device=importance_scores.device)[:k]
@@ -188,7 +188,7 @@ class AlignmentPruning(BasePruningStrategy):
             else:  # 'high' mode
                 # Prune k neurons with HIGHEST scores
                 _, indices_to_prune = torch.topk(importance_scores, k, largest=True)
-            
+
             keep_mask[indices_to_prune] = False
 
             # Expand mask to all weights in the neuron/channel

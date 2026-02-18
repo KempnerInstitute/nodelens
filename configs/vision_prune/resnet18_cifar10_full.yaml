@@ -9,8 +9,8 @@ model:
   name: resnet18
   pretrained: true
   num_classes: 10
-  
-# Dataset configuration  
+
+# Dataset configuration
 dataset:
   name: cifar10
   root: ./data
@@ -22,15 +22,15 @@ dataset:
 # Metric computation
 metrics:
   n_calibration_samples: 5000
-  
+
   # Rayleigh Quotient
   compute_rq: true
   rq_shrinkage: true
-  
+
   # Redundancy (Gaussian pairwise MI)
   compute_redundancy: true
   redundancy_sampling: all  # all, random, top_k
-  
+
   # Synergy with continuous target
   compute_synergy: true
   synergy_target: logit_margin  # logit_margin, correct_logit, logit_pc1
@@ -48,7 +48,7 @@ clustering:
   normalize_features: true
   compute_stability: true
   n_bootstrap: 50
-  
+
 # Cross-layer halo analysis
 halo_analysis:
   enabled: true
@@ -79,25 +79,25 @@ pruning:
   min_per_layer: 0.0
   max_per_layer: 0.95
   ratios: [0.1, 0.3, 0.5, 0.7]
-  
+
   # Comprehensive algorithm list for exploration
   algorithms:
     # Baselines
     - random
     - magnitude
     - taylor
-    
+
     # Single metrics - prune LOW
     - rq_low              # Prune low Rayleigh Quotient
     - redundancy_low      # Prune low redundancy (MI)
     - synergy_low         # Prune low synergy
-    
+
     # Single metrics - prune HIGH (test assumptions)
     - rq_high             # Prune high RQ
     - redundancy_high     # Prune high redundancy
     - synergy_high        # Prune high synergy
     - magnitude_high      # Prune high magnitude
-    
+
     # Composite combinations
     - composite           # score = RQ + syn - red (original)
     - composite_pos_red   # score = RQ + syn + red (flipped redundancy)
@@ -106,21 +106,21 @@ pruning:
     - magnitude_plus_rq   # score = magnitude + RQ
     - magnitude_minus_red # score = magnitude - redundancy
     - magnitude_plus_red  # score = magnitude + redundancy
-    
+
     # Cluster-aware
     - cluster_aware
     - cluster_aware_protect_redundant
-  
+
   fine_tuning:
     epochs: 10
     lr: 0.0001
-    
+
 # Baselines to compare against
 baselines:
   - magnitude
   - taylor
   - network_slimming
-  
+
 # Visualization
 visualization:
   enabled: true
@@ -143,7 +143,7 @@ output:
   save_metrics: true
   save_clusters: true
   save_figures: true
-  
+
 # Pre-training (required for ImageNet pretrained models on CIFAR)
 # This fine-tunes the model on CIFAR-10 before running experiments
 pretrain_epochs: 20

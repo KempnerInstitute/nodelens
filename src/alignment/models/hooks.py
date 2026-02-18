@@ -7,7 +7,7 @@ to prevent memory leaks.
 
 import logging
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -107,7 +107,7 @@ class HookManager:
                         return hook
 
                     self.register_forward_hook(module, make_hook(name), name=name)
-                    
+
             yield temp_cache
 
         finally:

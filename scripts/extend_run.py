@@ -200,18 +200,18 @@ def main() -> None:
             except Exception:
                 pass
 
-        ft_epochs = int(args.fine_tune_epochs) if args.fine_tune_epochs is not None else (
-            int(config.fine_tune_epochs) if bool(config.fine_tune_after_pruning) else 0
+        ft_epochs = (
+            int(args.fine_tune_epochs)
+            if args.fine_tune_epochs is not None
+            else (int(config.fine_tune_epochs) if bool(config.fine_tune_after_pruning) else 0)
         )
-        ft_lr = float(args.fine_tune_lr) if args.fine_tune_lr is not None else (
-            float(config.fine_tune_learning_rate)
-            if config.fine_tune_learning_rate is not None
-            else float(config.learning_rate) * 0.1
+        ft_lr = (
+            float(args.fine_tune_lr)
+            if args.fine_tune_lr is not None
+            else (float(config.fine_tune_learning_rate) if config.fine_tune_learning_rate is not None else float(config.learning_rate) * 0.1)
         )
         ft_mb = args.fine_tune_max_batches if args.fine_tune_max_batches is not None else config.fine_tune_max_batches
-        ft_wd = float(args.fine_tune_weight_decay) if args.fine_tune_weight_decay is not None else float(
-            config.fine_tune_weight_decay or 0.0
-        )
+        ft_wd = float(args.fine_tune_weight_decay) if args.fine_tune_weight_decay is not None else float(config.fine_tune_weight_decay or 0.0)
 
         exp.run_pruning_experiments(
             ratios=ratios,
@@ -227,4 +227,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

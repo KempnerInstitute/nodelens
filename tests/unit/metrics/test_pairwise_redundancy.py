@@ -171,7 +171,7 @@ class TestPairwiseRedundancyGaussian:
 
         # Should raise an error for incompatible dimensions
         with pytest.raises(RuntimeError, match="cannot be multiplied"):
-            redundancy = metric.compute(inputs=inputs, weights=weights)
+            metric.compute(inputs=inputs, weights=weights)
 
     def test_regularization_effect(self):
         """Test that regularization prevents singularity."""

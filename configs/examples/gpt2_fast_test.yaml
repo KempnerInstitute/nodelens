@@ -2,7 +2,7 @@
 # GPT-2 FAST PRUNING TEST
 # ============================================================================
 # PURPOSE: Quick validation of pruning pipeline on small model
-# 
+#
 # GPT-2 (124M) specs:
 # - 12 layers, 768 hidden dim, 3072 intermediate dim
 # - Uses standard MLP (fc1 -> GELU -> fc2), NOT SwiGLU
@@ -29,7 +29,7 @@ model:
   model_id: "gpt2"  # 124M params - very fast
   dtype: "float16"  # GPT-2 works better with fp16 than bf16
   device_map: "auto"
-  
+
   # GPT-2 uses standard MLP (not SwiGLU)
   # c_fc is the up projection, c_proj is the down projection
   tracked_layers:
@@ -48,9 +48,9 @@ metrics:
   enabled:
     - "rayleigh_quotient"
     - "activation_l2_norm"
-  
+
   num_samples: 16  # Fewer samples for speed
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -62,12 +62,12 @@ llm:
   scar_metrics: true
   scar_num_samples: 16  # Fewer samples
   scar_max_length: 256  # Shorter sequences
-  
+
   evaluate_perplexity: true
   evaluation_num_samples: 50  # Fewer eval samples
-  
+
   use_nvidia_fewshot: false  # Skip few-shot for speed
-  
+
   # Minimal benchmarks for quick test
   evaluation_metrics:
     - "perplexity"
@@ -85,7 +85,7 @@ supernode:
   protect_core: true
   cross_layer_analysis: false  # Skip for speed
   compare_by_connection: false
-  
+
   compute_metrics:
     - "activation"
 
@@ -100,24 +100,24 @@ supernode_robustness:
 # ============================================================================
 pruning:
   enabled: true
-  
+
   # Just two sparsity levels for quick test
   sparsity_levels: [0.25, 0.5]
-  
+
   selection_modes: ["low"]  # Just one mode for speed
-  
+
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   # Reduced algorithm set
   algorithms:
     - "rayleigh_quotient"
     - "activation_l2_norm"
     - "wanda"
-  
+
   single_strategy: null
-  
+
   fine_tune:
     enabled: false
 
@@ -133,7 +133,7 @@ do_connectivity_pruning: false
 analysis:
   save_scores: true
   generate_plots: true
-  
+
   plots:
     histograms: true
     scatter_plots: false  # Skip for speed

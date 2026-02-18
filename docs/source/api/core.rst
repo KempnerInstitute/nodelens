@@ -46,4 +46,4 @@ Utilities
 .. automodule:: alignment.core.utils
    :members:
    :undoc-members:
-   :show-inheritance: 
+   :show-inheritance:

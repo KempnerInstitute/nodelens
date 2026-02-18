@@ -248,12 +248,12 @@ class DependencyAwarePruning:
         """Get input mask from dependencies."""
         in_dim = self._get_input_dimension(layer_dep.module)
         device = next(layer_dep.module.parameters()).device
-        
+
         # For downsample/shortcut layers, always use correct input dimension
         # These layers have different input sources due to skip connections
         if "downsample" in layer_dep.name or "shortcut" in layer_dep.name:
             return torch.ones(in_dim, dtype=torch.bool, device=device)
-        
+
         # Check if previous layer has been processed
         if layer_dep.depends_on:
             prev_layer = layer_dep.depends_on[0]
@@ -273,18 +273,18 @@ class DependencyAwarePruning:
     def _create_weight_mask(self, module: nn.Module, out_mask: torch.Tensor, in_mask: torch.Tensor) -> torch.Tensor:
         """Create weight mask from input/output masks."""
         device = next(module.parameters()).device
-        
+
         if isinstance(module, nn.Linear):
             # Linear: [out_features, in_features]
             # Handle dimension mismatch (e.g., from skip connections)
             expected_out = module.out_features
             expected_in = module.in_features
-            
+
             if out_mask.shape[0] != expected_out:
                 out_mask = torch.ones(expected_out, dtype=torch.bool, device=device)
             if in_mask.shape[0] != expected_in:
                 in_mask = torch.ones(expected_in, dtype=torch.bool, device=device)
-                
+
             weight_mask = out_mask.unsqueeze(1) & in_mask.unsqueeze(0)
 
         elif isinstance(module, nn.Conv2d):
@@ -294,7 +294,7 @@ class DependencyAwarePruning:
             groups = int(getattr(module, "groups", 1))
             # Weight shape is [out_channels, in_channels/groups, k_h, k_w]
             in_per_group = int(module.weight.shape[1])
-            
+
             # Handle dimension mismatch (e.g., from skip connections or downsample layers)
             if out_mask.shape[0] != expected_out:
                 out_mask = torch.ones(expected_out, dtype=torch.bool, device=device)
@@ -326,7 +326,7 @@ class DependencyAwarePruning:
             expected_in = module.in_channels
             groups = int(getattr(module, "groups", 1))
             in_per_group = int(module.weight.shape[1])
-            
+
             if out_mask.shape[0] != expected_out:
                 out_mask = torch.ones(expected_out, dtype=torch.bool, device=device)
             if in_mask.shape[0] != expected_in:
@@ -404,12 +404,12 @@ class DependencyAwarePruning:
                 # Downsample layers in ResNet have different input sources (skip connections)
                 # These are expected mismatches, not errors
                 if "downsample" in layer_name or "shortcut" in layer_name:
-                    warnings.append(f"{layer_name}: Input mask adjusted for skip connection "
-                                   f"(mask: {len(masks['input_mask'])}, expected: {expected_in})")
+                    warnings.append(
+                        f"{layer_name}: Input mask adjusted for skip connection " f"(mask: {len(masks['input_mask'])}, expected: {expected_in})"
+                    )
                 else:
                     # For other layers, this is just a warning - we've already fixed the mask
-                    warnings.append(f"{layer_name}: Input mask length {len(masks['input_mask'])} "
-                                   f"adjusted to match expected {expected_in}")
+                    warnings.append(f"{layer_name}: Input mask length {len(masks['input_mask'])} " f"adjusted to match expected {expected_in}")
 
             # Check for complete pruning (warn if layer fully pruned)
             if not masks["output_mask"].any():
@@ -428,8 +428,10 @@ class DependencyAwarePruning:
 
                     if len(our_out) != len(their_in):
                         # This can happen with skip connections - downgrade to warning
-                        warnings.append(f"Dimension info: {layer_name}.out ({len(our_out)}) "
-                                       f"-> {next_layer}.in ({len(their_in)}) - may involve skip connection")
+                        warnings.append(
+                            f"Dimension info: {layer_name}.out ({len(our_out)}) "
+                            f"-> {next_layer}.in ({len(their_in)}) - may involve skip connection"
+                        )
                     elif not torch.equal(our_out, their_in):
                         # Mask values differ - also just a warning for complex architectures
                         warnings.append(f"Mask info: {layer_name}.out_mask != {next_layer}.in_mask")

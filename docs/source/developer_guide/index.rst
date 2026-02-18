@@ -6,7 +6,7 @@ to the alignment framework.
 
 .. toctree::
    :maxdepth: 2
-   
+
    extensibility
    internal/index
 

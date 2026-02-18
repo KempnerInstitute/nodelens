@@ -126,26 +126,26 @@ input(4096) -> gate_proj/up_proj(14336) -> down_proj -> output(4096) -> next lay
 ```yaml
 supernode:
   enabled: true
-  
+
   # Supernode identification (in intermediate dimension)
   score_metric: "scar_activation_power"  # Options: scar_activation_power, scar_taylor,
                                          #          scar_loss_proxy, rayleigh_quotient,
                                          #          mutual_information, activation_l2_norm
   core_fraction: 0.01                    # Top 1% as supernodes
   protect_core: true                     # Protect during pruning
-  
+
   # Cross-layer analysis
   cross_layer_analysis: true             # Enable next-layer analysis
   follower_fraction: 0.10                # Top 10% by weight from supernodes
-  
+
   compute_metrics:
     - "activation"
     - "rayleigh_quotient"
     - "mutual_information"
     - "redundancy"
-  
+
   compare_by_connection: true            # Compare high vs low connected neurons
-  
+
   # Target layers (optional)
   # - If not specified: uses tracked_layers from main config
   # - If empty list []: analyzes ALL layers with SCAR scores
@@ -229,4 +229,3 @@ python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
 # 2. Results saved to results/experiment_YYYYMMDD_HHMMSS/
 # 3. Plots generated in results/.../plots/
 ```
-

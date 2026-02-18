@@ -9,18 +9,14 @@ Tests validate:
 import pytest
 import torch
 
-from alignment.metrics.cross_layer import (
-    compute_downstream_importance,
-    compute_within_layer_redundancy,
-)
-
+from alignment.metrics.cross_layer import compute_downstream_importance, compute_within_layer_redundancy
 
 # ---------------------------------------------------------------------------
 # Tests: compute_downstream_importance
 # ---------------------------------------------------------------------------
 
-class TestDownstreamImportance:
 
+class TestDownstreamImportance:
     def test_output_shape(self):
         curr = torch.randn(50, 8)
         nxt = torch.randn(50, 12)
@@ -43,9 +39,7 @@ class TestDownstreamImportance:
 
         di = compute_downstream_importance(curr, nxt)
         # Neuron 0 should have highest DI (it's copied forward)
-        assert di[0] > di[1:].mean(), (
-            f"Copied neuron DI={di[0]:.4f} should exceed mean of others={di[1:].mean():.4f}"
-        )
+        assert di[0] > di[1:].mean(), f"Copied neuron DI={di[0]:.4f} should exceed mean of others={di[1:].mean():.4f}"
 
     def test_uncorrelated_gives_low_mi(self):
         """Completely independent layers should have near-zero MI."""
@@ -70,8 +64,8 @@ class TestDownstreamImportance:
 # Tests: compute_within_layer_redundancy
 # ---------------------------------------------------------------------------
 
-class TestWithinLayerRedundancy:
 
+class TestWithinLayerRedundancy:
     def test_output_shape(self):
         acts = torch.randn(50, 8)
         red = compute_within_layer_redundancy(acts)
@@ -95,10 +89,7 @@ class TestWithinLayerRedundancy:
         # Neurons 0,1 should have higher redundancy than 2,3
         corr_red = (red[0] + red[1]) / 2
         indep_red = (red[2] + red[3]) / 2
-        assert corr_red > indep_red, (
-            f"Correlated pair redundancy={corr_red:.4f} should exceed "
-            f"independent pair={indep_red:.4f}"
-        )
+        assert corr_red > indep_red, f"Correlated pair redundancy={corr_red:.4f} should exceed " f"independent pair={indep_red:.4f}"
 
     def test_max_refs_subsampling(self):
         torch.manual_seed(42)

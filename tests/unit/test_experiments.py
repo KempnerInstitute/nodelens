@@ -2,7 +2,6 @@
 Unit tests for experiment classes.
 """
 
-import pytest
 from alignment.experiments.base import ExperimentConfig
 from alignment.experiments.general_alignment import GeneralAlignmentConfig
 from alignment.pruning.base import PruningConfig

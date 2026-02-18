@@ -1,8 +1,8 @@
 """
 Partial Information Decomposition (PID) metrics.
 
-This module defines PID-based metrics that decompose information that a pair of 
-input features provides about the output into unique, redundant, and synergistic 
+This module defines PID-based metrics that decompose information that a pair of
+input features provides about the output into unique, redundant, and synergistic
 components.
 
 Note: These metrics currently return zeros as a placeholder. For practical PID-based
@@ -19,8 +19,14 @@ import torch
 from ...core.base import BaseMetric
 from ...core.registry import register_metric
 
-# BROJA solver not currently available - metrics return zeros as placeholder
-HAS_BROJA = False
+try:
+    from dit.pid import BROJA_2PID
+
+    HAS_BROJA = True
+except Exception:
+    # BROJA solver is optional; metrics fall back to zeros when unavailable.
+    BROJA_2PID = None
+    HAS_BROJA = False
 
 logger = logging.getLogger(__name__)
 

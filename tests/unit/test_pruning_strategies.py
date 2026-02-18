@@ -12,36 +12,16 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.base import (
-    BasePruningStrategy,
-    IterativePruningStrategy,
-    PrecomputedScorePruning,
-    PruningConfig,
-)
-from alignment.pruning.strategies.magnitude import (
-    GlobalMagnitudePruning,
-    IterativeMagnitudePruning,
-    MagnitudePruning,
-)
-from alignment.pruning.strategies.random import (
-    BernoulliPruning,
-    LayerwiseRandomPruning,
-    RandomPruning,
-)
-from alignment.pruning.strategies.gradient import (
-    FisherPruning,
-    GradientPruning,
-    MomentumPruning,
-)
-from alignment.pruning.strategies.movement import (
-    AdaptiveMovementPruning,
-    MovementPruning,
-)
-
+from alignment.pruning.base import PrecomputedScorePruning, PruningConfig
+from alignment.pruning.strategies.gradient import FisherPruning, GradientPruning, MomentumPruning
+from alignment.pruning.strategies.magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, MagnitudePruning
+from alignment.pruning.strategies.movement import AdaptiveMovementPruning, MovementPruning
+from alignment.pruning.strategies.random import BernoulliPruning, LayerwiseRandomPruning, RandomPruning
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _linear(in_f=8, out_f=4):
     """Create a fresh Linear layer."""
@@ -540,8 +520,9 @@ class TestAdaptiveMovementPruning:
 class TestCascadingAlignmentPruning:
     def test_init_and_direction(self):
         """Test init by monkeypatching get_metric to return a class."""
+        from unittest.mock import MagicMock, patch
+
         from alignment.pruning.strategies.cascading import CascadingAlignmentPruning
-        from unittest.mock import patch, MagicMock
 
         mock_metric_cls = MagicMock()
         mock_metric_cls.return_value = MagicMock()
@@ -555,8 +536,9 @@ class TestCascadingAlignmentPruning:
         assert strategy.direction == "forward"
 
     def test_compute_importance_requires_inputs(self):
+        from unittest.mock import MagicMock, patch
+
         from alignment.pruning.strategies.cascading import CascadingAlignmentPruning
-        from unittest.mock import patch, MagicMock
 
         mock_metric_cls = MagicMock()
         mock_metric_cls.return_value = MagicMock()

@@ -5,19 +5,12 @@ search, aliases, create_from_config, and decorator functions.
 
 import pytest
 
-from alignment.core.registry import (
-    Registry,
-    ComponentInfo,
-    create_component,
-    create_from_config,
-    list_all_components,
-    ALL_REGISTRIES,
-)
-
+from alignment.core.registry import ComponentInfo, Registry, create_component, create_from_config, list_all_components
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _DummyMetric:
     def __init__(self, alpha=1.0):

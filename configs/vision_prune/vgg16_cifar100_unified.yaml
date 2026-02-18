@@ -167,5 +167,3 @@ evaluation:
   accuracy: true
   loss: true
   per_class_accuracy: true
-
-

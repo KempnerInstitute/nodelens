@@ -11,9 +11,9 @@ computations belong here so they can be reused across projects and experiments.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -379,7 +379,7 @@ def validate_synergy_pair_lesions(
     top_n = max(1, min(int(top_pairs), len(pairs)))
     top_idx = np.argsort(-syn)[:top_n]
     top_pairs_list = [pairs[int(k)] for k in top_idx.tolist()]
-    top_synergy = syn[top_idx]
+    syn[top_idx]
     # Map all computed pairs to synergy so we can look up control-pair scores without re-running stats.
     syn_all = {pairs[i]: float(syn[i]) for i in range(len(pairs))}
 
@@ -460,7 +460,7 @@ def validate_synergy_pair_lesions(
         raise RuntimeError("Not enough control candidates to match; increase pool_size/eval size.")
     q25 = np.percentile(feat_mat, 25, axis=0)
     q75 = np.percentile(feat_mat, 75, axis=0)
-    scale = (q75 - q25)
+    scale = q75 - q25
     scale = np.where(scale > 1e-12, scale, (np.std(feat_mat, axis=0) + 1e-12))
 
     for sp in top_pairs_list:
@@ -493,11 +493,11 @@ def validate_synergy_pair_lesions(
 
     top_used = top_pairs_list[: len(matched_controls)]
     excess_top = []
-    for (i, j) in top_used:
+    for i, j in top_used:
         dij = pair_damage((i, j))
         excess_top.append(float(dij - max(delta[int(i)], delta[int(j)])))
     excess_ctl = []
-    for (i, j) in matched_controls:
+    for i, j in matched_controls:
         dij = pair_damage((i, j))
         excess_ctl.append(float(dij - max(delta[int(i)], delta[int(j)])))
 
@@ -717,4 +717,3 @@ def validate_halo_receiver_disruption(
         representative_spearman=float(rho_rep),
         k=int(k),
     )
-

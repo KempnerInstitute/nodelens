@@ -2,13 +2,11 @@
 Tests for models/base.py: BaseModelWrapper, and models/hooks.py: HookManager.
 """
 
-import pytest
 import torch
 import torch.nn as nn
 
 from alignment.models.base import BaseModelWrapper
 from alignment.models.hooks import HookManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -52,7 +50,7 @@ class TestHookManager:
         hm = HookManager()
         x = torch.randn(2, 3, 8, 8)
 
-        with hm.temporary_hooks(model, ["conv1"]) as acts:
+        with hm.temporary_hooks(model, ["conv1"]):
             model(x)
 
         hm.cleanup()

@@ -10,7 +10,7 @@ Run experiments from YAML configuration:
 # Vision analysis
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
-# LLM analysis  
+# LLM analysis
 python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_full.yaml
 
 # Cluster-based analysis
@@ -40,5 +40,3 @@ Options:
 - `--output-dir PATH` - Output directory
 - `--analyses LIST` - Specific analyses to run
 - `--quick` - Run all analyses with defaults
-
-

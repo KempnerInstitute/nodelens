@@ -5,12 +5,10 @@ Experiment runner for managing and executing experiments.
 import json
 import logging
 import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
-
-import torch
 
 from alignment.core.registry import get_experiment
 from alignment.experiments.base import BaseExperiment, ExperimentConfig

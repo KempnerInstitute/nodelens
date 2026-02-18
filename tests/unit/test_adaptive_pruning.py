@@ -6,15 +6,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.strategies.adaptive import (
-    AdaptiveSensitivityPruning,
-    LayerSensitivity,
-)
-
+from alignment.pruning.strategies.adaptive import AdaptiveSensitivityPruning, LayerSensitivity
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _TinyModel(nn.Module):
     def __init__(self):
@@ -217,10 +214,7 @@ class TestComputeAdaptiveAmounts:
 
     def test_amounts_within_bounds(self):
         asp = AdaptiveSensitivityPruning(min_amount=0.2, max_amount=0.8)
-        sensitivities = {
-            f"layer{i}": LayerSensitivity(f"layer{i}", sensitivity=i * 0.1, size=100, recommended_amount=0.0)
-            for i in range(5)
-        }
+        sensitivities = {f"layer{i}": LayerSensitivity(f"layer{i}", sensitivity=i * 0.1, size=100, recommended_amount=0.0) for i in range(5)}
         result = asp._compute_adaptive_amounts(sensitivities)
         for ls in result.values():
             assert ls.recommended_amount >= 0.2

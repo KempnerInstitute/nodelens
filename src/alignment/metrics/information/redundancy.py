@@ -89,54 +89,53 @@ class AverageRedundancy(BaseMetric):
         projected = torch.matmul(inputs, weights.T)  # [batch_size, num_neurons]
 
         # Move to CPU for large computations
-        compute_device = projected.device
         if self._should_use_cpu(projected) or num_neurons > 4096:
             projected = projected.cpu()
-        
+
         # Convert to float32 for numerical stability
         projected = projected.float()
-        
+
         # Normalize for correlation computation
         proj_mean = projected.mean(dim=0, keepdim=True)
         proj_std = projected.std(dim=0, keepdim=True)
         proj_std = torch.where(proj_std > 1e-12, proj_std, torch.ones_like(proj_std))
         projected_norm = (projected - proj_mean) / proj_std  # [batch_size, num_neurons]
-        
+
         # For large layers, compute redundancy by sampling neighbors per neuron
         # This gives a score for EVERY neuron without creating full NxN matrix
-        num_neighbors = min(512, num_neurons - 1)  # Sample 512 neighbors per neuron
-        
+        min(512, num_neurons - 1)  # Sample 512 neighbors per neuron
+
         if num_neurons > 2048:
             # Efficient stochastic approach: sample a fixed set of reference neurons
             # and compute each neuron's correlation with this reference set
             num_refs = min(1024, num_neurons)
             ref_indices = torch.randperm(num_neurons, device=projected.device)[:num_refs]
-            
+
             # Compute correlation of ALL neurons with reference neurons
             # projected_norm: [batch_size, num_neurons]
             # ref_activations: [batch_size, num_refs]
             ref_activations = projected_norm[:, ref_indices]
-            
+
             # Correlation matrix: [num_neurons, num_refs]
             corr_with_refs = (projected_norm.T @ ref_activations) / (batch_size - 1)
-            
+
             # For self-correlations (neuron i's corr with itself in ref set), set to 0
             # This happens when neuron i is in the reference set
             for idx, ref_idx in enumerate(ref_indices):
                 corr_with_refs[ref_idx, idx] = 0.0
-            
-            rho_sq = corr_with_refs ** 2
+
+            rho_sq = corr_with_refs**2
             rho_sq = torch.clamp(rho_sq, 0, 0.999999)
-            
+
             # MI approximation for each neuron
             mi_with_refs = -0.5 * torch.log(1.0 - rho_sq)
-            
+
             # Average MI with reference set (approximate redundancy)
             redundancy_scores = mi_with_refs.mean(dim=1)
         else:
             # Full correlation matrix for smaller layers
             corr_matrix = torch.matmul(projected_norm.T, projected_norm) / (batch_size - 1)
-            rho_sq = corr_matrix ** 2
+            rho_sq = corr_matrix**2
             rho_sq = torch.clamp(rho_sq, 0, 0.999999)
             mi_matrix = -0.5 * torch.log(1.0 - rho_sq)
             mi_matrix.fill_diagonal_(0)

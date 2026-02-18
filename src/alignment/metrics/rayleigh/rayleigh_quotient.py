@@ -30,7 +30,7 @@ class RayleighQuotient(BaseMetric):
 
     When relative=True (default), normalizes by trace(C) to get a
     proportion of total variance.
-    
+
     Optimization Options:
         use_jit: bool = False - Use JIT-compiled RQ computation (20-50% faster)
         use_gpu_acceleration: bool = False - Use GPU-accelerated covariance
@@ -67,7 +67,7 @@ class RayleighQuotient(BaseMetric):
         self.regularization = regularization
         # Optional: class-conditioned covariance support (targets provided at compute time preferred)
         self._cc_targets = class_conditioned_targets
-        
+
         # JIT-specific function reference
         self._jit_rq_compute = None
         if self._use_jit:
@@ -111,7 +111,7 @@ class RayleighQuotient(BaseMetric):
         """
         if weights is None:
             raise ValueError("RayleighQuotient requires weights")
-            
+
         # Use pre-computed covariance if provided (Streaming mode)
         if covariance is not None:
             return self._compute_from_covariance(covariance, weights)
@@ -144,8 +144,10 @@ class RayleighQuotient(BaseMetric):
             dim_pair = (input_features, weight_features)
             if dim_pair not in RayleighQuotient._warned_dim_pairs:
                 RayleighQuotient._warned_dim_pairs.add(dim_pair)
-                logger.warning(f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. "
-                              "Truncating to common dimensions. (This warning shown once per dimension pair)")
+                logger.warning(
+                    f"RQ: Dimension mismatch - inputs: {input_features}, weights: {weight_features}. "
+                    "Truncating to common dimensions. (This warning shown once per dimension pair)"
+                )
             min_dim = min(input_features, weight_features)
             inputs = inputs[:, :min_dim]
             weights = weights[:, :min_dim]
@@ -154,11 +156,10 @@ class RayleighQuotient(BaseMetric):
         # Move to appropriate device for computation
         # Force CPU for large input dimensions (covariance matrix would be huge)
         # down_proj has 14336 inputs -> cov is [14336, 14336] = 820MB
-        compute_device = weights.device
         use_cpu = self._should_use_cpu(inputs, weights) or input_features > 8192
         if use_cpu:
             logger.debug("RQ: Moving computation to CPU for large tensors")
-            compute_device = torch.device("cpu")
+            torch.device("cpu")
             inputs = inputs.cpu()
             weights = weights.cpu()
 
@@ -168,7 +169,7 @@ class RayleighQuotient(BaseMetric):
             tgt = targets if targets is not None else self._cc_targets
             if tgt.ndim > 1:
                 tgt = tgt.squeeze()
-            
+
             # Handle unfolded CNN inputs where each sample becomes multiple patches
             # If inputs has more rows than targets, expand targets to match
             original_batch_size = tgt.shape[0]
@@ -177,13 +178,13 @@ class RayleighQuotient(BaseMetric):
                     # Expand targets: each label applies to all patches from that sample
                     num_patches = batch_size // original_batch_size
                     tgt = tgt.repeat_interleave(num_patches)
-                    logger.debug(f"RQ: Expanded targets from {original_batch_size} to {batch_size} "
-                                f"({num_patches} patches per sample)")
+                    logger.debug(f"RQ: Expanded targets from {original_batch_size} to {batch_size} " f"({num_patches} patches per sample)")
                 else:
-                    logger.warning(f"RQ: Cannot expand targets {original_batch_size} to match "
-                                  f"batch_size {batch_size}, falling back to unconditional")
+                    logger.warning(
+                        f"RQ: Cannot expand targets {original_batch_size} to match " f"batch_size {batch_size}, falling back to unconditional"
+                    )
                     use_class_cond = False
-            
+
             if use_class_cond:
                 classes = torch.unique(tgt)
                 cov = torch.zeros(input_features, input_features, device=inputs.device, dtype=inputs.dtype)
@@ -202,7 +203,7 @@ class RayleighQuotient(BaseMetric):
                     cov = cov / total_weight
                 else:
                     use_class_cond = False  # Fall back to unconditional
-        
+
         if not use_class_cond:
             # Use JIT-compiled version if available for simple unconditional case
             if self._jit_rq_compute is not None and not self.scale_by_norm:
@@ -218,7 +219,7 @@ class RayleighQuotient(BaseMetric):
                     return rq_values
                 except Exception as e:
                     logger.warning(f"JIT RQ failed, falling back to standard: {e}")
-            
+
             # Use GPU-accelerated covariance if available
             if self._use_gpu_acceleration and self._get_gpu_function("fast_covariance") is not None:
                 try:
@@ -389,13 +390,13 @@ class RayleighQuotient(BaseMetric):
         return {"rq_uncond": rq_uncond, "rq_cond": rq_cond, "delta_rq": delta_rq}
 
     def _compute_patchwise(
-        self, 
-        inputs: torch.Tensor, 
-        weights: torch.Tensor, 
-        weight_by_variance: bool = True, 
+        self,
+        inputs: torch.Tensor,
+        weights: torch.Tensor,
+        weight_by_variance: bool = True,
         max_patches: int = 64,
         use_vectorized: bool = True,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Compute patch-wise RQ for CNN layers.
@@ -446,15 +447,10 @@ class RayleighQuotient(BaseMetric):
             # LOOP: Compute patches one by one (slower but less memory)
             return self._compute_patchwise_loop(inputs, weights, patch_weights)
 
-    def _compute_patchwise_vectorized(
-        self, 
-        inputs: torch.Tensor, 
-        weights: torch.Tensor, 
-        patch_weights: torch.Tensor
-    ) -> torch.Tensor:
+    def _compute_patchwise_vectorized(self, inputs: torch.Tensor, weights: torch.Tensor, patch_weights: torch.Tensor) -> torch.Tensor:
         """
         Vectorized patchwise RQ computation - no explicit loop.
-        
+
         Uses einsum for efficient batch computation over patches.
         Memory: O(num_patches * features^2) for covariances
         """
@@ -470,7 +466,7 @@ class RayleighQuotient(BaseMetric):
         # cov[p] = X_centered[:, :, p].T @ X_centered[:, :, p] / (B-1)
         # = einsum('bi,bj->ij' for each patch p)
         # Batched: einsum('bfp,bgp->fgp') gives [F, F, P]
-        all_covs = torch.einsum('bfp,bgp->fgp', inputs_centered, inputs_centered) / (batch_size - 1)
+        all_covs = torch.einsum("bfp,bgp->fgp", inputs_centered, inputs_centered) / (batch_size - 1)
 
         # Add regularization
         if self.regularization > 0:
@@ -481,11 +477,11 @@ class RayleighQuotient(BaseMetric):
         # weights: [N, F], all_covs: [F, G, P] where F=G
         # numerator[n, p] = sum_f sum_g w[n,f] * cov[f,g,p] * w[n,g]
         # = einsum('nf,fgp,ng->np')
-        wc = torch.einsum('nf,fgp->ngp', weights, all_covs)  # [N, G, P]
-        numerator = torch.einsum('ngp,ng->np', wc, weights)  # [N, P]
+        wc = torch.einsum("nf,fgp->ngp", weights, all_covs)  # [N, G, P]
+        numerator = torch.einsum("ngp,ng->np", wc, weights)  # [N, P]
 
         # Compute w^T w (same for all patches)
-        denominator = (weights ** 2).sum(dim=1)  # [N]
+        denominator = (weights**2).sum(dim=1)  # [N]
 
         # Compute RQ per patch
         patch_rq = torch.zeros(output_features, num_patches, device=device)
@@ -509,15 +505,10 @@ class RayleighQuotient(BaseMetric):
 
         return torch.nan_to_num(final_rq, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def _compute_patchwise_loop(
-        self, 
-        inputs: torch.Tensor, 
-        weights: torch.Tensor, 
-        patch_weights: torch.Tensor
-    ) -> torch.Tensor:
+    def _compute_patchwise_loop(self, inputs: torch.Tensor, weights: torch.Tensor, patch_weights: torch.Tensor) -> torch.Tensor:
         """
         Loop-based patchwise RQ computation - lower memory usage.
-        
+
         Memory: O(features^2) for one covariance at a time
         """
         batch_size, features, num_patches = inputs.shape
@@ -725,7 +716,7 @@ class FastRayleighQuotient(RayleighQuotient):
         elif inputs.ndim == 3:
             # Patchwise input [B, F, P] -> average over patches
             inputs = inputs.mean(dim=2)  # [B, F]
-        
+
         # Handle Conv weights: [C_out, C_in, k_H, k_W] -> sum over kernel -> [C_out, C_in]
         if weights.ndim == 4:
             # Sum over kernel dimensions to get channel-wise weights

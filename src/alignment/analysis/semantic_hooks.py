@@ -184,7 +184,7 @@ def compute_class_selectivity(
             # Accumulate
             for cls in torch.unique(y_cpu):
                 cls_i = int(cls.item())
-                idx = (y_cpu == cls)
+                idx = y_cpu == cls
                 if int(idx.sum().item()) == 0:
                     continue
                 sum_by_class[cls_i] += a_cpu[idx].sum(dim=0)
@@ -214,4 +214,3 @@ def compute_class_selectivity(
         mu_max=mu_max.astype(np.float64),
         mu_other=mu_other.astype(np.float64),
     )
-

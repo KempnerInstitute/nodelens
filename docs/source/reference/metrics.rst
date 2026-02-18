@@ -100,11 +100,11 @@ Usage Example
 .. code-block:: python
 
    from alignment.metrics import get_metric
-   
+
    # Single metric
    metric = get_metric("rayleigh_quotient")
    score = metric.compute(layer_weights, layer_inputs)
-   
+
    # Multiple metrics in config
    metrics = ["rayleigh_quotient", "mutual_information_gaussian"]
 
@@ -115,7 +115,7 @@ Configuration in YAML
 
    # Basic metrics configuration
    metrics: ["rayleigh_quotient", "mutual_information_gaussian"]
-   
+
    # Advanced metrics with parameters
    metric_configs:
      rayleigh_quotient:

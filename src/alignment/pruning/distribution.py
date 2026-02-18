@@ -7,7 +7,7 @@ how much to prune from each individual layer.
 
 import logging
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -100,7 +100,7 @@ class PruningDistributionManager:
 
         elif self.strategy == DistributionStrategy.HYBRID:
             return self._hybrid_distribution(model, layer_names, layer_scores, eval_fn)
-            
+
         elif self.strategy == DistributionStrategy.GLOBAL_KNAPSACK:
             if layer_scores is None:
                 raise ValueError("Global knapsack requires layer_scores")
@@ -122,13 +122,13 @@ class PruningDistributionManager:
         """
         # Collect all scores
         all_scores = []
-        
+
         # Need to weight by layer size to get accurate global sparsity
         # If we just concat scores, we assume each score corresponds to 1 parameter (or equal block of params)
         # Usually for structured pruning, 1 score = 1 neuron/channel.
         # But different layers have different params per neuron (d_in * d_out).
         # We should ideally weigh by params_per_neuron.
-        
+
         # Simple version: assuming score maps to roughly equal parameter chunks (or just counting neurons)
         for layer_name, scores in layer_scores.items():
             all_scores.append(scores.flatten())
@@ -142,13 +142,13 @@ class PruningDistributionManager:
         # We want to remove bottom X%.
         k = int(len(all_scores_cat) * self.target_sparsity)  # Number to prune
         if k == 0:
-             return {name: 0.0 for name in layer_scores}
-             
+            return {name: 0.0 for name in layer_scores}
+
         # topk returns largest, we want smallest.
         # negation to find smallest using topk, or just sort
         # torch.kthvalue finds the k-th smallest element
         if k >= len(all_scores_cat):
-            threshold = float('inf')
+            threshold = float("inf")
         else:
             # kthvalue is 1-indexed, returns (values, indices)
             # We want the value at index k-1 in sorted array.
@@ -162,7 +162,7 @@ class PruningDistributionManager:
         # for reproducibility / ablations; set to 1.0 to match legacy behavior.
         max_per_layer = float(self.kwargs.get("max_per_layer_sparsity_cap", 1.00))
         max_per_layer = max(0.0, min(1.0, max_per_layer))
-        
+
         amounts = {}
         for layer_name, scores in layer_scores.items():
             # Fraction below threshold in this layer
@@ -177,13 +177,13 @@ class PruningDistributionManager:
     def _global_knapsack_distribution(self, layer_scores: Dict[str, torch.Tensor], model: nn.Module, layer_names: List[str]) -> Dict[str, float]:
         """
         Global Knapsack Solver (Greedy approximation).
-        
+
         Objective: Maximize kept Importance s.t. Cost of kept <= Budget
         Equivalent: Minimize Pruned Importance s.t. Cost of pruned >= Target Savings
-        
+
         Metric: Ratio = Importance / Cost (Value per FLOP)
         We prune items with the LOWEST ratio.
-        
+
         Args:
             layer_scores: Importance L_i for each channel
             model: Model
@@ -192,18 +192,18 @@ class PruningDistributionManager:
         # Get costs per channel
         # If not provided, default to parameters per channel
         layer_costs = self.kwargs.get("layer_costs", {})
-        
-        all_items = [] # list of (score, cost, layer_name)
-        
+
+        all_items = []  # list of (score, cost, layer_name)
+
         total_cost_model = 0.0
-        
+
         for name in layer_names:
             if name not in layer_scores:
                 continue
-                
+
             scores = layer_scores[name].flatten()
             num_channels = len(scores)
-            
+
             # Determine cost per channel
             if name in layer_costs:
                 # Cost provided explicitly per channel or per layer
@@ -212,7 +212,7 @@ class PruningDistributionManager:
                     # Per-channel cost is uniform for this layer
                     costs = torch.full_like(scores, cost_val)
                 elif isinstance(cost_val, torch.Tensor):
-                     costs = cost_val
+                    costs = cost_val
                 else:
                     costs = torch.ones_like(scores)
             else:
@@ -227,79 +227,75 @@ class PruningDistributionManager:
                     layer_mod = dict(model.named_modules())[name]
                     # Rough heuristic: params / num_channels
                     if hasattr(layer_mod, "weight"):
-                         # Simple linear layer
-                         params = layer_mod.weight.numel()
-                         if hasattr(layer_mod, "bias") and layer_mod.bias is not None:
-                             params += layer_mod.bias.numel()
-                         cost_per_channel = params / num_channels
+                        # Simple linear layer
+                        params = layer_mod.weight.numel()
+                        if hasattr(layer_mod, "bias") and layer_mod.bias is not None:
+                            params += layer_mod.bias.numel()
+                        cost_per_channel = params / num_channels
                     else:
-                         # Wrapper or complex module, default to 1
-                         cost_per_channel = 1.0
-                    
+                        # Wrapper or complex module, default to 1
+                        cost_per_channel = 1.0
+
                     costs = torch.full_like(scores, cost_per_channel)
                 except Exception:
                     costs = torch.full_like(scores, 1.0)
-            
+
             total_cost_model += costs.sum().item()
-            
+
             # Ratio = Score / Cost
             # We want to prune smallest Ratio
             ratios = scores / (costs + 1e-8)
-            
+
             # Store items
             # We can't store all items in a list if millions, but for structured pruning (channels),
             # it's usually thousands (e.g. 32 layers * 11k channels ~ 350k items). This is fine.
-            
+
             # Move to CPU to save GPU mem
             ratios_cpu = ratios.detach().cpu()
             costs_cpu = costs.detach().cpu()
-            
+
             for i in range(num_channels):
-                all_items.append({
-                    "ratio": ratios_cpu[i].item(),
-                    "cost": costs_cpu[i].item(),
-                    "layer": name
-                })
+                all_items.append({"ratio": ratios_cpu[i].item(), "cost": costs_cpu[i].item(), "layer": name})
 
         if not all_items:
             return {name: 0.0 for name in layer_names}
 
         # Sort by ratio (ascending) -> prune smallest first
         all_items.sort(key=lambda x: x["ratio"])
-        
+
         # Target savings
         target_savings = total_cost_model * self.target_sparsity
-        
+
         current_savings = 0.0
         pruned_counts = {name: 0 for name in layer_names}
         layer_channel_counts = {name: len(layer_scores[name]) if name in layer_scores else 0 for name in layer_names}
-        
+
         # Accumulate pruned items
         for item in all_items:
             if current_savings >= target_savings:
                 break
-            
+
             # Check layer constraints
             name = item["layer"]
             current_pruned = pruned_counts[name]
             max_pruned = int(layer_channel_counts[name] * self.max_amount)
-            
+
             if current_pruned < max_pruned:
                 pruned_counts[name] += 1
                 current_savings += item["cost"]
-        
+
         # Convert counts to fractions
         amounts = {}
         for name in layer_names:
             total = layer_channel_counts.get(name, 0)
             if total > 0:
                 amount = pruned_counts.get(name, 0) / total
-                amounts[name] = max(self.min_amount, amount) # enforce min_amount? 
-                # If min_amount is strict, we might violate global budget. 
+                amounts[name] = max(self.min_amount, amount)  # enforce min_amount?
+                # If min_amount is strict, we might violate global budget.
                 # Usually min_amount is soft or handled before.
             else:
                 amounts[name] = 0.0
-                
+
         return amounts
 
     def _adaptive_sensitivity_distribution(self, model: nn.Module, layer_names: List[str], eval_fn: Callable) -> Dict[str, float]:
@@ -387,9 +383,9 @@ class PruningDistributionManager:
         layer_sizes = {}
         for name in layer_scores.keys():
             try:
-                 layer_sizes[name] = dict(model.named_modules())[name].weight.numel()
+                layer_sizes[name] = dict(model.named_modules())[name].weight.numel()
             except:
-                 layer_sizes[name] = 1000 # dummy
+                layer_sizes[name] = 1000  # dummy
 
         amounts = self._normalize_to_target(amounts, layer_sizes)
 
@@ -410,13 +406,13 @@ class PruningDistributionManager:
             sorted_layers = layer_names
 
         # Compute total params and target
-        layer_sizes = {} 
+        layer_sizes = {}
         for name in layer_names:
-             try:
+            try:
                 layer_sizes[name] = dict(model.named_modules())[name].weight.numel()
-             except:
+            except:
                 layer_sizes[name] = 0
-        
+
         total_params = sum(layer_sizes.values())
         target_to_remove = int(total_params * self.target_sparsity)
 
@@ -427,10 +423,10 @@ class PruningDistributionManager:
         for layer_name in sorted_layers:
             remaining_to_remove = target_to_remove - removed_so_far
             layer_size = layer_sizes[layer_name]
-            
+
             if layer_size == 0:
-                 amounts[layer_name] = 0.0
-                 continue
+                amounts[layer_name] = 0.0
+                continue
 
             if remaining_to_remove <= 0:
                 amounts[layer_name] = 0.0
@@ -521,7 +517,7 @@ class PruningDistributionManager:
             strat_name = self.strategy.value
         except:
             strat_name = str(self.strategy)
-            
+
         print(f"Pruning Distribution ({strat_name})")
         print(f"Target Overall Sparsity: {self.target_sparsity:.1%}")
         print("=" * 80)
@@ -530,22 +526,22 @@ class PruningDistributionManager:
         layer_info = []
         total_params = 0
         total_pruned = 0
-        
+
         sorted_names = sorted(amounts.keys())
-        
+
         # Try to get layer modules
         modules = dict(model.named_modules())
 
         for layer_name in sorted_names:
             if layer_name in modules:
                 layer = modules[layer_name]
-                if hasattr(layer, 'weight'):
+                if hasattr(layer, "weight"):
                     size = layer.weight.numel()
                 else:
                     size = 0
             else:
                 size = 0
-                
+
             amount = amounts[layer_name]
             pruned = int(size * amount)
 

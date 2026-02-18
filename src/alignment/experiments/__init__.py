@@ -7,6 +7,7 @@ including general alignment analysis, LLM alignment, and cluster-based analysis.
 
 from .base import BaseExperiment, ExperimentConfig
 from .general_alignment import GeneralAlignmentConfig, GeneralAlignmentExperiment
+
 # NOTE: Keep the package importable even if optional / heavy experiment modules
 # have missing dependencies or transient syntax issues. This is important because
 # vision-only workflows (cluster/pruning) should not break due to LLM-only code.
@@ -14,12 +15,9 @@ try:
     from .llm_experiments import LLMAlignmentExperiment
 except Exception as _exc:  # pragma: no cover
     LLMAlignmentExperiment = None  # type: ignore[assignment]
-from .cluster_experiments import (
-    ClusterAnalysisExperiment,
-    ClusterAnalysisConfig,
-    VisionExperiment,  # backward compat
-    VisionExperimentConfig,  # backward compat
-)
+from .cluster_experiments import VisionExperiment  # backward compat
+from .cluster_experiments import VisionExperimentConfig  # backward compat
+from .cluster_experiments import ClusterAnalysisConfig, ClusterAnalysisExperiment
 
 __all__ = [
     # Base classes

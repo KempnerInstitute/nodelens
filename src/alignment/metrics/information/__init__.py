@@ -3,7 +3,7 @@ Information-theoretic metrics for neural network alignment.
 """
 
 from .conditional_mutual_information import ConditionalMutualInformation
-from .gaussian_mi import GaussianMIAnalytic, FastGaussianMI
+from .gaussian_mi import FastGaussianMI, GaussianMIAnalytic
 from .mi_projection import MIProjectionVsMeanInput
 from .mutual_information import MutualInformationBinning, MutualInformationGaussian
 from .pairwise_gaussian import PairwiseRedundancyGaussian
@@ -11,8 +11,8 @@ from .pid import SharedInformation
 from .pid import SynergisticInformation as PIDSynergisticInformation
 from .pid import UniqueInformationX, UniqueInformationY
 from .redundancy import AverageRedundancy
-from .synergy_mmi import SynergyGaussianMMI
 from .synergy_continuous import SynergyContinuousTarget
+from .synergy_mmi import SynergyGaussianMMI
 
 # Import higher-order metrics if available
 try:

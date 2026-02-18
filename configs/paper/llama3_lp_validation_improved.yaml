@@ -24,7 +24,7 @@ supernode:
   score_metric: scar_loss_proxy
   core_fraction: 0.01
   follower_fraction: 0.10
-  
+
   # Improved LP ablation validation settings
   lp_ablation_validation:
     enabled: true
@@ -35,7 +35,7 @@ supernode:
     num_channels: 128         # Same (can increase to 256 if desired)
     quantile_bins: 8
     seed: 0
-  
+
   # Disable other probes to speed up run
   read_halo_analysis:
     enabled: false

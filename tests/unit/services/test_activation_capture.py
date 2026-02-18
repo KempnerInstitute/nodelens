@@ -120,4 +120,3 @@ def test_activation_capture_conv1d_unfold_matches_conv(device):
 
     pred = data.inputs["conv"] @ data.weights["conv"].T
     torch.testing.assert_close(pred, data.outputs["conv"], rtol=1e-4, atol=1e-5)
-

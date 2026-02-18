@@ -4,7 +4,7 @@ Batch processing utilities for efficient metric computation on large datasets.
 
 import logging
 import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch.utils.data import DataLoader
@@ -12,18 +12,19 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+
 # Configure tqdm to avoid ANSI escape codes when not in terminal
 def _get_tqdm_kwargs(**kwargs):
     """Get tqdm kwargs with proper terminal detection."""
     # Check if we're in a terminal (TTY)
-    is_tty = hasattr(sys.stderr, 'isatty') and sys.stderr.isatty()
-    
+    is_tty = hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+
     # If not in terminal, disable fancy formatting to avoid ANSI codes in log files
     if not is_tty:
-        kwargs.setdefault('ascii', True)  # Use ASCII characters instead of Unicode blocks
-        kwargs.setdefault('ncols', 100)   # Fixed width to avoid issues
-        kwargs.setdefault('file', sys.stderr)  # Always use stderr for progress bars
-    
+        kwargs.setdefault("ascii", True)  # Use ASCII characters instead of Unicode blocks
+        kwargs.setdefault("ncols", 100)  # Fixed width to avoid issues
+        kwargs.setdefault("file", sys.stderr)  # Always use stderr for progress bars
+
     return kwargs
 
 
@@ -265,8 +266,6 @@ def compute_metrics_parallel(
         Results dictionary
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
-
-    import torch.multiprocessing as mp
 
     # Determine devices
     if devices is None:

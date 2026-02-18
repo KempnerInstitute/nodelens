@@ -5,10 +5,8 @@ This module provides the main model wrappers used for alignment analysis,
 including the general-purpose ModelWrapper and specialized wrappers.
 """
 
-import copy
 import logging
-from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -85,7 +83,7 @@ class ModelWrapper(BaseModelWrapper):
 
         # Get activations
         activations = self._activation_cache.copy()
-        
+
         # Filter to requested layers if specified
         if layers is not None:
             filtered = {}

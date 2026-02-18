@@ -10,18 +10,15 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.analysis.clustering.metric_clustering import MetricSpaceClustering
-from alignment.analysis.clustering.cross_layer_halo import CrossLayerHaloAnalysis
 from alignment.analysis.cascade_analysis import CascadeAnalysis
-from alignment.pruning.strategies.cluster_aware import (
-    ClusterAwarePruning,
-    ClusterAwarePruningConfig,
-)
-
+from alignment.analysis.clustering.cross_layer_halo import CrossLayerHaloAnalysis
+from alignment.analysis.clustering.metric_clustering import MetricSpaceClustering
+from alignment.pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig
 
 # ---------------------------------------------------------------------------
 # Tiny model
 # ---------------------------------------------------------------------------
+
 
 class _PipelineCNN(nn.Module):
     """3-layer CNN for pipeline testing."""
@@ -46,9 +43,9 @@ class _PipelineCNN(nn.Module):
 # Integration test
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 class TestClusterPipeline:
-
     def test_full_pipeline(self):
         """Run metrics -> cluster -> halo -> prune -> verify model still works."""
         torch.manual_seed(42)
@@ -68,6 +65,7 @@ class TestClusterPipeline:
         def make_hook(name):
             def hook_fn(module, inp, out):
                 activations[name] = out.detach()
+
             return hook_fn
 
         for name, mod in [("conv1", model.conv1), ("conv2", model.conv2), ("conv3", model.conv3)]:
@@ -87,13 +85,13 @@ class TestClusterPipeline:
         var = np.var(acts_gap, axis=0)
         w = model.conv2.weight.detach().numpy()
         w_flat = w.reshape(w.shape[0], -1)
-        w_norm_sq = np.sum(w_flat ** 2, axis=1)
+        w_norm_sq = np.sum(w_flat**2, axis=1)
         rq = var / (w_norm_sq + 1e-10)
 
         # Redundancy: mean pairwise Gaussian MI
         corr = np.corrcoef(acts_gap.T)
         corr = np.clip(corr, -0.999, 0.999)
-        mi = -0.5 * np.log(1 - corr ** 2)
+        mi = -0.5 * np.log(1 - corr**2)
         np.fill_diagonal(mi, 0)
         red = np.mean(mi, axis=1)
 
@@ -113,7 +111,10 @@ class TestClusterPipeline:
         assert cluster_result.n_clusters == 4
         assert len(cluster_result.labels) == 32
         assert set(cluster_result.type_mapping.values()) == {
-            "critical", "redundant", "synergistic", "background",
+            "critical",
+            "redundant",
+            "synergistic",
+            "background",
         }
 
         # 5. Halo analysis: conv2 -> conv3
@@ -122,12 +123,10 @@ class TestClusterPipeline:
         # For conv: [out, in, k, k] -> sum kernel -> [out, in]
         w_next_2d = np.abs(w_next).sum(axis=(2, 3))
 
-        acts_next = activations["conv3"].mean(dim=(2, 3)).numpy()
+        activations["conv3"].mean(dim=(2, 3)).numpy()
         influence = halo_analyzer.compute_influence(w_next_2d, acts_gap)
 
-        critical_idx = np.where(
-            cluster_result.labels == [k for k, v in cluster_result.type_mapping.items() if v == "critical"][0]
-        )[0]
+        critical_idx = np.where(cluster_result.labels == [k for k, v in cluster_result.type_mapping.items() if v == "critical"][0])[0]
         halo_idx, rel_infl = halo_analyzer.find_halo(influence, critical_idx)
         assert rel_infl.shape[0] == 32  # n_out for conv3
 
@@ -151,7 +150,8 @@ class TestClusterPipeline:
         )
 
         scores = cap.compute_importance_scores(
-            module=model.conv2, layer_name="conv2",
+            module=model.conv2,
+            layer_name="conv2",
         )
         assert scores.shape == (32,)
         assert torch.all(torch.isfinite(scores))
@@ -201,7 +201,10 @@ class TestClusterPipeline:
         # Run cascade
         ca = CascadeAnalysis(model, loader, device="cpu")
         cascade_results = ca.by_cluster(
-            "conv2", result.labels, result.type_mapping, n_rm=3,
+            "conv2",
+            result.labels,
+            result.type_mapping,
+            n_rm=3,
         )
         assert len(cascade_results) > 0
         for ctype, cr in cascade_results.items():

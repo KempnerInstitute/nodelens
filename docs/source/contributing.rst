@@ -44,13 +44,13 @@ Run all checks:
 
    # Format code
    black src/ tests/
-   
+
    # Sort imports
    isort src/ tests/
-   
+
    # Run linting
    flake8 src/ tests/
-   
+
    # Type checking
    mypy src/
 
@@ -75,10 +75,10 @@ Run tests:
 
    # Run all tests
    pytest
-   
+
    # Run specific test file
    pytest tests/test_metrics.py
-   
+
    # Run with coverage
    pytest --cov=alignment
 
@@ -112,12 +112,12 @@ Example PR description:
 
    ## Summary
    Added new Fisher pruning strategy to the pruning module.
-   
+
    ## Changes
    - Implemented FisherPruning class in pruning/strategies/gradient.py
    - Added tests in tests/test_pruning_strategies.py
    - Updated documentation in docs/source/user_guide/pruning_strategies.rst
-   
+
    ## Testing
    - All existing tests pass
    - Added 5 new tests for Fisher pruning
@@ -142,4 +142,4 @@ Questions?
 - Start a discussion for general questions
 - Check existing issues before creating new ones
 
-Thank you for contributing to the alignment framework! 
+Thank you for contributing to the alignment framework!

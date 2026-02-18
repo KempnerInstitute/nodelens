@@ -256,8 +256,10 @@ def compute_next_layer_read_halo(
 
             if ablate:
                 if ln_mod is not None:
+
                     def ln_hook(_m: nn.Module, _inp: Tuple[torch.Tensor, ...], out: torch.Tensor):
                         return _ablate_hidden(out)
+
                     ln_handle = ln_mod.register_forward_hook(ln_hook)
                 else:
                     # Fallback: ablate inputs to both gate and up (may clone twice per forward).
@@ -266,6 +268,7 @@ def compute_next_layer_read_halo(
                             return inputs
                         x = inputs[0]
                         return (_ablate_hidden(x),) + tuple(inputs[1:])
+
                     gate_handle = gate_mod.register_forward_pre_hook(pre_hook)
                     up_handle = up_mod.register_forward_pre_hook(pre_hook)
 
@@ -441,4 +444,3 @@ def compute_next_layer_read_halo(
         },
         "dependence_u": dependence,
     }
-

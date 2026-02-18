@@ -4,8 +4,9 @@ Build documentation for the Neural Network Alignment framework.
 """
 
 import os
-import sys
 import subprocess
+import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 
@@ -20,9 +21,7 @@ def main():
     os.chdir(docs_dir)
 
     # Check if sphinx is installed
-    try:
-        import sphinx
-    except ImportError:
+    if find_spec("sphinx") is None:
         print("Sphinx not installed. Installing documentation requirements...")
         subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements-docs.txt"])
 

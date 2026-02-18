@@ -35,7 +35,7 @@ model:
   dtype: "bfloat16"
   device_map: "auto"
   trust_remote_code: true
-  
+
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
     - "model.model.layers.*.mlp.gate_proj"
@@ -77,27 +77,27 @@ metrics:
     use_gpu_acceleration: false    # Enable GPU-accelerated functions
     force_cpu_for_large_ops: true  # Prevent OOM for large covariance matrices
     cpu_threshold: 100000000       # 1e8 elements threshold
-  
+
   rayleigh_quotient:
     enabled: true
     relative: true
     regularization: 1.0e-6
-  
+
   redundancy:
     enabled: true
     # LLM uses: gaussian_mi_analytic, average_redundancy
-  
+
   magnitude:
     enabled: true
     # LLM uses: activation_l2_norm
-  
+
   # LLM-specific SCAR metrics
   scar:
     enabled: true
     num_samples: 64
     max_length: 512
     # Computes: scar_activation_power, scar_curvature, scar_loss_proxy, scar_taylor
-  
+
   composite_weights:
     rayleigh_quotient: 0.25
     redundancy: -0.25
@@ -162,36 +162,36 @@ pruning:
   max_per_layer: 0.95
   structured: true
   dependency_aware: true
-  
+
   # Algorithms to test (unified + LLM-specific)
   algorithms:
     # Alignment-based (core metrics)
     - "rayleigh_quotient"
     - "redundancy"              # maps to gaussian_mi_analytic
     - "average_redundancy"      # info-theoretic redundancy
-    
+
     # SCAR-based (gradient-informed)
     - "scar_loss_proxy"
-    
+
     # Supernode-aware (novel contribution)
     - "supernode_protection_score"
     - "supernode_connectivity_score"
-    
+
     # Generalized (no outlier assumption)
     - "generalized_importance"
-    
+
     # Cross-layer importance
     - "cross_layer_importance"
-    
+
     # Magnitude baseline
     - "magnitude"               # maps to activation_l2_norm
     # Weight-only magnitude baseline (channel-group)
     - "weight_magnitude"
-    
+
     # SOTA baselines
     - "wanda"
     - "sparsegpt"
-  
+
   scoring_methods:
     - "random"
     - "magnitude"               # activation_l2_norm
@@ -210,7 +210,7 @@ pruning:
     - "within_layer_importance"
     - "wanda"
     - "sparsegpt"
-  
+
   fine_tune:
     enabled: false
     epochs: 1
@@ -224,7 +224,7 @@ evaluation:
   accuracy: false  # Not applicable to LLM
   loss: true
   bits_per_byte: true  # Compression efficiency metric
-  
+
   # LLM-specific: Perplexity
   perplexity_enabled: true
   evaluation_num_samples: 100  # Samples per benchmark
@@ -235,7 +235,7 @@ evaluation:
     - name: "c4"
       split: "validation"
       max_samples: 1000
-  
+
   # LLM-specific: Benchmarks
   benchmarks_enabled: true
   benchmark_tasks:
@@ -271,19 +271,19 @@ visualization:
   enabled: true
   format: "pdf"
   dpi: 300
-  
+
   # Plot types (same as vision)
   histograms: true
   violin_plots: true
   correlation_heatmap: true
   pruning_comparison: true
   pruning_recovery: true
-  
+
   # LLM-specific plots
   supernode_distribution: true
   halo_structure: true
   cross_layer_heatmap: true
-  
+
   scatter_pairs:
     - ["magnitude", "rayleigh_quotient"]
     - ["magnitude", "scar_loss_proxy"]
@@ -362,7 +362,7 @@ extra:
       # Cross-layer
       - ["scar_loss_proxy", "supernode_connectivity_score"]
       - ["cross_layer_importance", "activation_l2_norm"]
-  
+
   # Supernode robustness analysis
   supernode_robustness:
     enabled: true
@@ -378,12 +378,12 @@ extra:
       - "gaussian_mi_analytic"
       - "activation_l2_norm"
     target_layers: null
-  
+
   # Supernode summary analysis
   supernode_summary:
     enabled: true
     outlier_analysis: true
-  
+
   # Halo analysis (detailed settings)
   halo_analysis:
     enabled: true
@@ -399,7 +399,7 @@ extra:
       histograms: true
       heatmaps: true
       comprehensive: true
-  
+
   # Multi-supernode clustering
   multi_supernode:
     enabled: true
@@ -407,7 +407,7 @@ extra:
     n_clusters: 4
     halo_fraction: 0.10
     clustering_features: "weights"
-  
+
   # Cross-layer importance weights
   cross_layer:
     enabled: true
@@ -417,7 +417,7 @@ extra:
     within_redundancy_weight: 0.25
     activation_weight: 0.15
     normalize: true
-  
+
   # Generalized importance
   generalized_importance:
     enabled: true
@@ -426,7 +426,7 @@ extra:
     redundancy_penalty: 0.5
     num_samples: 8
     max_length: 256
-  
+
   # Visualization for paper figures (detailed)
   visualization:
     save_plots: true
@@ -481,7 +481,7 @@ extra:
       - ["downstream_importance", "within_layer_redundancy"]
       - ["cross_layer_importance", "activation_l2_norm"]
       - ["generalized_importance", "scar_loss_proxy"]
-  
+
   # Advanced analysis flags
   do_scar_metrics: true
   do_directed_redundancy: true

@@ -22,7 +22,7 @@ dataset:
   train_split: 0.9  # Use 90% for train, 10% for calibration
 
 # Core alignment metrics for vision
-# NOTE: Synergy is very slow (O(n×k) with expensive MI). 
+# NOTE: Synergy is very slow (O(n×k) with expensive MI).
 # For fast runs, use only RQ + L2 + variance (like LLM experiment)
 metrics:
   enabled:
@@ -36,10 +36,10 @@ metrics:
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
-    
+
   pairwise_redundancy_gaussian:
     num_partners: 10  # Reduced from 50 for speed
-    
+
   gaussian_pid_synergy_mmi:
     num_partners: 10  # Reduced from 50
 
@@ -58,7 +58,7 @@ pruning:
   selection_modes: ["low", "high", "random"]
   distribution: "uniform"
   structured: true  # Channel pruning
-  
+
   # Pruning strategies to compare
   algorithms:
     - "random"                    # Random baseline
@@ -66,7 +66,7 @@ pruning:
     - "rayleigh_quotient"         # RQ-only
     - "composite_rq_redundancy"   # RQ - redundancy (ours)
     - "composite_full"            # RQ + MI + synergy - redundancy (ours)
-  
+
   # Fine-tuning after pruning
   fine_tune:
     enabled: true

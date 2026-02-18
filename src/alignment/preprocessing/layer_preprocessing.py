@@ -7,7 +7,7 @@ including convolutional, linear, and other specialized layers.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -119,17 +119,16 @@ class CNNPreprocessor(LayerPreprocessor):
             if activation.ndim != 4:
                 raise ValueError(f"Expected 4D tensor for Conv2d, got {activation.ndim}D")
 
-        b, c, h, w = activation.shape
-
+            _, c, _, _ = activation.shape
             if is_input:
-                # Unfold based on the layer's kernel parameters so feature dimension matches weight flattening
-            unfold_params = self._get_unfold_params(layer)
-            unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
+                # Unfold based on the layer's kernel parameters so feature dimension matches weight flattening.
+                unfold_params = self._get_unfold_params(layer)
+                unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
                 # [b, features, num_patches] -> [b*num_patches, features]
-            unfolded = unfolded.transpose(1, 2).contiguous()
-            return unfolded.view(-1, unfolded.size(2))
+                unfolded = unfolded.transpose(1, 2).contiguous()
+                return unfolded.view(-1, unfolded.size(2))
 
-            # Output: treat each spatial location as a sample (node = output channel)
+            # Output: treat each spatial location as a sample (node = output channel).
             # [b, c, h, w] -> [b*h*w, c]
             return activation.permute(0, 2, 3, 1).reshape(-1, c)
 
@@ -137,11 +136,11 @@ class CNNPreprocessor(LayerPreprocessor):
             if activation.ndim != 3:
                 raise ValueError(f"Expected 3D tensor for Conv1d, got {activation.ndim}D")
 
-            b, c, l = activation.shape
+            _, c, seq_len = activation.shape
 
             if is_input:
-                # Use 2D unfold trick on [b, c, 1, l] to respect stride/padding/dilation
-                x4 = activation.unsqueeze(2)  # [b, c, 1, l]
+                # Use 2D unfold trick on [b, c, 1, seq_len] to respect stride/padding/dilation.
+                x4 = activation.unsqueeze(2)  # [b, c, 1, seq_len]
                 k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
                 s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
                 p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
@@ -156,7 +155,7 @@ class CNNPreprocessor(LayerPreprocessor):
                 unfolded = unfolded.transpose(1, 2).contiguous()
                 return unfolded.view(-1, unfolded.size(2))  # [b*num_patches, c*k]
 
-            # Output: [b, c, l] -> [b*l, c]
+            # Output: [b, c, seq_len] -> [b*seq_len, c]
             return activation.permute(0, 2, 1).reshape(-1, c)
 
         raise ValueError(f"Expected Conv layer, got {type(layer)}")
@@ -172,26 +171,25 @@ class CNNPreprocessor(LayerPreprocessor):
             if activation.ndim != 4:
                 raise ValueError(f"Expected 4D tensor for Conv2d, got {activation.ndim}D")
 
-        b, c, h, w = activation.shape
-
+            b, c, h, w = activation.shape
             if is_input:
-                # Unfold to get kernel patches
-            unfold_params = self._get_unfold_params(layer)
-            unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
-            return unfolded  # [b, features, patches]
+                # Unfold to get kernel patches.
+                unfold_params = self._get_unfold_params(layer)
+                unfolded = torch.nn.functional.unfold(activation, kernel_size=layer.kernel_size, **unfold_params)
+                return unfolded  # [b, features, patches]
 
-            # Output: reshape spatial dims to patches (node = output channel)
+            # Output: reshape spatial dims to patches (node = output channel).
             return activation.reshape(b, c, h * w)  # [b, c, patches]
 
         if isinstance(layer, nn.Conv1d):
             if activation.ndim != 3:
                 raise ValueError(f"Expected 3D tensor for Conv1d, got {activation.ndim}D")
 
-            b, c, l = activation.shape
+            b, c, seq_len = activation.shape
 
             if is_input:
                 # Unfold 1D input into kernel patches: [b, c*k, patches]
-                x4 = activation.unsqueeze(2)  # [b, c, 1, l]
+                x4 = activation.unsqueeze(2)  # [b, c, 1, seq_len]
                 k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
                 s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
                 p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
@@ -205,7 +203,7 @@ class CNNPreprocessor(LayerPreprocessor):
                 )
                 return unfolded  # [b, c*k, patches]
 
-            # Output: already [b, c, l] = [b, c, patches]
+            # Output: already [b, c, seq_len] = [b, c, patches]
             return activation
 
         raise ValueError(f"Expected Conv layer, got {type(layer)}")
@@ -231,15 +229,15 @@ class CNNPreprocessor(LayerPreprocessor):
     def get_output_shape(self, input_shape: Tuple[int, ...], layer: nn.Module) -> Tuple[int, ...]:
         """Get expected output shape after preprocessing."""
         if isinstance(layer, nn.Conv2d):
-        if len(input_shape) != 4:
+            if len(input_shape) != 4:
                 raise ValueError(f"Expected 4D input shape for Conv2d, got {len(input_shape)}D")
-        b, c, h, w = input_shape
+            b, c, h, w = input_shape
 
-            # Output spatial size (PyTorch conv2d formula; floor division)
-            k_h, k_w = layer.kernel_size
-            s_h, s_w = layer.stride
-            p_h, p_w = layer.padding
-            d_h, d_w = layer.dilation
+            # Output spatial size (PyTorch conv2d formula; floor division).
+            k_h, k_w = layer.kernel_size if isinstance(layer.kernel_size, tuple) else (layer.kernel_size, layer.kernel_size)
+            s_h, s_w = layer.stride if isinstance(layer.stride, tuple) else (layer.stride, layer.stride)
+            p_h, p_w = layer.padding if isinstance(layer.padding, tuple) else (layer.padding, layer.padding)
+            d_h, d_w = layer.dilation if isinstance(layer.dilation, tuple) else (layer.dilation, layer.dilation)
             out_h = (h + 2 * p_h - d_h * (k_h - 1) - 1) // s_h + 1
             out_w = (w + 2 * p_w - d_w * (k_w - 1) - 1) // s_w + 1
             num_patches = max(0, out_h) * max(0, out_w)
@@ -255,13 +253,13 @@ class CNNPreprocessor(LayerPreprocessor):
         if isinstance(layer, nn.Conv1d):
             if len(input_shape) != 3:
                 raise ValueError(f"Expected 3D input shape for Conv1d, got {len(input_shape)}D")
-            b, c, l = input_shape
+            b, c, seq_len = input_shape
             k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
             s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
             p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
             d = layer.dilation[0] if isinstance(layer.dilation, tuple) else layer.dilation
-            out_l = (l + 2 * p - d * (k - 1) - 1) // s + 1
-            num_patches = max(0, out_l)
+            out_seq_len = (seq_len + 2 * p - d * (k - 1) - 1) // s + 1
+            num_patches = max(0, out_seq_len)
             features = c * k
 
             if self.mode in {"unfold", "batch_patch_combined"}:

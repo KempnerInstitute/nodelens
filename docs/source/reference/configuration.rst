@@ -120,7 +120,7 @@ Basic Training
    training_epochs: 10            # Number of epochs
    learning_rate: 0.001           # Learning rate
    optimizer: "adam"              # Optimizer type
-   
+
    # Advanced training options
    scheduler: "cosine"            # LR scheduler: null, "cosine", "step"
    weight_decay: 0.0001           # L2 regularization
@@ -152,7 +152,7 @@ Metric Selection
 
    # Basic metrics
    metrics: ["rayleigh_quotient", "mutual_information_gaussian"]
-   
+
    # Advanced configuration
    metric_configs:
      rayleigh_quotient:
@@ -170,13 +170,13 @@ Layer Tracking
 
    # Automatic layer discovery
    tracked_layers: null
-   
+
    # Manual layer specification
    tracked_layers:
      - "conv1"
      - "layer1.0.conv1"
      - "fc"
-   
+
    # CNN-specific settings
    exclude_classification_layer: true
    cnn_rq_aggregation_op: "mean"
@@ -214,7 +214,7 @@ Pruning Control
 
    # Enable/disable pruning
    do_pruning_experiments: true
-   
+
    # Pruning strategies
    pruning_strategies: ["magnitude", "alignment", "random"]
    pruning_amounts: [0.1, 0.3, 0.5, 0.7, 0.9]
@@ -260,7 +260,7 @@ Output Configuration
    checkpoint_dir: "./checkpoints"
    log_dir: "./logs"
    plots_dir: "./plots"
-   
+
    # Checkpointing
    save_best: true
    checkpoint_interval: 1000
@@ -273,7 +273,7 @@ Distributed Training
    # Multi-GPU training
    distributed: true
    world_size: 4                 # Number of GPUs
-   
+
    # Multi-network training
    num_networks: 10              # Train multiple networks in parallel
 

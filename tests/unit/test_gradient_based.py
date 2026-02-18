@@ -4,16 +4,14 @@ Tests for metrics/gradient_based.py: gradient-based metrics and utilities.
 
 import pytest
 import torch
-import torch.nn as nn
 
 from alignment.metrics.gradient_based import (
-    TaylorSaliency,
     GradientAlignment,
-    LocalLearningRuleSearch,
     GradientStatisticsTracker,
+    LocalLearningRuleSearch,
+    TaylorSaliency,
     compute_direction_consistency,
 )
-
 
 # =========================================================================
 # TaylorSaliency
@@ -135,9 +133,7 @@ class TestGradientAlignment:
         gradients = torch.randn(4, 8)
         targets = torch.randint(0, 4, (16,))
         metric = GradientAlignment(local_signal="anti_hebbian")
-        scores = metric.compute(
-            inputs=inputs, outputs=outputs, gradients=gradients, targets=targets
-        )
+        scores = metric.compute(inputs=inputs, outputs=outputs, gradients=gradients, targets=targets)
         assert scores.shape == (4,)
 
     def test_anti_hebbian_no_targets(self):
@@ -224,9 +220,7 @@ class TestLocalLearningRuleSearch:
         outputs = torch.randn(16, 4)
         gradients = torch.randn(4, 8)
         metric = LocalLearningRuleSearch()
-        indices = metric.compute(
-            inputs=inputs, outputs=outputs, gradients=gradients
-        )
+        indices = metric.compute(inputs=inputs, outputs=outputs, gradients=gradients)
         assert indices.shape == (4,)
         assert all(0 <= idx < 5 for idx in indices.tolist())
 
@@ -236,7 +230,9 @@ class TestLocalLearningRuleSearch:
         gradients = torch.randn(4, 8)
         metric = LocalLearningRuleSearch()
         corr_matrix = metric.compute(
-            inputs=inputs, outputs=outputs, gradients=gradients,
+            inputs=inputs,
+            outputs=outputs,
+            gradients=gradients,
             return_correlations=True,
         )
         assert corr_matrix.shape == (4, 5)  # 4 neurons, 5 rules

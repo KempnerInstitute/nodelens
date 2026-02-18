@@ -23,16 +23,15 @@ class ParallelBatchPruning:
 
     DEPRECATED: Use GeneralAlignmentExperiment with num_networks > 1 instead.
     The multi-network pruning is now handled automatically by the experiment class.
-    
+
     This class is kept for backward compatibility only.
     """
 
     def __init__(self, config=None):
         warnings.warn(
-            "ParallelBatchPruning is deprecated. Use GeneralAlignmentExperiment with "
-            "num_networks > 1 for multi-network pruning experiments.",
+            "ParallelBatchPruning is deprecated. Use GeneralAlignmentExperiment with " "num_networks > 1 for multi-network pruning experiments.",
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
         self.config = config
         self.eval_batches = getattr(config, "eval_batches", None) if config else None
@@ -318,7 +317,7 @@ class ParallelBatchPruning:
         # Use topk-based selection to guarantee exactly k weights are pruned
         # This avoids non-monotonic behavior caused by ties at threshold values
         mask = torch.ones(flat_importance.numel(), dtype=torch.bool, device=importance.device)
-        
+
         if selection_mode == "low":
             # Prune k weights with LOWEST scores
             _, indices = torch.topk(flat_importance, k, largest=False)
@@ -329,7 +328,7 @@ class ParallelBatchPruning:
             indices = torch.randperm(flat_importance.numel(), device=flat_importance.device)[:k]
         else:
             raise ValueError(f"Unknown selection mode: {selection_mode}")
-        
+
         mask[indices] = False
         mask = mask.view(importance.shape)
 

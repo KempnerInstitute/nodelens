@@ -7,7 +7,7 @@ including convolutional, linear, and other specialized layers.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -137,11 +137,11 @@ class CNNPreprocessor(LayerPreprocessor):
             if activation.ndim != 3:
                 raise ValueError(f"Expected 3D tensor for Conv1d, got {activation.ndim}D")
 
-            b, c, l = activation.shape
+            _, c, seq_len = activation.shape
 
             if is_input:
-                # Use 2D unfold trick on [b, c, 1, l] to respect stride/padding/dilation
-                x4 = activation.unsqueeze(2)  # [b, c, 1, l]
+                # Use 2D unfold trick on [b, c, 1, seq_len] to respect stride/padding/dilation.
+                x4 = activation.unsqueeze(2)  # [b, c, 1, seq_len]
                 k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
                 s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
                 p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
@@ -156,7 +156,7 @@ class CNNPreprocessor(LayerPreprocessor):
                 unfolded = unfolded.transpose(1, 2).contiguous()
                 return unfolded.view(-1, unfolded.size(2))  # [b*num_patches, c*k]
 
-            # Output: [b, c, l] -> [b*l, c]
+            # Output: [b, c, seq_len] -> [b*seq_len, c]
             return activation.permute(0, 2, 1).reshape(-1, c)
 
         raise ValueError(f"Expected Conv layer, got {type(layer)}")
@@ -187,11 +187,11 @@ class CNNPreprocessor(LayerPreprocessor):
             if activation.ndim != 3:
                 raise ValueError(f"Expected 3D tensor for Conv1d, got {activation.ndim}D")
 
-            b, c, l = activation.shape
+            b, c, seq_len = activation.shape
 
             if is_input:
                 # Unfold 1D input into kernel patches: [b, c*k, patches]
-                x4 = activation.unsqueeze(2)  # [b, c, 1, l]
+                x4 = activation.unsqueeze(2)  # [b, c, 1, seq_len]
                 k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
                 s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
                 p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
@@ -205,7 +205,7 @@ class CNNPreprocessor(LayerPreprocessor):
                 )
                 return unfolded  # [b, c*k, patches]
 
-            # Output: already [b, c, l] = [b, c, patches]
+            # Output: already [b, c, seq_len] = [b, c, patches]
             return activation
 
         raise ValueError(f"Expected Conv layer, got {type(layer)}")
@@ -255,13 +255,13 @@ class CNNPreprocessor(LayerPreprocessor):
         if isinstance(layer, nn.Conv1d):
             if len(input_shape) != 3:
                 raise ValueError(f"Expected 3D input shape for Conv1d, got {len(input_shape)}D")
-            b, c, l = input_shape
+            b, c, seq_len = input_shape
             k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
             s = layer.stride[0] if isinstance(layer.stride, tuple) else layer.stride
             p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
             d = layer.dilation[0] if isinstance(layer.dilation, tuple) else layer.dilation
-            out_l = (l + 2 * p - d * (k - 1) - 1) // s + 1
-            num_patches = max(0, out_l)
+            out_seq_len = (seq_len + 2 * p - d * (k - 1) - 1) // s + 1
+            num_patches = max(0, out_seq_len)
             features = c * k
 
             if self.mode in {"unfold", "batch_patch_combined"}:

@@ -59,7 +59,7 @@ manager = EvaluationManager(task="classification")
 for epoch in range(epochs):
     train(...)
     results = manager.evaluate(model, val_loader, step=epoch)
-    
+
 best = manager.get_best(metric="accuracy")
 history = manager.get_history()
 ```

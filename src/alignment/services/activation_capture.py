@@ -82,9 +82,7 @@ class ActivationCaptureService:
         try:
             # Prefer capturing RAW activations (we do preprocessing here for consistency)
             # Prefer passing explicit layers where supported
-            output, activations = self.model_wrapper.forward_with_activations(
-                input_batch, layers=layers, preprocess=False
-            )
+            output, activations = self.model_wrapper.forward_with_activations(input_batch, layers=layers, preprocess=False)
         except TypeError as e:
             # Backwards compatibility: wrappers may not accept 'layers' and/or 'preprocess'
             msg = str(e)
@@ -94,8 +92,7 @@ class ActivationCaptureService:
                     output, activations = self.model_wrapper.forward_with_activations(input_batch, layers=layers)
                 elif "unexpected keyword argument 'layers'" in msg:
                     logger.warning(
-                        "Model wrapper.forward_with_activations does not accept 'layers'; "
-                        "capturing activations for all tracked layers instead."
+                        "Model wrapper.forward_with_activations does not accept 'layers'; " "capturing activations for all tracked layers instead."
                     )
                     # Retry without layers (and without preprocess, which may also be unsupported)
                     try:
@@ -240,10 +237,10 @@ class ActivationCaptureService:
     def _get_layer_module(self, layer_name: str) -> Optional[torch.nn.Module]:
         """
         Get the layer module by name, handling input/output suffixes.
-        
+
         Args:
             layer_name: Layer name (possibly with _input or _output suffix)
-            
+
         Returns:
             The layer module or None if not found
         """
@@ -253,7 +250,7 @@ class ActivationCaptureService:
             actual_name = layer_name[:-6]
         elif layer_name.endswith("_output"):
             actual_name = layer_name[:-7]
-        
+
         # Try to get from model's named_modules
         try:
             modules = dict(self.model_wrapper._model.named_modules())

@@ -54,6 +54,7 @@ from .strategies import (
     CascadingAlignmentPruning,
     EigenvectorPruning,
     FisherPruning,
+    FLAPPruning,
     GlobalAlignmentPruning,
     GlobalMagnitudePruning,
     GradientPruning,
@@ -61,19 +62,18 @@ from .strategies import (
     IterativeMagnitudePruning,
     LayerSensitivity,
     LayerwiseRandomPruning,
+    LLMPrunerChannelMode,
     MagnitudePruning,
     MomentumPruning,
     MovementPruning,
+    OWLPruning,
     ParallelModePruning,
     RandomPruning,
+    RIAPruning,
+    SlimLLMPruning,
     SparseGPTPruning,
     TensorizedPruning,
     WandaPruning,
-    OWLPruning,
-    LLMPrunerChannelMode,
-    FLAPPruning,
-    RIAPruning,
-    SlimLLMPruning,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,7 @@ def get_pruning_strategy(name: str, **kwargs) -> BasePruningStrategy:
         "activation_variance",
         "activation_mean",
     }
-    
+
     if name in PRUNING_STRATEGIES:
         strategy_class = PRUNING_STRATEGIES[name]
         return strategy_class(**kwargs)

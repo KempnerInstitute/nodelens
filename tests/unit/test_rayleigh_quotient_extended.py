@@ -10,20 +10,15 @@ Tests validate:
 
 import pytest
 import torch
-import torch.nn as nn
 
-from alignment.metrics.rayleigh.rayleigh_quotient import (
-    RayleighQuotient,
-    FastRayleighQuotient,
-)
-
+from alignment.metrics.rayleigh.rayleigh_quotient import FastRayleighQuotient, RayleighQuotient
 
 # ---------------------------------------------------------------------------
 # Tests: _compute_from_covariance
 # ---------------------------------------------------------------------------
 
-class TestComputeFromCovariance:
 
+class TestComputeFromCovariance:
     def test_known_cov_identity(self):
         """With C=I, RQ(w) = ||w||² / ||w||² = 1 (relative: 1/trace(I))."""
         rq = RayleighQuotient(relative=False, regularization=0.0)
@@ -81,10 +76,12 @@ class TestComputeFromCovariance:
         """Multiple neurons: each gets its own RQ."""
         rq = RayleighQuotient(relative=False, regularization=0.0)
         C = torch.diag(torch.tensor([3.0, 1.0]))
-        W = torch.tensor([
-            [1.0, 0.0],  # aligned with first eigenvector -> RQ = 3
-            [0.0, 1.0],  # aligned with second eigenvector -> RQ = 1
-        ])
+        W = torch.tensor(
+            [
+                [1.0, 0.0],  # aligned with first eigenvector -> RQ = 3
+                [0.0, 1.0],  # aligned with second eigenvector -> RQ = 1
+            ]
+        )
         result = rq._compute_from_covariance(C, W)
         assert abs(result[0].item() - 3.0) < 1e-5
         assert abs(result[1].item() - 1.0) < 1e-5
@@ -94,8 +91,8 @@ class TestComputeFromCovariance:
 # Tests: standard compute method
 # ---------------------------------------------------------------------------
 
-class TestStandardCompute:
 
+class TestStandardCompute:
     def test_2d_inputs_shape(self):
         rq = RayleighQuotient(relative=True)
         inputs = torch.randn(50, 8)
@@ -143,8 +140,8 @@ class TestStandardCompute:
 # Tests: FastRayleighQuotient (GAP-based)
 # ---------------------------------------------------------------------------
 
-class TestFastRayleighQuotient:
 
+class TestFastRayleighQuotient:
     def test_4d_input_output_shape(self):
         """4D input [B,C,H,W] should produce [C_out] scores."""
         rq = FastRayleighQuotient()
@@ -189,8 +186,8 @@ class TestFastRayleighQuotient:
 # Tests: class-conditioned RQ
 # ---------------------------------------------------------------------------
 
-class TestClassConditionedRQ:
 
+class TestClassConditionedRQ:
     def test_two_class_basic(self):
         rq = RayleighQuotient(relative=True)
         # Two classes with different means -> class-conditioned cov differs from unconditional
@@ -218,7 +215,10 @@ class TestClassConditionedRQ:
         weights = torch.randn(4, 8)
 
         result = rq.compute_class_conditioned(
-            inputs, weights, targets, return_delta_rq=True,
+            inputs,
+            weights,
+            targets,
+            return_delta_rq=True,
         )
         assert isinstance(result, dict)
         assert "rq_uncond" in result
@@ -227,7 +227,8 @@ class TestClassConditionedRQ:
         torch.testing.assert_close(
             result["delta_rq"],
             result["rq_uncond"] - result["rq_cond"],
-            atol=1e-5, rtol=1e-5,
+            atol=1e-5,
+            rtol=1e-5,
         )
 
     def test_single_class_equals_unconditional(self):
@@ -247,8 +248,8 @@ class TestClassConditionedRQ:
 # Tests: patchwise computation
 # ---------------------------------------------------------------------------
 
-class TestPatchwise:
 
+class TestPatchwise:
     def test_3d_patchwise_loop_shape(self):
         """Loop-based patchwise computation should produce correct shape."""
         rq = RayleighQuotient(relative=True, regularization=1e-6)

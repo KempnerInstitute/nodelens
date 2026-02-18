@@ -91,34 +91,34 @@ metrics:
     use_gpu_acceleration: false    # Enable GPU-accelerated functions
     force_cpu_for_large_ops: true  # Prevent OOM for large covariance matrices
     cpu_threshold: 100000000       # 1e8 elements threshold
-  
+
   rayleigh_quotient:
     enabled: true
     relative: false  # Standard Rayleigh quotient (no trace-normalization)
     definition: both
     shrinkage: true
-  
+
   redundancy:
     enabled: true
     sampling: "all"  # all, random, top_k
-  
+
   synergy:
     enabled: true
     target: "logit_margin"  # logit_margin, correct_logit, logit_pc1
     num_pairs: 10
     sampling: "top_k"
-  
+
   magnitude:
     enabled: true
-  
+
   taylor:
     enabled: true
     criterion: "gradient_weight"  # gradient_weight, gradient_activation
-  
+
   activation_sparsity:
     enabled: true
     threshold: 0.01
-  
+
   # Composite weights for combined scoring
   composite_weights:
     rayleigh_quotient: 0.33
@@ -134,10 +134,10 @@ clustering:
   type_names: ["critical", "redundant", "synergistic", "background"]
   normalize_features: true
   features: ["rayleigh_quotient", "redundancy", "synergy"]
-  
+
   stability_enabled: true
   n_bootstrap: 50
-  
+
   # Metric ablation study: validate each metric's contribution
   # Clusters using subsets of metrics and compares to full 3-metric clustering
   ablation:
@@ -153,7 +153,7 @@ halo_analysis:
   percentile: 90.0
   use_activation_weight: true
   compute_influence_matrix: true
-  
+
   # Permutation baseline: shuffle cluster labels to establish null distribution
   # Tests whether observed halo effects are statistically significant
   permutation_baseline:
@@ -199,7 +199,7 @@ pruning:
   max_per_layer_sparsity_cap: 1.0
   # Include high sparsity (80%, 90%) to clearly see degradation
   ratios: [0.1, 0.3, 0.4, 0.5, 0.7, 0.8, 0.9, 0.95]
-  
+
   # COMPREHENSIVE ALGORITHM LIST for exploration
   algorithms:
     # =========================================================================
@@ -212,12 +212,12 @@ pruning:
     - "network_slimming"    # Network Slimming (BN gamma) baseline
     - "geometric_median"    # FPGM-style geometric median baseline
     - "hrank"               # HRank feature-rank baseline
-    
+
     # =========================================================================
     # SINGLE METRICS - Prune LOW (assumes low = unimportant)
     # =========================================================================
     - "rq_low"              # Prune low Rayleigh Quotient
-    - "mi_low"              # Prune low MI = 0.5*log(1 + RQ*||w||^2) 
+    - "mi_low"              # Prune low MI = 0.5*log(1 + RQ*||w||^2)
     - "redundancy_low"      # Prune low redundancy
     - "synergy_low"         # Prune low synergy
     - "lp_low"              # Prune low loss-proxy (Fisher importance)
@@ -227,7 +227,7 @@ pruning:
     - "redundancy_high"     # Prune high redundancy (standard approach)
     - "synergy_high"        # Prune high synergy
     - "lp_high"             # Prune high loss-proxy (should be catastrophically bad; sanity check)
-    
+
     # =========================================================================
     # COMPOSITE COMBINATIONS
     # =========================================================================
@@ -238,7 +238,7 @@ pruning:
     - "magnitude_plus_rq"   # score = magnitude + RQ
     - "magnitude_minus_red" # score = magnitude - redundancy
     - "magnitude_plus_red"  # score = magnitude + redundancy
-    
+
     # =========================================================================
     # CLUSTER-AWARE
     # =========================================================================
@@ -248,14 +248,14 @@ pruning:
     - "cluster_aware_depth_adaptive" # Per-layer adaptive weights (early=conservative)
     - "cluster_aware_gradient_weighted"  # Generalized Taylor: gradient-weight the CA score
     - "cluster_aware_protect_redundant"  # Ablation: inverted priority
-    
+
     # =========================================================================
     # TAYLOR-WEIGHTED METRICS (simple combinations)
     # =========================================================================
     - "taylor_rq"                   # sqrt(Taylor * RQ) - unique AND loss-sensitive
     - "taylor_redundancy"           # sqrt(Taylor * -redundancy) - non-redundant AND loss-sensitive
     - "taylor_synergy"              # sqrt(Taylor * synergy) - synergistic AND loss-sensitive
-    
+
     # =========================================================================
     # GENERALIZED TAYLOR (analytically-motivated combinations)
     # =========================================================================
@@ -267,7 +267,7 @@ pruning:
     - "mi_taylor"                   # Taylor × MI(channel, task): loss-sensitive AND informative
     - "cluster_type_taylor"         # Taylor × type_multiplier: cluster-weighted gradient
     - "taylor_optimal_combo"        # Learn: w_t·Taylor + w_rq·RQ + w_r·(-red) + w_s·syn
-    
+
     # =========================================================================
     # ADVANCED METHODS
     # =========================================================================
@@ -278,7 +278,7 @@ pruning:
     - "cluster_aware_bottleneck_protect" # Cluster-aware + protect high-bottleneck channels (routing tail)
     - "lp_optimal"                  # Learn optimal weights from LP correlation
     - "cluster_structure"           # Use cluster membership in scoring (not just selection)
-  
+
   scoring_methods:
     - "random"
     - "magnitude"
@@ -292,7 +292,7 @@ pruning:
     - "synergy_low"
     - "composite"
     - "composite_pos_red"
-  
+
   # =========================================================================
   # CLUSTER-AWARE METHOD CONFIGURATION
   # All cluster_aware* methods share these base settings
@@ -304,18 +304,18 @@ pruning:
     gamma: 0.3              # Weight for redundancy penalty
     lambda_halo: 0.5        # Weight for halo-synergy (cross-layer importance)
     protect_critical_frac: 0.3  # Fraction of critical channels to protect absolutely
-    
+
     # --- Annealing settings (for cluster_aware_annealed) ---
     # At sparsity < anneal_start: use pure Taylor
     # At sparsity > anneal_end: use pure cluster-aware
     # In between: linear blend
     anneal_start: 0.50      # Default: start blending at 50% sparsity
     anneal_end: 0.80        # Default: full CA at 80% sparsity
-    
+
     # --- Taylor blend (for cluster_aware_taylor_blend) ---
     # Constant blend: score = (1-w)*CA + w*Taylor
     taylor_weight: 0.3      # 30% Taylor, 70% cluster-aware (constant across sparsities)
-    
+
     # --- Depth-adaptive settings (for cluster_aware_depth_adaptive) ---
     # Early layers are typically more sensitive; use more conservative weights
     depth_adaptive: true    # Enable depth-adaptive weight adjustment
@@ -367,34 +367,34 @@ pruning:
 # -----------------------------------------------------------------------------
 evaluation:
   enabled: true
-  
+
   # Classification metrics
   accuracy: true
   top1_accuracy: true
   top5_accuracy: true
   loss: true
-  
+
   # Per-class analysis
   per_class_accuracy: true
   confusion_matrix: true
-  
+
   # Calibration metrics
   calibration_enabled: true
   expected_calibration_error: true
   reliability_diagram: true
-  
+
   # Efficiency metrics
   compute_flops: true
   compute_params: true
   compute_memory: true
   measure_latency: true
   latency_batch_sizes: [1, 8, 32, 128]
-  
+
   # Robustness (optional - requires corruption data)
   robustness_enabled: false
   corruption_types: ["gaussian_noise", "shot_noise", "impulse_noise", "gaussian_blur", "contrast", "brightness"]
   corruption_severities: [1, 3, 5]
-  
+
   # Transfer evaluation (optional)
   transfer_enabled: false
   transfer_datasets: ["cifar100", "svhn"]
@@ -404,26 +404,26 @@ evaluation:
 # -----------------------------------------------------------------------------
 benchmarks:
   enabled: true
-  
+
   # Standard test benchmarks
   tasks:
     - name: "cifar10_test"
       dataset: "cifar10"
       split: "test"
       enabled: true
-    
+
     - name: "cifar100_transfer"
       dataset: "cifar100"
       split: "test"
       enabled: false
-  
+
   # Inference benchmarks
   inference:
     warmup_iterations: 10
     benchmark_iterations: 100
     batch_sizes: [1, 8, 32, 128]
     devices: ["cuda"]
-  
+
   # Adversarial robustness (optional)
   adversarial:
     enabled: false
@@ -438,7 +438,7 @@ visualization:
   format: "pdf"  # pdf for paper quality
   dpi: 300
   style: "seaborn-v0_8-paper"
-  
+
   # Basic plots
   histograms: true
   violin_plots: true
@@ -450,13 +450,13 @@ visualization:
   pruning_comparison: true
   pruning_recovery: true
   cascade_test: true
-  
+
   # Additional analysis plots
   metric_distributions: true
   layer_importance_heatmap: true
   sensitivity_curves: true
   efficiency_tradeoffs: true
-  
+
   # Scatter plot pairs (unified naming)
   scatter_pairs:
     - ["rayleigh_quotient", "redundancy"]
@@ -488,20 +488,20 @@ extra:
   # Train until model achieves ~90% accuracy on CIFAR-10
   pretrain_epochs: 30
   pretrain_lr: 0.001
-  
+
   # Baselines to compare against
   baselines:
     - "magnitude"
     - "taylor"
     - "network_slimming"
     - "geometric_median"
-  
+
   # Layer-wise analysis
   analysis:
     layer_indices: "all"  # or specific: [0, 2, 4, 6, 8]
     save_scores: true
     generate_plots: true
-    
+
     # Metrics to compute per layer
     metrics:
       - "rayleigh_quotient"
@@ -510,7 +510,7 @@ extra:
       - "magnitude"
       - "taylor"
       - "activation_sparsity"
-    
+
     # Plots to generate
     plots:
       histograms: true
@@ -518,13 +518,13 @@ extra:
       pruning_curves: true
       layer_comparison: true
       filter_correlation: true
-    
+
     scatter_pairs:
       - ["rayleigh_quotient", "redundancy"]
       - ["rayleigh_quotient", "synergy"]
       - ["magnitude", "taylor"]
       - ["redundancy", "synergy"]
-  
+
   # Pruning sensitivity analysis
   sensitivity_analysis:
     enabled: true
@@ -532,7 +532,7 @@ extra:
     ratios: [0.1, 0.2, 0.3, 0.4, 0.5]
     metric: "accuracy"
     output_dir: "sensitivity"
-  
+
   # Structured pruning options
   structured_pruning:
     enabled: true
@@ -542,7 +542,7 @@ extra:
       - "l2_norm"
       - "taylor"
       - "alignment"
-  
+
   # Feature analysis
   feature_analysis:
     enabled: true
@@ -550,7 +550,7 @@ extra:
     compute_channel_redundancy: true
     visualize_filters: false  # Set true for filter visualization (slow)
     num_samples_to_visualize: 10
-  
+
   # Efficiency tracking
   efficiency:
     track_flops: true
@@ -558,27 +558,27 @@ extra:
     track_memory: true
     track_latency: true
     baseline_comparison: true
-  
+
   # Paper figure generation
   visualization:
     save_plots: true
     format: "pdf"
     dpi: 300
     style: "seaborn-v0_8-paper"
-    
+
     # Figure 1: Metric distributions by layer
     metric_distributions:
       enabled: true
       by_layer: true
       by_cluster: true
-      
+
     # Figure 2: Cluster analysis
     cluster_analysis:
       enabled: true
       scatter_3d: true
       cluster_evolution_by_layer: true
       cluster_purity: true
-      
+
     # Figure 3: Pruning comparison
     pruning_comparison:
       enabled: true
@@ -592,19 +592,19 @@ extra:
         - "composite"
         - "cluster_aware"
         - "network_slimming"
-      
+
     # Figure 4: Layer-wise importance
     layer_importance:
       enabled: true
       heatmap: true
       bar_chart: true
-      
+
     # Figure 5: Recovery after fine-tuning
     fine_tuning_recovery:
       enabled: true
       by_method: true
       by_sparsity: true
-      
+
     # Figure 6: Efficiency vs Accuracy tradeoffs
     efficiency_tradeoffs:
       enabled: true
