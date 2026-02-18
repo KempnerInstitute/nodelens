@@ -9,6 +9,7 @@ functionality needed for alignment analysis to standard PyTorch models.
 from ..core.registry import register_model
 from . import hub  # registers torchvision/timm/huggingface model loaders
 from .architectures.standard_models import CNN2P2, MLP, SimpleConvNet, create_model
+from .hub import adapt_model_for_dataset
 from .base import BaseModelWrapper
 from .transformers import LLaMAWrapper, TransformerWrapperEnhanced
 from .wrappers import ActivationTracker, AlignmentNetwork, ModelWrapper
@@ -30,5 +31,6 @@ __all__ = [
     "CNN2P2",
     "SimpleConvNet",
     "create_model",
+    "adapt_model_for_dataset",
     "hub",
 ]

@@ -39,6 +39,84 @@ def _to_torch_dtype(dtype_str: Optional[str]) -> Optional[torch.dtype]:
     return mapping.get(dtype_str.lower(), None)
 
 
+def adapt_model_for_dataset(
+    model: nn.Module,
+    model_name: str,
+    dataset_name: str,
+    pretrained: bool = True,
+) -> nn.Module:
+    """Adapt a pretrained model's stem for a target dataset resolution.
+
+    Handles common architecture adjustments needed when transferring
+    ImageNet-pretrained models to lower-resolution datasets:
+
+    - **CIFAR (32x32)**: ResNet gets 3x3 conv1 stride=1 + Identity maxpool;
+      MobileNetV2 gets stride=1 on its first conv.
+    - **Tiny-ImageNet (64x64)**: ResNet gets 3x3 conv1 stride=1 (keeps maxpool
+      for 64->32->16 spatial progression); MobileNetV2 gets stride=1 first conv.
+    - **ImageNet (224x224)** and higher: no changes needed.
+
+    Args:
+        model: The nn.Module to adapt (modified in-place).
+        model_name: Lowercase model name (e.g. "resnet18", "vgg16", "mobilenetv2").
+        dataset_name: Lowercase dataset name (e.g. "cifar100", "tinyimagenet").
+        pretrained: Whether the model was loaded with pretrained weights
+            (used to seed new conv from old weights when possible).
+
+    Returns:
+        The same model, adapted in-place.
+    """
+    model_name = model_name.lower()
+    dataset_name = dataset_name.lower()
+
+    is_cifar = "cifar" in dataset_name
+    is_tinyimagenet = "tinyimagenet" in dataset_name
+
+    if not (is_cifar or is_tinyimagenet):
+        return model  # No stem changes needed for larger resolutions
+
+    # --- ResNet stem adaptation ---
+    if "resnet" in model_name and hasattr(model, "conv1"):
+        conv1 = model.conv1
+        needs_stem = isinstance(conv1, nn.Conv2d) and (
+            tuple(conv1.kernel_size) != (3, 3) or tuple(conv1.stride) != (1, 1)
+        )
+        if needs_stem:
+            new_conv = nn.Conv2d(
+                conv1.in_channels, conv1.out_channels,
+                kernel_size=3, stride=1, padding=1, bias=False,
+            )
+            # Seed from pretrained 7x7 weights by center-cropping
+            if pretrained and hasattr(conv1, "weight") and conv1.weight.shape[-1] == 7:
+                with torch.no_grad():
+                    new_conv.weight.copy_(conv1.weight[:, :, 2:5, 2:5])
+            model.conv1 = new_conv
+            # CIFAR: also remove maxpool (32->16 immediately)
+            # Tiny-ImageNet: keep maxpool (64->32 is fine for 4 stages)
+            if is_cifar and hasattr(model, "maxpool"):
+                model.maxpool = nn.Identity()
+
+    # --- MobileNetV2 stem adaptation ---
+    if "mobilenet" in model_name:
+        try:
+            conv0 = model.features[0][0]
+            if isinstance(conv0, nn.Conv2d) and conv0.stride != (1, 1):
+                if is_cifar:
+                    # In-place stride change for CIFAR (32x32)
+                    conv0.stride = (1, 1)
+                elif is_tinyimagenet:
+                    # Replace with stride=1 conv for Tiny-ImageNet (64x64)
+                    model.features[0][0] = nn.Conv2d(
+                        conv0.in_channels, conv0.out_channels,
+                        kernel_size=conv0.kernel_size, stride=1,
+                        padding=conv0.padding, bias=False,
+                    )
+        except (IndexError, AttributeError):
+            pass
+
+    return model
+
+
 @register_model("torchvision_model")
 class TorchvisionModel(nn.Module):
     """Load a torchvision classification model by name.

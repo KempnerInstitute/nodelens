@@ -33,6 +33,8 @@ CIFAR10Dataset = DATASET_REGISTRY.get("cifar10")
 CIFAR100Dataset = DATASET_REGISTRY.get("cifar100")
 ImageNetDataset = DATASET_REGISTRY.get("imagenet")
 SVHNDataset = DATASET_REGISTRY.get("svhn")
+ImageNet100Dataset = DATASET_REGISTRY.get("imagenet100")
+TinyImageNetDataset = DATASET_REGISTRY.get("tinyimagenet")
 
 
 def get_dataset(
@@ -78,6 +80,8 @@ __all__ = [
     "CIFAR100Dataset",
     "ImageNetDataset",
     "SVHNDataset",
+    "ImageNet100Dataset",
+    "TinyImageNetDataset",
 ]
 
 # Add text datasets to exports if available

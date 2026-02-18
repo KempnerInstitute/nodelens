@@ -96,8 +96,7 @@ def _create_cluster_experiment(config):
     """Create ClusterAnalysisExperiment from unified config."""
     import torch
     import torchvision
-    import torchvision.transforms as transforms
-    
+
     # Helper to safely get nested config values
     def _get_nested(obj, key, default):
         """Get nested config value, handling both dict and object attributes."""
@@ -287,95 +286,73 @@ def _create_cluster_experiment(config):
         if hasattr(config, attr):
             setattr(cluster_config, attr, float(getattr(config, attr)))
     
-    # Load model
+    # ---------------------------------------------------------------
+    # Create model using torchvision + registry-based stem adaptation
+    # ---------------------------------------------------------------
+    from alignment.models.hub import adapt_model_for_dataset
+    from alignment.dataops.datasets.unified_dataset import DATASET_CONFIGS
+
     model_name = str(cluster_config.model_name).lower()
     dataset_name = str(cluster_config.dataset_name).lower()
 
-    # Prefer explicit num_classes from model_config when present; otherwise infer from dataset.
+    # Resolve num_classes: explicit model_config > dataset registry > legacy fallback
     model_cfg = getattr(cluster_config, "model_config", {}) or {}
-    # NOTE: be careful with substring matches: "cifar100" contains "cifar10".
-    # Always check the more specific dataset names first.
-    num_classes = (
-        int(model_cfg.get("num_classes"))
-        if isinstance(model_cfg, dict) and model_cfg.get("num_classes") is not None
-        else (
-            100
-            if "cifar100" in dataset_name
-            else 10
-            if "cifar10" in dataset_name
-            else 200
-            if "tinyimagenet" in dataset_name
-            else 100
-            if "imagenet100" in dataset_name
-            else 1000
+    if isinstance(model_cfg, dict) and model_cfg.get("num_classes") is not None:
+        num_classes = int(model_cfg["num_classes"])
+    elif dataset_name in DATASET_CONFIGS:
+        num_classes = DATASET_CONFIGS[dataset_name]["num_classes"]
+    else:
+        num_classes = 1000
+
+    pretrained = bool(getattr(cluster_config, "pretrained", True))
+    weights_name = model_cfg.get("weights", None) if isinstance(model_cfg, dict) else None
+    weights_arg = weights_name if pretrained else None
+
+    # Map model_name to torchvision function (handles vgg16→vgg16_bn alias)
+    _TORCHVISION_MAP = {
+        "resnet18": ("resnet18", "IMAGENET1K_V1"),
+        "resnet50": ("resnet50", "IMAGENET1K_V1"),
+        "vgg16": ("vgg16_bn", "IMAGENET1K_V1"),
+        "mobilenetv2": ("mobilenet_v2", "IMAGENET1K_V1"),
+        "mobilenet_v2": ("mobilenet_v2", "IMAGENET1K_V1"),
+        "mobilenet": ("mobilenet_v2", "IMAGENET1K_V1"),
+        "alexnet": ("alexnet", "IMAGENET1K_V1"),
+    }
+
+    tv_key = None
+    for key in _TORCHVISION_MAP:
+        if key in model_name:
+            tv_key = key
+            break
+
+    if tv_key is None:
+        raise ValueError(
+            f"Unknown model: {model_name}. Supported: {list(_TORCHVISION_MAP.keys())}"
         )
-    )
+
+    tv_func_name, default_weights = _TORCHVISION_MAP[tv_key]
+    tv_func = getattr(torchvision.models, tv_func_name)
+    model = tv_func(weights=weights_arg or default_weights)
+
+    # Adapt classifier head for target num_classes
+    if int(num_classes) != 1000:
+        if hasattr(model, "fc"):
+            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        elif hasattr(model, "classifier"):
+            if isinstance(model.classifier, torch.nn.Sequential):
+                model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+            else:
+                model.classifier = torch.nn.Linear(model.classifier.in_features, num_classes)
+
+    # Adapt model stem for dataset resolution (CIFAR, Tiny-ImageNet, etc.)
+    # This is now handled by a shared utility in src/alignment/models/hub.py
+    adapt_model_for_dataset(model, model_name, dataset_name, pretrained=pretrained)
 
     # Optional: explicit checkpoint
     checkpoint_path = getattr(cluster_config, "model_checkpoint", None) or (
         model_cfg.get("checkpoint") if isinstance(model_cfg, dict) else None
     )
 
-    pretrained = bool(getattr(cluster_config, "pretrained", True))
-    weights_name = model_cfg.get("weights", None) if isinstance(model_cfg, dict) else None
-    weights_arg = weights_name if pretrained else None
-
-    if "resnet18" in model_name:
-        model = torchvision.models.resnet18(weights=weights_arg or "IMAGENET1K_V1")
-        # Only replace the classifier head when adapting to a non-ImageNet-1k label space.
-        if int(num_classes) != 1000:
-            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-    elif "resnet50" in model_name:
-        model = torchvision.models.resnet50(weights=weights_arg or "IMAGENET1K_V1")
-        if int(num_classes) != 1000:
-            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-    elif "vgg16" in model_name:
-        model = torchvision.models.vgg16_bn(weights=weights_arg or "IMAGENET1K_V1")
-        if int(num_classes) != 1000:
-            model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
-    elif "mobilenet" in model_name:
-        model = torchvision.models.mobilenet_v2(weights=weights_arg or "IMAGENET1K_V1")
-        if int(num_classes) != 1000:
-            model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
-    elif "alexnet" in model_name:
-        model = torchvision.models.alexnet(weights=weights_arg or "IMAGENET1K_V1")
-        if int(num_classes) != 1000:
-            model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
-    else:
-        raise ValueError(f"Unknown model: {model_name}")
-
-    # CIFAR-style ResNet adaptation (matches common CIFAR ResNet checkpoints):
-    # - 3x3 conv1 (stride 1) instead of 7x7 (stride 2)
-    # - remove initial maxpool
-    if ("cifar10" in dataset_name or "cifar100" in dataset_name) and ("resnet" in model_name):
-        try:
-            model.conv1 = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            model.maxpool = torch.nn.Identity()
-        except Exception:
-            pass
-
-    # Tiny-ImageNet adaptation (64×64 input):
-    # - ResNet: 3x3 conv1 (stride 1), keep maxpool (64→32→16 is good for 4 ResNet stages)
-    # - VGG: use standard VGG (5 pool layers: 64→32→16→8→4→2), works at 64×64
-    # - MobileNetV2: reduce first conv stride from 2→1 (64→64 instead of 64→32)
-    if "tinyimagenet" in dataset_name:
-        if "resnet" in model_name:
-            try:
-                model.conv1 = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            except Exception:
-                pass
-        elif "mobilenet" in model_name:
-            try:
-                # MobileNetV2 first conv: change stride 2→1 for 64×64 input
-                first_conv = model.features[0][0]
-                model.features[0][0] = torch.nn.Conv2d(
-                    first_conv.in_channels, first_conv.out_channels,
-                    kernel_size=first_conv.kernel_size, stride=1,
-                    padding=first_conv.padding, bias=False,
-                )
-            except Exception:
-                pass
-    
     # Load checkpoint if available, otherwise model needs to be trained
     if checkpoint_path and os.path.exists(checkpoint_path):
         logger.info(f"Loading model checkpoint from {checkpoint_path}")
@@ -385,202 +362,49 @@ def _create_cluster_experiment(config):
         model.load_state_dict(state_dict)
         needs_training = False
     else:
-        # If we're evaluating the native pretrained ImageNet-1K label space (1000-way),
-        # allow a no-training analysis without requiring an explicit checkpoint.
         if bool(pretrained) and int(num_classes) == 1000:
             logger.info("No checkpoint provided; using pretrained ImageNet-1K head (no training).")
             needs_training = False
         else:
             logger.warning(f"No checkpoint found - model needs to be trained on {cluster_config.dataset_name}")
             needs_training = True
-    
-    # Load dataset
-    # NOTE: "cifar100" contains "cifar10" as a substring; check cifar100 first.
-    if "cifar100" in dataset_name:
-        mean = (0.5071, 0.4867, 0.4408)
-        std = (0.2675, 0.2565, 0.2761)
-        root = (
-            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
-            or getattr(config, "data_path", None)
-            or "./data"
-        )
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
-        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
-        train_dataset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=train_transform)
-        test_dataset = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=test_transform)
-    elif "cifar10" in dataset_name:
-        mean = (0.4914, 0.4822, 0.4465)
-        std = (0.2470, 0.2435, 0.2616)
-        root = (
-            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
-            or getattr(config, "data_path", None)
-            or "./data"
-        )
-        # Use standard CIFAR augmentation when training so baseline accuracies match common reporting.
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
-        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
-        train_dataset = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=train_transform)
-        test_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=test_transform)
-    elif "tinyimagenet" in dataset_name:
-        # Tiny-ImageNet: 200 classes, 64×64 images, ImageFolder layout
-        root = (
-            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
-            or getattr(config, "data_path", None)
-            or "./data/tiny-imagenet-200"
-        )
-        train_dir = Path(root) / "train"
-        val_dir = Path(root) / "val"
-        if not train_dir.exists() or not val_dir.exists():
-            raise FileNotFoundError(
-                f"Tiny-ImageNet not found. Expected ImageFolder dirs at: {train_dir} and {val_dir}. "
-                "Download from http://cs231n.stanford.edu/tiny-imagenet-200.zip"
-            )
 
-        # Tiny-ImageNet uses ImageNet normalization stats (natural images)
-        tin_mean = (0.4802, 0.4481, 0.3975)
-        tin_std = (0.2770, 0.2691, 0.2821)
-        image_size = 64
-        train_transform = transforms.Compose([
-            transforms.RandomCrop(image_size, padding=8),
-            transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-            transforms.ToTensor(),
-            transforms.Normalize(tin_mean, tin_std),
-        ])
-        val_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(tin_mean, tin_std),
-        ])
-        train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
-        test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
-    elif "imagenet100" in dataset_name:
-        # Expected folder structure: {root}/train/* and {root}/val/* (ImageFolder)
-        root = dataset_cfg.get("root", "./data/imagenet100") if isinstance(dataset_cfg, dict) else "./data/imagenet100"
-        train_dir = Path(root) / "train"
-        val_dir = Path(root) / "val"
-        if not train_dir.exists() or not val_dir.exists():
-            raise FileNotFoundError(
-                f"ImageNet-100 not found. Expected ImageFolder dirs at: {train_dir} and {val_dir}"
-            )
+    # ---------------------------------------------------------------
+    # Create dataset using unified registry (DATASET_CONFIGS)
+    # ---------------------------------------------------------------
+    # Resolve data path: dataset_config.root > data_path > registry default
+    dataset_cfg = getattr(cluster_config, "dataset_config", {}) or {}
+    if not isinstance(dataset_cfg, dict):
+        dataset_cfg = {}
+    data_path = (
+        dataset_cfg.get("root")
+        or getattr(config, "data_path", None)
+        or "./data"
+    )
 
-        imagenet_mean = (0.485, 0.456, 0.406)
-        imagenet_std = (0.229, 0.224, 0.225)
-        image_size = int(dataset_cfg.get("image_size", 224)) if isinstance(dataset_cfg, dict) else 224
-        train_transform = transforms.Compose([
-            transforms.RandomResizedCrop(image_size),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(imagenet_mean, imagenet_std),
-        ])
-        val_transform = transforms.Compose([
-            transforms.Resize(int(image_size * 256 / 224)),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(imagenet_mean, imagenet_std),
-        ])
-        train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
-        test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
-    elif "imagenet" in dataset_name:
-        # ImageNet-1K (full) support: expects ImageFolder at {root}/{train,val}.
-        root = (
-            (dataset_cfg.get("root") if isinstance(dataset_cfg, dict) else None)
-            or os.environ.get("IMAGENET1K_ROOT", None)
-            or "./data/imagenet_1k"
-        )
-        train_dir = Path(root) / "train"
-        val_dir = Path(root) / "val"
-        if not train_dir.exists() or not val_dir.exists():
-            raise FileNotFoundError(
-                f"ImageNet-1K not found. Expected ImageFolder dirs at: {train_dir} and {val_dir}. "
-                "Set dataset.root in the config or export IMAGENET1K_ROOT."
-            )
+    if dataset_name not in DATASET_CONFIGS:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(DATASET_CONFIGS.keys())}")
 
-        imagenet_mean = (0.485, 0.456, 0.406)
-        imagenet_std = (0.229, 0.224, 0.225)
-        image_size = int(dataset_cfg.get("image_size", 224)) if isinstance(dataset_cfg, dict) else 224
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomResizedCrop(image_size),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(imagenet_mean, imagenet_std),
-            ]
-        )
-        val_transform = transforms.Compose(
-            [
-                transforms.Resize(int(image_size * 256 / 224)),
-                transforms.CenterCrop(image_size),
-                transforms.ToTensor(),
-                transforms.Normalize(imagenet_mean, imagenet_std),
-            ]
-        )
-        train_dataset = torchvision.datasets.ImageFolder(root=str(train_dir), transform=train_transform)
-        test_dataset = torchvision.datasets.ImageFolder(root=str(val_dir), transform=val_transform)
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
-    
+    from alignment.dataops.datasets.unified_dataset import UnifiedDataset
+    train_dataset = UnifiedDataset(
+        dataset_type=dataset_name,
+        data_path=data_path,
+        train=True,
+        augment=True,
+        normalize=True,
+    )
+    test_dataset = UnifiedDataset(
+        dataset_type=dataset_name,
+        data_path=data_path,
+        train=False,
+        augment=False,
+        normalize=True,
+    )
+
     batch_size = int(getattr(config, "batch_size", 128))
     num_workers = int(getattr(config, "num_workers", 4))
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=num_workers)
-    
-    # Track architecture tweaks so we can reproduce the exact model when loading checkpoints later.
-    resnet_cifar_stem_tweaked = False
-    mobilenet_cifar_stride1 = False
-    
-    # CIFAR-specific stem tweak: using the ImageNet stem (7x7,stride2 + maxpool)
-    # degrades CIFAR accuracy. Use the standard CIFAR stem and (when pretrained)
-    # seed weights by center-cropping the 7x7 conv filter.
-    if ("cifar" in dataset_name) and ("resnet" in model_name):
-        if hasattr(model, "conv1") and hasattr(model, "maxpool"):
-            # Only apply the CIFAR stem tweak when the model still has an ImageNet-style stem.
-            # If a CIFAR checkpoint was loaded (conv1 already 3x3, stride1), do NOT overwrite it.
-            needs_stem_tweak = True
-            try:
-                conv1 = model.conv1
-                if isinstance(conv1, torch.nn.Conv2d):
-                    if tuple(conv1.kernel_size) == (3, 3) and tuple(conv1.stride) == (1, 1):
-                        needs_stem_tweak = False
-            except Exception:
-                pass
-
-            if needs_stem_tweak:
-                old_conv = model.conv1
-                new_conv = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-                try:
-                    if pretrained and hasattr(old_conv, "weight") and old_conv.weight.shape[-1] == 7:
-                        with torch.no_grad():
-                            new_conv.weight.copy_(old_conv.weight[:, :, 2:5, 2:5])
-                except Exception:
-                    pass
-                model.conv1 = new_conv
-                model.maxpool = torch.nn.Identity()
-                resnet_cifar_stem_tweaked = True
-
-    # MobileNetV2 CIFAR stem tweak: the ImageNet stride-2 stem collapses spatial resolution too early
-    # on 32x32 inputs and can lead to unstable/weak CIFAR fine-tuning. Use stride=1 for the first conv.
-    if ("cifar" in dataset_name) and ("mobilenet" in model_name):
-        try:
-            conv0 = model.features[0][0]  # ConvBNReLU: [conv, bn, relu]
-            if isinstance(conv0, torch.nn.Conv2d):
-                conv0.stride = (1, 1)
-                mobilenet_cifar_stride1 = True
-        except Exception:
-            pass
 
     # Train/fine-tune the model on target dataset before experiments.
     # If you want a pure "no-training" analysis, provide an explicit checkpoint and set do_train=false.
@@ -620,9 +444,6 @@ def _create_cluster_experiment(config):
         'model_name': model_name,
         'dataset_name': dataset_name,
         'num_classes': num_classes,
-        # Architecture metadata for reproducibility when loading from paper scripts
-        'cifar_resnet_stem_tweaked': resnet_cifar_stem_tweaked,
-        'cifar_mobilenet_stride1': mobilenet_cifar_stride1,
     }, trained_checkpoint)
     logger.info(f"Saved trained model checkpoint to {trained_checkpoint}")
     
