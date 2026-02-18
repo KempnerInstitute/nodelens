@@ -6,15 +6,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.distribution import (
-    DistributionStrategy,
-    PruningDistributionManager,
-)
-
+from alignment.pruning.distribution import DistributionStrategy, PruningDistributionManager
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _TinyModel(nn.Module):
     def __init__(self):

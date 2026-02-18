@@ -8,24 +8,20 @@ The canonical location is alignment.dataops.datasets.
 # Re-export everything from the canonical location
 from alignment.dataops.datasets import (
     DATASET_CONFIGS,
-    UnifiedDataset,
-    get_dataset,
-    MNISTDataset,
-    FashionMNISTDataset,
     CIFAR10Dataset,
     CIFAR100Dataset,
+    FashionMNISTDataset,
     ImageNetDataset,
+    MNISTDataset,
     SVHNDataset,
+    UnifiedDataset,
+    get_dataset,
 )
 
 # Try to import text datasets (optional)
 try:
-    from alignment.dataops.datasets import (
-        TextDataset,
-        WikiTextDataset,
-        C4Dataset,
-        load_text_dataset,
-    )
+    from alignment.dataops.datasets import C4Dataset, TextDataset, WikiTextDataset, load_text_dataset
+
     HAS_TEXT_DATASETS = True
 except ImportError:
     HAS_TEXT_DATASETS = False
@@ -49,9 +45,11 @@ __all__ = [
 
 # Add text datasets to exports if available
 if HAS_TEXT_DATASETS:
-    __all__.extend([
-        "TextDataset",
-        "WikiTextDataset",
-        "C4Dataset",
-        "load_text_dataset",
-    ])
+    __all__.extend(
+        [
+            "TextDataset",
+            "WikiTextDataset",
+            "C4Dataset",
+            "load_text_dataset",
+        ]
+    )

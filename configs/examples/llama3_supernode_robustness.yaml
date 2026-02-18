@@ -1,9 +1,9 @@
 # ============================================================================
 # LLaMA-3 SUPERNODE ROBUSTNESS ANALYSIS
 # ============================================================================
-# 
+#
 # PURPOSE: Analyze the robustness and consistency of supernode identification
-# 
+#
 # This config focuses on answering:
 # 1. Are supernodes consistent across different metrics (RQ, MI, SCAR, magnitude)?
 # 2. Are supernodes consistent across different data batches?
@@ -31,7 +31,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # Track all MLP layers
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
@@ -51,9 +51,9 @@ metrics:
     - "rayleigh_quotient"
     - "gaussian_mi_analytic"
     - "activation_l2_norm"
-  
+
   num_samples: 64
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -66,11 +66,11 @@ llm:
   scar_metrics: true
   scar_num_samples: 64
   scar_max_length: 512
-  
+
   # Minimal evaluation (focus is on supernode analysis)
   evaluate_perplexity: true
   evaluation_num_samples: 50
-  
+
   evaluation_metrics:
     - "perplexity"
     - "loss"
@@ -80,15 +80,15 @@ llm:
 # ============================================================================
 supernode:
   enabled: true
-  
+
   core_fraction: 0.01         # Top 1% = supernodes
   follower_fraction: 0.10
   score_metric: "scar_activation_power"
-  
+
   protect_core: true
   cross_layer_analysis: true
   compare_by_connection: true
-  
+
   compute_metrics:
     - "activation"
     - "rayleigh_quotient"
@@ -100,15 +100,15 @@ supernode:
 # ============================================================================
 supernode_robustness:
   enabled: true
-  
+
   # Supernode fraction for comparison
   supernode_fraction: 0.01    # Top 1%
-  
+
   # Bootstrap analysis for batch consistency
   num_bootstrap_samples: 10   # 10 bootstrap resamples
   batch_size: 16              # Smaller batch for memory
   max_samples: 128            # Fewer samples for faster testing
-  
+
   # Metrics to compare for cross-metric consistency
   metrics:
     - "scar_activation_power"   # Raw activation power
@@ -117,7 +117,7 @@ supernode_robustness:
     - "rayleigh_quotient"       # Alignment measure
     - "gaussian_mi_analytic"    # Mutual information
     - "activation_l2_norm"      # Simple magnitude
-  
+
   # Focus on specific layers for detailed analysis
   # (null = analyze all layers, which is expensive)
   target_layers:
@@ -130,14 +130,14 @@ supernode_robustness:
 # ============================================================================
 pruning:
   enabled: true
-  
+
   # Just a few sparsity levels to see effect of robustness
   sparsity_levels: [0.3, 0.5, 0.7]
   selection_modes: ["low"]
-  
+
   distribution: "uniform"
   structured: true
-  
+
   # Compare a few key algorithms
   algorithms:
     - "rayleigh_quotient"
@@ -156,7 +156,7 @@ do_connectivity_pruning: true
 analysis:
   save_scores: true
   generate_plots: true
-  
+
   plots:
     histograms: true
     scatter_plots: true
@@ -186,5 +186,3 @@ visualization:
 # |   ├── scar/
 # |   └── pruning/
 # └── checkpoints/
-
-

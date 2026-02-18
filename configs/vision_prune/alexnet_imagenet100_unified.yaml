@@ -3,8 +3,8 @@
 # =============================================================================
 # Classic AlexNet architecture on ImageNet-100 subset.
 # AlexNet was designed for ImageNet (224x224 images), so this is the natural
-# dataset for this architecture. AlexNet has distinct layer structure 
-# (no skip connections, no BN originally) which provides a different test 
+# dataset for this architecture. AlexNet has distinct layer structure
+# (no skip connections, no BN originally) which provides a different test
 # case for the functional taxonomy.
 #
 # Usage: python scripts/run_experiment.py --config configs/vision_prune/alexnet_imagenet100_unified.yaml
@@ -77,25 +77,25 @@ metrics:
     use_gpu_acceleration: false
     force_cpu_for_large_ops: true
     cpu_threshold: 100000000
-  
+
   rayleigh_quotient:
     enabled: true
     relative: false
     shrinkage: true
-  
+
   redundancy:
     enabled: true
     sampling: "all"
-  
+
   synergy:
     enabled: true
     target: "logit_margin"
     num_pairs: 10
     sampling: "top_k"
-  
+
   magnitude:
     enabled: true
-  
+
   taylor:
     enabled: true
     criterion: "gradient_weight"

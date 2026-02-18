@@ -26,13 +26,13 @@ model:
   #   LLM: "hf_causal_lm" (set model_id below)
   name: "resnet18"
   pretrained: true
-  
+
   # Layers to track (null = auto-detect)
   # Vision: ["layer1", "layer2", "layer3", "layer4"]
   # LLM (HFCausalLM): ["model.model.layers.*.mlp.up_proj"]
   #   Note: HFCausalLM wraps LlamaForCausalLM, so paths have 'model.model.' prefix
   tracked_layers: null
-  
+
   # HuggingFace config (for LLMs only)
   model_id: null                  # e.g., "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"                # "float32", "float16", "bfloat16"
@@ -51,7 +51,7 @@ dataset:
 # METRICS
 # -----------------------------------------------------------------------------
 # Metrics to compute for alignment analysis and pruning.
-# 
+#
 # AVAILABLE METRICS (by category):
 #
 # ALIGNMENT (Rayleigh Quotient based):
@@ -96,21 +96,21 @@ metrics:
     - "rayleigh_quotient"
     - "activation_l2_norm"
     - "pairwise_redundancy_gaussian"
-  
+
   # Number of data samples for metric computation
   num_samples: 128
-  
+
   # =========================================================================
   # OPTIMIZATION OPTIONS
   # =========================================================================
   # These options enable optimized implementations for faster computation.
-  # 
+  #
   # use_jit: Use JIT-compiled functions (20-50% faster)
   #   - Available for: rayleigh_quotient, mutual_information, node_correlation,
   #                    cosine_similarity, spectral_norm, eigenvalue_entropy
   #   - Requires: PyTorch JIT compilation support
   #
-  # use_gpu_acceleration: Use GPU-accelerated functions  
+  # use_gpu_acceleration: Use GPU-accelerated functions
   #   - Available for: histogram (1D/2D), mutual_information, entropy,
   #                    covariance, correlation
   #   - Requires: CUDA-enabled GPU
@@ -125,7 +125,7 @@ metrics:
     use_gpu_acceleration: false    # Enable GPU-accelerated functions
     force_cpu_for_large_ops: true  # Move large ops to CPU to prevent OOM
     cpu_threshold: 100000000       # 1e8 elements threshold for CPU fallback
-  
+
   # =========================================================================
   # ALIGNMENT METRICS
   # =========================================================================
@@ -134,20 +134,20 @@ metrics:
     min_samples: 2               # Minimum samples for covariance estimation
     scale_by_norm: false         # Scale covariance by Frobenius norm
     regularization: 1.0e-6       # Diagonal regularization for stability
-  
+
   # Fast RQ for CNNs using Global Average Pooling
   # 10-100x faster, good approximation for early conv layers
   rq_fast:
     relative: true
     regularization: 1.0e-6
-  
+
   # Conditional RQ (class-conditioned)
   conditional_rayleigh_quotient:
     relative: true
     min_samples: 2               # Minimum samples per class
     regularization: 1.0e-6
     return_delta: false          # If true, return ΔRQ = RQ_uncond - RQ_cond
-  
+
   # =========================================================================
   # MUTUAL INFORMATION METRICS
   # =========================================================================
@@ -156,12 +156,12 @@ metrics:
     noise_std: 0.1               # Assumed noise standard deviation
     regularization: 1.0e-6       # Covariance regularization
     per_neuron: true             # Per-neuron MI (true) or joint MI (false)
-  
+
   mi_about_class:
     method: "gaussian"           # "gaussian" (fast) or "binning" (discrete)
     bins: 10                     # Number of bins for binning method
     min_samples_per_class: 5     # Minimum samples per class
-  
+
   # =========================================================================
   # REDUNDANCY METRICS
   # =========================================================================
@@ -170,39 +170,39 @@ metrics:
     num_pairs: 10                # Partners to sample per neuron
     sampling_strategy: "random"  # "random", "nearest", or "all"
     regularization: 1.0e-6       # For covariance_based mode
-  
+
   average_redundancy:
     min_samples: 2               # Minimum samples for computation
     use_correlation: true        # Use correlation (true) or covariance (false)
-  
+
   halo_redundancy:
     supernode_fraction: 0.01     # Top fraction as supernodes
     halo_fraction: 0.10          # Fraction of non-supernodes as halo
     max_samples: 1000            # Max activation samples
     max_pairs_per_group: 500     # Max pairs per group
-  
+
   cross_layer_redundancy:
     max_refs: 512                # Max reference neurons for efficiency
     compute_within: true         # Also compute within-layer redundancy
-  
+
   # =========================================================================
   # SYNERGY METRICS
   # =========================================================================
   synergy_gaussian_mmi:
     num_pairs: 10                # Pairs to sample for synergy
     regularization: 1.0e-6
-  
+
   # =========================================================================
   # ACTIVATION METRICS
   # =========================================================================
   activation_l2_norm:
     aggregate_method: "l2"       # "l2", "mean", "max"
     use_absolute: true           # Take absolute value before aggregation
-  
+
   activation_outlier_index:
     quantile: 0.999              # High percentile for outlier detection
     eps: 1.0e-6                  # Numerical stability
-  
+
   # =========================================================================
   # COMPOSITE METRICS
   # =========================================================================
@@ -212,11 +212,11 @@ metrics:
     rayleigh_quotient: 0.3
     pairwise_redundancy_gaussian: -0.2   # Negative = penalize redundancy
     synergy_gaussian_mmi: 0.2
-  
+
   composite_importance:
     normalize_components: true   # Normalize each component to [0, 1]
     log_transform_rq: true       # Apply log transform to RQ
-  
+
   cross_layer_importance:
     rq_weight: 0.25              # Weight for RQ (α)
     downstream_weight: 0.35      # Weight for downstream importance (β)
@@ -244,7 +244,7 @@ supernode:
   core_fraction: 0.01             # Top X% as supernodes
   min_core_neurons: 32
   protect_core: true              # Prevent pruning supernodes
-  
+
   # Cross-layer analysis (LLM only)
   cross_layer_analysis: false
   follower_fraction: 0.10
@@ -256,27 +256,27 @@ supernode:
 # For each metric, neurons/channels are ranked and pruned based on selection_modes.
 pruning:
   enabled: false
-  
+
   # Sparsity levels to test (fraction of neurons to remove)
   sparsity_levels: [0.1, 0.3, 0.5, 0.7]
-  
+
   # Selection modes determine WHICH neurons to prune based on their scores:
   #   "low"    - prune neurons with LOWEST scores (remove least important)
   #   "high"   - prune neurons with HIGHEST scores (ablation study)
   #   "random" - prune randomly (baseline comparison)
   selection_modes: ["low", "high", "random"]
-  
+
   # Distribution strategy: HOW to allocate sparsity across layers
   #   "uniform"              - same % per layer (simple, default)
   #   "global_threshold"     - global score threshold across all layers
   #   "adaptive_sensitivity" - prune robust layers more, sensitive layers less
   #   "cascading"            - sequential layer-by-layer pruning
   distribution: "uniform"
-  
+
   # Per-layer sparsity constraints
   min_per_layer: 0.0                # Minimum sparsity per layer
   max_per_layer: 0.95               # Maximum sparsity per layer (avoid removing everything)
-  
+
   # Sensitivity configuration (used when distribution="adaptive_sensitivity")
   # Measures how important each layer is to determine per-layer pruning amounts
   sensitivity:
@@ -290,7 +290,7 @@ pruning:
     method: "activation_variance"
     perturbation_scale: 0.1         # For "perturbation" method
     num_trials: 3                   # For "perturbation" and "masking" methods
-  
+
   # Pruning strategies available via get_pruning_strategy():
   # BASELINES:
   #   "random"              - Random pruning baseline
@@ -315,16 +315,16 @@ pruning:
   # LLM-SPECIFIC:
   #   "wanda"               - Sun et al. 2023
   #   "sparsegpt"           - Frantar & Alistarh 2023
-  
+
   # Structured pruning: remove entire neurons/channels (vs individual weights)
   # - true  = prune whole neurons (hardware efficient, required for alignment metrics)
   # - false = prune individual weights (sparse matrices, less practical)
   structured: true
-  
+
   # Dependency-aware: handle skip connections (ResNet) and attention (transformers)
   # Ensures shape compatibility when pruning connected layers
   dependency_aware: false
-  
+
   fine_tune:
     enabled: true
     epochs: 20
@@ -359,7 +359,7 @@ llm:
   scar_metrics: false             # Enable SCAR (activation power, curvature, loss proxy)
   scar_num_samples: 64
   scar_max_length: 512
-  
+
   # Perplexity evaluation
   evaluate_perplexity: false
   evaluation_dataset: "wikitext"
@@ -406,7 +406,7 @@ cnn:
   #   "channel_variance": Uses per-channel variance summary. For activation-based
   #                       metrics only (not covariance-based like RQ).
   mode: "unfold"
-  
+
   # Additional CNN options:
   max_patches: 64                # Max patches to use (subsample if more)
   weight_by_variance: true       # Weight patches by their variance (for patchwise)
@@ -425,7 +425,7 @@ analysis:
   save_scores: true
   generate_plots: true
   class_conditioned: false        # Class-conditioned metrics (vision)
-  
+
   # Plots to generate
   plots:
     histograms: true
@@ -433,7 +433,7 @@ analysis:
     heatmaps: true
     pruning_curves: true
     supernode_analysis: true
-  
+
   histogram_bins: 100
   scatter_pairs:
     - ["activation_l2_norm", "rayleigh_quotient"]

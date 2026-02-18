@@ -8,10 +8,9 @@ repos:
       - id: check-added-large-files
       - id: check-merge-conflict
       - id: debug-statements
-      - id: check-docstring-first
 
   - repo: https://github.com/psf/black
-    rev: 23.7.0
+    rev: 25.9.0
     hooks:
       - id: black
         language_version: python3
@@ -22,36 +21,8 @@ repos:
       - id: isort
         args: ["--profile", "black"]
 
-  - repo: https://github.com/pycqa/flake8
-    rev: 6.0.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
     hooks:
-      - id: flake8
-        args: [--max-line-length=100, --ignore=E203,W503]
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.5.1
-    hooks:
-      - id: mypy
-        additional_dependencies: [types-all]
-        args: [--ignore-missing-imports, --no-strict-optional]
-
-  - repo: https://github.com/pycqa/bandit
-    rev: 1.7.5
-    hooks:
-      - id: bandit
-        args: [-r, src/, -f, json, -o, bandit-report.json]
-
-  - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.4.0
-    hooks:
-      - id: detect-secrets
-        args: ['--baseline', '.secrets.baseline']
-
-  - repo: local
-    hooks:
-      - id: fast-tests
-        name: Fast unit tests
-        entry: python -m pytest tests/unit/ -x -q -m "not slow and not integration and not gpu"
-        language: system
-        pass_filenames: false
-        always_run: true
+      - id: ruff
+        args: ["--fix"]

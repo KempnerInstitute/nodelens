@@ -3,19 +3,19 @@ Tests for configs/config_loader.py: format detection, conversion, load/save.
 """
 
 import json
+
 import pytest
 import yaml
 
 from alignment.configs.config_loader import (
-    _is_unified_format,
+    METRIC_ORIGINAL_TO_UNIFIED,
+    METRIC_UNIFIED_TO_ORIGINAL,
     _convert_unified_to_original,
+    _is_unified_format,
     _map_nested_to_flat_config,
     load_config,
     save_config,
-    METRIC_UNIFIED_TO_ORIGINAL,
-    METRIC_ORIGINAL_TO_UNIFIED,
 )
-
 
 # =========================================================================
 # _is_unified_format
@@ -163,16 +163,20 @@ class TestMapNestedToFlatConfig:
         assert result["name"] == "flat_exp"
 
     def test_dataset_mapping(self):
-        result = _map_nested_to_flat_config({
-            "dataset": {"name": "CIFAR10", "batch_size": 64},
-        })
+        result = _map_nested_to_flat_config(
+            {
+                "dataset": {"name": "CIFAR10", "batch_size": 64},
+            }
+        )
         assert result["dataset_name"] == "cifar10"  # lowercased
         assert result["batch_size"] == 64
 
     def test_model_mapping(self):
-        result = _map_nested_to_flat_config({
-            "model": {"name": "resnet18", "pretrained": True},
-        })
+        result = _map_nested_to_flat_config(
+            {
+                "model": {"name": "resnet18", "pretrained": True},
+            }
+        )
         assert result["model_name"] == "resnet18"
         assert result["pretrained"] is True
 
@@ -181,23 +185,29 @@ class TestMapNestedToFlatConfig:
         assert result["metrics"] == ["rq", "red"]
 
     def test_metrics_dict_with_enabled(self):
-        result = _map_nested_to_flat_config({
-            "metrics": {"enabled": ["rq"], "rayleigh_quotient": {"definition": "standard"}},
-        })
+        result = _map_nested_to_flat_config(
+            {
+                "metrics": {"enabled": ["rq"], "rayleigh_quotient": {"definition": "standard"}},
+            }
+        )
         assert result["metrics"] == ["rq"]
         assert result["rq_definition"] == "standard"
 
     def test_clustering_ablation(self):
-        result = _map_nested_to_flat_config({
-            "clustering": {"ablation": {"enabled": True, "modes": ["RQ_Red", "RQ_Syn"]}},
-        })
+        result = _map_nested_to_flat_config(
+            {
+                "clustering": {"ablation": {"enabled": True, "modes": ["RQ_Red", "RQ_Syn"]}},
+            }
+        )
         assert result["run_metric_ablation"] is True
         assert result["metric_ablations"] == ["RQ_Red", "RQ_Syn"]
 
     def test_halo_permutation(self):
-        result = _map_nested_to_flat_config({
-            "halo_analysis": {"permutation_baseline": {"enabled": True, "n_permutations": 100}},
-        })
+        result = _map_nested_to_flat_config(
+            {
+                "halo_analysis": {"permutation_baseline": {"enabled": True, "n_permutations": 100}},
+            }
+        )
         assert result["run_permutation_baseline"] is True
         assert result["n_permutations"] == 100
 

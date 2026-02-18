@@ -137,8 +137,7 @@ class SynergyGaussianMMI(BaseMetric):
                 outputs = outputs.view(batch_size, num_patches, num_neurons).mean(dim=1)
             else:
                 logger.warning(
-                    f"SynergyGaussianMMI: Batch size mismatch (outputs={outputs.shape[0]}, "
-                    f"targets={targets.shape[0]}). Returning zeros."
+                    f"SynergyGaussianMMI: Batch size mismatch (outputs={outputs.shape[0]}, " f"targets={targets.shape[0]}). Returning zeros."
                 )
                 return torch.zeros(weights.shape[0], device=weights.device, dtype=weights.dtype)
 

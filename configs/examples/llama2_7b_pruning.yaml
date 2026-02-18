@@ -2,9 +2,9 @@
 # LLAMA-2-7B COMPREHENSIVE PRUNING COMPARISON
 # ============================================================================
 # Reference: https://arxiv.org/abs/2307.09288 (Llama 2)
-# 
+#
 # PURPOSE: Extend SCAR evaluation to Llama-2-7B for comparison paper results
-# 
+#
 # Llama-2-7B specs:
 # - 32 layers, 4096 hidden dim, 11008 intermediate dim
 # - Same SwiGLU MLP as Llama-3
@@ -34,7 +34,7 @@ model:
   model_id: "meta-llama/Llama-2-7b-hf"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # Llama-2 uses same MLP structure as Llama-3 (SwiGLU)
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
@@ -55,9 +55,9 @@ metrics:
     - "gaussian_mi_analytic"
     - "average_redundancy"
     - "activation_l2_norm"
-  
+
   num_samples: 64
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -69,13 +69,13 @@ llm:
   scar_metrics: true
   scar_num_samples: 64
   scar_max_length: 512
-  
+
   evaluate_perplexity: true
   evaluation_num_samples: 200
-  
+
   use_nvidia_fewshot: true
   use_chain_of_thought: true
-  
+
   evaluation_metrics:
     - "perplexity"
     - "loss"
@@ -98,7 +98,7 @@ supernode:
   protect_core: true
   cross_layer_analysis: true
   compare_by_connection: true
-  
+
   compute_metrics:
     - "activation"
     - "rayleigh_quotient"
@@ -114,13 +114,13 @@ supernode_robustness:
   num_bootstrap_samples: 5
   batch_size: 32
   max_samples: 128
-  
+
   metrics:
     - "scar_activation_power"
     - "scar_loss_proxy"
     - "rayleigh_quotient"
     - "activation_l2_norm"
-  
+
   target_layers: null
 
 # ============================================================================
@@ -138,15 +138,15 @@ supernode_summary:
 # ============================================================================
 pruning:
   enabled: true
-  
+
   sparsity_levels: [0, 0.25, 0.5, 0.75]
-  
+
   selection_modes: ["low", "high"]
-  
+
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   algorithms:
     # Alignment-based
     - "rayleigh_quotient"
@@ -161,9 +161,9 @@ pruning:
     - "activation_l2_norm"
     - "wanda"
     - "sparsegpt"
-  
+
   single_strategy: null
-  
+
   fine_tune:
     enabled: false
 
@@ -179,13 +179,13 @@ do_connectivity_pruning: true
 analysis:
   save_scores: true
   generate_plots: true
-  
+
   plots:
     histograms: true
     scatter_plots: true
     pruning_curves: true
     redundancy_heatmaps: true
-  
+
   scatter_pairs:
     - ["activation_l2_norm", "rayleigh_quotient"]
     - ["activation_l2_norm", "gaussian_mi_analytic"]

@@ -44,7 +44,7 @@ class TestHookManager:
         input_tensor = torch.randn(2, 3, 10, 10)
 
         with mgr.temporary_hooks(model, ["conv1", "conv2"], track_outputs=True) as cache:
-            output = model(input_tensor)
+            model(input_tensor)
 
             # Check outputs were captured
             assert "conv1_output" in cache
@@ -67,7 +67,7 @@ class TestHookManager:
         input_tensor = torch.randn(2, 3, 10, 10)
 
         with mgr.temporary_hooks(model, ["conv1", "fc"], track_inputs=True) as cache:
-            output = model(input_tensor)
+            model(input_tensor)
 
             # Check inputs were captured
             assert "conv1_input" in cache
@@ -84,8 +84,8 @@ class TestHookManager:
         input_tensor = torch.randn(2, 3, 10, 10)
 
         with pytest.raises(RuntimeError):
-            with mgr.temporary_hooks(model, ["conv1"]) as cache:
-                output = model(input_tensor)
+            with mgr.temporary_hooks(model, ["conv1"]):
+                model(input_tensor)
                 raise RuntimeError("Test exception")
 
         # Hooks should still be cleaned up
@@ -196,7 +196,7 @@ def test_multiple_layers_capture():
     layers = ["conv1", "conv2", "fc"]
 
     with mgr.temporary_hooks(model, layers, track_inputs=True, track_outputs=True) as cache:
-        output = model(input_tensor)
+        model(input_tensor)
 
         # All layers should be captured
         for layer in layers:

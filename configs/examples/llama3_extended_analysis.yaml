@@ -1,7 +1,7 @@
 # ============================================================================
 # LLaMA-3 EXTENDED ANALYSIS CONFIGURATION
 # ============================================================================
-# 
+#
 # This configuration enables all the extended metrics:
 # 1. Halo redundancy analysis (within-halo, within-non-halo, cross-group)
 # 2. Multi-supernode clustering (k clusters of supernodes)
@@ -31,11 +31,11 @@ model:
 analysis:
   # Layers to analyze
   layer_indices: [4, 8, 12, 16, 20, 24, 28]
-  
+
   # Calibration data
   num_samples: 16
   max_length: 256
-  
+
   # Metrics to compute
   metrics:
     # Standard metrics
@@ -43,7 +43,7 @@ analysis:
     - "gaussian_mi_analytic"
     - "average_redundancy"
     - "activation_l2_norm"
-    
+
     # Extended metrics (NEW)
     - "halo_redundancy"
     - "multi_supernode"
@@ -68,7 +68,7 @@ halo_analysis:
   halo_fraction: 0.10         # Top 10% of non-supernodes = halo
   max_samples: 1000           # Activation samples per layer
   max_pairs_per_group: 500    # Pairs to sample per group
-  
+
   # Plots
   plots:
     depth_comparison: true    # Bar chart by layer depth
@@ -92,7 +92,7 @@ multi_supernode:
   n_clusters: 4               # Number of supernode clusters
   halo_fraction: 0.10         # Halo per cluster
   clustering_features: "weights"  # "weights", "activations", or "combined"
-  
+
   # Importance scoring
   supernode_weight: 1.0       # Weight for supernode neurons
   halo_weight: 0.7            # Weight for halo neurons
@@ -115,7 +115,7 @@ multi_supernode:
 cross_layer:
   enabled: true
   max_refs: 512               # Reference neurons per layer
-  
+
   # Importance scoring weights (SCAR-aligned)
   # Score = α·RQ + β·Downstream_Importance - γ·R_within + δ·Activation
   rq_weight: 0.25             # α: Rayleigh Quotient (input alignment)
@@ -139,7 +139,7 @@ supernode:
 pruning:
   enabled: false              # Disable pruning for analysis-only run
   sparsity_levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-  
+
   # Scoring methods to compare
   scoring_methods:
     - "activation_l2_norm"
@@ -167,18 +167,18 @@ visualization:
   save_plots: true
   format: "png"
   dpi: 150
-  
+
   plots:
     # Standard plots
     histograms: true
     scatter_plots: true
     heatmaps: true
-    
+
     # Extended plots
     halo_redundancy_depth: true    # Redundancy by layer depth
     multi_supernode_clusters: true # Cluster visualizations
     cross_layer_efficiency: true   # Layer transition efficiency
-    
+
   # Scatter plot pairs
   scatter_pairs:
     - ["activation_l2_norm", "rayleigh_quotient"]

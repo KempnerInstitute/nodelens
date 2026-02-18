@@ -14,7 +14,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
     - "model.model.layers.*.mlp.gate_proj"
@@ -30,7 +30,7 @@ metrics:
     - "rayleigh_quotient"
     - "activation_l2_norm"
   num_samples: 16  # Quick test
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -39,10 +39,10 @@ llm:
   scar_metrics: true
   scar_num_samples: 16  # Quick calibration
   scar_max_length: 256
-  
+
   evaluate_perplexity: true
   evaluation_num_samples: 20  # Quick eval
-  
+
   evaluation_metrics:
     - "perplexity"
     - "loss"
@@ -68,7 +68,7 @@ pruning:
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   algorithms:
     # Test baselines
     - "activation_l2_norm"
@@ -76,9 +76,9 @@ pruning:
     - "supernode_connectivity_score"
     - "wanda"
     - "sparsegpt"
-  
+
   single_strategy: null
-  
+
   fine_tune:
     enabled: false
 
@@ -100,4 +100,3 @@ analysis:
 visualization:
   format: "png"
   dpi: 150
-

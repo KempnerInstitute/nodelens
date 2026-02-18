@@ -46,4 +46,4 @@ Training Loops
 ~~~~~~~~~~~~~~
 
 .. autofunction:: alignment.training.utils.train_epoch
-.. autofunction:: alignment.training.utils.evaluate 
+.. autofunction:: alignment.training.utils.evaluate

@@ -19,7 +19,7 @@ Usage:
 
     # Use the metric
     metric = get_metric("my_custom_metric", param1=value1)
-    
+
     # Or from config
     metric = create_from_config({"name": "my_custom_metric", "param1": value1})
 """
@@ -38,14 +38,15 @@ T = TypeVar("T")
 @dataclass
 class ComponentInfo:
     """Metadata about a registered component."""
+
     name: str
     cls: Type[Any]
     category: str = "default"
     description: str = ""
     requires: List[str] = field(default_factory=list)  # Dependencies
     provides: List[str] = field(default_factory=list)  # What it provides
-    config_schema: Optional[Dict[str, Any]] = None     # Expected config params
-    tags: Set[str] = field(default_factory=set)        # Searchable tags
+    config_schema: Optional[Dict[str, Any]] = None  # Expected config params
+    tags: Set[str] = field(default_factory=set)  # Searchable tags
     version: str = "1.0.0"
     author: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -54,7 +55,7 @@ class ComponentInfo:
 class Registry:
     """
     Generic registry for framework components with enhanced metadata and discovery.
-    
+
     Features:
     - Category-based organization
     - Tag-based search
@@ -79,8 +80,8 @@ class Registry:
         self._aliases: Dict[str, str] = {}  # alias -> canonical name
 
     def register(
-        self, 
-        name: str, 
+        self,
+        name: str,
         cls: Optional[Type[T]] = None,
         category: str = "default",
         description: str = "",
@@ -89,7 +90,7 @@ class Registry:
         tags: Optional[List[str]] = None,
         aliases: Optional[List[str]] = None,
         config_schema: Optional[Dict[str, Any]] = None,
-        **extra: Any
+        **extra: Any,
     ) -> Union[Callable[[Type[T]], Type[T]], Type[T]]:
         """
         Register a class in the registry with comprehensive metadata.
@@ -110,7 +111,7 @@ class Registry:
 
         Returns:
             Registered class or decorator function
-            
+
         Example:
             @registry.register(
                 "rayleigh_quotient",
@@ -132,7 +133,7 @@ class Registry:
         def decorator(cls_to_register: Type[T]) -> Type[T]:
             if name in self._registry:
                 logger.warning(f"Overwriting existing registration '{name}' in {self.name} registry")
-            
+
             # Create component info
             info = ComponentInfo(
                 name=name,
@@ -145,21 +146,21 @@ class Registry:
                 tags=tags,
                 extra=extra,
             )
-            
+
             self._registry[name] = info
-            
+
             # Index by category
             if category not in self._by_category:
                 self._by_category[category] = []
             if name not in self._by_category[category]:
                 self._by_category[category].append(name)
-            
+
             # Index by tags
             for tag in tags:
                 if tag not in self._by_tag:
                     self._by_tag[tag] = set()
                 self._by_tag[tag].add(name)
-            
+
             # Register aliases
             for alias in aliases:
                 self._aliases[alias] = name
@@ -180,7 +181,7 @@ class Registry:
             return decorator
         else:
             return decorator(cls)
-    
+
     def resolve_name(self, name: str) -> str:
         """Resolve an alias to its canonical name."""
         return self._aliases.get(name, name)
@@ -203,7 +204,7 @@ class Registry:
             available = list(self._registry.keys())
             raise KeyError(f"'{name}' not found in {self.name} registry. Available: {available}")
         return self._registry[canonical].cls
-    
+
     def get_info(self, name: str) -> ComponentInfo:
         """Get full component info for a registered class."""
         canonical = self.resolve_name(name)
@@ -220,56 +221,55 @@ class Registry:
             "requires": info.requires,
             "provides": info.provides,
             "tags": list(info.tags),
-            **info.extra
+            **info.extra,
         }
 
     def list(self, category: Optional[str] = None) -> List[str]:
         """
         List registered names, optionally filtered by category.
-        
+
         Args:
             category: Optional category to filter by
-            
+
         Returns:
             List of registered names
         """
         if category:
             return self._by_category.get(category, [])
         return list(self._registry.keys())
-    
+
     def list_categories(self) -> List[str]:
         """List all categories."""
         return list(self._by_category.keys())
-    
+
     def search(self, query: str = "", tags: Optional[List[str]] = None) -> List[str]:
         """
         Search for components by name substring or tags.
-        
+
         Args:
             query: Substring to search in names and descriptions
             tags: Tags to filter by (AND logic)
-            
+
         Returns:
             List of matching component names
         """
         results = set(self._registry.keys())
-        
+
         # Filter by query
         if query:
             query_lower = query.lower()
             results = {
-                name for name, info in self._registry.items()
-                if query_lower in name.lower() 
-                or query_lower in info.description.lower()
-                or any(query_lower in tag for tag in info.tags)
+                name
+                for name, info in self._registry.items()
+                if query_lower in name.lower() or query_lower in info.description.lower() or any(query_lower in tag for tag in info.tags)
             }
-        
+
         # Filter by tags (AND logic)
         if tags:
             for tag in tags:
                 tag_matches = self._by_tag.get(tag, set())
                 results = results & tag_matches
-        
+
         return list(results)
 
     def create(self, name: str, **kwargs: Any) -> Any:
@@ -285,17 +285,17 @@ class Registry:
         """
         cls = self.get(name)
         return cls(**kwargs)
-    
+
     def create_from_config(self, config: Dict[str, Any]) -> Any:
         """
         Create an instance from a configuration dictionary.
-        
+
         The config should have a 'name' or 'type' key specifying the component,
         and other keys are passed as constructor arguments.
-        
+
         Args:
             config: Configuration dictionary
-            
+
         Returns:
             Instance of the registered class
         """
@@ -317,19 +317,19 @@ class Registry:
     def __iter__(self):
         """Iterate over registered names."""
         return iter(self._registry.keys())
-    
+
     def summary(self) -> str:
         """Get a human-readable summary of the registry."""
         lines = [f"\n=== {self.name.upper()} REGISTRY ==="]
         lines.append(f"Total: {len(self)} components in {len(self._by_category)} categories\n")
-        
+
         for category, names in sorted(self._by_category.items()):
             lines.append(f"  {category}:")
             for name in sorted(names):
                 info = self._registry[name]
                 desc = info.description[:50] + "..." if len(info.description) > 50 else info.description
                 lines.append(f"    - {name}: {desc}")
-        
+
         return "\n".join(lines)
 
 
@@ -348,11 +348,11 @@ AGGREGATOR_REGISTRY = Registry("aggregators")
 REPORTER_REGISTRY = Registry("reporters")
 
 # New registries for enhanced modularity
-ANALYZER_REGISTRY = Registry("analyzers")       # Analysis pipelines (clustering, halo, etc.)
-VISUALIZER_REGISTRY = Registry("visualizers")   # Visualization components
-PRUNER_REGISTRY = Registry("pruners")           # Pruning strategies
-EVALUATOR_REGISTRY = Registry("evaluators")     # Evaluation methods (accuracy, perplexity, etc.)
-PREPROCESSOR_REGISTRY = Registry("preprocessors") # Data/activation preprocessors
+ANALYZER_REGISTRY = Registry("analyzers")  # Analysis pipelines (clustering, halo, etc.)
+VISUALIZER_REGISTRY = Registry("visualizers")  # Visualization components
+PRUNER_REGISTRY = Registry("pruners")  # Pruning strategies
+EVALUATOR_REGISTRY = Registry("evaluators")  # Evaluation methods (accuracy, perplexity, etc.)
+PREPROCESSOR_REGISTRY = Registry("preprocessors")  # Data/activation preprocessors
 
 # Collect all registries for easy iteration
 ALL_REGISTRIES = {
@@ -374,10 +374,11 @@ ALL_REGISTRIES = {
 # DECORATOR FUNCTIONS FOR REGISTRATION
 # =============================================================================
 
+
 def register_metric(name: str, **metadata: Any) -> Callable:
     """
     Register a metric class.
-    
+
     Example:
         @register_metric("my_metric", category="information", tags=["mi", "entropy"])
         class MyMetric(BaseMetric):
@@ -414,7 +415,7 @@ def register_reporter(name: str, **metadata: Any) -> Callable:
 def register_analyzer(name: str, **metadata: Any) -> Callable:
     """
     Register an analyzer class (clustering, halo analysis, etc.).
-    
+
     Example:
         @register_analyzer("kmeans_clustering", category="clustering")
         class KMeansClustering(BaseAnalyzer):
@@ -431,7 +432,7 @@ def register_visualizer(name: str, **metadata: Any) -> Callable:
 def register_pruner(name: str, **metadata: Any) -> Callable:
     """
     Register a pruning strategy.
-    
+
     Example:
         @register_pruner("magnitude", category="baseline", tags=["simple", "weight-based"])
         class MagnitudePruning(BasePruner):
@@ -453,6 +454,7 @@ def register_preprocessor(name: str, **metadata: Any) -> Callable:
 # =============================================================================
 # GETTER FUNCTIONS
 # =============================================================================
+
 
 def get_metric(name: str, **kwargs: Any) -> Any:
     """Get a metric instance by name."""
@@ -513,22 +515,19 @@ def get_preprocessor(name: str, **kwargs: Any) -> Any:
 # UNIFIED COMPONENT FACTORY
 # =============================================================================
 
-def create_component(
-    registry_name: str,
-    component_name: str,
-    **kwargs: Any
-) -> Any:
+
+def create_component(registry_name: str, component_name: str, **kwargs: Any) -> Any:
     """
     Create a component from any registry by name.
-    
+
     Args:
         registry_name: Name of the registry ("metrics", "pruners", etc.)
         component_name: Name of the component within that registry
         **kwargs: Arguments to pass to the component constructor
-        
+
     Returns:
         Instance of the component
-        
+
     Example:
         metric = create_component("metrics", "rayleigh_quotient", relative=True)
         pruner = create_component("pruners", "magnitude", amount=0.5)
@@ -541,20 +540,20 @@ def create_component(
 def create_from_config(config: Dict[str, Any], registry_name: Optional[str] = None) -> Any:
     """
     Create a component from a configuration dictionary.
-    
+
     The config should have 'registry' and 'name' keys, or just 'name' if registry_name is provided.
-    
+
     Args:
         config: Configuration dictionary with at least 'name' key
         registry_name: Optional registry name (if not in config)
-        
+
     Returns:
         Instance of the component
-        
+
     Example:
         config = {"registry": "metrics", "name": "rayleigh_quotient", "relative": True}
         metric = create_from_config(config)
-        
+
         # Or with explicit registry
         config = {"name": "magnitude", "amount": 0.5}
         pruner = create_from_config(config, registry_name="pruners")
@@ -563,7 +562,7 @@ def create_from_config(config: Dict[str, Any], registry_name: Optional[str] = No
     reg_name = config.pop("registry", None) or registry_name
     if not reg_name:
         raise ValueError("Config must have 'registry' key or registry_name must be provided")
-    
+
     return ALL_REGISTRIES[reg_name].create_from_config(config)
 
 
@@ -589,6 +588,7 @@ def print_registry_summary(registry_name: Optional[str] = None) -> None:
 # AUTO-DISCOVERY
 # =============================================================================
 
+
 def discover_and_register(module_path: str, registry_type: str = "all") -> int:
     """
     Auto-discover and register components from a module.
@@ -599,7 +599,7 @@ def discover_and_register(module_path: str, registry_type: str = "all") -> int:
     Args:
         module_path: Python module path to scan (e.g., "alignment.metrics")
         registry_type: Type of components to register ("all", "metrics", etc.)
-        
+
     Returns:
         Number of modules imported
     """
@@ -611,11 +611,7 @@ def discover_and_register(module_path: str, registry_type: str = "all") -> int:
         module = importlib.import_module(module_path)
 
         # Recursively walk through submodules
-        for importer, modname, ispkg in pkgutil.walk_packages(
-            path=module.__path__, 
-            prefix=module.__name__ + ".", 
-            onerror=lambda x: None
-        ):
+        for importer, modname, ispkg in pkgutil.walk_packages(path=module.__path__, prefix=module.__name__ + ".", onerror=lambda x: None):
             try:
                 importlib.import_module(modname)
                 count += 1
@@ -625,49 +621,49 @@ def discover_and_register(module_path: str, registry_type: str = "all") -> int:
 
     except Exception as e:
         logger.error(f"Failed to discover components from {module_path}: {e}")
-    
+
     return count
 
 
 def discover_plugins(plugin_dirs: Optional[List[str]] = None) -> int:
     """
     Discover and load plugins from specified directories.
-    
+
     Plugins are Python files or packages that register components using
     the @register_* decorators. This allows users to extend the framework
     without modifying core code.
-    
+
     Args:
         plugin_dirs: List of directories to search for plugins.
                     Defaults to ["./plugins", "~/.alignment/plugins"]
-                    
+
     Returns:
         Number of plugins loaded
     """
     import importlib.util
     import sys
-    
+
     if plugin_dirs is None:
         plugin_dirs = [
             "./plugins",
             os.path.expanduser("~/.alignment/plugins"),
         ]
-    
+
     count = 0
     for plugin_dir in plugin_dirs:
         plugin_path = Path(plugin_dir)
         if not plugin_path.exists():
             continue
-            
+
         logger.info(f"Scanning for plugins in: {plugin_path}")
-        
+
         # Find all Python files
         for py_file in plugin_path.glob("**/*.py"):
             if py_file.name.startswith("_"):
                 continue
-                
+
             module_name = f"alignment_plugin_{py_file.stem}"
-            
+
             try:
                 spec = importlib.util.spec_from_file_location(module_name, py_file)
                 if spec and spec.loader:
@@ -678,7 +674,7 @@ def discover_plugins(plugin_dirs: Optional[List[str]] = None) -> int:
                     logger.info(f"Loaded plugin: {py_file}")
             except Exception as e:
                 logger.warning(f"Failed to load plugin {py_file}: {e}")
-    
+
     return count
 
 
@@ -688,12 +684,13 @@ def discover_plugins(plugin_dirs: Optional[List[str]] = None) -> int:
 
 _initialized = False
 
+
 def initialize_registries(discover_builtin: bool = True, discover_plugins_flag: bool = True) -> None:
     """
     Initialize all registries by discovering and registering built-in components.
-    
+
     This should be called once at application startup.
-    
+
     Args:
         discover_builtin: Whether to discover built-in components
         discover_plugins_flag: Whether to discover user plugins
@@ -701,7 +698,7 @@ def initialize_registries(discover_builtin: bool = True, discover_plugins_flag: 
     global _initialized
     if _initialized:
         return
-    
+
     if discover_builtin:
         # Discover built-in components from alignment package
         builtin_modules = [
@@ -715,9 +712,9 @@ def initialize_registries(discover_builtin: bool = True, discover_plugins_flag: 
                 discover_and_register(module)
             except Exception as e:
                 logger.debug(f"Could not discover from {module}: {e}")
-    
+
     if discover_plugins_flag:
         discover_plugins()
-    
+
     _initialized = True
     logger.info(f"Registries initialized: {sum(len(r) for r in ALL_REGISTRIES.values())} components")

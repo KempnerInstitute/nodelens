@@ -8,7 +8,7 @@ These metrics use gradient information to:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -103,7 +103,7 @@ class TaylorSaliency(BaseMetric):
             if self.mode == "mean_abs":
                 return product.mean(dim=(0, 2, 3)).abs()
             if self.mode == "sq_mean":
-                return (product ** 2).mean(dim=(0, 2, 3))
+                return (product**2).mean(dim=(0, 2, 3))
             raise ValueError(f"Unknown Taylor Saliency mode: {self.mode}")
 
         # Flatten batch dimension if needed, keep neuron dimension
@@ -124,8 +124,8 @@ class TaylorSaliency(BaseMetric):
 
         elif self.mode == "sq_mean":
             # E[(u * g)^2]
-            scores = (product ** 2).mean(dim=0)
-        
+            scores = (product**2).mean(dim=0)
+
         else:
             raise ValueError(f"Unknown Taylor Saliency mode: {self.mode}")
 

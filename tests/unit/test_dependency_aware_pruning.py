@@ -83,5 +83,3 @@ class TestDependencyAwarePruning:
             assert "Invalid pruning plan" in str(e)
         else:
             assert False, "Expected ValueError due to invalid pruning plan"
-
-

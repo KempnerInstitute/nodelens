@@ -14,7 +14,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # Track MLP layers for pruning
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
@@ -32,7 +32,7 @@ metrics:
     - "rayleigh_quotient"
     - "activation_l2_norm"
   num_samples: 64
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -44,7 +44,7 @@ llm:
   scar_max_length: 512
   evaluate_perplexity: true
   evaluation_num_samples: 50
-  
+
   # Evaluation metrics for pruning plots
   # Available metrics (lower is better for perplexity/bits_per_byte, higher for accuracy):
   #   - perplexity: Language modeling perplexity on WikiText
@@ -55,7 +55,7 @@ llm:
   evaluation_metrics:
     - "perplexity"
     - "accuracy_hellaswag"  # Zero-shot commonsense reasoning
-    
+
 # Pruning experiments
 pruning:
   enabled: true
@@ -64,11 +64,11 @@ pruning:
   distribution: "uniform"
   structured: true
   dependency_aware: true
-  
+
   # For LLMs: limit to single strategy to reduce memory usage
   # Set to a specific metric name, or null to run all enabled metrics
   single_strategy: null  # e.g., "rayleigh_quotient" or "activation_l2_norm"
-  
+
   fine_tune:
     enabled: false
     epochs: 1
@@ -92,4 +92,3 @@ analysis:
 visualization:
   format: "png"
   dpi: 300
-

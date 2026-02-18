@@ -20,10 +20,10 @@ Create and activate the conda environment:
 
    git clone <repository-url>
    cd alignment
-   
+
    conda env create -f environment.yml
    conda activate alignment
-   
+
    pip install -e .
 
 Using Pip
@@ -46,7 +46,7 @@ Test the installation:
 
    import alignment
    from alignment.metrics import METRIC_REGISTRY
-   
+
    # List available metrics
    print(METRIC_REGISTRY.list())
 

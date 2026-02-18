@@ -11,15 +11,12 @@ Tests validate:
 import numpy as np
 import pytest
 
-from alignment.analysis.clustering.cross_layer_halo import (
-    CrossLayerHaloAnalysis,
-    HaloResult,
-)
-
+from alignment.analysis.clustering.cross_layer_halo import CrossLayerHaloAnalysis, HaloResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def rng():
@@ -42,8 +39,8 @@ def small_activations(rng):
 # Tests: compute_influence
 # ---------------------------------------------------------------------------
 
-class TestComputeInfluence:
 
+class TestComputeInfluence:
     def test_shape(self, small_weights):
         halo = CrossLayerHaloAnalysis()
         infl = halo.compute_influence(small_weights)
@@ -71,8 +68,8 @@ class TestComputeInfluence:
 # Tests: find_halo
 # ---------------------------------------------------------------------------
 
-class TestFindHalo:
 
+class TestFindHalo:
     def test_dominant_column_produces_nonempty_halo(self, rng):
         """When one source column dominates, its halo should be non-empty."""
         # Make column 0 dominate for a few receivers
@@ -102,8 +99,8 @@ class TestFindHalo:
 # Tests: analyze_halo
 # ---------------------------------------------------------------------------
 
-class TestAnalyzeHalo:
 
+class TestAnalyzeHalo:
     def test_empty_halo(self):
         halo = CrossLayerHaloAnalysis()
         result = halo.analyze_halo(
@@ -131,8 +128,8 @@ class TestAnalyzeHalo:
 # Tests: cluster_to_cluster_flow
 # ---------------------------------------------------------------------------
 
-class TestClusterToClusterFlow:
 
+class TestClusterToClusterFlow:
     def test_rows_sum_to_one(self, rng):
         n_out, n_in = 16, 8
         W = np.abs(rng.standard_normal((n_out, n_in)))
@@ -144,13 +141,15 @@ class TestClusterToClusterFlow:
         halo = CrossLayerHaloAnalysis()
         infl = halo.compute_influence(W)
         flow = halo.compute_cluster_to_cluster_flow(
-            infl, source_labels, target_labels, source_types, target_types,
+            infl,
+            source_labels,
+            target_labels,
+            source_types,
+            target_types,
         )
         for src_type, row in flow.items():
             row_sum = sum(row.values())
-            assert abs(row_sum - 1.0) < 0.05, (
-                f"Row {src_type} sums to {row_sum}, expected ~1.0"
-            )
+            assert abs(row_sum - 1.0) < 0.05, f"Row {src_type} sums to {row_sum}, expected ~1.0"
 
     def test_keys_match_types(self, rng):
         n_out, n_in = 12, 6
@@ -163,7 +162,11 @@ class TestClusterToClusterFlow:
         halo = CrossLayerHaloAnalysis()
         infl = halo.compute_influence(W)
         flow = halo.compute_cluster_to_cluster_flow(
-            infl, source_labels, target_labels, source_types, target_types,
+            infl,
+            source_labels,
+            target_labels,
+            source_types,
+            target_types,
         )
         assert set(flow.keys()) == {"A", "B", "C"}
         for row in flow.values():
@@ -174,8 +177,8 @@ class TestClusterToClusterFlow:
 # Tests: permutation_baseline
 # ---------------------------------------------------------------------------
 
-class TestPermutationBaseline:
 
+class TestPermutationBaseline:
     def test_returns_z_scores_and_pvalues(self, rng):
         n_out, n_in = 20, 10
         W = np.abs(rng.standard_normal((n_out, n_in)))
@@ -187,8 +190,13 @@ class TestPermutationBaseline:
         halo = CrossLayerHaloAnalysis(percentile=80)
         infl = halo.compute_influence(W)
         results = halo.permutation_baseline(
-            infl, labels, type_mapping, red, syn,
-            n_permutations=50, seed=42,
+            infl,
+            labels,
+            type_mapping,
+            red,
+            syn,
+            n_permutations=50,
+            seed=42,
         )
         for ctype, stats in results.items():
             assert "z_red" in stats
@@ -210,8 +218,13 @@ class TestPermutationBaseline:
         halo = CrossLayerHaloAnalysis(percentile=80)
         infl = halo.compute_influence(W)
         results = halo.permutation_baseline(
-            infl, labels, type_mapping, red, syn,
-            n_permutations=20, seed=0,
+            infl,
+            labels,
+            type_mapping,
+            red,
+            syn,
+            n_permutations=20,
+            seed=0,
         )
         for stats in results.values():
             assert stats["n_permutations"] == 20

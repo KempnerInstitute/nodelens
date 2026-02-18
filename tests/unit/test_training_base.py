@@ -7,12 +7,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from alignment.training.base import TrainingConfig, BaseTrainer
-
+from alignment.training.base import BaseTrainer, TrainingConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _TinyModel(nn.Module):
     def __init__(self):

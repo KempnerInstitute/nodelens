@@ -9,7 +9,7 @@ Implements:
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CascadeResult:
     """Result of cascade test for a cluster type."""
+
     layer_name: str
     cluster_type: str
     n_removed: int
@@ -37,6 +38,7 @@ class CascadeResult:
 @dataclass
 class DamageResult:
     """Result of damage prediction analysis."""
+
     layer_name: str
     method: str
     spearman: float
@@ -55,9 +57,9 @@ class CascadeAnalysis:
     def baseline(self):
         """Compute baseline accuracy/loss."""
         if not HAS_TORCH:
-            return {"acc": 0., "loss": 0.}
+            return {"acc": 0.0, "loss": 0.0}
         self.model.eval()
-        correct, total, loss_sum = 0, 0, 0.
+        correct, total, loss_sum = 0, 0, 0.0
         crit = nn.CrossEntropyLoss()
         with torch.no_grad():
             for x, y in self.loader:
@@ -66,7 +68,7 @@ class CascadeAnalysis:
                 loss_sum += crit(out, y).item() * x.size(0)
                 correct += (out.argmax(1) == y).sum().item()
                 total += y.size(0)
-        self._baseline = {"acc": correct/total, "loss": loss_sum/total}
+        self._baseline = {"acc": correct / total, "loss": loss_sum / total}
         return self._baseline
 
     def ablate(self, layer_name: str, indices: List[int]) -> CascadeResult:
@@ -74,8 +76,8 @@ class CascadeAnalysis:
         if self._baseline is None:
             self.baseline()
         layer = dict(self.model.named_modules()).get(layer_name)
-        if layer is None or not hasattr(layer, 'weight'):
-            return CascadeResult(layer_name, "", len(indices), 0., 0.)
+        if layer is None or not hasattr(layer, "weight"):
+            return CascadeResult(layer_name, "", len(indices), 0.0, 0.0)
         # Performance: avoid cloning the entire parameter tensor for each ablation.
         # We only need to restore the ablated output channels (dim=0).
         idx = [int(i) for i in indices]
@@ -88,9 +90,7 @@ class CascadeAnalysis:
         layer.weight.data[idx] = orig_w_slice
         if orig_b_slice is not None:
             layer.bias.data[idx] = orig_b_slice
-        return CascadeResult(layer_name, "", len(indices),
-                            self._baseline["acc"] - new["acc"],
-                            new["loss"] - self._baseline["loss"])
+        return CascadeResult(layer_name, "", len(indices), self._baseline["acc"] - new["acc"], new["loss"] - self._baseline["loss"])
 
     def by_cluster(
         self,
@@ -120,7 +120,7 @@ class CascadeAnalysis:
 
     def _eval(self):
         self.model.eval()
-        correct, total, loss_sum = 0, 0, 0.
+        correct, total, loss_sum = 0, 0, 0.0
         crit = nn.CrossEntropyLoss()
         with torch.no_grad():
             for x, y in self.loader:
@@ -129,7 +129,7 @@ class CascadeAnalysis:
                 loss_sum += crit(out, y).item() * x.size(0)
                 correct += (out.argmax(1) == y).sum().item()
                 total += y.size(0)
-        return {"acc": correct/total, "loss": loss_sum/total}
+        return {"acc": correct / total, "loss": loss_sum / total}
 
 
 class DamagePrediction:
@@ -156,15 +156,15 @@ class DamagePrediction:
         self._damages = damages
         return damages
 
-    def evaluate(self, scores: np.ndarray, method: str = "composite",
-                top_ks: List[int] = [10, 20, 50]) -> DamageResult:
+    def evaluate(self, scores: np.ndarray, method: str = "composite", top_ks: List[int] = [10, 20, 50]) -> DamageResult:
         """Evaluate score vs damage correlation."""
         from scipy import stats
+
         if self._damages is None:
             raise ValueError("Call compute_damages first")
         mask = self._damages != 0
         if mask.sum() < 5:
-            return DamageResult(self.layer, method, 0., {})
+            return DamageResult(self.layer, method, 0.0, {})
         d, s = self._damages[mask], scores[mask]
         # In some pruning workflows we treat `scores` as a *prune score* where higher
         # means "safer to remove". A good prune score should correlate with
@@ -172,8 +172,8 @@ class DamagePrediction:
         rho, _ = stats.spearmanr(s, -d)
         recall = {}
         # Recall@k: how well the prune score identifies the least-damaging channels.
-        by_d = np.argsort(d)      # least damaging first
-        by_s = np.argsort(-s)     # highest prune score first
+        by_d = np.argsort(d)  # least damaging first
+        by_s = np.argsort(-s)  # highest prune score first
         for k in top_ks:
             # Keep the dictionary key as the *requested* k for stable downstream
             # table formatting, but clamp the effective k to the number of
@@ -181,4 +181,4 @@ class DamagePrediction:
             k_eff = min(int(k), len(d))
             overlap = len(set(by_d[:k_eff]) & set(by_s[:k_eff]))
             recall[int(k)] = overlap / k_eff if k_eff > 0 else 0.0
-        return DamageResult(self.layer, method, float(rho) if not np.isnan(rho) else 0., recall)
+        return DamageResult(self.layer, method, float(rho) if not np.isnan(rho) else 0.0, recall)

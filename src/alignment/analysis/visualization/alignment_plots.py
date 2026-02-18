@@ -179,7 +179,7 @@ class AlignmentVisualizer:
             # Add text annotations
             for i in range(len(layers)):
                 for j in range(len(metrics)):
-                    text = ax.text(j, i, f"{matrix[i, j]:.3f}", ha="center", va="center", color="black", fontsize=8)
+                    ax.text(j, i, f"{matrix[i, j]:.3f}", ha="center", va="center", color="black", fontsize=8)
 
         ax.set_title("Alignment Metrics Heatmap")
         ax.set_xlabel("Metric")

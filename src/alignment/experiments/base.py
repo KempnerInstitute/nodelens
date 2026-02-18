@@ -7,17 +7,16 @@ handling common functionality like checkpointing, logging, and metrics.
 
 import json
 import logging
-import time
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 
 from alignment.core.base import BaseExperiment as CoreBaseExperiment
-from alignment.core.registry import DATASET_REGISTRY, get_dataset, get_metric, get_model
+from alignment.core.registry import DATASET_REGISTRY
 from alignment.dataops.loaders import create_distributed_loader
 from alignment.models import ModelWrapper
 
@@ -157,7 +156,7 @@ class ExperimentConfig:
     metric_ablations: List[str] = field(default_factory=lambda: ["all", "rq_red", "rq_syn", "red_syn"])
     run_permutation_baseline: bool = False
     n_permutations: int = 100
-    
+
     # Clustering first metric: "rq" (default) or "ixy" (mutual information I(X;Y))
     # When set to "ixy", clustering uses mi_in_proxy instead of rq as the first dimension
     clustering_first_metric: str = "rq"
@@ -184,8 +183,8 @@ class ExperimentConfig:
     # Between-layer routing metrics (vision)
     # These are computed from the same effective influence matrix used for halos.
     routing_bottleneck_topk: int = 5  # top-k mass summaries for bottleneck metrics
-    outred_candidate_pool: int = 64   # candidate sources per channel when estimating outgoing overlap
-    outred_topm: int = 8              # average of top-m overlaps for OutRed
+    outred_candidate_pool: int = 64  # candidate sources per channel when estimating outgoing overlap
+    outred_topm: int = 8  # average of top-m overlaps for OutRed
     bottleneck_protect_percentile: float = 95.0  # used by bottleneck-protect pruning variants
 
     # Cross-layer halo analysis parameters (vision)
@@ -220,17 +219,17 @@ class ExperimentConfig:
     # Annealing window used by the cluster-aware (annealed) variant
     cluster_aware_anneal_start: float = 0.70
     cluster_aware_anneal_end: float = 0.90
-    
+
     # NEW: Additional cluster-aware method variants
     # Weight for Taylor component in cluster_aware_taylor_blend method
     cluster_aware_taylor_weight: float = 0.3
     # Enable depth-adaptive score weights (early layers more conservative)
     cluster_aware_depth_adaptive: bool = False
     # Early/late layer weight profiles for depth-adaptive mode
-    cluster_aware_early_alpha: float = 1.5   # Higher RQ weight early
-    cluster_aware_early_gamma: float = 0.1   # Lower redundancy penalty early
-    cluster_aware_late_alpha: float = 0.8    # Lower RQ weight late
-    cluster_aware_late_gamma: float = 0.5    # Higher redundancy penalty late
+    cluster_aware_early_alpha: float = 1.5  # Higher RQ weight early
+    cluster_aware_early_gamma: float = 0.1  # Lower redundancy penalty early
+    cluster_aware_late_alpha: float = 0.8  # Lower RQ weight late
+    cluster_aware_late_gamma: float = 0.5  # Higher redundancy penalty late
     # Fraction of layers considered "early"
     cluster_aware_early_layer_frac: float = 0.3
 
@@ -351,7 +350,7 @@ class ExperimentConfig:
     plot_format: str = "png"
     plot_dpi: int = 300
     visualization_options: Dict[str, Any] = field(default_factory=dict)
-    
+
     # Post-experiment analysis (runs after experiment completes)
     # When set, AnalysisRunner generates additional visualizations from results
     post_analysis: Dict[str, Any] = field(default_factory=dict)
@@ -381,12 +380,12 @@ class ExperimentConfig:
     evaluation_num_samples: int = 100
     evaluation_metrics: List[str] = field(default_factory=lambda: ["perplexity"])
     llm: Dict[str, Any] = field(default_factory=dict)  # Full LLM config block
-    
+
     # Few-shot evaluation settings (NVIDIA Minitron compatible)
     use_nvidia_fewshot: bool = False  # Use NVIDIA Minitron official few-shot settings
     use_chain_of_thought: bool = False  # Enable chain-of-thought for GSM8k
     fewshot_settings: Dict[str, int] = field(default_factory=dict)  # Per-benchmark few-shot counts
-    
+
     # Directed redundancy and connectivity pruning
     do_directed_redundancy: bool = True
     do_connectivity_pruning: bool = True
@@ -394,8 +393,8 @@ class ExperimentConfig:
     # SCAR / supernode-specific options for LLMs
     do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i) for FFN
     do_attention_scar_metrics: bool = False  # Whether to compute SCAR-style metrics for attention heads
-    scar_num_samples: int = 0      # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
-    scar_max_length: int = 512     # Max sequence length for SCAR calibration passes
+    scar_num_samples: int = 0  # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
+    scar_max_length: int = 512  # Max sequence length for SCAR calibration passes
 
     # Supernode analysis configs (nested dicts from YAML)
     supernode: Dict[str, Any] = field(default_factory=dict)  # Core supernode analysis config
@@ -413,14 +412,13 @@ class ExperimentConfig:
     # Performance optimization
     eval_batches: Optional[int] = None  # Limit evaluation to N batches (None = all)
     use_tensorized_training: bool = True  # Always enabled
-    use_tensorized_pruning: bool = True   # Always enabled
+    use_tensorized_pruning: bool = True  # Always enabled
     use_ultra_parallel_eval: bool = True  # Always enabled
 
     # Misc
     tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
     model_kwargs: Dict[str, Any] = field(default_factory=dict)
     analysis_options: Dict[str, Any] = field(default_factory=dict)
-    
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -581,7 +579,7 @@ class BaseExperiment(CoreBaseExperiment):
         if device_str == "auto":
             device_str = "cuda" if torch.cuda.is_available() else "cpu"
             # Update config so all code uses the resolved device
-            object.__setattr__(self.config, 'device', device_str)
+            object.__setattr__(self.config, "device", device_str)
         device = torch.device(device_str)
         if self.config.model_name.lower() == "hf_causal_lm":
             # For HuggingFace causal LMs we may be using accelerate's device_map.
@@ -610,6 +608,7 @@ class BaseExperiment(CoreBaseExperiment):
                 raise ValueError("model_id must be set in model_config for hf_causal_lm")
             try:
                 from transformers import AutoTokenizer
+
                 self.tokenizer = AutoTokenizer.from_pretrained(model_id)
                 logger.info(f"Loaded tokenizer for HF model '{model_id}'")
             except ImportError:
@@ -680,6 +679,7 @@ class BaseExperiment(CoreBaseExperiment):
     def _initialize_metrics(self):
         """Initialize metrics."""
         import inspect
+
         from alignment.core.registry import METRIC_REGISTRY
 
         # Combine primary metrics and alignment-specific methods so that
@@ -700,10 +700,7 @@ class BaseExperiment(CoreBaseExperiment):
                 sig = inspect.signature(metric_class.__init__)
                 accepted_params = set(sig.parameters.keys()) - {"self"}
                 # Check if metric accepts **kwargs
-                accepts_kwargs = any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD
-                    for p in sig.parameters.values()
-                )
+                accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
             except (ValueError, TypeError):
                 # If we can't inspect, assume it accepts everything
                 accepted_params = set()
@@ -859,7 +856,7 @@ class BaseExperiment(CoreBaseExperiment):
     def _make_serializable(self, obj):
         """Convert PyTorch tensors and numpy arrays to lists for JSON serialization."""
         import numpy as np
-        
+
         if isinstance(obj, torch.Tensor):
             return obj.cpu().tolist()
         elif isinstance(obj, np.ndarray):

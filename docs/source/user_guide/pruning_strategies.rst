@@ -16,7 +16,7 @@ Available Pruning Strategies
 
 **Module**: :mod:`alignment.pruning.strategies.magnitude`
 
-**Classes**: 
+**Classes**:
 
 - :class:`MagnitudePruning`: Basic magnitude pruning
 - :class:`GlobalMagnitudePruning`: Global magnitude pruning across all layers
@@ -31,12 +31,12 @@ Available Pruning Strategies
 .. code-block:: python
 
    from alignment.pruning import get_pruning_strategy
-   
+
    # Basic magnitude pruning
    strategy = get_pruning_strategy("magnitude")
    mask = strategy.compute_mask(layer.weight, amount=0.5)
    strategy.apply_mask(layer, mask)
-   
+
    # Global magnitude pruning
    strategy = get_pruning_strategy("global_magnitude")
    masks = strategy.compute_masks_for_model(model, amount=0.5)
@@ -89,11 +89,11 @@ Available Pruning Strategies
 .. code-block:: python
 
    strategy = get_pruning_strategy("gradient")
-   
+
    # Requires gradient computation
    loss.backward()
    mask = strategy.compute_mask(
-       layer.weight, 
+       layer.weight,
        amount=0.5,
        gradient=layer.weight.grad
    )
@@ -108,14 +108,14 @@ All strategies support structured pruning by setting ``structured=True``:
 .. code-block:: python
 
    from alignment.pruning import PruningConfig
-   
+
    config = PruningConfig(
        strategy="magnitude",
        amount=0.3,
        structured=True,
        dim=0  # Prune output channels
    )
-   
+
    strategy = get_pruning_strategy(config.strategy)
    mask = strategy.compute_mask(layer.weight, **config.to_dict())
 
@@ -127,19 +127,19 @@ The framework provides iterative pruning through dedicated strategies:
 .. code-block:: python
 
    from alignment.pruning.strategies.magnitude import IterativeMagnitudePruning
-   
+
    strategy = IterativeMagnitudePruning(
        iterations=10,
        final_sparsity=0.9
    )
-   
+
    for step in range(strategy.iterations):
        mask = strategy.compute_mask_for_iteration(
-           layer.weight, 
+           layer.weight,
            iteration=step
        )
        strategy.apply_mask(layer, mask)
-       
+
        # Fine-tune between iterations
        fine_tune(model, epochs=5)
 
@@ -151,7 +151,7 @@ Create pruning schedules for gradual sparsification:
 .. code-block:: python
 
    from alignment.pruning.schedules import PolynomialSchedule, LinearSchedule
-   
+
    # Polynomial schedule (recommended)
    schedule = PolynomialSchedule(
        initial_sparsity=0.0,
@@ -160,7 +160,7 @@ Create pruning schedules for gradual sparsification:
        end_step=10000,
        power=3
    )
-   
+
    # Get sparsity for current step
    current_sparsity = schedule(step=5000)
 
@@ -206,7 +206,7 @@ Always fine-tune after pruning for best results:
    strategy = get_pruning_strategy("magnitude")
    mask = strategy.compute_mask(layer.weight, amount=0.5)
    strategy.apply_mask(layer, mask)
-   
+
    # Fine-tune
    for epoch in range(fine_tune_epochs):
        train(model, train_loader, optimizer, criterion)
@@ -220,10 +220,10 @@ Check Sparsity
 .. code-block:: python
 
    from alignment.pruning.utils import get_sparsity, get_model_sparsity
-   
+
    # Layer sparsity
    sparsity = get_sparsity(layer)
-   
+
    # Model sparsity
    model_sparsity = get_model_sparsity(model)
 
@@ -233,7 +233,7 @@ Remove Pruning
 .. code-block:: python
 
    from alignment.pruning.utils import remove_pruning
-   
+
    # Makes pruning permanent and removes masks
    remove_pruning(layer)
 
@@ -251,7 +251,7 @@ Example analysis:
 .. code-block:: python
 
    from alignment.experiments import GeneralAlignmentExperiment
-   
+
    # Track how metrics change with pruning
    config = {
        "model_name": "resnet18",
@@ -260,10 +260,10 @@ Example analysis:
        "pruning_amounts": [0.0, 0.3, 0.5, 0.7, 0.9],
        "pruning_strategy": "magnitude"
    }
-   
+
    experiment = GeneralAlignmentExperiment(config)
    results = experiment.run()
-   
+
    # Visualize metric changes vs sparsity
    experiment.visualize_results()
 
@@ -295,4 +295,4 @@ See Also
 
 - :doc:`/api/pruning` - Complete API reference
 - :doc:`experiments` - Pruning experiments guide
-- :doc:`/examples/pruning_experiments` - Example code 
+- :doc:`/examples/pruning_experiments` - Example code

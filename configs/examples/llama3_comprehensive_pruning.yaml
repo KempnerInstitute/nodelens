@@ -1,11 +1,11 @@
 # ============================================================================
 # LLaMA-3 COMPREHENSIVE PRUNING COMPARISON
 # ============================================================================
-# 
+#
 # PURPOSE: Compare ALL custom pruning methods against SOTA baselines
-# 
+#
 # This config runs a comprehensive comparison of:
-# 
+#
 # ┌─────────────────────────────────────────────────────────────────────────┐
 # | CATEGORY           | METHOD                        | REFERENCE          |
 # ├────────────────────┼───────────────────────────────┼────────────────────┤
@@ -59,7 +59,7 @@ model:
   model_id: "meta-llama/Llama-3.1-8B"
   dtype: "bfloat16"
   device_map: "auto"
-  
+
   # Track all MLP layers for comprehensive analysis
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
@@ -82,9 +82,9 @@ metrics:
     - "average_redundancy"      # Information-theoretic redundancy
     # Magnitude-based (baseline for comparison)
     - "activation_l2_norm"      # Standard activation magnitude
-  
+
   num_samples: 64  # Calibration samples for metric computation
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -97,29 +97,29 @@ llm:
   scar_metrics: true
   scar_num_samples: 64    # More samples for stable estimates
   scar_max_length: 512
-  
+
   # Evaluation settings
   evaluate_perplexity: true
   evaluation_num_samples: 100  # Samples per benchmark (balance accuracy vs speed)
-  
+
   # COMPREHENSIVE EVALUATION SUITE
   evaluation_metrics:
     # Language modeling (core metrics)
     - "perplexity"            # WikiText-2 perplexity
     - "loss"                  # Cross-entropy loss
     - "bits_per_byte"         # Compression efficiency
-    
+
     # Knowledge & Reasoning
     - "accuracy_mmlu"         # 57-subject knowledge (~20min)
     - "accuracy_hellaswag"    # Commonsense reasoning (~10min)
     - "accuracy_arc_easy"     # Easy science questions
     - "accuracy_arc_challenge" # Hard science questions
-    
+
     # Common Sense
     - "accuracy_winogrande"   # Winograd schemas
     - "accuracy_piqa"         # Physical intuition
     - "accuracy_boolq"        # Boolean questions
-    
+
     # Math & Truthfulness
     #- "accuracy_gsm8k"        # Grade school math
     #- "accuracy_truthfulqa"   # Truthfulness
@@ -132,19 +132,19 @@ llm:
 # ============================================================================
 supernode:
   enabled: true
-  
+
   # Supernode identification
   core_fraction: 0.01         # Top 1% = supernodes
   follower_fraction: 0.10     # Top 10% connected = followers
   score_metric: "activation_l2_norm"  # Metric for supernode identification
-  
+
   # Protection settings
   protect_core: true          # Prevent pruning supernodes
-  
+
   # Analysis settings
   cross_layer_analysis: true  # Analyze inter-layer connections
   compare_by_connection: true # Compare high vs low connectivity groups
-  
+
   # Metrics to compute for supernodes
   compute_metrics:
     - "activation"
@@ -167,15 +167,15 @@ supernode:
 
 supernode_robustness:
   enabled: true
-  
+
   # Supernode fraction (same as supernode.core_fraction)
   supernode_fraction: 0.01    # Top 1% = supernodes
-  
+
   # Bootstrap analysis settings
   num_bootstrap_samples: 10   # Number of bootstrap resamples
   batch_size: 32              # Batch size for forward passes
   max_samples: 256            # Max calibration samples per bootstrap
-  
+
   # Metrics to compare for robustness
   metrics:
     - "scar_activation_power"
@@ -184,10 +184,10 @@ supernode_robustness:
     - "rayleigh_quotient"
     - "gaussian_mi_analytic"
     - "activation_l2_norm"
-  
+
   # Layers to analyze (null = analyze all down_proj layers)
   target_layers: null
-  
+
   # Optionally focus on specific layers for detailed analysis
   # target_layers:
   #   - "model.layers.15"
@@ -209,18 +209,18 @@ supernode_summary:
 # ============================================================================
 pruning:
   enabled: true
-  
+
   # Comprehensive sparsity sweep for clear comparison curves
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-  
+
   # Selection modes
   selection_modes: ["low", "high"]  # "low" prunes lowest-scored, "high" prunes highest
-  
+
   # Pruning structure
   distribution: "uniform"     # Uniform sparsity across layers
   structured: true            # Structured (neuron-level) pruning
   dependency_aware: true      # Consider layer dependencies
-  
+
   # =========================================================================
   # ALL PRUNING ALGORITHMS - Complete comparison
   # =========================================================================
@@ -231,7 +231,7 @@ pruning:
     - "rayleigh_quotient"            # RQ - alignment measure
     - "gaussian_mi_analytic"         # MI - related to alignment
     - "average_redundancy"           # Redundancy - info-theoretic
-    
+
     # -----------------------------------------------------------------------
     # SCAR-BASED (Gradient-Informed)
     # -----------------------------------------------------------------------
@@ -239,23 +239,23 @@ pruning:
     # Note: scar_activation_power, scar_taylor, scar_curvature are computed
     # internally and available for analysis but we use scar_loss_proxy
     # as the main SCAR-based pruning metric
-    
+
     # -----------------------------------------------------------------------
     # SUPERNODE-AWARE (Novel Contribution)
     # -----------------------------------------------------------------------
     - "supernode_protection_score"   # Protects unique halo neurons
     - "supernode_connectivity_score" # Low connectivity = safe to prune
-    
+
     # -----------------------------------------------------------------------
     # GENERALIZED IMPORTANCE (No Outlier Assumption)
     # -----------------------------------------------------------------------
     - "generalized_importance"       # Works without clear supernode structure
-    
+
     # -----------------------------------------------------------------------
     # MAGNITUDE-BASED (Standard Baseline)
     # -----------------------------------------------------------------------
     - "activation_l2_norm"           # Standard magnitude pruning
-    
+
     # -----------------------------------------------------------------------
     # STATE-OF-THE-ART BASELINES
     # -----------------------------------------------------------------------
@@ -263,11 +263,11 @@ pruning:
                                      # https://arxiv.org/abs/2306.11695
     - "sparsegpt"                    # Second-order one-shot (Frantar & Alistarh, 2023)
                                      # https://arxiv.org/abs/2301.00774
-  
+
   # For memory-constrained runs, set to one strategy name (e.g., "rayleigh_quotient")
   # null = run all strategies
   single_strategy: null
-  
+
   # Fine-tuning after pruning (optional recovery)
   fine_tune:
     enabled: false            # Set to true for recovery experiments
@@ -326,28 +326,28 @@ performance:
 analysis:
   save_scores: true             # Save importance scores for post-hoc analysis
   generate_plots: true
-  
+
   plots:
     histograms: true            # Score distributions
     scatter_plots: true         # Metric correlations
     pruning_curves: true        # Accuracy/perplexity vs sparsity
     redundancy_heatmaps: true   # Layer-wise redundancy patterns
-  
+
   # Metric pairs for scatter plot analysis
   scatter_pairs:
     # Alignment vs magnitude
     - ["activation_l2_norm", "rayleigh_quotient"]
     - ["activation_l2_norm", "gaussian_mi_analytic"]
-    
+
     # SCAR relationships
     - ["scar_activation_power", "scar_loss_proxy"]
     - ["scar_activation_power", "scar_curvature"]
     - ["scar_taylor", "scar_loss_proxy"]
-    
+
     # Alignment vs SCAR
     - ["rayleigh_quotient", "scar_loss_proxy"]
     - ["gaussian_mi_analytic", "scar_loss_proxy"]
-    
+
     # Redundancy relationships
     - ["average_redundancy", "rayleigh_quotient"]
     - ["average_redundancy", "activation_l2_norm"]
@@ -392,4 +392,3 @@ visualization:
 # |       ├── scar_loss_proxy_layers.png
 # |       └── scar_metrics_heatmap.png
 # └── checkpoints/
-

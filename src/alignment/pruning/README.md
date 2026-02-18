@@ -103,8 +103,8 @@ strategy = AdaptiveSensitivityPruning(
 
 # Compute layer sensitivities and prune adaptively
 sensitivities = strategy.compute_all_sensitivities(
-    model, 
-    layer_names, 
+    model,
+    layer_names,
     data_loader=val_loader  # For fast methods
 )
 

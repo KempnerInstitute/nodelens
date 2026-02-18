@@ -78,13 +78,15 @@ def adapt_model_for_dataset(
     # --- ResNet stem adaptation ---
     if "resnet" in model_name and hasattr(model, "conv1"):
         conv1 = model.conv1
-        needs_stem = isinstance(conv1, nn.Conv2d) and (
-            tuple(conv1.kernel_size) != (3, 3) or tuple(conv1.stride) != (1, 1)
-        )
+        needs_stem = isinstance(conv1, nn.Conv2d) and (tuple(conv1.kernel_size) != (3, 3) or tuple(conv1.stride) != (1, 1))
         if needs_stem:
             new_conv = nn.Conv2d(
-                conv1.in_channels, conv1.out_channels,
-                kernel_size=3, stride=1, padding=1, bias=False,
+                conv1.in_channels,
+                conv1.out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                bias=False,
             )
             # Seed from pretrained 7x7 weights by center-cropping
             if pretrained and hasattr(conv1, "weight") and conv1.weight.shape[-1] == 7:
@@ -107,9 +109,12 @@ def adapt_model_for_dataset(
                 elif is_tinyimagenet:
                     # Replace with stride=1 conv for Tiny-ImageNet (64x64)
                     model.features[0][0] = nn.Conv2d(
-                        conv0.in_channels, conv0.out_channels,
-                        kernel_size=conv0.kernel_size, stride=1,
-                        padding=conv0.padding, bias=False,
+                        conv0.in_channels,
+                        conv0.out_channels,
+                        kernel_size=conv0.kernel_size,
+                        stride=1,
+                        padding=conv0.padding,
+                        bias=False,
                     )
         except (IndexError, AttributeError):
             pass

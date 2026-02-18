@@ -11,22 +11,22 @@ It replaces the scattered scripts:
 Usage:
     # Run all analyses from a config file
     python scripts/run_analysis.py --config configs/analysis_template.yaml
-    
+
     # Run specific analyses with overrides
     python scripts/run_analysis.py --config configs/analysis_template.yaml \
         --analyses histograms scatter_plots \
         --output-dir ./custom_output
-    
+
     # Run on a specific results directory
     python scripts/run_analysis.py --results-dir ./results/llm_experiment \
         --output-dir ./llm_plots
-    
+
     # Quick analysis without config file
     python scripts/run_analysis.py --results-dir ./results --quick
 
 For more control, use the AnalysisRunner class directly:
     from alignment.analysis import AnalysisRunner, AnalysisConfig
-    
+
     config = AnalysisConfig(
         results_dir="./results",
         output_dir="./plots",
@@ -42,16 +42,13 @@ import sys
 from pathlib import Path
 
 try:
-    from alignment.analysis import AnalysisRunner, AnalysisConfig
+    from alignment.analysis import AnalysisConfig, AnalysisRunner
 except ImportError:
     # Add src to path for development (repo-local runs without installing the package)
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-    from alignment.analysis import AnalysisRunner, AnalysisConfig
+    from alignment.analysis import AnalysisConfig, AnalysisRunner
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -61,7 +58,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    
+
     # Config file
     parser.add_argument(
         "--config",
@@ -69,7 +66,7 @@ def main():
         default=None,
         help="Path to analysis config YAML file",
     )
-    
+
     # Input sources (can override config)
     parser.add_argument(
         "--results-dir",
@@ -89,7 +86,7 @@ def main():
         default=None,
         help="Pre-computed importance scores (.pt file)",
     )
-    
+
     # Output (can override config)
     parser.add_argument(
         "--output-dir",
@@ -104,7 +101,7 @@ def main():
         default=None,
         help="Output image format",
     )
-    
+
     # Analysis selection (can override config)
     parser.add_argument(
         "--analyses",
@@ -113,14 +110,14 @@ def main():
         default=None,
         help="Which analyses to run (e.g., histograms scatter_plots pruning_curves)",
     )
-    
+
     # Quick mode (no config file needed)
     parser.add_argument(
         "--quick",
         action="store_true",
         help="Quick mode: run all analyses with default settings",
     )
-    
+
     # Style options
     parser.add_argument(
         "--style",
@@ -128,9 +125,9 @@ def main():
         default=None,
         help="Matplotlib style (e.g., seaborn-v0_8-paper)",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Build config
     if args.config:
         config = AnalysisConfig.from_yaml(args.config)
@@ -138,7 +135,7 @@ def main():
         config = AnalysisConfig()
     else:
         parser.error("Either --config or --results-dir/--results-file is required")
-    
+
     # Apply overrides
     if args.results_dir:
         config.results_dir = args.results_dir
@@ -154,21 +151,21 @@ def main():
         config.analyses = args.analyses
     if args.style:
         config.style = args.style
-    
+
     # Validate we have input
     if not config.results_dir and not config.results_file and not config.importance_scores_file:
         parser.error("No input source specified. Use --results-dir, --results-file, or --scores-file")
-    
+
     # Run analysis
     logger.info("Starting analysis...")
     runner = AnalysisRunner(config)
     outputs = runner.run()
-    
+
     # Print summary
     total_files = sum(len(v) for v in outputs.values())
-    print(f"\nAnalysis complete!")
+    print("\nAnalysis complete!")
     print(f"Generated {total_files} files in {config.output_dir}")
-    
+
     for analysis_type, files in outputs.items():
         if files:
             print(f"  {analysis_type}: {len(files)} files")
@@ -176,4 +173,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

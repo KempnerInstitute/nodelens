@@ -5,7 +5,7 @@ Complete reference materials for the alignment framework.
 
 .. toctree::
    :maxdepth: 2
-   
+
    metrics
    models
    configuration
@@ -23,5 +23,5 @@ Quick Links
 -----------
 
 - :doc:`metrics` - 30+ available alignment and similarity metrics
-- :doc:`models` - Vision models, transformers, and custom architectures  
+- :doc:`models` - Vision models, transformers, and custom architectures
 - :doc:`configuration` - Complete YAML parameter reference

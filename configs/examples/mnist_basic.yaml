@@ -27,7 +27,7 @@ metrics:
   enabled:
     - "rayleigh_quotient"
   num_samples: 256
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6

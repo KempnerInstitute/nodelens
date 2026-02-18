@@ -63,7 +63,6 @@ class WikiTextDataset(Dataset):
 
     def __init__(self, tokenizer: Any, split: str = "test", max_length: int = 512, dataset_name: str = "wikitext-2-raw-v1"):
         from datasets import load_dataset
-
         from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
         # Accept either a tokenizer object or a model ID string
@@ -318,9 +317,7 @@ def load_text_dataset(
         return TextDataset(texts, hf_tokenizer, max_length=max_length)
 
     else:
-        raise ValueError(
-            f"Unknown dataset: {dataset_name}. Supported: wikitext, c4, ptb, mixed_wikitext_c4, arxiv, code"
-        )
+        raise ValueError(f"Unknown dataset: {dataset_name}. Supported: wikitext, c4, ptb, mixed_wikitext_c4, arxiv, code")
 
 
 # Register datasets in the alignment registry.

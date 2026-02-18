@@ -11,7 +11,7 @@ Usage:
 
 Job Directory Structure:
     When base_output_dir is specified in config, experiments create unique job directories:
-    
+
     {base_output_dir}/
         {experiment_name}_{timestamp}_{job_id}/
             results/          # JSON results files
@@ -32,17 +32,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
-import yaml
 
 try:
+    from alignment.experiments.cluster_experiments import ClusterAnalysisExperiment
     from alignment.experiments.general_alignment import GeneralAlignmentExperiment
     from alignment.experiments.llm_experiments import LLMAlignmentExperiment
-    from alignment.experiments.cluster_experiments import (
-        ClusterAnalysisExperiment,
-        ClusterAnalysisConfig,
-        VisionExperiment,  # backward compat
-        VisionExperimentConfig,  # backward compat
-    )
 except ImportError:
     # Repo-local runs (without installing the package): add project root + src/ to sys.path.
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -50,18 +44,12 @@ except ImportError:
     sys.path.insert(0, repo_root)
     sys.path.insert(0, os.path.join(repo_root, "src"))
 
+    from alignment.experiments.cluster_experiments import ClusterAnalysisExperiment  # backward compat
     from alignment.experiments.general_alignment import GeneralAlignmentExperiment
     from alignment.experiments.llm_experiments import LLMAlignmentExperiment
-    from alignment.experiments.cluster_experiments import (
-        ClusterAnalysisExperiment,
-        ClusterAnalysisConfig,
-        VisionExperiment,  # backward compat
-        VisionExperimentConfig,  # backward compat
-    )
 
 # Configure tqdm to avoid ANSI escape codes in log files (common under SLURM).
 try:
-    from tqdm import tqdm
     import tqdm as tqdm_module
 
     # Check if we're in a terminal (TTY) - if not, we're likely logging to a file.
@@ -106,25 +94,23 @@ def _create_cluster_experiment(config):
                 return val
             return default
         return default
-    
+
     # Extract nested configs with proper defaults
     model_cfg = _get_nested(config, "model", {})
     dataset_cfg = _get_nested(config, "dataset", {})
-    metrics_cfg = _get_nested(config, "metrics", {})
+    _get_nested(config, "metrics", {})
     clustering_cfg = _get_nested(config, "clustering", {})
     halo_cfg = _get_nested(config, "halo_analysis", {})
     pruning_cfg = _get_nested(config, "pruning", {})
-    
+
     # Get pruning settings
-    pruning_ratios = getattr(config, "pruning_amounts", None) or \
-                     (pruning_cfg.get("ratios") if isinstance(pruning_cfg, dict) else None) or \
-                     [0.1, 0.3, 0.5, 0.7]
+    pruning_ratios = (
+        getattr(config, "pruning_amounts", None) or (pruning_cfg.get("ratios") if isinstance(pruning_cfg, dict) else None) or [0.1, 0.3, 0.5, 0.7]
+    )
 
     # Pruning distribution / constraints (used by ClusterAnalysisExperiment pruning pipeline)
     pruning_distribution = (
-        getattr(config, "pruning_distribution", None)
-        or (pruning_cfg.get("distribution") if isinstance(pruning_cfg, dict) else None)
-        or "uniform"
+        getattr(config, "pruning_distribution", None) or (pruning_cfg.get("distribution") if isinstance(pruning_cfg, dict) else None) or "uniform"
     )
     dependency_aware_pruning = bool(
         getattr(config, "dependency_aware_pruning", None)
@@ -158,15 +144,14 @@ def _create_cluster_experiment(config):
         if hasattr(config, "pruning_skip_depthwise")
         else (pruning_cfg.get("skip_depthwise", False) if isinstance(pruning_cfg, dict) else False)
     )
-    
+
     # Get fine-tuning settings
     fine_tune_cfg = pruning_cfg.get("fine_tune", {}) if isinstance(pruning_cfg, dict) else {}
-    fine_tune_enabled = getattr(config, "fine_tune_after_pruning", 
-                                fine_tune_cfg.get("enabled", False) if isinstance(fine_tune_cfg, dict) else False)
-    fine_tune_epochs = getattr(config, "fine_tune_epochs",
-                              fine_tune_cfg.get("epochs", 10) if isinstance(fine_tune_cfg, dict) else 10)
-    fine_tune_lr = getattr(config, "fine_tune_learning_rate",
-                          fine_tune_cfg.get("learning_rate", 0.0001) if isinstance(fine_tune_cfg, dict) else 0.0001)
+    fine_tune_enabled = getattr(config, "fine_tune_after_pruning", fine_tune_cfg.get("enabled", False) if isinstance(fine_tune_cfg, dict) else False)
+    fine_tune_epochs = getattr(config, "fine_tune_epochs", fine_tune_cfg.get("epochs", 10) if isinstance(fine_tune_cfg, dict) else 10)
+    fine_tune_lr = getattr(
+        config, "fine_tune_learning_rate", fine_tune_cfg.get("learning_rate", 0.0001) if isinstance(fine_tune_cfg, dict) else 0.0001
+    )
     fine_tune_max_batches = getattr(
         config,
         "fine_tune_max_batches",
@@ -177,15 +162,18 @@ def _create_cluster_experiment(config):
             config,
             "fine_tune_weight_decay",
             fine_tune_cfg.get("weight_decay", 0.0) if isinstance(fine_tune_cfg, dict) else 0.0,
-        ) or 0.0
+        )
+        or 0.0
     )
-    
+
     # Get pruning algorithms/methods
-    pruning_methods = getattr(config, "pruning_strategies", None) or \
-                     (pruning_cfg.get("methods") if isinstance(pruning_cfg, dict) else None) or \
-                     (pruning_cfg.get("algorithms") if isinstance(pruning_cfg, dict) else None) or \
-                     ['random', 'magnitude', 'taylor', 'composite', 'cluster_aware']
-    
+    pruning_methods = (
+        getattr(config, "pruning_strategies", None)
+        or (pruning_cfg.get("methods") if isinstance(pruning_cfg, dict) else None)
+        or (pruning_cfg.get("algorithms") if isinstance(pruning_cfg, dict) else None)
+        or ["random", "magnitude", "taylor", "composite", "cluster_aware"]
+    )
+
     # ClusterAnalysisExperiment consumes the repo-standard ExperimentConfig directly.
     # Keep names from the historical API for minimal downstream churn.
     cluster_config = config
@@ -211,8 +199,7 @@ def _create_cluster_experiment(config):
     # Metric ablation + permutation baseline (vision diagnostics)
     ablation_cfg = clustering_cfg.get("ablation", {}) if isinstance(clustering_cfg, dict) else {}
     run_metric_ablation = bool(
-        getattr(config, "run_metric_ablation", False)
-        or (ablation_cfg.get("enabled", False) if isinstance(ablation_cfg, dict) else False)
+        getattr(config, "run_metric_ablation", False) or (ablation_cfg.get("enabled", False) if isinstance(ablation_cfg, dict) else False)
     )
     metric_ablations = getattr(config, "metric_ablations", None)
     if not metric_ablations and isinstance(ablation_cfg, dict):
@@ -222,8 +209,7 @@ def _create_cluster_experiment(config):
 
     perm_cfg = halo_cfg.get("permutation_baseline", {}) if isinstance(halo_cfg, dict) else {}
     run_permutation_baseline = bool(
-        getattr(config, "run_permutation_baseline", False)
-        or (perm_cfg.get("enabled", False) if isinstance(perm_cfg, dict) else False)
+        getattr(config, "run_permutation_baseline", False) or (perm_cfg.get("enabled", False) if isinstance(perm_cfg, dict) else False)
     )
     n_permutations = getattr(config, "n_permutations", None)
     if n_permutations is None and isinstance(perm_cfg, dict):
@@ -285,12 +271,12 @@ def _create_cluster_experiment(config):
     ):
         if hasattr(config, attr):
             setattr(cluster_config, attr, float(getattr(config, attr)))
-    
+
     # ---------------------------------------------------------------
     # Create model using torchvision + registry-based stem adaptation
     # ---------------------------------------------------------------
-    from alignment.models.hub import adapt_model_for_dataset
     from alignment.dataops.datasets.unified_dataset import DATASET_CONFIGS
+    from alignment.models.hub import adapt_model_for_dataset
 
     model_name = str(cluster_config.model_name).lower()
     dataset_name = str(cluster_config.dataset_name).lower()
@@ -326,9 +312,7 @@ def _create_cluster_experiment(config):
             break
 
     if tv_key is None:
-        raise ValueError(
-            f"Unknown model: {model_name}. Supported: {list(_TORCHVISION_MAP.keys())}"
-        )
+        raise ValueError(f"Unknown model: {model_name}. Supported: {list(_TORCHVISION_MAP.keys())}")
 
     tv_func_name, default_weights = _TORCHVISION_MAP[tv_key]
     tv_func = getattr(torchvision.models, tv_func_name)
@@ -349,16 +333,14 @@ def _create_cluster_experiment(config):
     adapt_model_for_dataset(model, model_name, dataset_name, pretrained=pretrained)
 
     # Optional: explicit checkpoint
-    checkpoint_path = getattr(cluster_config, "model_checkpoint", None) or (
-        model_cfg.get("checkpoint") if isinstance(model_cfg, dict) else None
-    )
+    checkpoint_path = getattr(cluster_config, "model_checkpoint", None) or (model_cfg.get("checkpoint") if isinstance(model_cfg, dict) else None)
 
     # Load checkpoint if available, otherwise model needs to be trained
     if checkpoint_path and os.path.exists(checkpoint_path):
         logger.info(f"Loading model checkpoint from {checkpoint_path}")
-        state_dict = torch.load(checkpoint_path, map_location='cpu')
-        if 'model_state_dict' in state_dict:
-            state_dict = state_dict['model_state_dict']
+        state_dict = torch.load(checkpoint_path, map_location="cpu")
+        if "model_state_dict" in state_dict:
+            state_dict = state_dict["model_state_dict"]
         model.load_state_dict(state_dict)
         needs_training = False
     else:
@@ -376,16 +358,13 @@ def _create_cluster_experiment(config):
     dataset_cfg = getattr(cluster_config, "dataset_config", {}) or {}
     if not isinstance(dataset_cfg, dict):
         dataset_cfg = {}
-    data_path = (
-        dataset_cfg.get("root")
-        or getattr(config, "data_path", None)
-        or "./data"
-    )
+    data_path = dataset_cfg.get("root") or getattr(config, "data_path", None) or "./data"
 
     if dataset_name not in DATASET_CONFIGS:
         raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(DATASET_CONFIGS.keys())}")
 
     from alignment.dataops.datasets.unified_dataset import UnifiedDataset
+
     train_dataset = UnifiedDataset(
         dataset_type=dataset_name,
         data_path=data_path,
@@ -408,12 +387,20 @@ def _create_cluster_experiment(config):
         _dl_kwargs["persistent_workers"] = True
         _dl_kwargs["prefetch_factor"] = 2
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=True, **_dl_kwargs,
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        **_dl_kwargs,
     )
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=batch_size * 2, shuffle=False,
-        num_workers=num_workers, pin_memory=True, **_dl_kwargs,
+        test_dataset,
+        batch_size=batch_size * 2,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        **_dl_kwargs,
     )
 
     # Train/fine-tune the model on target dataset before experiments.
@@ -421,8 +408,8 @@ def _create_cluster_experiment(config):
     do_train = bool(getattr(config, "do_train", True))
     if needs_training and not do_train:
         raise RuntimeError(
-            f"Model checkpoint not found and training is disabled (do_train=false). "
-            f"Provide model.checkpoint/model_checkpoint or enable training in the config."
+            "Model checkpoint not found and training is disabled (do_train=false). "
+            "Provide model.checkpoint/model_checkpoint or enable training in the config."
         )
     if needs_training and do_train:
         model = _finetune_model_for_dataset(
@@ -438,25 +425,26 @@ def _create_cluster_experiment(config):
             scheduler=getattr(config, "scheduler", None),
             scheduler_config=getattr(config, "scheduler_config", {}) or {},
         )
-    
+
     # Save the trained model checkpoint
     # Standard runner sets config.experiment_dir to the job directory.
     output_dir = Path(
-        getattr(cluster_config, "experiment_dir", None)
-        or getattr(cluster_config, "results_path", None)  # legacy
-        or "results/cluster_analysis"
+        getattr(cluster_config, "experiment_dir", None) or getattr(cluster_config, "results_path", None) or "results/cluster_analysis"  # legacy
     )
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True, parents=True)
     trained_checkpoint = checkpoint_dir / "trained_model.pth"
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'model_name': model_name,
-        'dataset_name': dataset_name,
-        'num_classes': num_classes,
-    }, trained_checkpoint)
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "model_name": model_name,
+            "dataset_name": dataset_name,
+            "num_classes": num_classes,
+        },
+        trained_checkpoint,
+    )
     logger.info(f"Saved trained model checkpoint to {trained_checkpoint}")
-    
+
     return ClusterAnalysisExperiment(cluster_config, model, train_loader, test_loader)
 
 
@@ -476,10 +464,10 @@ def _finetune_model_for_dataset(
 ) -> torch.nn.Module:
     """
     Fine-tune a pretrained model on the target dataset.
-    
+
     This is necessary when using ImageNet pretrained models on CIFAR-10/100
     because the classifier head is replaced with random weights.
-    
+
     Args:
         model: Model with replaced classifier head
         train_loader: Training data loader
@@ -487,14 +475,14 @@ def _finetune_model_for_dataset(
         device: Device to train on
         epochs: Number of fine-tuning epochs
         lr: Learning rate
-        
+
     Returns:
         Fine-tuned model
     """
     import torch.optim as optim
-    
+
     model = model.to(device)
-    
+
     # Check initial accuracy
     model.eval()
     correct, total = 0, 0
@@ -505,25 +493,25 @@ def _finetune_model_for_dataset(
             correct += (out.argmax(1) == y).sum().item()
             total += y.size(0)
     initial_acc = correct / total
-    
+
     # If already well-trained, skip fine-tuning (useful when an explicit checkpoint is provided).
     if initial_acc > 0.90:
         logger.info(f"Model already well-trained (accuracy: {initial_acc:.2%}), skipping fine-tuning")
         return model
-    
+
     logger.info(f"Fine-tuning model on target dataset (initial accuracy: {initial_acc:.2%})...")
-    
+
     # Use different learning rates for pretrained vs new layers
     # Freeze early layers, fine-tune later layers + new classifier
     pretrained_params = []
     new_params = []
-    
+
     for name, param in model.named_parameters():
-        if 'fc' in name or 'classifier' in name:
+        if "fc" in name or "classifier" in name:
             new_params.append(param)
         else:
             pretrained_params.append(param)
-    
+
     opt_name = (optimizer_name or "adam").lower()
     if opt_name in {"sgd", "momentum", "sgd_momentum"}:
         optimizer = optim.SGD(
@@ -553,7 +541,7 @@ def _finetune_model_for_dataset(
         )
 
     # Scheduler (optional)
-    sch_name = (str(scheduler).lower() if scheduler is not None else "none")
+    sch_name = str(scheduler).lower() if scheduler is not None else "none"
     scheduler_config = scheduler_config or {}
     if sch_name in {"none", "null", ""}:
         lr_scheduler = None
@@ -565,10 +553,10 @@ def _finetune_model_for_dataset(
         # Default: cosine
         lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = torch.nn.CrossEntropyLoss()
-    
+
     best_acc = 0
     best_state = None
-    
+
     for epoch in range(epochs):
         # Train
         model.train()
@@ -586,7 +574,7 @@ def _finetune_model_for_dataset(
 
         if lr_scheduler is not None:
             lr_scheduler.step()
-        
+
         # Evaluate
         model.eval()
         correct, total = 0, 0
@@ -596,21 +584,21 @@ def _finetune_model_for_dataset(
                 out = model(x)
                 correct += (out.argmax(1) == y).sum().item()
                 total += y.size(0)
-        
+
         acc = correct / total
         if acc > best_acc:
             best_acc = acc
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-        
+
         if (epoch + 1) % 5 == 0 or epoch == 0:
             logger.info(f"  Epoch {epoch+1}/{epochs}: loss={train_loss/len(train_loader):.4f}, acc={acc:.2%}")
-    
+
     # Load best model
     if best_state is not None:
         model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
-    
+
     logger.info(f"Fine-tuning complete. Best accuracy: {best_acc:.2%}")
-    
+
     return model
 
 
@@ -619,12 +607,12 @@ def run_post_analysis(config, results_file: Path, output_dir: Path):
     post_analysis_config = getattr(config, "post_analysis", {})
     if not post_analysis_config:
         return
-    
+
     logger.info("Running post-experiment analysis...")
-    
+
     try:
-        from alignment.analysis import AnalysisRunner, AnalysisConfig
-        
+        from alignment.analysis import AnalysisConfig, AnalysisRunner
+
         # Build analysis config from post_analysis block
         analysis_config = AnalysisConfig(
             results_file=str(results_file),
@@ -640,13 +628,13 @@ def run_post_analysis(config, results_file: Path, output_dir: Path):
             layer_distributions=post_analysis_config.get("layer_distributions", {}),
             scar_analysis=post_analysis_config.get("scar_analysis", {}),
         )
-        
+
         runner = AnalysisRunner(analysis_config)
         outputs = runner.run()
-        
+
         total_files = sum(len(v) for v in outputs.values())
         logger.info(f"Post-analysis complete: generated {total_files} files in {output_dir / 'analysis'}")
-        
+
     except Exception as e:
         logger.error(f"Post-analysis failed: {e}")
 
@@ -654,19 +642,20 @@ def run_post_analysis(config, results_file: Path, output_dir: Path):
 def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
     """
     Regenerate visualizations for LLM experiments from saved results.
-    
+
     Args:
         experiment: LLMAlignmentExperiment instance
         results: Loaded results dictionary from JSON
         output_dir: Output directory for plots
     """
-    import numpy as np
     import matplotlib
-    matplotlib.use('Agg')  # Non-interactive backend
+    import numpy as np
+
+    matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.pyplot as plt
-    
+
     from alignment.analysis.visualization import UnifiedVisualizer
-    
+
     # Determine plots directory
     if (output_dir / "figures").exists():
         plots_dir = output_dir / "figures"
@@ -675,23 +664,23 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
     else:
         plots_dir = output_dir / "figures"
     plots_dir.mkdir(parents=True, exist_ok=True)
-    
+
     viz = UnifiedVisualizer()
-    
+
     # Extract data from results
     importance_scores = results.get("importance_scores", {})
     pruning_results = results.get("pruning_results", {})
     scar_results = results.get("scar_metrics", results.get("scar_scores", {}))
     supernode_results = results.get("supernode_analysis", {})
     halo_results = results.get("halo_analysis", {})
-    
+
     logger.info(f"Regenerating plots to: {plots_dir}")
     logger.info(f"  - Found importance_scores: {bool(importance_scores)}")
     logger.info(f"  - Found pruning_results: {bool(pruning_results)}")
     logger.info(f"  - Found scar_results: {bool(scar_results)}")
     logger.info(f"  - Found supernode_results: {bool(supernode_results)}")
     logger.info(f"  - Found halo_results: {bool(halo_results)}")
-    
+
     # Convert list values back to numpy arrays for plotting
     def to_numpy(data):
         if isinstance(data, list):
@@ -699,15 +688,15 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
         elif isinstance(data, dict):
             return {k: to_numpy(v) for k, v in data.items()}
         return data
-    
+
     importance_scores = to_numpy(importance_scores)
     scar_results = to_numpy(scar_results)
-    
+
     # 1. SCAR metrics plots
     if scar_results:
         scar_plots_dir = plots_dir / "scar"
         scar_plots_dir.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             # Layer-wise SCAR distributions
             for metric_name in ["scar_loss_proxy", "scar_activation_power", "scar_curvature", "scar_taylor"]:
@@ -727,12 +716,12 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
                         logger.debug(f"Could not generate {metric_name} plot: {e}")
         except Exception as e:
             logger.warning(f"Error generating SCAR plots: {e}")
-    
+
     # 2. Pruning comparison plots
     if pruning_results:
         pruning_plots_dir = plots_dir / "pruning"
         pruning_plots_dir.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             # Extract pruning data for visualization
             all_pruning_data = []
@@ -748,7 +737,7 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
                             }
                             if entry["perplexity"] is not None or entry["accuracy"] is not None:
                                 all_pruning_data.append(entry)
-            
+
             if all_pruning_data:
                 # Generate pruning comparison plots
                 fig = viz.plot_pruning_comparison_curves(
@@ -762,24 +751,26 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
                     logger.info("  Generated: pruning_comparison_perplexity.png")
         except Exception as e:
             logger.warning(f"Error generating pruning plots: {e}")
-    
+
     # 3. Redundancy plots (if halo analysis results exist)
     if halo_results:
         redundancy_plots_dir = plots_dir / "redundancy"
         redundancy_plots_dir.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             for layer_name, layer_data in halo_results.items():
                 if isinstance(layer_data, dict):
                     high_vals = layer_data.get("high_connected_redundancy", [])
                     low_vals = layer_data.get("low_connected_redundancy", [])
-                    
+
                     if high_vals and low_vals:
                         high_vals = np.array(high_vals) if isinstance(high_vals, list) else high_vals
                         low_vals = np.array(low_vals) if isinstance(low_vals, list) else low_vals
-                        
+
                         figs = viz.plot_redundancy_comparison(
-                            high_vals, low_vals, layer_name,
+                            high_vals,
+                            low_vals,
+                            layer_name,
                             save_dir=redundancy_plots_dir,
                         )
                         for fig in figs:
@@ -787,12 +778,12 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
                         logger.info(f"  Generated redundancy plots for: {layer_name}")
         except Exception as e:
             logger.warning(f"Error generating redundancy plots: {e}")
-    
+
     # 4. Importance score histograms
     if importance_scores:
         importance_plots_dir = plots_dir / "importance"
         importance_plots_dir.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             for layer_name, layer_metrics in importance_scores.items():
                 if isinstance(layer_metrics, dict):
@@ -801,49 +792,49 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
                             try:
                                 values_np = np.array(values) if isinstance(values, list) else values
                                 fig, ax = plt.subplots(figsize=(10, 6))
-                                ax.hist(values_np.flatten(), bins=50, alpha=0.7, edgecolor='black')
+                                ax.hist(values_np.flatten(), bins=50, alpha=0.7, edgecolor="black")
                                 ax.set_xlabel(metric_name)
                                 ax.set_ylabel("Count")
                                 ax.set_title(f"{metric_name} Distribution\n{layer_name}")
-                                
+
                                 safe_layer = layer_name.replace(".", "_").replace("/", "_")
                                 save_path = importance_plots_dir / f"{metric_name}_{safe_layer}.png"
-                                fig.savefig(save_path, dpi=150, bbox_inches='tight')
+                                fig.savefig(save_path, dpi=150, bbox_inches="tight")
                                 plt.close(fig)
                             except Exception as e:
                                 logger.debug(f"Could not plot {metric_name} for {layer_name}: {e}")
         except Exception as e:
             logger.warning(f"Error generating importance plots: {e}")
-    
+
     logger.info(f"Visualization regeneration complete. Plots saved to: {plots_dir}")
 
 
 def _create_job_directory(config, args, timestamp: str) -> Path:
     """
     Create job directory using the new unified structure.
-    
+
     Priority for base_output_dir:
     1. --output-dir CLI argument (full path)
     2. config.base_output_dir (new field)
     3. config.experiment.output_dir or config.output.dir
     4. Default: ./results
-    
+
     Returns:
         Path to the created job directory.
     """
     from alignment.infrastructure.storage import create_job_directory, get_slurm_job_id
-    
+
     experiment_name = getattr(config, "name", "experiment")
-    
+
     # If --output-dir is given as full path, use it directly
     if args.output_dir:
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
-    
+
     # Check for base_output_dir in config (new unified approach)
     base_output_dir = getattr(config, "base_output_dir", None)
-    
+
     # If base_output_dir is set, use new job directory structure
     if base_output_dir:
         job_id = get_slurm_job_id()  # Will be None for non-SLURM runs
@@ -855,15 +846,15 @@ def _create_job_directory(config, args, timestamp: str) -> Path:
             create_subdirs=True,
         )
         return output_dir
-    
+
     # Fallback to old behavior: results/{name}_{timestamp}
     output_dir = Path(f"results/{experiment_name}_{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create subdirectories for consistency
     for subdir in ["results", "logs", "checkpoints", "figures", "analysis"]:
         (output_dir / subdir).mkdir(exist_ok=True)
-    
+
     return output_dir
 
 
@@ -909,6 +900,7 @@ def main():
     # Example:
     #   python scripts/run_experiment.py --config ... name="llama3_8b_paper_main" supernode.protect_core=false
     from alignment.configs.config_loader import load_config_with_overrides as proper_load_config
+
     cli_overrides = [x for x in (unknown or []) if isinstance(x, str) and "=" in x]
     config = proper_load_config(args.config, overrides=overrides or None, cli_args=cli_overrides or None)
 
@@ -936,7 +928,7 @@ def main():
             print("  - Commit/stash your changes, then rerun")
             print("  - Or rerun with --allow-dirty (will record git diff in the run dir)\n")
             sys.exit(2)
-    
+
     # Override base_output_dir if provided via CLI
     if args.base_output_dir:
         config.base_output_dir = args.base_output_dir
@@ -949,6 +941,7 @@ def main():
     # -------------------------------------------------------------------------
     try:
         import random
+
         import numpy as np
         import torch
 
@@ -976,7 +969,7 @@ def main():
         config.experiment_dir = str(output_dir)
         config.checkpoint_dir = str(output_dir / "checkpoints")
         config.log_dir = str(output_dir / "logs")
-        
+
         # Support both old 'plots' and new 'figures' directory names
         if (output_dir / "figures").exists():
             plots_dir = output_dir / "figures"
@@ -1033,7 +1026,7 @@ def main():
         log_file = logs_subdir / "experiment.log"
     else:
         log_file = output_dir / "experiment.log"
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -1061,10 +1054,12 @@ def main():
         # Cluster-based analysis experiment (works for any architecture)
         experiment = _create_cluster_experiment(config)
     else:
-        raise ValueError(f"Unknown experiment type: {experiment_type}. "
-                        f"Supported types: llm_alignment, llm_supernode, llm, "
-                        f"alignment_analysis, vision_synergy, general_alignment, "
-                        f"cluster_analysis, vision_cluster_analysis, metric_cluster_analysis")
+        raise ValueError(
+            f"Unknown experiment type: {experiment_type}. "
+            f"Supported types: llm_alignment, llm_supernode, llm, "
+            f"alignment_analysis, vision_synergy, general_alignment, "
+            f"cluster_analysis, vision_cluster_analysis, metric_cluster_analysis"
+        )
 
     # Analysis-only mode
     if is_analysis_only:
@@ -1074,11 +1069,11 @@ def main():
             result_files = sorted(results_subdir.glob("results_*.json"))
         else:
             result_files = sorted(output_dir.glob("results_*.json"))
-        
+
         if not result_files:
             raise FileNotFoundError(f"No results_*.json found in {output_dir} or {results_subdir}")
         results_path = result_files[-1]
-        
+
         with results_path.open("r") as f:
             results = json.load(f)
 
@@ -1092,28 +1087,28 @@ def main():
             if getattr(config, "generate_plots", True):
                 experiment._generate_visualizations()
                 logger.info("Regenerated visualizations from existing results")
-            
+
             # Run post-analysis if configured
             run_post_analysis(config, results_path, output_dir)
-        
+
         elif isinstance(experiment, LLMAlignmentExperiment):
             # For LLM experiments, regenerate visualizations from saved results
             logger.info("Regenerating LLM experiment visualizations from saved results...")
-            
+
             # Setup experiment (loads model/tokenizer for any model-dependent plots)
             try:
                 experiment.setup()
             except Exception as e:
                 logger.warning(f"Could not setup model (may not be needed for plots): {e}")
-            
+
             # Regenerate visualizations using the unified visualizer
             if getattr(config, "generate_plots", True):
                 _regenerate_llm_visualizations(experiment, results, output_dir)
                 logger.info("Regenerated LLM visualizations from existing results")
-            
+
             # Run post-analysis if configured
             run_post_analysis(config, results_path, output_dir)
-        
+
         else:
             logger.warning(f"Analysis-only mode not supported for {experiment_type}")
 
@@ -1162,7 +1157,7 @@ def main():
     print(f"  - Configuration: {config_save_path}")
     print(f"  - Results: {results_file}")
     print(f"  - Plots: {plots_dir}/")
-    
+
     # Check for analysis output
     analysis_dir = output_dir / "analysis"
     if analysis_dir.exists():

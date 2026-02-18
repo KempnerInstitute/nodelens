@@ -15,8 +15,8 @@ import torch.nn as nn
 # Skip entire module if transformers not installed
 pytest.importorskip("transformers")
 
-from alignment.experiments.llm_experiments import LLMAlignmentExperiment
 from alignment.experiments.base import ExperimentConfig
+from alignment.experiments.llm_experiments import LLMAlignmentExperiment
 
 
 class _TinySelfAttention(nn.Module):
@@ -36,8 +36,8 @@ class _TinySelfAttention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Not a real attention implementation; sufficient for shape checks.
-        q = self.q_proj(x)
-        k = self.k_proj(x)
+        self.q_proj(x)
+        self.k_proj(x)
         v = self.v_proj(x)
         return self.o_proj(v)
 
@@ -115,6 +115,7 @@ class _Wrapper:
         activations = {}
         for name, module in self._model.named_modules():
             if name in self._tracked_layers:
+
                 def hook(mod, inp, out, key=name):
                     activations[f"{key}_output"] = out.detach()
 
@@ -227,11 +228,11 @@ def test_mlp_pruning_gate_up_down_consistency(tiny_llm_experiment):
     mlp = exp.wrapped_model._model.layers[0].mlp
 
     # gate_proj: mask on output dimension (rows)
-    rows_zero = (mlp.gate_proj.weight.data.abs().sum(dim=1) == 0)
+    rows_zero = mlp.gate_proj.weight.data.abs().sum(dim=1) == 0
     assert torch.all(rows_zero == (~gate_mask.bool()))
 
     # down_proj: corresponding columns should be zero
-    cols_zero = (mlp.down_proj.weight.data.abs().sum(dim=0) == 0)
+    cols_zero = mlp.down_proj.weight.data.abs().sum(dim=0) == 0
     assert torch.all(cols_zero == (~gate_mask.bool()))
 
 
@@ -278,5 +279,3 @@ def test_attention_supernode_core_protection(tiny_llm_experiment):
     assert neuron_mask[0] == 1.0
     head_dim = attn.head_dim
     assert neuron_mask[0:head_dim].min().item() == 1.0
-
-

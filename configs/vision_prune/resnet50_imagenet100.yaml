@@ -13,8 +13,8 @@ model:
   pretrained: true
   num_classes: 100
   weights: IMAGENET1K_V2  # Use torchvision pretrained weights
-  
-# Dataset configuration  
+
+# Dataset configuration
 dataset:
   name: imagenet100
   root: ./data/imagenet100  # Path to ImageNet-100 subset
@@ -29,15 +29,15 @@ dataset:
 # Metric computation
 metrics:
   n_calibration_samples: 5000
-  
+
   # Rayleigh Quotient
   compute_rq: true
   rq_shrinkage: true
-  
+
   # Redundancy (Gaussian pairwise MI)
   compute_redundancy: true
   redundancy_sampling: all
-  
+
   # Synergy with continuous target
   compute_synergy: true
   synergy_target: logit_margin
@@ -51,7 +51,7 @@ clustering:
   normalize_features: true
   compute_stability: true
   n_bootstrap: 30  # Fewer for larger model
-  
+
 # Cross-layer halo analysis
 halo_analysis:
   enabled: true
@@ -70,25 +70,25 @@ cascade_analysis:
 pruning:
   enabled: true
   ratios: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-  
+
   # Comprehensive algorithm list
   algorithms:
     # Baselines
     - random
     - magnitude
     - taylor
-    
+
     # Single metrics - prune LOW
     - rq_low              # Prune low Rayleigh Quotient
     - redundancy_low      # Prune low redundancy (MI)
     - synergy_low         # Prune low synergy
-    
+
     # Single metrics - prune HIGH
     - rq_high             # Prune high RQ
     - redundancy_high     # Prune high redundancy
     - synergy_high        # Prune high synergy
     - magnitude_high      # Prune high magnitude
-    
+
     # Composite combinations
     - composite           # score = RQ + syn - red (original)
     - composite_pos_red   # score = RQ + syn + red (flipped)
@@ -97,22 +97,22 @@ pruning:
     - magnitude_plus_rq   # score = magnitude + RQ
     - magnitude_minus_red # score = magnitude - redundancy
     - magnitude_plus_red  # score = magnitude + redundancy
-    
+
     # Cluster-aware
     - cluster_aware
     - cluster_aware_protect_redundant
-  
+
   fine_tuning:
     epochs: 5  # Fewer epochs for ImageNet
     lr: 0.00001
     weight_decay: 0.0001
-    
+
 # Baselines to compare against
 baselines:
   - magnitude
   - taylor
   - network_slimming
-  
+
 # Visualization
 visualization:
   enabled: true
@@ -131,7 +131,7 @@ output:
   save_metrics: true
   save_clusters: true
   save_figures: true
-  
+
 # Hardware
 device: cuda
 seed: 42

@@ -202,7 +202,7 @@ from alignment.analysis.visualization import (
 )
 
 # Metric space scatter (RQ vs Red, RQ vs Syn, Red vs Syn)
-plot_metric_scatter(rq, redundancy, synergy, labels, type_mapping, 
+plot_metric_scatter(rq, redundancy, synergy, labels, type_mapping,
                    layer_name, save_path)
 
 # Cluster composition across depth

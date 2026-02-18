@@ -6,26 +6,26 @@ This section contains the complete API reference for the alignment framework.
 .. toctree::
    :maxdepth: 2
    :caption: Core APIs
-   
+
    core
    models
    metrics
    experiments
    pruning
-   
+
 .. toctree::
    :maxdepth: 2
    :caption: Supporting APIs
-   
+
    data
    training
    analysis
    infrastructure
-   
+
 .. toctree::
    :maxdepth: 1
    :caption: Utilities
-   
+
    utils
 
 Module Overview
@@ -83,4 +83,4 @@ Key Functions
 - :func:`alignment.core.get_experiment` - Get experiment by type
 - :func:`alignment.core.list_metrics` - List available metrics
 - :func:`alignment.infrastructure.configuration.load_config` - Load YAML config
-- :func:`alignment.analysis.load_results` - Load experiment results 
+- :func:`alignment.analysis.load_results` - Load experiment results

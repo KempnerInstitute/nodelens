@@ -12,13 +12,12 @@ import pytest
 
 from alignment.experiments.cluster_experiments import _CovAccumulator, _VarAccumulator
 
-
 # ---------------------------------------------------------------------------
 # Tests: _CovAccumulator
 # ---------------------------------------------------------------------------
 
-class TestCovAccumulator:
 
+class TestCovAccumulator:
     def test_streaming_matches_batch_covariance(self):
         """Streaming accumulation should match batch np.cov."""
         rng = np.random.default_rng(42)
@@ -34,7 +33,7 @@ class TestCovAccumulator:
         acc = _CovAccumulator(c)
         chunk_size = 20
         for i in range(0, n, chunk_size):
-            acc.update(y[i:i+chunk_size], t[i:i+chunk_size])
+            acc.update(y[i : i + chunk_size], t[i : i + chunk_size])
 
         var_t, var_y, cov_yy, cov_ty = acc.finalize()
 
@@ -97,8 +96,8 @@ class TestCovAccumulator:
 # Tests: _VarAccumulator
 # ---------------------------------------------------------------------------
 
-class TestVarAccumulator:
 
+class TestVarAccumulator:
     def test_streaming_matches_np_var(self):
         rng = np.random.default_rng(42)
         n, c = 200, 5
@@ -107,7 +106,7 @@ class TestVarAccumulator:
         acc = _VarAccumulator(c)
         chunk = 25
         for i in range(0, n, chunk):
-            acc.update(y[i:i+chunk])
+            acc.update(y[i : i + chunk])
 
         var = acc.variance()
         np.testing.assert_allclose(var, np.var(y, axis=0, ddof=1), atol=1e-10)

@@ -107,7 +107,7 @@ class BasePruningStrategy(ABC):
             # This avoids issues with ties at threshold values that can cause non-monotonic behavior
             flat_scores = aggregated_scores.flatten()
             mask = torch.ones(flat_scores.numel(), dtype=torch.bool, device=aggregated_scores.device)
-            
+
             if pruning_mode == "random":
                 # Random selection of structures
                 indices = torch.randperm(flat_scores.numel(), device=flat_scores.device)[:k]
@@ -117,7 +117,7 @@ class BasePruningStrategy(ABC):
             else:  # pruning_mode == 'high'
                 # Prune k neurons with HIGHEST scores (keep low-scoring neurons)
                 _, indices = torch.topk(flat_scores, k, largest=True)
-            
+
             mask[indices] = False
 
             # Expand mask to original shape
@@ -135,7 +135,7 @@ class BasePruningStrategy(ABC):
             # Use topk-based selection to guarantee exactly k weights are pruned
             # This avoids issues with ties at threshold values
             mask = torch.ones(importance_flat.numel(), dtype=torch.bool, device=importance_scores.device)
-            
+
             if pruning_mode == "random":
                 # Random selection of weights
                 indices = torch.randperm(importance_flat.numel(), device=importance_flat.device)[:k]
@@ -145,7 +145,7 @@ class BasePruningStrategy(ABC):
             else:  # pruning_mode == 'high'
                 # Prune k weights with HIGHEST scores (keep low-scoring weights)
                 _, indices = torch.topk(importance_flat, k, largest=True)
-            
+
             mask[indices] = False
             mask = mask.view(importance_scores.shape)
 
@@ -159,7 +159,7 @@ class BasePruningStrategy(ABC):
             module: Module to prune (must have .weight)
             mask: Binary mask to apply (1D or same shape as weights)
             make_permanent: If True, apply pruning permanently (no hooks)
-            dim: 'input', 'output', or 'auto' (default). 
+            dim: 'input', 'output', or 'auto' (default).
                 - 'output': prunes rows (out_features)
                 - 'input': prunes columns (in_features)
                 - 'auto': infers based on mask size and weight shape
@@ -168,7 +168,7 @@ class BasePruningStrategy(ABC):
             raise ValueError(f"Module {module} does not have a weight parameter")
 
         weight = module.weight.data
-        
+
         # Move mask to same device as weight (important for multi-GPU models)
         mask = mask.to(weight.device)
 
@@ -181,8 +181,7 @@ class BasePruningStrategy(ABC):
                     dim = "input"
                 else:
                     raise ValueError(
-                        f"Mask length {mask.numel()} doesn't match weight shape {tuple(weight.shape)} "
-                        f"for module {module.__class__.__name__}"
+                        f"Mask length {mask.numel()} doesn't match weight shape {tuple(weight.shape)} " f"for module {module.__class__.__name__}"
                     )
             if dim == "output":
                 # Linear: [out, in] -> mask[:, None]
@@ -203,9 +202,7 @@ class BasePruningStrategy(ABC):
         elif mask.shape == weight.shape:
             mask_applied = mask
         else:
-            raise ValueError(
-                f"Mask shape {tuple(mask.shape)} not compatible with weight shape {tuple(weight.shape)}"
-            )
+            raise ValueError(f"Mask shape {tuple(mask.shape)} not compatible with weight shape {tuple(weight.shape)}")
 
         # Apply mask permanently or with hooks
         if make_permanent:
@@ -239,7 +236,6 @@ class BasePruningStrategy(ABC):
         module._pruning_hook = module.register_forward_pre_hook(apply_mask_hook)
         module._gradient_hook_handle = module.weight.register_hook(mask_gradient_hook)
 
-
     def remove_pruning(self, module: nn.Module):
         """
         Remove pruning from a module (make pruning permanent).
@@ -265,12 +261,12 @@ class BasePruningStrategy(ABC):
         if hasattr(module, "_gradient_hook_handle"):
             module._gradient_hook_handle.remove()
             delattr(module, "_gradient_hook_handle")
-    
+
     def clear_pruning_state(self, module: nn.Module):
         """
         Clear all pruning state from a module WITHOUT making pruning permanent.
         This allows a fresh pruning to be applied later.
-        
+
         Args:
             module: Module to clear pruning state from
         """
@@ -282,11 +278,11 @@ class BasePruningStrategy(ABC):
         if hasattr(module, "_gradient_hook_handle"):
             module._gradient_hook_handle.remove()
             delattr(module, "_gradient_hook_handle")
-        
+
         # Remove buffers (original weight and mask)
         if hasattr(module, "_original_weight"):
             delattr(module, "_original_weight")
-        
+
         if hasattr(module, "weight_mask"):
             delattr(module, "weight_mask")
 
@@ -334,16 +330,16 @@ class BasePruningStrategy(ABC):
 class PrecomputedScorePruning(BasePruningStrategy):
     """
     Pruning strategy for use with pre-computed importance scores.
-    
+
     This is a concrete implementation that doesn't compute scores itself,
     but can apply masks and pruning using externally computed importance scores
     (e.g., from SCAR metrics or other analysis methods).
     """
-    
+
     def compute_importance_scores(self, module: nn.Module, inputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         """
         Not used for pre-computed scores - raises error if called.
-        
+
         For PrecomputedScorePruning, importance scores should be passed directly
         to create_pruning_mask() rather than computed here.
         """

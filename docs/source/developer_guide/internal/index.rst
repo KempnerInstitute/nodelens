@@ -5,7 +5,7 @@ This section contains internal documentation about the codebase organization and
 
 .. toctree::
    :maxdepth: 1
-   
+
    CODEBASE_ORGANIZATION
    DOCUMENTATION_OVERVIEW
    DOCUMENTATION_STRUCTURE
@@ -21,4 +21,4 @@ These documents provide guidance for maintainers and contributors:
 - **Documentation Structure**: How documentation is organized across the project
 - **GitHub Pages Setup**: Instructions for setting up and maintaining the documentation site
 
-These are primarily for maintainers and contributors who need to understand the codebase structure and documentation system. 
+These are primarily for maintainers and contributors who need to understand the codebase structure and documentation system.

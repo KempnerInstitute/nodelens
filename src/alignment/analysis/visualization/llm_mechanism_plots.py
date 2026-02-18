@@ -15,10 +15,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
-import matplotlib as mpl
 import numpy as np
 import torch
-from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Rectangle
+from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +258,7 @@ def plot_halo_structure_improved(
       (B) Per-layer halo/non-halo ratio bars
       (C) Aggregate comparison
       (D) Ratio distribution across layers
-    
+
     Args:
         conn_values: Connectivity scores for halo channels
         redundancy_values: Redundancy-to-core values for halo channels
@@ -274,23 +273,22 @@ def plot_halo_structure_improved(
         save_path: Optional path to save figure
         dpi: Resolution
     """
-    import scipy.stats as stats
-    
+
     conn_np = _to_numpy(conn_values).astype(np.float64).ravel()
     red_np = _to_numpy(redundancy_values).astype(np.float64).ravel()
     halo_np = _to_numpy(is_halo).astype(bool).ravel()
-    
+
     # Filter to finite values in halo region
     valid = np.isfinite(conn_np) & np.isfinite(red_np) & (red_np > 0) & halo_np
     conn_h = conn_np[valid]
     red_h = red_np[valid]
-    
-    fig, axes = plt.subplots(1, 4, figsize=(10.5, 2.6), gridspec_kw={'width_ratios': [1.2, 1, 0.8, 1]})
-    
+
+    fig, axes = plt.subplots(1, 4, figsize=(10.5, 2.6), gridspec_kw={"width_ratios": [1.2, 1, 0.8, 1]})
+
     # ========== Panel A: Binned Conn vs Redundancy ==========
     ax = axes[0]
     ax.text(0.02, 0.98, "(A)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    
+
     if conn_h.size >= 20:
         # Bin by connectivity percentiles
         bin_edges = np.percentile(conn_h, np.linspace(0, 100, n_bins + 1))
@@ -298,29 +296,29 @@ def plot_halo_structure_improved(
         bin_means = []
         bin_ci_low = []
         bin_ci_high = []
-        
+
         for i in range(n_bins):
-            mask = (conn_h >= bin_edges[i]) & (conn_h < bin_edges[i+1])
+            mask = (conn_h >= bin_edges[i]) & (conn_h < bin_edges[i + 1])
             if i == n_bins - 1:  # Include right edge in last bin
-                mask = (conn_h >= bin_edges[i]) & (conn_h <= bin_edges[i+1])
-            
+                mask = (conn_h >= bin_edges[i]) & (conn_h <= bin_edges[i + 1])
+
             if mask.sum() >= 3:
                 bin_red = red_h[mask]
-                bin_centers.append((bin_edges[i] + bin_edges[i+1]) / 2)
+                bin_centers.append((bin_edges[i] + bin_edges[i + 1]) / 2)
                 bin_means.append(np.mean(bin_red))
                 # 95% CI via bootstrap or t-distribution
                 sem = np.std(bin_red, ddof=1) / np.sqrt(len(bin_red))
                 t_crit = 1.96  # Approx for large n
                 bin_ci_low.append(np.mean(bin_red) - t_crit * sem)
                 bin_ci_high.append(np.mean(bin_red) + t_crit * sem)
-        
+
         bin_centers = np.array(bin_centers)
         bin_means = np.array(bin_means)
         bin_ci_low = np.array(bin_ci_low)
         bin_ci_high = np.array(bin_ci_high)
-        
+
         ax.fill_between(bin_centers, bin_ci_low, bin_ci_high, alpha=0.3, color="#1f77b4")
-        ax.plot(bin_centers, bin_means, 'o-', color="#1f77b4", linewidth=2, markersize=5)
+        ax.plot(bin_centers, bin_means, "o-", color="#1f77b4", linewidth=2, markersize=5)
         ax.set_xlabel(r"Connectivity $\mathrm{Conn}$")
         ax.set_ylabel(r"Redundancy (mean $\pm$ 95% CI)")
         ax.set_title("Conn vs Redundancy\n(binned means)", fontsize=10)
@@ -331,62 +329,61 @@ def plot_halo_structure_improved(
         ax.set_ylabel(r"Redundancy")
         ax.set_title("Conn vs Redundancy", fontsize=10)
     ax.grid(True, alpha=0.25)
-    
+
     # ========== Panel B: Per-layer ratio bars ==========
     ax = axes[1]
     ax.text(0.02, 0.98, "(B)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    
+
     if per_layer_halo_means is not None and per_layer_nonhalo_means is not None:
         halo_arr = np.asarray(per_layer_halo_means, dtype=np.float64)
         nonhalo_arr = np.asarray(per_layer_nonhalo_means, dtype=np.float64)
         layers = np.asarray(layer_indices if layer_indices is not None else np.arange(len(halo_arr)))
-        
+
         # Use pre-computed ratios if available, else compute
         if per_layer_ratios is not None:
             ratios = np.asarray(per_layer_ratios, dtype=np.float64)
         else:
             ratios = halo_arr / np.maximum(nonhalo_arr, 1e-12)
-        
+
         valid_mask = np.isfinite(ratios) & (ratios > 0)
-        
-        colors = ['#ff7f0e' if r > 1.0 else '#7f8c8d' for r in ratios[valid_mask]]
-        ax.bar(layers[valid_mask], ratios[valid_mask], color=colors, alpha=0.8, edgecolor='none')
-        ax.axhline(y=1.0, color='#c0392b', linestyle='--', linewidth=1.5, label='No enrichment')
+
+        colors = ["#ff7f0e" if r > 1.0 else "#7f8c8d" for r in ratios[valid_mask]]
+        ax.bar(layers[valid_mask], ratios[valid_mask], color=colors, alpha=0.8, edgecolor="none")
+        ax.axhline(y=1.0, color="#c0392b", linestyle="--", linewidth=1.5, label="No enrichment")
         ax.set_xlabel("Layer")
         ax.set_ylabel("Halo/Non-halo ratio")
         ax.set_title("Ratio by Layer", fontsize=10)
-        ax.legend(fontsize=7, loc='upper right')
+        ax.legend(fontsize=7, loc="upper right")
     else:
-        ax.text(0.5, 0.5, "No per-layer data", ha='center', va='center', transform=ax.transAxes)
-    ax.grid(True, alpha=0.25, axis='y')
-    
+        ax.text(0.5, 0.5, "No per-layer data", ha="center", va="center", transform=ax.transAxes)
+    ax.grid(True, alpha=0.25, axis="y")
+
     # ========== Panel C: Aggregate comparison ==========
     ax = axes[2]
     ax.text(0.02, 0.98, "(C)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    
+
     if aggregate_halo_mean is not None and aggregate_nonhalo_mean is not None:
         x_pos = [0, 1]
         vals = [aggregate_halo_mean, aggregate_nonhalo_mean]
-        colors = ['#ff7f0e', '#7f8c8d']
-        bars = ax.bar(x_pos, vals, color=colors, alpha=0.85, width=0.6, edgecolor='none')
+        colors = ["#ff7f0e", "#7f8c8d"]
+        ax.bar(x_pos, vals, color=colors, alpha=0.85, width=0.6, edgecolor="none")
         ax.set_xticks(x_pos)
-        ax.set_xticklabels(['Halo', 'Non-halo'], fontsize=9)
+        ax.set_xticklabels(["Halo", "Non-halo"], fontsize=9)
         ax.set_ylabel("Mean Redundancy")
         ax.set_title("Aggregate", fontsize=10)
-        
+
         # Annotate ratio
         if aggregate_nonhalo_mean > 0:
             ratio = aggregate_halo_mean / aggregate_nonhalo_mean
-            ax.text(0.5, 0.95, f"{ratio:.2f}×", ha='center', va='top', 
-                   transform=ax.transAxes, fontsize=10, fontweight='bold', color='#2c3e50')
+            ax.text(0.5, 0.95, f"{ratio:.2f}×", ha="center", va="top", transform=ax.transAxes, fontsize=10, fontweight="bold", color="#2c3e50")
     else:
-        ax.text(0.5, 0.5, "No aggregate data", ha='center', va='center', transform=ax.transAxes)
-    ax.grid(True, alpha=0.25, axis='y')
-    
+        ax.text(0.5, 0.5, "No aggregate data", ha="center", va="center", transform=ax.transAxes)
+    ax.grid(True, alpha=0.25, axis="y")
+
     # ========== Panel D: Ratio distribution ==========
     ax = axes[3]
     ax.text(0.02, 0.98, "(D)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    
+
     if per_layer_ratios is not None or (per_layer_halo_means is not None and per_layer_nonhalo_means is not None):
         if per_layer_ratios is not None:
             ratios = np.asarray(per_layer_ratios, dtype=np.float64)
@@ -394,24 +391,22 @@ def plot_halo_structure_improved(
             halo_arr = np.asarray(per_layer_halo_means, dtype=np.float64)
             nonhalo_arr = np.asarray(per_layer_nonhalo_means, dtype=np.float64)
             ratios = halo_arr / np.maximum(nonhalo_arr, 1e-12)
-        
+
         ratios = ratios[np.isfinite(ratios) & (ratios > 0)]
-        
+
         if ratios.size > 0:
-            ax.hist(ratios, bins=15, color='#ff7f0e', alpha=0.7, edgecolor='white')
-            ax.axvline(x=1.0, color='#2c3e50', linestyle=':', linewidth=2, label='Baseline (1×)')
-            ax.axvline(x=np.mean(ratios), color='#c0392b', linestyle='-', linewidth=2, 
-                      label=f'Mean: {np.mean(ratios):.2f}×')
-            ax.axvline(x=np.median(ratios), color='#3498db', linestyle='--', linewidth=2, 
-                      label=f'Median: {np.median(ratios):.2f}×')
+            ax.hist(ratios, bins=15, color="#ff7f0e", alpha=0.7, edgecolor="white")
+            ax.axvline(x=1.0, color="#2c3e50", linestyle=":", linewidth=2, label="Baseline (1×)")
+            ax.axvline(x=np.mean(ratios), color="#c0392b", linestyle="-", linewidth=2, label=f"Mean: {np.mean(ratios):.2f}×")
+            ax.axvline(x=np.median(ratios), color="#3498db", linestyle="--", linewidth=2, label=f"Median: {np.median(ratios):.2f}×")
             ax.set_xlabel("Halo/Non-Halo Ratio")
             ax.set_ylabel("Count (layers)")
             ax.set_title("Ratio Distribution", fontsize=10)
-            ax.legend(fontsize=7, loc='upper right')
+            ax.legend(fontsize=7, loc="upper right")
     else:
-        ax.text(0.5, 0.5, "No ratio data", ha='center', va='center', transform=ax.transAxes)
-    ax.grid(True, alpha=0.25, axis='y')
-    
+        ax.text(0.5, 0.5, "No ratio data", ha="center", va="center", transform=ax.transAxes)
+    ax.grid(True, alpha=0.25, axis="y")
+
     plt.tight_layout()
     if save_path is not None:
         _save(fig, save_path, dpi=dpi)
@@ -886,7 +881,7 @@ def plot_main_schematic(
             color = C_REG
             lw = 2.0
         ax.plot([xi, xi], [0.28, 0.72], color=color, linewidth=lw, solid_capstyle="round", alpha=0.95)
-    
+
     # Add subtle grouping rectangle around halo channels
     halo_x_min = xs[3] - 0.012
     halo_x_max = xs[7] + 0.012
@@ -927,11 +922,11 @@ def plot_main_schematic(
     left_y = [0.85, 0.72, 0.58, 0.44, 0.30]
     left_c = [C_REG, C_HALO, C_SUP, C_HALO, C_REG]
     left_labels = ["", "W", "S", "W", ""]
-    
+
     # Shared support / residual stream (center)
     center_x = 0.50
     center_y = [0.70, 0.55, 0.40]
-    
+
     # Layer ℓ+1 (right): read halos + regular
     right_x = 0.88
     right_y = [0.78, 0.58, 0.38]
@@ -957,7 +952,7 @@ def plot_main_schematic(
         ax.add_patch(Circle((left_x, y), 0.035, facecolor=c, edgecolor="white" if c != C_REG else "#95a5a6", linewidth=1.2))
         if lbl:
             ax.text(left_x, y, lbl, ha="center", va="center", fontsize=7, fontweight="bold", color="white")
-    
+
     # Layer ℓ label
     ax.text(left_x, 0.16, r"Layer $\ell$", ha="center", va="center", fontsize=9, fontweight="bold", color=C_INK)
 
@@ -997,7 +992,7 @@ def plot_main_schematic(
         ax.add_patch(Circle((right_x, y), 0.035, facecolor=c, edgecolor="white" if c != C_REG else "#95a5a6", linewidth=1.2))
         if lbl:
             ax.text(right_x, y, lbl, ha="center", va="center", fontsize=7, fontweight="bold", color="white")
-    
+
     # Layer ℓ+1 label
     ax.text(right_x, 0.16, r"Layer $\ell{+}1$", ha="center", va="center", fontsize=9, fontweight="bold", color=C_INK)
 
@@ -1008,13 +1003,28 @@ def plot_main_schematic(
         ls = "-" if c == C_SUP else "--"
         lw = 1.8 if c == C_SUP else 1.2
         for yy in center_y:
-            ax.add_patch(FancyArrowPatch((left_x + 0.04, y), (center_x - 0.03, yy), arrowstyle="->", linewidth=lw, linestyle=ls, color=c, alpha=0.45, mutation_scale=7))
+            ax.add_patch(
+                FancyArrowPatch(
+                    (left_x + 0.04, y), (center_x - 0.03, yy), arrowstyle="->", linewidth=lw, linestyle=ls, color=c, alpha=0.45, mutation_scale=7
+                )
+            )
 
     # Draw read connections (center to right) - only to read halos
     for y, c in zip(right_y, right_c):
         if c == C_READ:
             for yy in center_y:
-                ax.add_patch(FancyArrowPatch((center_x + 0.03, yy), (right_x - 0.04, y), arrowstyle="->", linewidth=1.2, linestyle="-", color=c, alpha=0.45, mutation_scale=7))
+                ax.add_patch(
+                    FancyArrowPatch(
+                        (center_x + 0.03, yy),
+                        (right_x - 0.04, y),
+                        arrowstyle="->",
+                        linewidth=1.2,
+                        linestyle="-",
+                        color=c,
+                        alpha=0.45,
+                        mutation_scale=7,
+                    )
+                )
 
     # Weight labels
     ax.text(0.31, 0.88, r"$W_{\mathrm{down}}$", ha="center", va="center", fontsize=8, color=C_INK)
@@ -1055,7 +1065,7 @@ def plot_supernode_hit_rate_vs_ppl(
 
     # Filter valid points
     finite = np.isfinite(xs) & np.isfinite(ys) & (ys > 0)
-    labs_f = [l for l, ok in zip(labs, finite) if ok]
+    labs_f = [label for label, ok in zip(labs, finite) if ok]
     xs = xs[finite]
     ys = ys[finite]
 
@@ -1088,13 +1098,17 @@ def plot_supernode_hit_rate_vs_ppl(
     ax.grid(True, alpha=0.25, linewidth=0.6)
 
     # Annotate only a small, pre-chosen subset (avoids clutter).
-    annotate = list(annotate) if annotate is not None else [
-        "SCAR-Prot",
-        "Act-L2 (channel)",
-        "Wanda (channel)",
-        "SparseGPT (channel)",
-        "Magnitude (channel)",
-    ]
+    annotate = (
+        list(annotate)
+        if annotate is not None
+        else [
+            "SCAR-Prot",
+            "Act-L2 (channel)",
+            "Wanda (channel)",
+            "SparseGPT (channel)",
+            "Magnitude (channel)",
+        ]
+    )
     for i, label in enumerate(labs_f):
         if label not in annotate:
             continue
@@ -1166,7 +1180,7 @@ def plot_supernode_hit_rate_dose_response(
         logy = np.log10(yb)
         mu = float(np.mean(logy))
         sd = float(np.std(logy)) if logy.size > 1 else 0.0
-        y_mu = 10 ** mu
+        y_mu = 10**mu
         y_lo = 10 ** (mu - sd)
         y_hi = 10 ** (mu + sd)
         mean_x.append(float(xb))
@@ -1382,7 +1396,7 @@ def plot_lp_retrieval_validation(
 
         # Random baseline = expected overlap
         prec_rand.append(k)  # E[precision] = k for random
-        rec_rand.append(k)   # E[recall] = k for random
+        rec_rand.append(k)  # E[recall] = k for random
 
         # Activation power predictions
         if ap_arr is not None:
@@ -1471,10 +1485,10 @@ def plot_lp_vs_ablation_improved(
 ) -> plt.Figure:
     """
     Improved LP validation with 2 panels showing clear relationships.
-    
+
       (a) LP percentile vs mean |ΔNLL| (bar chart showing trend)
       (b) Tail retrieval: hit rate for top-k% by LP vs random
-    
+
     Key improvement: Uses bar charts and hit rates instead of noisy scatter.
     """
     lp_arr = np.asarray(list(lp), dtype=np.float64).reshape(-1)
@@ -1482,24 +1496,24 @@ def plot_lp_vs_ablation_improved(
     m = min(lp_arr.size, dn_arr.size)
     lp_arr = lp_arr[:m]
     dn_arr = dn_arr[:m]
-    
+
     mask = np.isfinite(lp_arr) & np.isfinite(dn_arr) & (lp_arr > 0)
     lp_filt = lp_arr[mask]
     dn_filt = dn_arr[mask]
     n = lp_filt.size
     abs_dnll = np.abs(dn_filt)
-    
+
     fig, axes = plt.subplots(1, 2, figsize=(7.5, 2.8))
-    
+
     # ========== Panel A: LP percentile vs mean |ΔNLL| ==========
     ax = axes[0]
     ax.text(0.02, 0.98, "(a)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    
+
     if n < 10:
-        ax.text(0.5, 0.5, "Insufficient data", ha='center', va='center', transform=ax.transAxes)
+        ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", transform=ax.transAxes)
     else:
         lp_percentiles = np.percentile(lp_filt, [0, 25, 50, 75, 90, 95, 99, 100])
-        labels = ['0-25%', '25-50%', '50-75%', '75-90%', '90-95%', '95-99%', 'Top 1%']
+        labels = ["0-25%", "25-50%", "50-75%", "75-90%", "90-95%", "95-99%", "Top 1%"]
         means, stds = [], []
         for i in range(len(lp_percentiles) - 1):
             if i == len(lp_percentiles) - 2:
@@ -1512,25 +1526,25 @@ def plot_lp_vs_ablation_improved(
             else:
                 means.append(0)
                 stds.append(0)
-        
+
         x = np.arange(len(labels))
-        colors = ['#95a5a6'] * 4 + ['#f39c12'] * 2 + ['#c0392b']
-        ax.bar(x, means, yerr=stds, capsize=3, color=colors, alpha=0.85, edgecolor='none')
+        colors = ["#95a5a6"] * 4 + ["#f39c12"] * 2 + ["#c0392b"]
+        ax.bar(x, means, yerr=stds, capsize=3, color=colors, alpha=0.85, edgecolor="none")
         ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
-        ax.set_ylabel(r'Mean $|\Delta\mathrm{NLL}|$', fontsize=9)
-        ax.set_title('LP percentile vs ablation effect', fontsize=10)
-        ax.grid(True, alpha=0.25, axis='y')
-    
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+        ax.set_ylabel(r"Mean $|\Delta\mathrm{NLL}|$", fontsize=9)
+        ax.set_title("LP percentile vs ablation effect", fontsize=10)
+        ax.grid(True, alpha=0.25, axis="y")
+
     # ========== Panel B: Tail hit rate ==========
     ax = axes[1]
     ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    
+
     if n >= 10:
         k_values = [1, 2, 5, 10, 20]
         lp_rank = np.argsort(-lp_filt)
         dnll_rank = np.argsort(-abs_dnll)
-        
+
         hit_rates, expected_random = [], []
         for k in k_values:
             top_k = max(1, int(round(k / 100 * n)))
@@ -1539,27 +1553,26 @@ def plot_lp_vs_ablation_improved(
             overlap = len(lp_top & dnll_top)
             hit_rates.append(overlap / top_k)
             expected_random.append(k / 100)
-        
+
         xb = np.arange(len(k_values))
         width = 0.35
-        ax.bar(xb - width / 2, hit_rates, width, label='LP', color='#2c3e50', alpha=0.85)
-        ax.bar(xb + width / 2, expected_random, width, label='Random', color='#95a5a6', alpha=0.6)
+        ax.bar(xb - width / 2, hit_rates, width, label="LP", color="#2c3e50", alpha=0.85)
+        ax.bar(xb + width / 2, expected_random, width, label="Random", color="#95a5a6", alpha=0.6)
         ax.set_xticks(xb)
-        ax.set_xticklabels([f'Top {k}%' for k in k_values], fontsize=8)
-        ax.set_ylabel('Hit rate', fontsize=9)
-        ax.set_title(r'LP retrieves high-$|\Delta\mathrm{NLL}|$', fontsize=10)
-        ax.legend(fontsize=7, loc='upper right')
+        ax.set_xticklabels([f"Top {k}%" for k in k_values], fontsize=8)
+        ax.set_ylabel("Hit rate", fontsize=9)
+        ax.set_title(r"LP retrieves high-$|\Delta\mathrm{NLL}|$", fontsize=10)
+        ax.legend(fontsize=7, loc="upper right")
         ax.set_ylim(0, max(0.65, max(hit_rates) * 1.15))
-        ax.grid(True, alpha=0.25, axis='y')
-        
+        ax.grid(True, alpha=0.25, axis="y")
+
         for i, (hr, er) in enumerate(zip(hit_rates, expected_random)):
             if hr > er and er > 0:
                 improvement = hr / er
-                ax.text(xb[i] - width / 2, hr + 0.02, f'{improvement:.1f}x', ha='center', va='bottom', 
-                       fontsize=7, fontweight='bold', color='#27ae60')
+                ax.text(xb[i] - width / 2, hr + 0.02, f"{improvement:.1f}x", ha="center", va="bottom", fontsize=7, fontweight="bold", color="#27ae60")
     else:
-        ax.text(0.5, 0.5, "Insufficient data", ha='center', va='center', transform=ax.transAxes)
-    
+        ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", transform=ax.transAxes)
+
     plt.tight_layout()
     if save_path is not None:
         _save(fig, save_path, dpi=dpi)
@@ -1627,10 +1640,10 @@ def plot_lp_vs_magnitude_controls(
     # (b) correlation summary as bar chart (Spearman on log space)
     ax = axes[1]
     ax.text(0.02, 0.98, "(b)", transform=ax.transAxes, ha="left", va="top", fontsize=10, fontweight="bold")
-    
+
     labels: List[str] = []
     values: List[float] = []
-    
+
     labels.append("ActPower")
     values.append(_spearman_np(y, x))
 
@@ -1649,18 +1662,19 @@ def plot_lp_vs_magnitude_controls(
         gn = np.log10(np.maximum(gn, 0.0) + eps)
         labels.append(r"$\|W_{\mathrm{gate}}[i]\|$")
         values.append(_spearman_np(y, gn))
-    
+
     # Create bar chart
     x_pos = np.arange(len(labels))
     colors = ["#27ae60" if v > 0.15 else "#3498db" if v > 0 else "#e74c3c" for v in values]
     bars = ax.bar(x_pos, values, color=colors, edgecolor="#2c3e50", linewidth=0.8, alpha=0.85)
-    
+
     # Add value labels on bars
     for i, (bar, val) in enumerate(zip(bars, values)):
         y_pos = val + 0.02 if val >= 0 else val - 0.05
-        ax.text(bar.get_x() + bar.get_width()/2, y_pos, f"{val:+.2f}", 
-                ha="center", va="bottom" if val >= 0 else "top", fontsize=8, fontweight="bold")
-    
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, y_pos, f"{val:+.2f}", ha="center", va="bottom" if val >= 0 else "top", fontsize=8, fontweight="bold"
+        )
+
     ax.set_xticks(x_pos)
     ax.set_xticklabels(labels, fontsize=8.5, rotation=15, ha="right")
     ax.set_ylabel(r"Spearman $\rho$ with LP", fontsize=9)
@@ -1803,9 +1817,16 @@ def plot_read_halo_dependence_summary(
         # Add ratio annotation
         if len(deciles) >= 2:
             ratio = deciles[-1] / deciles[0] if deciles[0] > 0 else float("inf")
-            ax.text(0.95, 0.95, f"Top/Bottom = {ratio:.1f}×",
-                    transform=ax.transAxes, ha="right", va="top", fontsize=9,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#bdc3c7"))
+            ax.text(
+                0.95,
+                0.95,
+                f"Top/Bottom = {ratio:.1f}×",
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#bdc3c7"),
+            )
     else:
         ax.plot(layers, mh, "o-", color="#f39c12", linewidth=2.0, markersize=3.5, label="Top ReadConn decile")
         ax.plot(layers, mr, "o--", color="#95a5a6", linewidth=1.8, markersize=3.0, label="Bottom decile")
@@ -1873,4 +1894,3 @@ def plot_conditional_halo_ablation(
     if save_path is not None:
         _save(fig, save_path, dpi=dpi)
     return fig
-

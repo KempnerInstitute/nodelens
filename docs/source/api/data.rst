@@ -46,4 +46,4 @@ Data Utilities
 .. automodule:: alignment.data.utils
    :members:
    :undoc-members:
-   :show-inheritance: 
+   :show-inheritance:

@@ -67,22 +67,22 @@ Here's how to create and register a custom alignment metric:
    class ActivationKurtosis(BaseMetric):
        """
        Compute excess kurtosis of activations for each neuron.
-       
+
        High kurtosis indicates heavy tails (potential outlier neurons).
        """
-       
+
        name = "activation_kurtosis"
        requires_inputs = False
        requires_weights = False
        requires_outputs = True
-       
+
        def __init__(self, fisher: bool = True):
            """
            Args:
                fisher: If True, compute excess kurtosis (subtract 3).
            """
            self.fisher = fisher
-       
+
        def compute(
            self,
            inputs=None,
@@ -92,27 +92,27 @@ Here's how to create and register a custom alignment metric:
        ) -> torch.Tensor:
            """
            Compute kurtosis for each neuron/channel.
-           
+
            Args:
                outputs: Activations [batch_size, num_neurons]
-               
+
            Returns:
                Kurtosis values [num_neurons]
            """
            if outputs is None:
                raise ValueError("ActivationKurtosis requires outputs")
-           
+
            # Handle different tensor shapes
            if outputs.dim() == 4:
                # Conv layer: [batch, channels, h, w] -> [batch, channels]
                outputs = outputs.mean(dim=(2, 3))
-           
+
            # Compute per-neuron statistics
            mean = outputs.mean(dim=0)
            std = outputs.std(dim=0) + 1e-8
            z = (outputs - mean) / std
            m4 = (z ** 4).mean(dim=0)
-           
+
            if self.fisher:
                return m4 - 3.0
            return m4
@@ -136,32 +136,32 @@ Analyzers perform higher-level analysis on metrics:
    )
    class LayerSimilarityAnalyzer(BaseAnalyzer):
        """Analyze representational similarity between layers using CKA."""
-       
+
        name = "layer_similarity"
        requires = ["activations"]
        provides = ["similarity_matrix", "layer_clusters"]
-       
+
        def __init__(self, method: str = "linear_cka"):
            self.method = method
-       
+
        def analyze(self, metrics, model=None, activations=None, **kwargs):
            """Compute layer-to-layer similarity matrix."""
            if activations is None:
                raise ValueError("LayerSimilarityAnalyzer requires activations")
-           
+
            # Your analysis logic here
            layer_names = list(activations.keys())
            n_layers = len(layer_names)
            similarity_matrix = np.zeros((n_layers, n_layers))
-           
+
            # ... compute CKA similarity ...
-           
+
            return {
                "similarity_matrix": similarity_matrix.tolist(),
                "layer_names": layer_names,
                "method": self.method,
            }
-       
+
        def visualize(self, results, output_dir=None, **kwargs):
            """Generate similarity heatmap."""
            # Your visualization logic here
@@ -186,28 +186,28 @@ Pruning strategies define how to select neurons for removal:
    )
    class EntropyBasedPruner(BasePruner):
        """Prune neurons based on activation entropy."""
-       
+
        name = "entropy_based"
        structured = True
-       
+
        def __init__(self, n_bins: int = 50):
            self.n_bins = n_bins
-       
+
        def compute_importance(self, model, layer_name, activations=None, **kwargs):
            """Compute entropy-based importance scores."""
            if activations is None:
                raise ValueError("Requires activations")
-           
+
            # Compute entropy per neuron
            n_neurons = activations.size(-1)
            entropies = torch.zeros(n_neurons)
-           
+
            for i in range(n_neurons):
                hist = torch.histc(activations[..., i], bins=self.n_bins)
                probs = hist / hist.sum()
                probs = probs[probs > 0]
                entropies[i] = -(probs * torch.log2(probs)).sum()
-           
+
            return entropies
 
 Using Custom Components

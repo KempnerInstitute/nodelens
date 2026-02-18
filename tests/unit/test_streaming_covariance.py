@@ -52,5 +52,3 @@ class TestStreamingCovariance:
         # With very few samples, covariance will be noisy but finite
         assert not torch.isnan(cov).any()
         assert not torch.isinf(cov).any()
-
-

@@ -14,7 +14,7 @@ It intentionally avoids referencing any paper draft; the canonical sources are t
 
 ### "Metric value" vs "importance score"
 
-Many metrics are naturally "larger = more of something" (e.g., more redundancy).  
+Many metrics are naturally "larger = more of something" (e.g., more redundancy).
 But pruning code often needs an **importance score** with the convention:
 
 - **Higher score = more important (keep)**
@@ -142,4 +142,3 @@ syn = get_metric("gaussian_pid_synergy_mmi")# MMI Gaussian PID synergy
 - It prevents **silent sign flips** (especially for redundancy).
 - It keeps metric naming/keys stable across refactors.
 - It gives reviewers and future contributors a single, repo-local "what exactly is computed?" reference.
-

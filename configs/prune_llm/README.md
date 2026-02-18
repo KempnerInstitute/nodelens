@@ -97,7 +97,7 @@ The `output.base_dir` setting controls where job directories are created:
 output:
   # Creates: {base_dir}/{experiment_name}_{timestamp}_{job_id}/
   base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
-  
+
   # Fallback if base_dir is not set (legacy)
   dir: "./results/paper/llama3_8b"
 ```

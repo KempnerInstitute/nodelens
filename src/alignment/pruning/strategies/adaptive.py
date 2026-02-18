@@ -56,11 +56,11 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
     # Available sensitivity methods
     SENSITIVITY_METHODS = [
-        "perturbation",      # Add Gaussian noise, measure accuracy drop (slow but accurate)
-        "masking",           # Random mask 30% weights, measure accuracy drop (slow)
+        "perturbation",  # Add Gaussian noise, measure accuracy drop (slow but accurate)
+        "masking",  # Random mask 30% weights, measure accuracy drop (slow)
         "activation_variance",  # Use activation variance as proxy (fast, single forward pass)
-        "gradient",          # Use gradient magnitude (fast, single backward pass)
-        "fisher",            # Fisher information approximation (moderate speed)
+        "gradient",  # Use gradient magnitude (fast, single backward pass)
+        "fisher",  # Fisher information approximation (moderate speed)
         "weight_magnitude",  # Use weight magnitude as proxy (fastest, no forward pass)
     ]
 
@@ -107,10 +107,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
         self.num_trials = num_trials
 
         if sensitivity_method not in self.SENSITIVITY_METHODS:
-            raise ValueError(
-                f"Unknown sensitivity_method: {sensitivity_method}. "
-                f"Available: {self.SENSITIVITY_METHODS}"
-            )
+            raise ValueError(f"Unknown sensitivity_method: {sensitivity_method}. " f"Available: {self.SENSITIVITY_METHODS}")
 
         # Will be populated during sensitivity analysis
         self.layer_sensitivities: Dict[str, LayerSensitivity] = {}
@@ -239,30 +236,28 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
         return avg_sensitivity
 
-    def _compute_gradient_sensitivity(
-        self, model: nn.Module, layer_name: str, data_loader
-    ) -> float:
+    def _compute_gradient_sensitivity(self, model: nn.Module, layer_name: str, data_loader) -> float:
         """Compute sensitivity using gradient magnitude."""
         layer = dict(model.named_modules())[layer_name]
-        
+
         model.train()
         total_grad = None
         num_batches = 0
-        
+
         # Get a few batches
         for i, (inputs, targets) in enumerate(data_loader):
             if i >= 3:  # Only use 3 batches for speed
                 break
-                
+
             if torch.cuda.is_available():
                 inputs = inputs.cuda()
                 targets = targets.cuda()
-            
+
             model.zero_grad()
             outputs = model(inputs)
             loss = torch.nn.functional.cross_entropy(outputs, targets)
             loss.backward()
-            
+
             if layer.weight.grad is not None:
                 grad = layer.weight.grad.abs()
                 if total_grad is None:
@@ -270,58 +265,56 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
                 else:
                     total_grad += grad
                 num_batches += 1
-        
+
         model.eval()
-        
+
         if total_grad is None or num_batches == 0:
             return 0.0
-        
+
         # Average gradient magnitude = sensitivity
         return (total_grad / num_batches).mean().item()
 
-    def _compute_fisher_sensitivity(
-        self, model: nn.Module, layer_name: str, data_loader
-    ) -> float:
+    def _compute_fisher_sensitivity(self, model: nn.Module, layer_name: str, data_loader) -> float:
         """Compute sensitivity using Fisher information approximation."""
         layer = dict(model.named_modules())[layer_name]
-        
+
         model.train()
         fisher_diag = None
         num_batches = 0
-        
+
         for i, (inputs, targets) in enumerate(data_loader):
             if i >= 3:  # Only use 3 batches for speed
                 break
-                
+
             if torch.cuda.is_available():
                 inputs = inputs.cuda()
                 targets = targets.cuda()
-            
+
             model.zero_grad()
             outputs = model(inputs)
-            
+
             # For Fisher, we use log-likelihood gradient squared
             log_probs = torch.nn.functional.log_softmax(outputs, dim=1)
             # Sample from predicted distribution
             with torch.no_grad():
                 sampled_labels = torch.multinomial(torch.exp(log_probs), 1).squeeze()
-            
+
             loss = torch.nn.functional.nll_loss(log_probs, sampled_labels)
             loss.backward()
-            
+
             if layer.weight.grad is not None:
-                grad_sq = layer.weight.grad ** 2
+                grad_sq = layer.weight.grad**2
                 if fisher_diag is None:
                     fisher_diag = grad_sq.clone()
                 else:
                     fisher_diag += grad_sq
                 num_batches += 1
-        
+
         model.eval()
-        
+
         if fisher_diag is None or num_batches == 0:
             return 0.0
-        
+
         # Fisher information = sensitivity
         return (fisher_diag / num_batches).mean().item()
 
@@ -387,9 +380,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
 
         return sensitivities
 
-    def _capture_activations(
-        self, model: nn.Module, layer_names: List[str], data_loader
-    ) -> Dict[str, torch.Tensor]:
+    def _capture_activations(self, model: nn.Module, layer_names: List[str], data_loader) -> Dict[str, torch.Tensor]:
         """Capture activations for all layers in a single forward pass."""
         activations = {}
         hooks = []
@@ -399,6 +390,7 @@ class AdaptiveSensitivityPruning(BasePruningStrategy):
                 if isinstance(output, tuple):
                     output = output[0]
                 activations[name] = output.detach()
+
             return hook
 
         # Register hooks

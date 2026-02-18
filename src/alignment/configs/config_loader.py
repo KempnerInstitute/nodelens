@@ -34,17 +34,19 @@ METRIC_UNIFIED_TO_ORIGINAL = {
 
 # Reverse mapping: original -> unified
 METRIC_ORIGINAL_TO_UNIFIED = {v: k for k, v in METRIC_UNIFIED_TO_ORIGINAL.items()}
-METRIC_ORIGINAL_TO_UNIFIED.update({
-    "average_redundancy": "redundancy",
-    "pairwise_redundancy_gaussian": "redundancy",
-    "gaussian_mi": "redundancy",
-})
+METRIC_ORIGINAL_TO_UNIFIED.update(
+    {
+        "average_redundancy": "redundancy",
+        "pairwise_redundancy_gaussian": "redundancy",
+        "gaussian_mi": "redundancy",
+    }
+)
 
 
 def _is_unified_format(config_dict: Dict[str, Any]) -> bool:
     """
     Detect if config is in unified format.
-    
+
     Unified format characteristics:
     - metrics block has nested dicts with 'enabled' keys (not a list)
     - Has 'extra' section for experiment-specific settings
@@ -53,35 +55,35 @@ def _is_unified_format(config_dict: Dict[str, Any]) -> bool:
     metrics = config_dict.get("metrics", {})
     if not isinstance(metrics, dict):
         return False
-    
+
     # Unified format: metrics.rayleigh_quotient.enabled exists
     # Original format: metrics.enabled is a list
     if "enabled" in metrics and isinstance(metrics["enabled"], list):
         return False
-    
+
     # Check for unified metric structure
     unified_metrics = ["rayleigh_quotient", "redundancy", "synergy", "magnitude", "scar"]
     for metric in unified_metrics:
         if metric in metrics and isinstance(metrics[metric], dict):
             if "enabled" in metrics[metric]:
                 return True
-    
+
     # Check for 'extra' section (strong indicator of unified format)
     if "extra" in config_dict:
         return True
-    
+
     return False
 
 
 def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert unified format config to original format.
-    
+
     This ensures that the unified config produces the exact same
     ExperimentConfig as the original format would.
     """
     original = {}
-    
+
     # -------------------------------------------------------------------------
     # EXPERIMENT
     # -------------------------------------------------------------------------
@@ -99,7 +101,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original["num_networks"] = exp["num_networks"]
         if "save_activations" in exp:
             original["save_activations"] = exp["save_activations"]
-    
+
     # -------------------------------------------------------------------------
     # MODEL
     # -------------------------------------------------------------------------
@@ -122,7 +124,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original["model"]["tracked_layers"] = model["tracked_layers"]
         if "num_classes" in model:
             original["model"]["num_classes"] = model["num_classes"]
-    
+
     # -------------------------------------------------------------------------
     # DATASET
     # -------------------------------------------------------------------------
@@ -147,7 +149,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
     # ExperimentConfig.{do_train,training_epochs,learning_rate,optimizer,...}.
     if "training" in unified and isinstance(unified["training"], dict):
         original["training"] = unified["training"]
-    
+
     # -------------------------------------------------------------------------
     # CALIBRATION
     # -------------------------------------------------------------------------
@@ -159,7 +161,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         original["metrics"]["num_samples"] = cal.get("num_samples", 5000)
         # Also keep calibration block for LLM experiments
         original["calibration"] = cal
-    
+
     # -------------------------------------------------------------------------
     # METRICS - Convert unified names to original names
     # -------------------------------------------------------------------------
@@ -167,7 +169,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         metrics = unified["metrics"]
         enabled_metrics = []
         metric_configs = {}
-        
+
         # Extract optimization options (apply to all metrics)
         optimization = metrics.get("optimization", {})
         global_optimization_opts = {
@@ -176,7 +178,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             "force_cpu_for_large_ops": optimization.get("force_cpu_for_large_ops", True),
             "cpu_threshold": optimization.get("cpu_threshold", 100000000),
         }
-        
+
         # Check each unified metric
         for unified_name, original_name in METRIC_UNIFIED_TO_ORIGINAL.items():
             if unified_name in metrics:
@@ -194,7 +196,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                     enabled_metrics.append(original_name)
                     # Apply optimization options even for simple enabled metrics
                     metric_configs[original_name] = global_optimization_opts.copy()
-        
+
         # Handle SCAR metrics (LLM-specific)
         if "scar" in metrics:
             scar = metrics["scar"]
@@ -202,13 +204,13 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                 original["do_scar_metrics"] = True
                 original["scar_num_samples"] = scar.get("num_samples", 64)
                 original["scar_max_length"] = scar.get("max_length", 512)
-        
+
         # Handle additional metrics
         # Note: Skip analysis-derived metrics that are computed by analysis pipelines
         # (not standalone metrics that can be computed independently)
         ANALYSIS_DERIVED_METRICS = {
             "supernode_protection_score",
-            "supernode_connectivity_score", 
+            "supernode_connectivity_score",
             "scar_activation_power",
             "scar_curvature",
             "scar_loss_proxy",
@@ -220,7 +222,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                     continue  # Skip analysis-derived metrics
                 if isinstance(cfg, dict) and cfg.get("enabled", True):
                     enabled_metrics.append(name)
-        
+
         original["metrics"] = {
             "enabled": enabled_metrics,
             **metric_configs,
@@ -255,7 +257,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                 original["metrics"]["synergy_target"] = syn.get("target")
             if "num_pairs" in syn:
                 original["metrics"]["synergy_num_pairs"] = syn.get("num_pairs")
-        
+
         # Composite weights - convert unified names to original
         if "composite_weights" in metrics:
             comp_weights = {}
@@ -263,19 +265,19 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                 original_name = METRIC_UNIFIED_TO_ORIGINAL.get(name, name)
                 comp_weights[original_name] = weight
             original["metrics"]["composite_weights"] = comp_weights
-    
+
     # -------------------------------------------------------------------------
     # SUPERNODE (LLM outlier detection)
     # -------------------------------------------------------------------------
     if "supernode" in unified:
         original["supernode"] = unified["supernode"]
-    
+
     # -------------------------------------------------------------------------
     # CLUSTERING (Vision)
     # -------------------------------------------------------------------------
     if "clustering" in unified:
         original["clustering"] = unified["clustering"]
-    
+
     # -------------------------------------------------------------------------
     # HALO ANALYSIS
     # -------------------------------------------------------------------------
@@ -283,13 +285,13 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         original["halo_analysis"] = unified["halo_analysis"]
         if unified["halo_analysis"].get("enabled"):
             original["do_halo_analysis"] = True
-    
+
     # -------------------------------------------------------------------------
     # CASCADE ANALYSIS
     # -------------------------------------------------------------------------
     if "cascade_analysis" in unified:
         original["cascade_analysis"] = unified["cascade_analysis"]
-    
+
     # -------------------------------------------------------------------------
     # PRUNING - Convert unified metric names in algorithms/scoring_methods
     # -------------------------------------------------------------------------
@@ -298,24 +300,24 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         original_pruning = {
             "enabled": pruning.get("enabled", True),
         }
-        
+
         # Ratios/sparsity levels
         if "ratios" in pruning:
             original_pruning["sparsity_levels"] = pruning["ratios"]
         elif "sparsity_levels" in pruning:
             original_pruning["sparsity_levels"] = pruning["sparsity_levels"]
-        
+
         # Selection modes
         if "selection_modes" in pruning:
             original_pruning["selection_modes"] = pruning["selection_modes"]
-        
+
         # Convert algorithm names (support both "algorithms" and "methods" keys)
         methods_key = None
         if "methods" in pruning:
             methods_key = "methods"
         elif "algorithms" in pruning:
             methods_key = "algorithms"
-        
+
         if methods_key:
             converted_algorithms = []
             for alg in pruning[methods_key]:
@@ -329,7 +331,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                     converted_algorithms.append(METRIC_UNIFIED_TO_ORIGINAL.get(alg, alg))
             # Store as "methods" to match what _map_nested_to_flat_config expects
             original_pruning["methods"] = converted_algorithms
-        
+
         # Convert scoring methods
         if "scoring_methods" in pruning:
             converted_scoring = []
@@ -339,7 +341,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     converted_scoring.append(METRIC_UNIFIED_TO_ORIGINAL.get(method, method))
             original_pruning["scoring_methods"] = converted_scoring
-        
+
         # Other pruning fields
         # Note: unified configs commonly specify per-layer caps as min_per_layer/max_per_layer.
         for key in [
@@ -357,21 +359,21 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         ]:
             if key in pruning:
                 original_pruning[key] = pruning[key]
-        
+
         # Fine-tune settings (support both "fine_tune" and "fine_tuning")
         fine_tune_block = pruning.get("fine_tune") or pruning.get("fine_tuning")
         if fine_tune_block:
             original_pruning["fine_tune"] = fine_tune_block
-        
+
         original["pruning"] = original_pruning
-    
+
     # -------------------------------------------------------------------------
     # EVALUATION
     # -------------------------------------------------------------------------
     if "evaluation" in unified:
         ev = unified["evaluation"]
         original["evaluation"] = {"enabled": ev.get("enabled", True)}
-        
+
         # Perplexity (LLM)
         if ev.get("perplexity_enabled"):
             original["do_perplexity_computation"] = True
@@ -381,27 +383,27 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                     "enabled": True,
                     "datasets": ev["perplexity_datasets"],
                 }
-        
+
         # bits_per_byte
         if ev.get("bits_per_byte"):
             original["evaluation"]["bits_per_byte"] = True
-        
+
         # evaluation_num_samples
         if "evaluation_num_samples" in ev:
             original["evaluation_num_samples"] = ev["evaluation_num_samples"]
-        
+
         # Benchmarks (LLM)
         if ev.get("benchmarks_enabled"):
             if "benchmark_tasks" in ev:
                 original["evaluation"]["benchmarks"] = ev["benchmark_tasks"]
             original["evaluation"]["batch_size"] = ev.get("benchmark_batch_size", 8)
-    
+
     # -------------------------------------------------------------------------
     # PERFORMANCE
     # -------------------------------------------------------------------------
     if "performance" in unified:
         original["performance"] = unified["performance"]
-    
+
     # -------------------------------------------------------------------------
     # VISUALIZATION
     # -------------------------------------------------------------------------
@@ -414,7 +416,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original["plot_format"] = viz["format"]
         if "dpi" in viz:
             original["plot_dpi"] = viz["dpi"]
-    
+
     # -------------------------------------------------------------------------
     # OUTPUT
     # -------------------------------------------------------------------------
@@ -428,41 +430,41 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         # Handle base_output_dir for job directory structure
         if "base_dir" in out:
             original["base_output_dir"] = out["base_dir"]
-    
+
     # -------------------------------------------------------------------------
     # EXTRA - Expand LLM-specific settings from extra block to top-level
     # -------------------------------------------------------------------------
     if "extra" in unified:
         extra = unified["extra"]
-        
+
         # Analysis options (with all detailed settings) - TOP LEVEL
         if "analysis" in extra:
             original["analysis"] = extra["analysis"]
-        
+
         # Supernode robustness - TOP LEVEL
         if "supernode_robustness" in extra:
             original["supernode_robustness"] = extra["supernode_robustness"]
-        
+
         # Supernode summary - TOP LEVEL
         if "supernode_summary" in extra:
             original["supernode_summary"] = extra["supernode_summary"]
-        
+
         # Multi-supernode - TOP LEVEL
         if "multi_supernode" in extra:
             original["multi_supernode"] = extra["multi_supernode"]
-        
+
         # Cross-layer - TOP LEVEL
         if "cross_layer" in extra:
             original["cross_layer"] = extra["cross_layer"]
             if extra["cross_layer"].get("enabled"):
                 original["do_connectivity_pruning"] = True
-        
+
         # Generalized importance - TOP LEVEL
         if "generalized_importance" in extra:
             original["generalized_importance"] = extra["generalized_importance"]
             if extra["generalized_importance"].get("enabled"):
                 original["do_generalized_importance"] = True
-        
+
         # Halo analysis (detailed settings from extra override top-level)
         if "halo_analysis" in extra:
             if "halo_analysis" not in original:
@@ -470,7 +472,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             original["halo_analysis"].update(extra["halo_analysis"])
             if extra["halo_analysis"].get("enabled"):
                 original["do_halo_analysis"] = True
-        
+
         # Visualization (detailed figure settings) - MERGE with top-level
         if "visualization" in extra:
             if "visualization" not in original:
@@ -479,44 +481,43 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
             extra_viz = extra["visualization"]
             for key, value in extra_viz.items():
                 original["visualization"][key] = value
-        
+
         # Top-level flags from extra
-        for flag in ["do_scar_metrics", "do_directed_redundancy", "do_connectivity_pruning", 
-                     "do_halo_analysis", "do_generalized_importance"]:
+        for flag in ["do_scar_metrics", "do_directed_redundancy", "do_connectivity_pruning", "do_halo_analysis", "do_generalized_importance"]:
             if flag in extra:
                 original[flag] = extra[flag]
-        
+
         # Pretrain settings (for vision)
         if "pretrain_epochs" in extra:
             original["pretrain_epochs"] = extra["pretrain_epochs"]
         if "pretrain_lr" in extra:
             original["pretrain_lr"] = extra["pretrain_lr"]
-        
+
         # Baselines (for vision)
         if "baselines" in extra:
             original["baselines"] = extra["baselines"]
-        
+
         # Sensitivity analysis (for vision)
         if "sensitivity_analysis" in extra:
             original["sensitivity_analysis"] = extra["sensitivity_analysis"]
-        
+
         # Structured pruning (for vision)
         if "structured_pruning" in extra:
             original["structured_pruning"] = extra["structured_pruning"]
-        
+
         # Feature analysis (for vision)
         if "feature_analysis" in extra:
             original["feature_analysis"] = extra["feature_analysis"]
-        
+
         # Efficiency tracking (for vision)
         if "efficiency" in extra:
             original["efficiency"] = extra["efficiency"]
-    
+
     # -------------------------------------------------------------------------
     # BUILD LLM BLOCK - Reconstruct full llm: section as original expects
     # -------------------------------------------------------------------------
     llm_block = {}
-    
+
     # SCAR settings
     if original.get("do_scar_metrics"):
         llm_block["scar_metrics"] = True
@@ -524,20 +525,20 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         llm_block["scar_num_samples"] = original["scar_num_samples"]
     if "scar_max_length" in original:
         llm_block["scar_max_length"] = original["scar_max_length"]
-    
+
     # Perplexity settings
     if original.get("do_perplexity_computation"):
         llm_block["evaluate_perplexity"] = True
-    
+
     # Build evaluation_metrics list from evaluation.benchmarks
     evaluation_metrics = []
     if "evaluation" in original:
         ev = original["evaluation"]
-        
+
         # Perplexity metrics
         if ev.get("perplexity", {}).get("enabled") or original.get("do_perplexity_computation"):
             evaluation_metrics.extend(["perplexity", "loss", "bits_per_byte"])
-        
+
         # Build benchmark metrics from benchmark tasks
         if "benchmarks" in ev:
             for benchmark in ev["benchmarks"]:
@@ -564,7 +565,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                         evaluation_metrics.append("accuracy_gsm8k")
                     elif task_name == "truthfulqa":
                         evaluation_metrics.append("accuracy_truthfulqa")
-    
+
     # Remove duplicates while preserving order
     seen = set()
     unique_metrics = []
@@ -572,13 +573,13 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         if m not in seen:
             seen.add(m)
             unique_metrics.append(m)
-    
+
     if unique_metrics:
         llm_block["evaluation_metrics"] = unique_metrics
-    
+
     if llm_block:
         original["llm"] = llm_block
-    
+
     # -------------------------------------------------------------------------
     # ENSURE TOP-LEVEL FLAGS ARE SET based on section enables
     # -------------------------------------------------------------------------
@@ -587,15 +588,15 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
         original["do_scar_metrics"] = True
         original["scar_num_samples"] = unified["metrics"]["scar"].get("num_samples", 64)
         original["scar_max_length"] = unified["metrics"]["scar"].get("max_length", 512)
-    
+
     # Set flags based on section enablement
     if unified.get("supernode", {}).get("enabled"):
         if unified["supernode"].get("cross_layer_analysis"):
             original["do_connectivity_pruning"] = True
-    
+
     if unified.get("halo_analysis", {}).get("enabled"):
         original["do_halo_analysis"] = True
-    
+
     logger.info("Converted unified config to original format")
     return original
 
@@ -603,7 +604,7 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
 def load_config(config_path: Union[str, Path]) -> ExperimentConfig:
     """
     Load configuration from a YAML or JSON file.
-    
+
     Supports both original format and unified format configs.
     Unified format configs are automatically detected and converted.
 
@@ -652,7 +653,6 @@ def load_config(config_path: Union[str, Path]) -> ExperimentConfig:
         raise ValueError(f"Invalid configuration: {e}")
 
 
-
 def save_config(config: ExperimentConfig, save_path: Union[str, Path], format: str = "yaml") -> None:
     """
     Save configuration to a file.
@@ -693,12 +693,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
 
     # Map experiment metadata (support nested "experiment" block)
     experiment_block = nested_config.get("experiment", {})
-    name = (
-        nested_config.get("experiment_name")
-        or experiment_block.get("name")
-        or nested_config.get("name")
-        or "default_experiment"
-    )
+    name = nested_config.get("experiment_name") or experiment_block.get("name") or nested_config.get("name") or "default_experiment"
     flat_config["name"] = name
 
     flat_config["experiment_type"] = nested_config.get(
@@ -818,11 +813,11 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         model_name = model.get("name", model.get("model_name", "mlp"))
         flat_config["model_name"] = model_name
         flat_config["model_config"] = {}
-        
+
         # Handle pretrained flag directly in model block
         if "pretrained" in model:
             flat_config["pretrained"] = model["pretrained"]
-        
+
         # Handle tracked_layers from model block
         if "tracked_layers" in model:
             flat_config["tracked_layers"] = model["tracked_layers"]
@@ -838,7 +833,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             if external.get("source") == "torchvision":
                 flat_config["model_name"] = external.get("name_or_path", "resnet18")
                 flat_config["pretrained"] = external.get("pretrained", False)
-        
+
         # Handle HuggingFace model config (for LLMs)
         hf_fields = ["model_id", "model_backend", "dtype", "torch_dtype", "device_map"]
         for field in hf_fields:
@@ -900,7 +895,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map training configuration
     # Auto-disable training when using pretrained models (unless explicitly enabled)
     is_pretrained = flat_config.get("pretrained", False)
-    
+
     if "training" in nested_config:
         training = nested_config["training"]
         # Handle both 'enabled' (new) and 'do_train' (old) keys
@@ -935,7 +930,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Priority: metrics.enabled > alignment.methods > alignment_methods > default
     flat_config["alignment_methods"] = nested_config.get("alignment_methods", ["rayleigh_quotient"])
     flat_config["alignment_data_num_samples"] = nested_config.get("alignment_data_num_samples", 1)
-    
+
     # Handle metrics block (new cleaner format)
     metrics_block = nested_config.get("metrics", {})
     if isinstance(metrics_block, dict):
@@ -957,7 +952,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         if "task_activation_samples" in metrics_block:
             flat_config["task_activation_samples"] = metrics_block.get("task_activation_samples")
         if "spatial_samples_per_image" in metrics_block:
-            flat_config["spatial_samples_per_image"] = int(metrics_block.get("spatial_samples_per_image", flat_config.get("spatial_samples_per_image", 16)))
+            flat_config["spatial_samples_per_image"] = int(
+                metrics_block.get("spatial_samples_per_image", flat_config.get("spatial_samples_per_image", 16))
+            )
         if "synergy_target" in metrics_block:
             flat_config["synergy_target"] = metrics_block.get("synergy_target", flat_config.get("synergy_target", "logit_margin"))
         # Also accept unified-style per-metric config (synergy_gaussian_mmi) after conversion.
@@ -974,7 +971,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         if "compute_loss_proxy" in metrics_block:
             flat_config["compute_loss_proxy"] = bool(metrics_block.get("compute_loss_proxy", False))
         if "loss_proxy_n_calibration" in metrics_block:
-            flat_config["loss_proxy_n_calibration"] = int(metrics_block.get("loss_proxy_n_calibration", flat_config.get("loss_proxy_n_calibration", 1024)))
+            flat_config["loss_proxy_n_calibration"] = int(
+                metrics_block.get("loss_proxy_n_calibration", flat_config.get("loss_proxy_n_calibration", 1024))
+            )
         # Within-layer connectivity summaries (vision)
         if "within_layer_connectivity" in metrics_block:
             flat_config["compute_within_layer_connectivity"] = bool(metrics_block.get("within_layer_connectivity", False))
@@ -1000,7 +999,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     cal_block = nested_config.get("calibration", {})
     if isinstance(cal_block, dict) and "num_samples" in cal_block:
         flat_config["n_calibration"] = int(cal_block.get("num_samples", flat_config.get("n_calibration", 5000)))
-    
+
     # Handle nested alignment block (backward compatibility)
     if "alignment" in nested_config and isinstance(nested_config["alignment"], dict):
         alignment_block = nested_config["alignment"]
@@ -1008,7 +1007,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["alignment_data_num_samples"] = alignment_block["data_num_samples"]
         if "methods" in alignment_block:
             flat_config["alignment_methods"] = alignment_block["methods"]
-    
+
     if "alignment_settings" in nested_config:
         alignment = nested_config["alignment_settings"]
         # Map metric names
@@ -1045,10 +1044,8 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["seed"] = experiment_block.get("seed", nested_config.get("seed", 42))
     # num_networks: experiment > training > top-level > default (1)
     if "num_networks" not in flat_config:
-        flat_config["num_networks"] = experiment_block.get(
-            "num_networks", nested_config.get("num_networks", 1)
-        )
-    
+        flat_config["num_networks"] = experiment_block.get("num_networks", nested_config.get("num_networks", 1))
+
     # Composite weights: metrics.composite_weights > alignment.composite_weights > top-level
     if "alignment_composite_weights" not in flat_config:
         flat_config["alignment_composite_weights"] = nested_config.get("alignment_composite_weights", {})
@@ -1065,7 +1062,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["supernode_summary"] = nested_config.get("supernode_summary", {})
     flat_config["halo_analysis"] = nested_config.get("halo_analysis", {})
     flat_config["generalized_importance"] = nested_config.get("generalized_importance", {})
-    
+
     # Map flags for these analyses
     if "halo_analysis" in nested_config and nested_config["halo_analysis"].get("enabled", False):
         flat_config["do_halo_analysis"] = True
@@ -1121,13 +1118,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             if "methods" in type_aware_block and isinstance(type_aware_block["methods"], (list, tuple)):
                 flat_config["fine_tune_type_aware_methods"] = [str(x) for x in type_aware_block["methods"]]
             if "lr_multipliers" in type_aware_block and isinstance(type_aware_block["lr_multipliers"], dict):
-                flat_config["fine_tune_type_aware_lr_multipliers"] = {
-                    str(k): float(v) for k, v in type_aware_block["lr_multipliers"].items()
-                }
+                flat_config["fine_tune_type_aware_lr_multipliers"] = {str(k): float(v) for k, v in type_aware_block["lr_multipliers"].items()}
             if "wd_multipliers" in type_aware_block and isinstance(type_aware_block["wd_multipliers"], dict):
-                flat_config["fine_tune_type_aware_wd_multipliers"] = {
-                    str(k): float(v) for k, v in type_aware_block["wd_multipliers"].items()
-                }
+                flat_config["fine_tune_type_aware_wd_multipliers"] = {str(k): float(v) for k, v in type_aware_block["wd_multipliers"].items()}
             if "scale_batchnorm" in type_aware_block:
                 flat_config["fine_tune_type_aware_scale_batchnorm"] = bool(type_aware_block["scale_batchnorm"])
             if "scale_classifier" in type_aware_block:
@@ -1139,13 +1132,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         if "type_aware_methods" in fine_tune_block and isinstance(fine_tune_block["type_aware_methods"], (list, tuple)):
             flat_config["fine_tune_type_aware_methods"] = [str(x) for x in fine_tune_block["type_aware_methods"]]
         if "type_aware_lr_multipliers" in fine_tune_block and isinstance(fine_tune_block["type_aware_lr_multipliers"], dict):
-            flat_config["fine_tune_type_aware_lr_multipliers"] = {
-                str(k): float(v) for k, v in fine_tune_block["type_aware_lr_multipliers"].items()
-            }
+            flat_config["fine_tune_type_aware_lr_multipliers"] = {str(k): float(v) for k, v in fine_tune_block["type_aware_lr_multipliers"].items()}
         if "type_aware_wd_multipliers" in fine_tune_block and isinstance(fine_tune_block["type_aware_wd_multipliers"], dict):
-            flat_config["fine_tune_type_aware_wd_multipliers"] = {
-                str(k): float(v) for k, v in fine_tune_block["type_aware_wd_multipliers"].items()
-            }
+            flat_config["fine_tune_type_aware_wd_multipliers"] = {str(k): float(v) for k, v in fine_tune_block["type_aware_wd_multipliers"].items()}
         if "type_aware_scale_batchnorm" in fine_tune_block:
             flat_config["fine_tune_type_aware_scale_batchnorm"] = bool(fine_tune_block["type_aware_scale_batchnorm"])
         if "type_aware_scale_classifier" in fine_tune_block:
@@ -1168,22 +1157,15 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # Fallback to default pruning methods
         flat_config["pruning_strategies"] = nested_config.get(
-            "pruning_strategies", 
-            ["random", "magnitude", "taylor", "cluster_aware", "cluster_aware_annealed"]
+            "pruning_strategies", ["random", "magnitude", "taylor", "cluster_aware", "cluster_aware_annealed"]
         )
-    
+
     flat_config["pruning_amounts"] = pruning_block.get("sparsity_levels", nested_config.get("pruning_amounts", [0.1, 0.3, 0.5, 0.7, 0.9]))
     selection_modes = pruning_block.get("selection_modes", nested_config.get("pruning_selection_mode", "low"))
     flat_config["pruning_selection_mode"] = selection_modes
-    flat_config["pruning_distribution"] = pruning_block.get(
-        "distribution", nested_config.get("pruning_distribution", "uniform")
-    )
-    flat_config["pruning_min_per_layer"] = pruning_block.get(
-        "min_per_layer", nested_config.get("pruning_min_per_layer", 0.0)
-    )
-    flat_config["pruning_max_per_layer"] = pruning_block.get(
-        "max_per_layer", nested_config.get("pruning_max_per_layer", 0.95)
-    )
+    flat_config["pruning_distribution"] = pruning_block.get("distribution", nested_config.get("pruning_distribution", "uniform"))
+    flat_config["pruning_min_per_layer"] = pruning_block.get("min_per_layer", nested_config.get("pruning_min_per_layer", 0.0))
+    flat_config["pruning_max_per_layer"] = pruning_block.get("max_per_layer", nested_config.get("pruning_max_per_layer", 0.95))
     flat_config["pruning_max_per_layer_sparsity_cap"] = pruning_block.get(
         "max_per_layer_sparsity_cap", nested_config.get("pruning_max_per_layer_sparsity_cap", 1.00)
     )
@@ -1200,9 +1182,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["pruning_alignment_metric"] = pruning_block.get(
         "alignment_metric", nested_config.get("pruning_alignment_metric", "rayleigh_quotient")
     )
-    flat_config["dependency_aware_pruning"] = pruning_block.get(
-        "dependency_aware", nested_config.get("dependency_aware_pruning", False)
-    )
+    flat_config["dependency_aware_pruning"] = pruning_block.get("dependency_aware", nested_config.get("dependency_aware_pruning", False))
 
     # Optional: restrict which conv layers are prunable (vision)
     if "pointwise_only" in pruning_block:
@@ -1224,17 +1204,17 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["cluster_aware_lambda_halo"] = float(ca["lambda_halo"])
         if "protect_critical_frac" in ca:
             flat_config["cluster_aware_protect_critical_frac"] = float(ca["protect_critical_frac"])
-        
+
         # Annealing window (for cluster_aware_annealed)
         if "anneal_start" in ca:
             flat_config["cluster_aware_anneal_start"] = float(ca["anneal_start"])
         if "anneal_end" in ca:
             flat_config["cluster_aware_anneal_end"] = float(ca["anneal_end"])
-        
+
         # Taylor blend weight (for cluster_aware_taylor_blend)
         if "taylor_weight" in ca:
             flat_config["cluster_aware_taylor_weight"] = float(ca["taylor_weight"])
-        
+
         # Depth-adaptive settings (for cluster_aware_depth_adaptive)
         if "depth_adaptive" in ca:
             flat_config["cluster_aware_depth_adaptive"] = bool(ca["depth_adaptive"])
@@ -1334,19 +1314,13 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["cascade_n_remove"] = int(cascade_block.get("n_remove_per_cluster", flat_config.get("cascade_n_remove", 5)))
         if "damage_sample_fraction" in cascade_block:
             flat_config["damage_sample_frac"] = float(cascade_block.get("damage_sample_fraction", flat_config.get("damage_sample_frac", 0.2)))
-    
+
     # Single-layer pruning: specify a layer name to prune only that layer
-    flat_config["pruning_target_layer"] = pruning_block.get(
-        "target_layer", nested_config.get("pruning_target_layer", None)
-    )
+    flat_config["pruning_target_layer"] = pruning_block.get("target_layer", nested_config.get("pruning_target_layer", None))
 
     # Optional pruning layer filters (primarily for MobileNet-like nets)
-    flat_config["pruning_pointwise_only"] = pruning_block.get(
-        "pointwise_only", nested_config.get("pruning_pointwise_only", False)
-    )
-    flat_config["pruning_skip_depthwise"] = pruning_block.get(
-        "skip_depthwise", nested_config.get("pruning_skip_depthwise", False)
-    )
+    flat_config["pruning_pointwise_only"] = pruning_block.get("pointwise_only", nested_config.get("pruning_pointwise_only", False))
+    flat_config["pruning_skip_depthwise"] = pruning_block.get("skip_depthwise", nested_config.get("pruning_skip_depthwise", False))
 
     # Performance settings (all optimizations enabled by default)
     # Check both old "optimization" block and new "performance" block
@@ -1354,7 +1328,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(perf_block, dict):
         if "eval_batches" in perf_block:
             flat_config["eval_batches"] = perf_block["eval_batches"]
-    
+
     # These are always enabled (no longer configurable)
     flat_config["use_tensorized_training"] = True
     flat_config["use_tensorized_pruning"] = True
@@ -1364,7 +1338,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["do_perplexity_computation"] = nested_config.get("do_perplexity_computation", False)
     flat_config["evaluation_dataset"] = nested_config.get("evaluation_dataset", "wikitext")
     flat_config["evaluation_num_samples"] = nested_config.get("evaluation_num_samples", 100)
-    
+
     # Directed redundancy and connectivity pruning flags
     flat_config["do_directed_redundancy"] = nested_config.get("do_directed_redundancy", True)
     flat_config["do_connectivity_pruning"] = nested_config.get("do_connectivity_pruning", True)
@@ -1373,7 +1347,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     flat_config["do_scar_metrics"] = nested_config.get("do_scar_metrics", False)
     flat_config["scar_num_samples"] = nested_config.get("scar_num_samples", 0)
     flat_config["scar_max_length"] = nested_config.get("scar_max_length", 512)
-    
+
     # Handle new llm block (cleaner format)
     llm_block = nested_config.get("llm", {})
     if isinstance(llm_block, dict):
@@ -1400,7 +1374,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["fewshot_settings"] = llm_block["fewshot_settings"]
         # Preserve the entire llm block for direct access
         flat_config["llm"] = llm_block
-    
+
     # Also check evaluation block (backward compatibility)
     eval_block = nested_config.get("evaluation", {})
     if isinstance(eval_block, dict):
@@ -1436,7 +1410,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["analysis_options"] = analysis_block
         if "generate_plots" in analysis_block:
             flat_config["generate_plots"] = analysis_block.get("generate_plots", flat_config.get("generate_plots", True))
-    
+
     # Post-experiment analysis configuration (for AnalysisRunner)
     post_analysis_block = nested_config.get("post_analysis", {})
     if isinstance(post_analysis_block, dict) and post_analysis_block:
@@ -1458,7 +1432,7 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map paths
     flat_config["log_dir"] = nested_config.get("results_path", "./logs")
     flat_config["checkpoint_dir"] = os.path.join(flat_config["log_dir"], "checkpoints")
-    
+
     # Handle base_output_dir for job directory structure
     # Priority: output.base_dir > experiment.base_output_dir > top-level base_output_dir
     output_block = nested_config.get("output", {})
@@ -1665,7 +1639,7 @@ def load_config_with_overrides(
                     raw = value.strip()
                     low = raw.lower()
                     if low in {"true", "false"}:
-                        value = (low == "true")
+                        value = low == "true"
                     elif low in {"none", "null"}:
                         value = None
                     else:

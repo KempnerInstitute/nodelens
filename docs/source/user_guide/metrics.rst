@@ -314,7 +314,7 @@ Creating a Custom Metric
        def __init__(self, parameter=1.0):
            super().__init__(name="my_custom_metric")
            self.parameter = parameter
-       
+
        def compute(self, inputs, weights, outputs=None):
            # Your metric computation
            scores = custom_computation(inputs, weights, self.parameter)
@@ -396,4 +396,4 @@ Interpretation Issues
 
 - Normalize metrics for comparison across layers
 - Consider layer-specific baselines
-- Use multiple metrics for robust conclusions 
+- Use multiple metrics for robust conclusions

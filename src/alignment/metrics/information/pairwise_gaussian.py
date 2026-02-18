@@ -8,7 +8,7 @@ where ρ is correlation in the Σ_X space.
 """
 
 import logging
-from typing import Any, Optional, Union, List
+from typing import Any, List, Optional, Union
 
 import torch
 
@@ -120,10 +120,10 @@ class PairwiseRedundancyGaussian(BaseMetric):
             raise ValueError(f"Unknown mode: {self.mode}")
 
     def _compute_output_based(
-        self, 
-        outputs: torch.Tensor, 
+        self,
+        outputs: torch.Tensor,
         target_indices: Optional[Union[List[int], torch.Tensor]] = None,
-        allowed_partners: Optional[Union[List[int], torch.Tensor]] = None
+        allowed_partners: Optional[Union[List[int], torch.Tensor]] = None,
     ) -> torch.Tensor:
         """
         Compute redundancy from outputs directly (FAST!).
@@ -166,7 +166,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
 
         # Normalize outputs (standard deviation)
         # We normalize early to make matrix multiplication yield correlations directly
-        Y_var = (Y_centered ** 2).sum(dim=0) / max(1, B - 1)
+        Y_var = (Y_centered**2).sum(dim=0) / max(1, B - 1)
         Y_std = torch.sqrt(Y_var + 1e-12)
         Y_norm = Y_centered / Y_std
 
@@ -205,59 +205,59 @@ class PairwiseRedundancyGaussian(BaseMetric):
             # If T, S are small, it's fine. If T, S are huge (full layer), it's fine (same as before).
             t_grid = targets.unsqueeze(1)
             s_grid = sources.unsqueeze(0)
-            mask = (t_grid == s_grid)
+            mask = t_grid == s_grid
             R_matrix.masked_fill_(mask, 0.0)
 
         # Compute average redundancy per target
         # Result will be mapped back to full N-sized tensor
         redundancy_full = torch.zeros(N, device=outputs.device)
-        
+
         num_targets = len(targets)
         num_sources = len(sources)
-        
+
         # Determine how to aggregate based on sampling strategy
         if self.sampling_strategy == "all":
             # Average over all valid sources (excluding self)
             # Valid count per row: S - 1 (if self in sources) or S (if self not in sources)
             # We already zeroed self, so sum is correct.
             # Count is tricky.
-            
-            row_sums = R_matrix.sum(dim=1) # [T]
-            
+
+            row_sums = R_matrix.sum(dim=1)  # [T]
+
             # Calculate denominator (count of non-self partners)
             # is_in_source[t] = (targets[t] in sources)
             # Using the mask computed earlier: mask.sum(dim=1) is 1 if target[t] in sources, else 0
             self_counts = mask.sum(dim=1).float()
             denominators = num_sources - self_counts
             denominators = torch.clamp(denominators, min=1)
-            
+
             scores = row_sums / denominators
-            
+
         else:
             # Sampling (Random or Nearest)
             # Since we computed the full [T, S] matrix (which is efficient if T, S << N),
             # we can just sample from the rows of R_matrix.
-            
+
             scores = torch.zeros(num_targets, device=outputs.device)
-            
+
             for t_idx in range(num_targets):
-                row = R_matrix[t_idx] # [S]
-                
+                row = R_matrix[t_idx]  # [S]
+
                 # Exclude self
                 # We can use the mask row
                 valid_mask = ~mask[t_idx]
                 valid_indices = torch.nonzero(valid_mask).squeeze()
-                
+
                 num_valid = len(valid_indices)
                 if num_valid == 0:
                     continue
-                    
+
                 if self.sampling_strategy == "random":
                     num_sample = min(self.num_pairs, num_valid)
                     perm = torch.randperm(num_valid, device=outputs.device)[:num_sample]
                     sampled_indices = valid_indices[perm]
                     scores[t_idx] = row[sampled_indices].mean()
-                    
+
                 elif self.sampling_strategy == "nearest":
                     # "Nearest" usually means spatial/index distance.
                     # Here indices are targets[t_idx] and sources[valid_indices]
@@ -265,7 +265,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
                     target_id = targets[t_idx]
                     source_ids = sources[valid_indices]
                     dists = (target_id - source_ids).abs()
-                    
+
                     num_sample = min(self.num_pairs, num_valid)
                     _, topk_indices = torch.topk(dists, num_sample, largest=False)
                     # topk_indices are indices into valid_indices
@@ -278,11 +278,11 @@ class PairwiseRedundancyGaussian(BaseMetric):
         return redundancy_full
 
     def _compute_covariance_based(
-        self, 
-        inputs: torch.Tensor, 
+        self,
+        inputs: torch.Tensor,
         weights: torch.Tensor,
         target_indices: Optional[Union[List[int], torch.Tensor]] = None,
-        allowed_partners: Optional[Union[List[int], torch.Tensor]] = None
+        allowed_partners: Optional[Union[List[int], torch.Tensor]] = None,
     ) -> torch.Tensor:
         """
         Compute redundancy via input covariance.
@@ -374,11 +374,11 @@ class PairwiseRedundancyGaussian(BaseMetric):
             available = list(range(num_neurons))
         else:
             available = list(pool)
-            
+
         # Exclude self if present
         if neuron_idx in available:
             available.remove(neuron_idx)
-            
+
         if not available:
             return torch.tensor([], dtype=torch.long)
 
@@ -395,7 +395,7 @@ class PairwiseRedundancyGaussian(BaseMetric):
             # If pool is small, just take it
             if len(available) <= self.num_pairs:
                 return torch.tensor(available, dtype=torch.long)
-                
+
             indices = torch.randperm(len(available))[:num_to_sample]
             return torch.tensor([available[i] for i in indices], dtype=torch.long)
 

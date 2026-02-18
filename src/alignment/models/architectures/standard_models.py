@@ -6,11 +6,10 @@ studies, matching the functionality from the old alignment codebase.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 

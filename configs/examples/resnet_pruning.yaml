@@ -31,7 +31,7 @@ metrics:
     - "rayleigh_quotient"
     - "activation_l2_norm"
   num_samples: 256
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -44,30 +44,30 @@ cnn:
 # Pruning experiments
 pruning:
   enabled: true
-  
+
   # Sparsity levels to test (fraction of neurons to remove)
   sparsity_levels: [0.1, 0.2, 0.3, 0.5, 0.7]
-  
+
   # Selection modes: WHICH neurons to prune based on their scores
   #   "low"    - prune neurons with LOWEST scores (remove least important)
   #   "high"   - prune neurons with HIGHEST scores (ablation study)
   #   "random" - prune randomly (baseline comparison)
   selection_modes: ["low", "high", "random"]
-  
+
   # Distribution: HOW to allocate sparsity across layers
   #   "uniform"              - same % per layer (simple, default)
   #   "global_threshold"     - global score threshold
   #   "adaptive_sensitivity" - prune robust layers more, sensitive layers less
   #   "cascading"            - sequential layer-by-layer
   distribution: "adaptive_sensitivity"
-  
+
   # Structured: prune entire neurons/channels (vs individual weights)
   # Required for alignment metrics (RQ is per-neuron)
   structured: true
-  
+
   # Dependency-aware: handle skip connections (critical for ResNet)
   dependency_aware: true
-  
+
   fine_tune:
     enabled: true
     epochs: 20

@@ -11,16 +11,12 @@ Tests validate:
 import numpy as np
 import pytest
 
-from alignment.analysis.clustering.metric_clustering import (
-    MetricSpaceClustering,
-    ClusterResult,
-    METRIC_ABLATIONS,
-)
-
+from alignment.analysis.clustering.metric_clustering import ClusterResult, MetricSpaceClustering
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _well_separated_data(n_per_type: int = 25, seed: int = 42):
     """Generate 4 well-separated clusters in (RQ, Red, Syn) space.
@@ -33,27 +29,31 @@ def _well_separated_data(n_per_type: int = 25, seed: int = 42):
     rng = np.random.default_rng(seed)
     n = n_per_type
 
-    rq = np.concatenate([
-        rng.uniform(8.0, 12.0, n),   # critical - high RQ
-        rng.uniform(0.5, 1.5, n),    # redundant - low RQ
-        rng.uniform(3.0, 5.0, n),    # synergistic - mid RQ
-        rng.uniform(0.1, 0.8, n),    # background - low RQ
-    ])
-    red = np.concatenate([
-        rng.uniform(0.0, 0.1, n),    # critical - low Red
-        rng.uniform(0.8, 1.0, n),    # redundant - high Red
-        rng.uniform(0.0, 0.15, n),   # synergistic - low Red
-        rng.uniform(0.05, 0.2, n),   # background - low Red
-    ])
-    syn = np.concatenate([
-        rng.uniform(0.2, 0.4, n),    # critical - mid Syn
-        rng.uniform(0.0, 0.1, n),    # redundant - low Syn
-        rng.uniform(0.8, 1.0, n),    # synergistic - high Syn
-        rng.uniform(0.0, 0.15, n),   # background - low Syn
-    ])
-    true_labels = np.array(
-        ["critical"] * n + ["redundant"] * n + ["synergistic"] * n + ["background"] * n
+    rq = np.concatenate(
+        [
+            rng.uniform(8.0, 12.0, n),  # critical - high RQ
+            rng.uniform(0.5, 1.5, n),  # redundant - low RQ
+            rng.uniform(3.0, 5.0, n),  # synergistic - mid RQ
+            rng.uniform(0.1, 0.8, n),  # background - low RQ
+        ]
     )
+    red = np.concatenate(
+        [
+            rng.uniform(0.0, 0.1, n),  # critical - low Red
+            rng.uniform(0.8, 1.0, n),  # redundant - high Red
+            rng.uniform(0.0, 0.15, n),  # synergistic - low Red
+            rng.uniform(0.05, 0.2, n),  # background - low Red
+        ]
+    )
+    syn = np.concatenate(
+        [
+            rng.uniform(0.2, 0.4, n),  # critical - mid Syn
+            rng.uniform(0.0, 0.1, n),  # redundant - low Syn
+            rng.uniform(0.8, 1.0, n),  # synergistic - high Syn
+            rng.uniform(0.0, 0.15, n),  # background - low Syn
+        ]
+    )
+    true_labels = np.array(["critical"] * n + ["redundant"] * n + ["synergistic"] * n + ["background"] * n)
     return rq, red, syn, true_labels
 
 
@@ -61,8 +61,8 @@ def _well_separated_data(n_per_type: int = 25, seed: int = 42):
 # Tests: basic fit
 # ---------------------------------------------------------------------------
 
-class TestMetricSpaceClusteringFit:
 
+class TestMetricSpaceClusteringFit:
     def test_fit_returns_cluster_result(self):
         rq, red, syn, _ = _well_separated_data()
         msc = MetricSpaceClustering(n_clusters=4, seed=42)
@@ -108,21 +108,18 @@ class TestMetricSpaceClusteringFit:
         n = 50
         for i, expected in enumerate(["critical", "redundant", "synergistic", "background"]):
             group_labels = result.labels[i * n : (i + 1) * n]
-            assigned_types = [result.type_mapping[int(l)] for l in group_labels]
+            assigned_types = [result.type_mapping[int(label_id)] for label_id in group_labels]
             dominant = max(set(assigned_types), key=assigned_types.count)
             agreement = assigned_types.count(dominant) / n
-            assert agreement > 0.7, (
-                f"Expected >{70}% agreement for {expected}, "
-                f"got {agreement*100:.0f}% assigned to {dominant}"
-            )
+            assert agreement > 0.7, f"Expected >{70}% agreement for {expected}, " f"got {agreement*100:.0f}% assigned to {dominant}"
 
 
 # ---------------------------------------------------------------------------
 # Tests: type mapping modes
 # ---------------------------------------------------------------------------
 
-class TestTypeMappingModes:
 
+class TestTypeMappingModes:
     def test_greedy_assigns_four_types(self):
         rq, red, syn, _ = _well_separated_data()
         msc = MetricSpaceClustering(n_clusters=4, seed=42, type_mapping_mode="greedy")
@@ -160,17 +157,19 @@ class TestTypeMappingModes:
 # Tests: greedy type assignment internals
 # ---------------------------------------------------------------------------
 
-class TestTypesGreedy:
 
+class TestTypesGreedy:
     def test_known_centroids(self):
         """Critical = high RQ - low Red, Redundant = high Red, Synergistic = high Syn."""
         msc = MetricSpaceClustering(n_clusters=4, type_mapping_mode="greedy")
-        centroids = np.array([
-            [2.0, 0.1, 0.3],  # high RQ, low Red -> critical
-            [0.2, 0.9, 0.1],  # high Red -> redundant
-            [0.5, 0.1, 0.9],  # high Syn -> synergistic
-            [0.1, 0.2, 0.2],  # low everything -> background
-        ])
+        centroids = np.array(
+            [
+                [2.0, 0.1, 0.3],  # high RQ, low Red -> critical
+                [0.2, 0.9, 0.1],  # high Red -> redundant
+                [0.5, 0.1, 0.9],  # high Syn -> synergistic
+                [0.1, 0.2, 0.2],  # low everything -> background
+            ]
+        )
         mapping = msc._types_greedy(centroids)
         assert mapping[0] == "critical"
         assert mapping[1] == "redundant"
@@ -188,8 +187,8 @@ class TestTypesGreedy:
 # Tests: ablation study
 # ---------------------------------------------------------------------------
 
-class TestAblationStudy:
 
+class TestAblationStudy:
     def test_ablation_study_returns_all_modes(self):
         rq, red, syn, _ = _well_separated_data()
         msc = MetricSpaceClustering(n_clusters=4, seed=42)
@@ -236,8 +235,8 @@ class TestAblationStudy:
 # Tests: edge cases
 # ---------------------------------------------------------------------------
 
-class TestClusteringEdgeCases:
 
+class TestClusteringEdgeCases:
     def test_very_few_channels(self):
         """With fewer channels than clusters, should not crash."""
         rq = np.array([1.0, 2.0, 3.0])

@@ -14,10 +14,10 @@ import torch.nn as nn
 
 from alignment.analysis.cascade_analysis import CascadeAnalysis, CascadeResult
 
-
 # ---------------------------------------------------------------------------
 # Tiny model + dataset
 # ---------------------------------------------------------------------------
+
 
 class _TinyCNN(nn.Module):
     """Minimal 2-layer CNN for testing cascade analysis."""
@@ -42,7 +42,7 @@ def _synthetic_loader(n_samples: int = 40, n_classes: int = 5):
     batches = []
     bs = 10
     for i in range(0, n_samples, bs):
-        batches.append((images[i:i+bs], labels[i:i+bs]))
+        batches.append((images[i : i + bs], labels[i : i + bs]))
     return batches
 
 
@@ -50,8 +50,8 @@ def _synthetic_loader(n_samples: int = 40, n_classes: int = 5):
 # Tests: baseline
 # ---------------------------------------------------------------------------
 
-class TestBaseline:
 
+class TestBaseline:
     def test_acc_in_unit_interval(self):
         model = _TinyCNN()
         loader = _synthetic_loader()
@@ -79,8 +79,8 @@ class TestBaseline:
 # Tests: ablate
 # ---------------------------------------------------------------------------
 
-class TestAblate:
 
+class TestAblate:
     def test_returns_cascade_result(self):
         model = _TinyCNN()
         loader = _synthetic_loader()
@@ -121,8 +121,8 @@ class TestAblate:
 # Tests: by_cluster
 # ---------------------------------------------------------------------------
 
-class TestByCluster:
 
+class TestByCluster:
     def test_returns_dict_keyed_by_type(self):
         model = _TinyCNN(n_channels=8)
         loader = _synthetic_loader()

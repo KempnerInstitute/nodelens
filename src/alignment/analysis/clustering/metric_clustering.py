@@ -1,11 +1,14 @@
 """Metric-space clustering for channels."""
+
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Optional, Tuple
+
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Tuple, Literal
 
 try:
     from sklearn.cluster import KMeans
     from sklearn.metrics import silhouette_score
+
     HAS_SK = True
 except ImportError:
     HAS_SK = False
@@ -15,18 +18,18 @@ except ImportError:
 # Format: (use_first_metric, use_red, use_syn)
 # The first metric can be RQ or IXY depending on what's passed to fit()
 METRIC_ABLATIONS = {
-    "all": (True, True, True),      # RQ, Red, Syn
+    "all": (True, True, True),  # RQ, Red, Syn
     "rq_red": (True, True, False),  # RQ + Redundancy only
     "rq_syn": (True, False, True),  # RQ + Synergy only
-    "red_syn": (False, True, True), # Redundancy + Synergy only
+    "red_syn": (False, True, True),  # Redundancy + Synergy only
     "rq_only": (True, False, False),
     "red_only": (False, True, False),
     "syn_only": (False, False, True),
     # IXY variants: when used, the first argument to fit() should be I(X;Y) instead of RQ
-    "ixy_all": (True, True, True),      # I(X;Y), Red, Syn
-    "ixy_red": (True, True, False),     # I(X;Y) + Redundancy only
-    "ixy_syn": (True, False, True),     # I(X;Y) + Synergy only
-    "ixy_only": (True, False, False),   # I(X;Y) only
+    "ixy_all": (True, True, True),  # I(X;Y), Red, Syn
+    "ixy_red": (True, True, False),  # I(X;Y) + Redundancy only
+    "ixy_syn": (True, False, True),  # I(X;Y) + Synergy only
+    "ixy_only": (True, False, False),  # I(X;Y) only
 }
 
 
@@ -48,6 +51,7 @@ class ClusterResult:
 @dataclass
 class AblationResult:
     """Results from metric ablation study."""
+
     layer_name: str
     ablation_mode: str
     silhouette: float
@@ -60,11 +64,11 @@ class AblationResult:
 class MetricSpaceClustering:
     """
     Cluster channels in metric space (log RQ, Redundancy, Synergy).
-    
+
     Supports ablation studies to validate each metric's contribution
     by clustering with subsets of the three metrics.
     """
-    
+
     def __init__(
         self,
         n_clusters: int = 4,
@@ -179,11 +183,11 @@ class MetricSpaceClustering:
             km = KMeans(effective_k, random_state=self.seed, n_init=10)
             lab = km.fit_predict(X_cluster)
             cen = km.cluster_centers_
-            sil = silhouette_score(X_cluster, lab) if n > effective_k else 0.
+            sil = silhouette_score(X_cluster, lab) if n > effective_k else 0.0
         else:
             lab = np.zeros(n, dtype=int)
             cen = np.zeros((1, X_cluster.shape[1]))
-            sil = 0.
+            sil = 0.0
 
         # For score_augmented, centroids include the score column at index 0;
         # extract the geometry-only part for type mapping.
@@ -229,7 +233,7 @@ class MetricSpaceClustering:
             metrics_used=(use_rq, use_red, use_syn),
             ablation_mode=ablation,
         )
-    
+
     @staticmethod
     def _norm01(x: np.ndarray) -> np.ndarray:
         lo, hi = x.min(), x.max()
@@ -335,49 +339,46 @@ class MetricSpaceClustering:
     ) -> Dict[str, AblationResult]:
         """
         Run clustering with different metric subsets and compare to full clustering.
-        
+
         Args:
             rq, red, syn: Per-channel metric values
             name: Layer name
             ablations: List of ablation modes to test (default: all 2-metric combinations)
-        
+
         Returns:
             Dict mapping ablation mode to AblationResult
         """
         if ablations is None:
             ablations = ["all", "rq_red", "rq_syn", "red_syn"]
-        
+
         results = {}
         full_result = None
-        
+
         for ablation in ablations:
             result = self.fit(rq, red, syn, name, ablation=ablation)
-            
+
             if ablation == "all":
                 full_result = result
-            
+
             results[ablation] = AblationResult(
                 layer_name=name,
                 ablation_mode=ablation,
                 silhouette=result.silhouette,
                 cluster_result=result,
             )
-        
+
         # Compute agreement metrics against full clustering
         if full_result is not None and HAS_SK:
             try:
-                from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
+                from sklearn.metrics import adjusted_mutual_info_score, adjusted_rand_score
+
                 for ablation, abl_result in results.items():
                     if ablation != "all":
-                        abl_result.ari_vs_full = adjusted_rand_score(
-                            full_result.labels, abl_result.cluster_result.labels
-                        )
-                        abl_result.ami_vs_full = adjusted_mutual_info_score(
-                            full_result.labels, abl_result.cluster_result.labels
-                        )
+                        abl_result.ari_vs_full = adjusted_rand_score(full_result.labels, abl_result.cluster_result.labels)
+                        abl_result.ami_vs_full = adjusted_mutual_info_score(full_result.labels, abl_result.cluster_result.labels)
             except ImportError:
                 pass
-        
+
         return results
 
     def _types_greedy(self, c: np.ndarray) -> Dict[int, str]:
@@ -428,12 +429,7 @@ class MetricSpaceClustering:
 
         # Enumerate nP4 assignments (n is small in practice; defaults to 4).
         for perm in itertools.permutations(range(n), 4):
-            s = (
-                scores[perm[0], 0]
-                + scores[perm[1], 1]
-                + scores[perm[2], 2]
-                + scores[perm[3], 3]
-            )
+            s = scores[perm[0], 0] + scores[perm[1], 1] + scores[perm[2], 2] + scores[perm[3], 3]
             if s > best_score:
                 best_score = float(s)
                 best = perm
@@ -471,11 +467,7 @@ class MetricSpaceClustering:
         # synergistic: high syn (with mild penalty for high red)
         scores[:, 2] = (w_syn * c[:, 2]) - (0.25 * w_red * c[:, 1])
         # background: close to origin
-        scores[:, 3] = -(
-            (w_rq * np.abs(c[:, 0]))
-            + (w_red * np.abs(c[:, 1]))
-            + (w_syn * np.abs(c[:, 2]))
-        )
+        scores[:, 3] = -((w_rq * np.abs(c[:, 0])) + (w_red * np.abs(c[:, 1])) + (w_syn * np.abs(c[:, 2])))
         return scores
 
     def _scores_global_simple(
@@ -499,11 +491,7 @@ class MetricSpaceClustering:
         # synergistic: maximize synergy
         scores[:, 2] = w_syn * c[:, 2]
         # background: low magnitude in active metric dimensions
-        scores[:, 3] = -(
-            (w_rq * np.abs(c[:, 0]))
-            + (w_red * np.abs(c[:, 1]))
-            + (w_syn * np.abs(c[:, 2]))
-        )
+        scores[:, 3] = -((w_rq * np.abs(c[:, 0])) + (w_red * np.abs(c[:, 1])) + (w_syn * np.abs(c[:, 2])))
         return scores
 
     def _scores_global_prototype(
@@ -527,10 +515,10 @@ class MetricSpaceClustering:
         # [critical, redundant, synergistic, background]
         prototypes = np.array(
             [
-                [1.0, -1.0, 0.0],   # high rq, low red
-                [0.0, 1.0, -1.0],   # high red, low syn
-                [0.0, -1.0, 1.0],   # high syn, low red
-                [-1.0, -1.0, -1.0], # low on all
+                [1.0, -1.0, 0.0],  # high rq, low red
+                [0.0, 1.0, -1.0],  # high red, low syn
+                [0.0, -1.0, 1.0],  # high syn, low red
+                [-1.0, -1.0, -1.0],  # low on all
             ],
             dtype=np.float64,
         )

@@ -89,11 +89,11 @@ class MutualInformationGaussian(BaseMetric):
             outputs = outputs.reshape(-1, outputs.shape[-1])
 
         batch_size, num_neurons = outputs.shape
-        
+
         # Subsample if too many samples (common for unfolded CNN layers)
         subsample_indices = None
         if batch_size > self.max_samples:
-            subsample_indices = torch.randperm(batch_size, device=outputs.device)[:self.max_samples]
+            subsample_indices = torch.randperm(batch_size, device=outputs.device)[: self.max_samples]
             outputs = outputs[subsample_indices]
             batch_size = self.max_samples
 
@@ -110,7 +110,7 @@ class MutualInformationGaussian(BaseMetric):
                     inputs = inputs.permute(0, 2, 3, 1).reshape(B * H * W, C)
                 elif inputs.ndim != 2:
                     inputs = inputs.reshape(inputs.shape[0], -1)
-                
+
                 # Apply same subsampling as outputs
                 if subsample_indices is not None and inputs.shape[0] > self.max_samples:
                     inputs = inputs[subsample_indices]

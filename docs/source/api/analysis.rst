@@ -88,4 +88,4 @@ Analysis Utilities
 .. automodule:: alignment.analysis.utils
    :members:
    :undoc-members:
-   :show-inheritance: 
+   :show-inheritance:

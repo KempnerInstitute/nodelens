@@ -168,7 +168,7 @@ class GlobalMagnitudePruning(BasePruningStrategy):
         offset = 0
         for name, module, shape in module_info:
             num_weights = shape.numel()
-            module_mask = global_mask[offset:offset + num_weights].view(shape).float()
+            module_mask = global_mask[offset : offset + num_weights].view(shape).float()
             self.apply_pruning(module, module_mask)
             masks[name] = module_mask
             offset += num_weights

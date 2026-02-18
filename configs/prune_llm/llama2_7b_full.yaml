@@ -24,7 +24,7 @@ model:
   dtype: "bfloat16"
   device_map: "auto"
   trust_remote_code: true
-  
+
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
     - "model.model.layers.*.mlp.gate_proj"
@@ -55,9 +55,9 @@ metrics:
     - "gaussian_mi_analytic"
     - "average_redundancy"
     - "activation_l2_norm"
-  
+
   num_samples: 64
-  
+
   rayleigh_quotient:
     relative: true
     regularization: 1.0e-6
@@ -74,7 +74,7 @@ llm:
   scar_metrics: true
   scar_num_samples: 64
   scar_max_length: 512
-  
+
   evaluate_perplexity: true
   evaluation_num_samples: 100
   # Use NVIDIA Minitron official few-shot settings for downstream tasks.
@@ -84,7 +84,7 @@ llm:
   perplexity_protocol: "oats"
   wikitext_subset: "wikitext-2-raw-v1"
   perplexity_seq_len: 2048
-  
+
   evaluation_metrics:
     - "perplexity"
     - "loss"
@@ -105,7 +105,7 @@ analysis:
   layer_indices: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 31]
   save_scores: true
   generate_plots: true
-  
+
   metrics:
     - "activation_l2_norm"
     - "rayleigh_quotient"
@@ -120,13 +120,13 @@ analysis:
     - "halo_redundancy"
     - "cross_layer_importance"
     - "within_layer_importance"
-  
+
   plots:
     histograms: true
     scatter_plots: true
     pruning_curves: true
     redundancy_heatmaps: true
-  
+
   scatter_pairs:
     - ["activation_l2_norm", "rayleigh_quotient"]
     - ["scar_activation_power", "scar_loss_proxy"]
@@ -166,7 +166,7 @@ supernode:
   positive_redundancy: false
   cross_layer_analysis: true
   compare_by_connection: true
-  
+
   compute_metrics:
     - "activation"
     - "rayleigh_quotient"
@@ -182,7 +182,7 @@ supernode_robustness:
   num_bootstrap_samples: 10
   batch_size: 32
   max_samples: 256
-  
+
   metrics:
     - "scar_activation_power"
     - "scar_loss_proxy"
@@ -210,7 +210,7 @@ halo_analysis:
   sample_pairs: 2000
   max_samples: 2000
   max_pairs_per_group: 1000
-  
+
   plots:
     depth_comparison: true
     histograms: true
@@ -251,10 +251,10 @@ pruning:
   max_per_layer: 0.95
   structured: true
   dependency_aware: true
-  
+
   sparsity_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
   selection_modes: ["low"]
-  
+
   algorithms:
     - "rayleigh_quotient"
     - "gaussian_mi_analytic"
@@ -268,7 +268,7 @@ pruning:
     - "wanda"
     - "sparsegpt"
     - "cross_layer_importance"
-  
+
   scoring_methods:
     - "random"
     - "activation_l2_norm"
@@ -285,9 +285,9 @@ pruning:
     - "within_layer_importance"
     - "wanda"
     - "sparsegpt"
-  
+
   single_strategy: null
-  
+
   fine_tune:
     enabled: false
     epochs: 1
@@ -306,7 +306,7 @@ do_generalized_importance: true
 # ============================================================================
 evaluation:
   enabled: true
-  
+
   perplexity:
     enabled: true
     datasets:
@@ -316,7 +316,7 @@ evaluation:
       - name: "c4"
         split: "validation"
         max_samples: 1000
-  
+
   benchmarks:
     - name: "hellaswag"
       num_fewshot: 0
@@ -341,7 +341,7 @@ evaluation:
     - name: "mmlu"
       num_fewshot: 5
       limit: null
-  
+
   batch_size: 8
   max_eval_batches: null
 
@@ -359,29 +359,29 @@ visualization:
   format: "pdf"
   dpi: 300
   style: "seaborn-v0_8-paper"
-  
+
   histograms: true
   scatter_plots: true
   heatmaps: true
-  
+
   supernode_distribution:
     enabled: true
     plot_loss_proxy_histogram: true
     plot_concentration_by_layer: true
     highlight_top_percent: [1, 5, 10]
-  
+
   halo_structure:
     enabled: true
     plot_redundancy_by_depth: true
     plot_protection_vs_connection: true
     plot_within_vs_cross_group: true
-  
+
   cross_layer:
     enabled: true
     plot_downstream_importance_by_layer: true
     plot_importance_vs_redundancy: true
     plot_efficiency_heatmap: true
-  
+
   pruning_curves:
     enabled: true
     plot_sparsity_vs_perplexity: true
@@ -396,14 +396,14 @@ visualization:
       - "activation_l2_norm"
       - "weight_magnitude"
       - "random"
-  
+
   supernode_robustness:
     enabled: true
     jaccard_heatmap: true
     spearman_heatmap: true
     bootstrap_stability: true
     consistency_bars: true
-  
+
   scatter_pairs:
     - ["activation_l2_norm", "scar_loss_proxy"]
     - ["scar_loss_proxy", "supernode_connectivity_score"]

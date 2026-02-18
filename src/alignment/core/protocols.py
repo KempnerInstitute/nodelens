@@ -21,16 +21,16 @@ Example - Creating a custom metric:
 
     from alignment.core.protocols import AlignmentMetric
     from alignment.core.registry import register_metric
-    
+
     @register_metric("my_custom_metric", category="custom", tags=["experimental"])
     class MyCustomMetric:
         '''My custom alignment metric.'''
-        
+
         name = "my_custom_metric"
         requires_inputs = False
         requires_weights = True
         requires_outputs = True
-        
+
         def compute(self, outputs, weights, **kwargs):
             # Your metric computation here
             return per_neuron_scores
@@ -38,7 +38,7 @@ Example - Creating a custom metric:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple, Type, Union, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_checkable
 
 import torch
 import torch.nn as nn
@@ -259,13 +259,14 @@ class ResultReporter(Protocol):
 # NEW PROTOCOLS FOR ENHANCED MODULARITY
 # =============================================================================
 
+
 @runtime_checkable
 class Analyzer(Protocol):
     """
     Protocol for analysis components (clustering, halo analysis, cross-layer, etc.).
-    
+
     Analyzers take metric results and produce higher-level insights.
-    
+
     Example implementations:
     - KMeansClustering: Cluster neurons by metric values
     - HaloAnalysis: Analyze cross-layer dependencies
@@ -276,23 +277,19 @@ class Analyzer(Protocol):
     def name(self) -> str:
         """Analyzer name."""
         ...
-    
+
     @property
     def requires(self) -> List[str]:
         """List of required inputs (metric names, activations, etc.)."""
         ...
-    
+
     @property
     def provides(self) -> List[str]:
         """List of outputs this analyzer produces."""
         ...
 
     def analyze(
-        self,
-        metrics: Dict[str, Any],
-        model: Optional[nn.Module] = None,
-        activations: Optional[Dict[str, torch.Tensor]] = None,
-        **kwargs: Any
+        self, metrics: Dict[str, Any], model: Optional[nn.Module] = None, activations: Optional[Dict[str, torch.Tensor]] = None, **kwargs: Any
     ) -> Dict[str, Any]:
         """
         Perform analysis on metrics/activations.
@@ -307,21 +304,16 @@ class Analyzer(Protocol):
             Dictionary of analysis results
         """
         ...
-    
-    def visualize(
-        self,
-        results: Dict[str, Any],
-        output_dir: Optional[str] = None,
-        **kwargs: Any
-    ) -> List[str]:
+
+    def visualize(self, results: Dict[str, Any], output_dir: Optional[str] = None, **kwargs: Any) -> List[str]:
         """
         Generate visualizations from analysis results.
-        
+
         Args:
             results: Analysis results from analyze()
             output_dir: Directory to save figures
             **kwargs: Visualization parameters
-            
+
         Returns:
             List of paths to generated figures
         """
@@ -332,9 +324,9 @@ class Analyzer(Protocol):
 class Pruner(Protocol):
     """
     Protocol for pruning strategies.
-    
+
     Pruners compute importance scores and apply pruning to models.
-    
+
     Example implementations:
     - MagnitudePruning: Prune by weight magnitude
     - GradientPruning: Prune by gradient-based importance
@@ -346,19 +338,14 @@ class Pruner(Protocol):
     def name(self) -> str:
         """Pruner name."""
         ...
-    
+
     @property
     def structured(self) -> bool:
         """Whether this is structured (channel/neuron) or unstructured (weight) pruning."""
         ...
 
     def compute_importance(
-        self,
-        model: nn.Module,
-        layer_name: str,
-        activations: Optional[torch.Tensor] = None,
-        gradients: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, model: nn.Module, layer_name: str, activations: Optional[torch.Tensor] = None, gradients: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """
         Compute importance scores for neurons/channels in a layer.
@@ -375,12 +362,7 @@ class Pruner(Protocol):
         """
         ...
 
-    def select_to_prune(
-        self,
-        scores: torch.Tensor,
-        amount: float,
-        **kwargs: Any
-    ) -> torch.Tensor:
+    def select_to_prune(self, scores: torch.Tensor, amount: float, **kwargs: Any) -> torch.Tensor:
         """
         Select which neurons/channels to prune based on scores.
 
@@ -394,12 +376,7 @@ class Pruner(Protocol):
         """
         ...
 
-    def apply(
-        self,
-        model: nn.Module,
-        prune_mask: Dict[str, torch.Tensor],
-        **kwargs: Any
-    ) -> nn.Module:
+    def apply(self, model: nn.Module, prune_mask: Dict[str, torch.Tensor], **kwargs: Any) -> nn.Module:
         """
         Apply pruning to the model.
 
@@ -418,9 +395,9 @@ class Pruner(Protocol):
 class Visualizer(Protocol):
     """
     Protocol for visualization components.
-    
+
     Visualizers generate plots and figures from various data types.
-    
+
     Example implementations:
     - MetricHistogramVisualizer: Plot metric distributions
     - PruningCurveVisualizer: Plot accuracy vs sparsity
@@ -431,19 +408,13 @@ class Visualizer(Protocol):
     def name(self) -> str:
         """Visualizer name."""
         ...
-    
+
     @property
     def plot_types(self) -> List[str]:
         """List of plot types this visualizer can generate."""
         ...
 
-    def plot(
-        self,
-        data: Any,
-        plot_type: str,
-        save_path: Optional[str] = None,
-        **kwargs: Any
-    ) -> Any:
+    def plot(self, data: Any, plot_type: str, save_path: Optional[str] = None, **kwargs: Any) -> Any:
         """
         Generate a plot.
 
@@ -457,21 +428,16 @@ class Visualizer(Protocol):
             Matplotlib figure or other visualization object
         """
         ...
-    
-    def plot_batch(
-        self,
-        data: Dict[str, Any],
-        output_dir: str,
-        **kwargs: Any
-    ) -> List[str]:
+
+    def plot_batch(self, data: Dict[str, Any], output_dir: str, **kwargs: Any) -> List[str]:
         """
         Generate multiple plots from a batch of data.
-        
+
         Args:
             data: Dictionary of data to visualize
             output_dir: Directory to save figures
             **kwargs: Common plot parameters
-            
+
         Returns:
             List of paths to generated figures
         """
@@ -482,9 +448,9 @@ class Visualizer(Protocol):
 class Evaluator(Protocol):
     """
     Protocol for model evaluation.
-    
+
     Evaluators compute performance metrics on models.
-    
+
     Example implementations:
     - AccuracyEvaluator: Classification accuracy
     - PerplexityEvaluator: Language model perplexity
@@ -495,19 +461,13 @@ class Evaluator(Protocol):
     def name(self) -> str:
         """Evaluator name."""
         ...
-    
+
     @property
     def metrics(self) -> List[str]:
         """List of metrics this evaluator computes."""
         ...
 
-    def evaluate(
-        self,
-        model: nn.Module,
-        dataloader: DataLoader,
-        device: str = "cuda",
-        **kwargs: Any
-    ) -> Dict[str, float]:
+    def evaluate(self, model: nn.Module, dataloader: DataLoader, device: str = "cuda", **kwargs: Any) -> Dict[str, float]:
         """
         Evaluate the model.
 
@@ -527,9 +487,9 @@ class Evaluator(Protocol):
 class Preprocessor(Protocol):
     """
     Protocol for data/activation preprocessing.
-    
+
     Preprocessors transform raw data or activations before metric computation.
-    
+
     Example implementations:
     - CNNUnfoldPreprocessor: Unfold conv activations for covariance computation
     - NormalizePreprocessor: Normalize activations
@@ -541,11 +501,7 @@ class Preprocessor(Protocol):
         """Preprocessor name."""
         ...
 
-    def preprocess(
-        self,
-        data: torch.Tensor,
-        **kwargs: Any
-    ) -> torch.Tensor:
+    def preprocess(self, data: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """
         Preprocess data.
 
@@ -563,29 +519,26 @@ class Preprocessor(Protocol):
 # BASE CLASSES (Optional abstract implementations)
 # =============================================================================
 
+
 class BaseMetric(ABC):
     """
     Abstract base class for metrics with common functionality.
-    
+
     Inherit from this for convenience, or just implement the AlignmentMetric protocol.
     """
-    
+
     name: str = "base_metric"
     requires_inputs: bool = False
     requires_weights: bool = False
     requires_outputs: bool = True
-    
+
     @abstractmethod
     def compute(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        weights: Optional[torch.Tensor] = None,
-        outputs: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, inputs: Optional[torch.Tensor] = None, weights: Optional[torch.Tensor] = None, outputs: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """Compute the metric."""
         pass
-    
+
     def compute_distributed(
         self,
         inputs: Optional[torch.Tensor] = None,
@@ -599,83 +552,60 @@ class BaseMetric(ABC):
         result = self.compute(inputs, weights, outputs, **kwargs)
         if world_size > 1:
             import torch.distributed as dist
+
             dist.all_reduce(result, op=dist.ReduceOp.SUM)
             result = result / world_size
         return result
-    
+
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name='{self.name}')"
 
 
 class BaseAnalyzer(ABC):
     """Abstract base class for analyzers."""
-    
+
     name: str = "base_analyzer"
     requires: List[str] = []
     provides: List[str] = []
-    
+
     @abstractmethod
     def analyze(
-        self,
-        metrics: Dict[str, Any],
-        model: Optional[nn.Module] = None,
-        activations: Optional[Dict[str, torch.Tensor]] = None,
-        **kwargs: Any
+        self, metrics: Dict[str, Any], model: Optional[nn.Module] = None, activations: Optional[Dict[str, torch.Tensor]] = None, **kwargs: Any
     ) -> Dict[str, Any]:
         """Perform analysis."""
         pass
-    
-    def visualize(
-        self,
-        results: Dict[str, Any],
-        output_dir: Optional[str] = None,
-        **kwargs: Any
-    ) -> List[str]:
+
+    def visualize(self, results: Dict[str, Any], output_dir: Optional[str] = None, **kwargs: Any) -> List[str]:
         """Default visualization (override for custom plots)."""
         return []
 
 
 class BasePruner(ABC):
     """Abstract base class for pruning strategies."""
-    
+
     name: str = "base_pruner"
     structured: bool = True
-    
+
     @abstractmethod
     def compute_importance(
-        self,
-        model: nn.Module,
-        layer_name: str,
-        activations: Optional[torch.Tensor] = None,
-        gradients: Optional[torch.Tensor] = None,
-        **kwargs: Any
+        self, model: nn.Module, layer_name: str, activations: Optional[torch.Tensor] = None, gradients: Optional[torch.Tensor] = None, **kwargs: Any
     ) -> torch.Tensor:
         """Compute importance scores."""
         pass
-    
-    def select_to_prune(
-        self,
-        scores: torch.Tensor,
-        amount: float,
-        **kwargs: Any
-    ) -> torch.Tensor:
+
+    def select_to_prune(self, scores: torch.Tensor, amount: float, **kwargs: Any) -> torch.Tensor:
         """Select neurons to prune (default: lowest scores)."""
         n_prune = int(len(scores) * amount) if amount < 1 else int(amount)
         _, indices = torch.sort(scores)
         mask = torch.zeros_like(scores, dtype=torch.bool)
         mask[indices[:n_prune]] = True
         return mask
-    
-    def apply(
-        self,
-        model: nn.Module,
-        prune_mask: Dict[str, torch.Tensor],
-        **kwargs: Any
-    ) -> nn.Module:
+
+    def apply(self, model: nn.Module, prune_mask: Dict[str, torch.Tensor], **kwargs: Any) -> nn.Module:
         """Apply pruning masks to model."""
         for name, mask in prune_mask.items():
             layer = dict(model.named_modules()).get(name)
-            if layer is not None and hasattr(layer, 'weight'):
+            if layer is not None and hasattr(layer, "weight"):
                 with torch.no_grad():
                     layer.weight.data[mask] = 0
         return model
@@ -685,13 +615,15 @@ class BasePruner(ABC):
 # CONFIGURATION DATACLASSES
 # =============================================================================
 
+
 @dataclass
 class MetricConfig:
     """Configuration for a metric."""
+
     name: str
     enabled: bool = True
     params: Dict[str, Any] = None
-    
+
     def __post_init__(self):
         if self.params is None:
             self.params = {}
@@ -700,10 +632,11 @@ class MetricConfig:
 @dataclass
 class AnalyzerConfig:
     """Configuration for an analyzer."""
+
     name: str
     enabled: bool = True
     params: Dict[str, Any] = None
-    
+
     def __post_init__(self):
         if self.params is None:
             self.params = {}
@@ -712,11 +645,12 @@ class AnalyzerConfig:
 @dataclass
 class PrunerConfig:
     """Configuration for a pruner."""
+
     name: str
     amount: float = 0.5
     selection: str = "low"  # low, high, random
     params: Dict[str, Any] = None
-    
+
     def __post_init__(self):
         if self.params is None:
             self.params = {}

@@ -7,7 +7,7 @@ model:
   name: vgg16_bn
   pretrained: true
   num_classes: 10
-  
+
 dataset:
   name: cifar10
   root: ./data
@@ -42,25 +42,25 @@ cascade_analysis:
 pruning:
   enabled: true
   ratios: [0.1, 0.3, 0.5, 0.7, 0.8]  # VGG can handle higher sparsity
-  
+
   # Comprehensive algorithm list
   algorithms:
     # Baselines
     - random
     - magnitude
     - taylor
-    
+
     # Single metrics - prune LOW
     - rq_low              # Prune low Rayleigh Quotient
     - redundancy_low      # Prune low redundancy (MI)
     - synergy_low         # Prune low synergy
-    
+
     # Single metrics - prune HIGH
     - rq_high             # Prune high RQ
     - redundancy_high     # Prune high redundancy
     - synergy_high        # Prune high synergy
     - magnitude_high      # Prune high magnitude
-    
+
     # Composite combinations
     - composite           # score = RQ + syn - red (original)
     - composite_pos_red   # score = RQ + syn + red (flipped)
@@ -69,11 +69,11 @@ pruning:
     - magnitude_plus_rq   # score = magnitude + RQ
     - magnitude_minus_red # score = magnitude - redundancy
     - magnitude_plus_red  # score = magnitude + redundancy
-    
+
     # Cluster-aware
     - cluster_aware
     - cluster_aware_protect_redundant
-  
+
   fine_tuning:
     epochs: 10
     lr: 0.0001

@@ -10,13 +10,8 @@ Includes:
 - AblationResult: Results from metric ablation studies
 """
 
-from .metric_clustering import (
-    MetricSpaceClustering, 
-    ClusterResult, 
-    AblationResult,
-    METRIC_ABLATIONS,
-)
 from .cross_layer_halo import CrossLayerHaloAnalysis, HaloResult
+from .metric_clustering import METRIC_ABLATIONS, AblationResult, ClusterResult, MetricSpaceClustering
 
 __all__ = [
     "MetricSpaceClustering",

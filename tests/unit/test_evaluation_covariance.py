@@ -5,19 +5,9 @@ Tests for training/evaluation.py and dataops/processing/covariance.py.
 import pytest
 import torch
 import torch.nn as nn
-import numpy as np
 
-from alignment.training.evaluation import (
-    evaluate_classification,
-    evaluate_regression,
-    evaluate_model,
-    EvaluationManager,
-)
-from alignment.dataops.processing.covariance import (
-    CovarianceEstimator,
-    estimate_covariance,
-)
-
+from alignment.dataops.processing.covariance import CovarianceEstimator, estimate_covariance
+from alignment.training.evaluation import EvaluationManager, evaluate_classification, evaluate_model, evaluate_regression
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -225,8 +215,8 @@ class TestCovarianceEstimator:
         assert cov.shape == (4, 4)
 
     def test_estimate_condition_number_identity(self):
-        I = torch.eye(4)
-        kappa = CovarianceEstimator.estimate_condition_number(I)
+        identity = torch.eye(4)
+        kappa = CovarianceEstimator.estimate_condition_number(identity)
         assert kappa == pytest.approx(1.0, abs=1e-4)
 
     def test_compare_methods(self):
