@@ -330,6 +330,11 @@ class ExperimentConfig:
     fine_tune_type_aware_scale_classifier: bool = False
     # Record per-epoch test accuracy during post-pruning fine-tuning.
     fine_tune_track_epoch_accuracy: bool = False
+    # How often (in epochs) to evaluate during FT when track_epoch_accuracy=True.
+    # Default 5 means eval at epoch 5, 10, 15, ... and always at the last epoch.
+    fine_tune_eval_frequency: int = 5
+    # Use AMP (automatic mixed precision) during fine-tuning for faster training.
+    fine_tune_use_amp: bool = True
     alignment_structured_pruning: bool = False  # Use structured pruning for alignment
     cascading_direction: str = "forward"  # Direction for cascading pruning
     dependency_aware_pruning: bool = False  # Propagate masks across dependent layers

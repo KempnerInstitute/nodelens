@@ -228,6 +228,9 @@ class ClusterAnalysisExperiment:
         self.pruning_cluster_distributions = {}
         # Cache for expensive pruning scores (e.g., gradient-based Taylor)
         self._pruning_score_cache: Dict[str, Dict[str, "torch.Tensor"]] = {}
+        # Cache for cluster-aware first-pass results (scores + pruners), keyed by method name.
+        # Avoids recomputing identical scores across different sparsity ratios.
+        self._cap_first_pass_cache: Dict[str, Dict[str, Any]] = {}
 
         # Deterministic calibration subset (saved to disk for reproducibility)
         self._calibration_indices: Optional[List[int]] = None
@@ -3563,11 +3566,23 @@ class ClusterAnalysisExperiment:
         max_amount = float(self.config.pruning_max_per_layer)
 
         # First pass: compute per-layer cluster-aware scores (no pruning yet)
-        layer_scores: Dict[str, torch.Tensor] = {}
-        layer_pruners: Dict[str, "ClusterAwarePruning"] = {}
-        layer_num_channels: Dict[str, int] = {}
+        # Cache scores across sparsity ratios (ratio-independent for most methods).
+        _ratio_dependent = base_method in {"cluster_aware_annealed", "cluster_aware_adaptive"}
+        _cache_key = method_name if not _ratio_dependent else None
+        _cached = self._cap_first_pass_cache.get(_cache_key) if _cache_key else None
 
-        for idx, layer_name in enumerate(layer_names_all):
+        if _cached is not None:
+            layer_scores = _cached["layer_scores"]
+            layer_pruners = _cached["layer_pruners"]
+            layer_num_channels = _cached["layer_num_channels"]
+            logger.debug("Reusing cached CAP first-pass scores for method=%s", method_name)
+        else:
+            layer_scores: Dict[str, torch.Tensor] = {}
+            layer_pruners: Dict[str, "ClusterAwarePruning"] = {}
+            layer_num_channels: Dict[str, int] = {}
+
+        _layers_to_score = layer_names_all if _cached is None else []
+        for idx, layer_name in enumerate(_layers_to_score):
             if prunable_set and (layer_name not in prunable_set):
                 continue
             layer = module_map.get(layer_name)
@@ -3943,6 +3958,14 @@ class ClusterAnalysisExperiment:
 
             layer_scores[layer_name] = scores.detach()
             layer_pruners[layer_name] = pruner
+
+        # Store first-pass results in cache for reuse across sparsity ratios
+        if _cache_key is not None and _cached is None:
+            self._cap_first_pass_cache[_cache_key] = {
+                "layer_scores": layer_scores,
+                "layer_pruners": layer_pruners,
+                "layer_num_channels": layer_num_channels,
+            }
 
         # Compute per-layer amounts using the shared distribution manager.
         try:
@@ -4839,6 +4862,11 @@ class ClusterAnalysisExperiment:
         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay or 0.0))
         criterion = nn.CrossEntropyLoss()
 
+        # AMP (automatic mixed precision) for faster FT on modern GPUs
+        use_amp = bool(getattr(self.config, "fine_tune_use_amp", True)) and self.device != "cpu"
+        amp_dtype = torch.bfloat16 if (use_amp and hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()) else torch.float16
+        scaler = torch.amp.GradScaler(enabled=(use_amp and amp_dtype == torch.float16))
+
         module_map: Dict[str, nn.Module] = dict(model.named_modules())
         masks_dev: Dict[str, torch.Tensor] = {}
         bn_map: Dict[str, nn.Module] = {}
@@ -4979,15 +5007,17 @@ class ClusterAnalysisExperiment:
             n_batches = 0
 
             for x, y in self.train_loader:
-                x, y = x.to(self.device), y.to(self.device)
+                x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
 
-                optimizer.zero_grad()
-                out = model(x)
-                loss = criterion(out, y)
-                loss.backward()
+                optimizer.zero_grad(set_to_none=True)
+                with torch.amp.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
+                    out = model(x)
+                    loss = criterion(out, y)
+                scaler.scale(loss).backward()
                 if bool(type_aware):
                     _apply_type_aware_updates()
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 _reapply_masks()
 
                 total_loss += float(loss.item())
@@ -5000,10 +5030,13 @@ class ClusterAnalysisExperiment:
                 logger.debug("    FT epoch %d/%d: loss=%.4f", epoch + 1, epochs, avg_loss)
 
             if bool(track_epoch_accuracy):
-                model.eval()
-                acc = float(self._evaluate_accuracy(model))
-                ft_curve.append({"epoch": int(epoch + 1), "accuracy": acc})
-                model.train()
+                eval_freq = max(1, int(getattr(self.config, "fine_tune_eval_frequency", 5)))
+                is_last = (epoch + 1) == epochs
+                if is_last or (epoch + 1) % eval_freq == 0:
+                    model.eval()
+                    acc = float(self._evaluate_accuracy(model))
+                    ft_curve.append({"epoch": int(epoch + 1), "accuracy": acc})
+                    model.train()
 
         model.eval()
         return model, ft_curve
@@ -5012,17 +5045,20 @@ class ClusterAnalysisExperiment:
         """Evaluate model accuracy on test set."""
         model = model or self.model
         model.eval()
-        
+
         correct = 0
         total = 0
-        
+        use_amp = self.device != "cpu"
+        amp_dtype = torch.bfloat16 if (use_amp and hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()) else torch.float16
+
         with torch.no_grad():
             for x, y in self.test_loader:
-                x, y = x.to(self.device), y.to(self.device)
-                out = model(x)
+                x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                with torch.amp.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
+                    out = model(x)
                 correct += (out.argmax(1) == y).sum().item()
                 total += y.size(0)
-        
+
         return correct / total if total > 0 else 0.0
     
     def run_full_analysis(self, include_pruning: bool = True) -> Dict[str, Any]:

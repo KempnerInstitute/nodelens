@@ -29,7 +29,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import torch
 import yaml
@@ -403,8 +403,18 @@ def _create_cluster_experiment(config):
 
     batch_size = int(getattr(config, "batch_size", 128))
     num_workers = int(getattr(config, "num_workers", 4))
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size * 2, shuffle=False, num_workers=num_workers)
+    _dl_kwargs: Dict[str, Any] = {}
+    if num_workers > 0:
+        _dl_kwargs["persistent_workers"] = True
+        _dl_kwargs["prefetch_factor"] = 2
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=True, **_dl_kwargs,
+    )
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=batch_size * 2, shuffle=False,
+        num_workers=num_workers, pin_memory=True, **_dl_kwargs,
+    )
 
     # Train/fine-tune the model on target dataset before experiments.
     # If you want a pure "no-training" analysis, provide an explicit checkpoint and set do_train=false.
