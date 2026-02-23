@@ -1,0 +1,86 @@
+
+# ========================================================================================================================
+
+experiment:
+  name: "llama3_pruning"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_pruning"
+
+# ========================================================================================================================
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  
+  # LLaMA MLP: up_proj has 14336 intermediate neurons (pruning target)
+  # Note: HFCausalLM wraps LlamaForCausalLM, so paths include 'model.model.'
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+  # tracked_layers:
+  #   - "model.model.layers.10.mlp.up_proj"     # 14336 intermediate neurons
+  #   - "model.model.layers.10.mlp.down_proj"   # For SCAR: hooks capture 14336-dim input
+
+# ========================================================================================================================
+
+dataset:
+  name: "wikitext-2-v1"
+  batch_size: 1
+  num_workers: 0
+
+# ========================================================================================================================
+
+metrics:
+  enabled:
+    - "activation_l2_norm"
+  num_samples: 128
+
+# ========================================================================================================================
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 4
+  scar_max_length: 512
+  evaluate_perplexity: true
+  evaluation_dataset: "wikitext"
+  evaluation_num_samples: 50
+
+# ========================================================================================================================
+
+pruning:
+  enabled: true
+  strategy: "alignment"
+  sparsity_levels: [0.2, 0.4, 0.6, 0.8]
+  scoring: "activation_l2_norm"
+  direction: "low"
+  structured: true
+
+# ========================================================================================================================
+
+# supernode:
+#   enabled: true
+
+#   # Supernode identification (in intermediate dimension)
+#   score_metric: "scar_activation_power"        # Options: scar_activation_power, scar_taylor,
+#                                          #          scar_loss_proxy, rayleigh_quotient,
+#                                          #          mutual_information, activation_l2_norm
+#   core_fraction: 0.01                    # Top 1% as supernodes
+#   protect_core: true                     # Protect during pruning
+
+#   # Cross-layer analysis
+#   cross_layer_analysis: true             # Enable next-layer analysis
+#   follower_fraction: 0.10                # Top 10% by weight from supernodes
+
+#   compare_by_connection: true            # Compare high vs low connected neurons
+
+# ========================================================================================================================
+
+visualization:
+  format: "png"
+  dpi: 300
