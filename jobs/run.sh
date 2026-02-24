@@ -74,7 +74,7 @@ echo "==========================================================================
 echo ""
 
 python scripts/run_experiment.py \
-    --config configs/examples/llama3_extended_analysis.yaml \
+    --config configs/examples/llama3_activation_vs_scar.yaml \
     --device cuda
 
 echo ""
