@@ -1228,6 +1228,27 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["cluster_aware_late_alpha"] = float(ca["late_alpha"])
         if "late_gamma" in ca:
             flat_config["cluster_aware_late_gamma"] = float(ca["late_gamma"])
+        # Two-axis adaptive settings
+        if "twoaxis_depth_switch" in ca:
+            flat_config["cluster_aware_twoaxis_depth_switch"] = float(ca["twoaxis_depth_switch"])
+        if "twoaxis_depth_sharpness" in ca:
+            flat_config["cluster_aware_twoaxis_depth_sharpness"] = float(ca["twoaxis_depth_sharpness"])
+        if "twoaxis_ixy_weight" in ca:
+            flat_config["cluster_aware_twoaxis_ixy_weight"] = float(ca["twoaxis_ixy_weight"])
+        if "twoaxis_red_internal_weight" in ca:
+            flat_config["cluster_aware_twoaxis_red_internal_weight"] = float(ca["twoaxis_red_internal_weight"])
+        if "twoaxis_syn_weight" in ca:
+            flat_config["cluster_aware_twoaxis_syn_weight"] = float(ca["twoaxis_syn_weight"])
+        if "twoaxis_early_task_weight" in ca:
+            flat_config["cluster_aware_twoaxis_early_task_weight"] = float(ca["twoaxis_early_task_weight"])
+        if "twoaxis_late_task_weight" in ca:
+            flat_config["cluster_aware_twoaxis_late_task_weight"] = float(ca["twoaxis_late_task_weight"])
+        if "twoaxis_red_target_weight" in ca:
+            flat_config["cluster_aware_twoaxis_red_target_weight"] = float(ca["twoaxis_red_target_weight"])
+        if "twoaxis_use_pid_red_target" in ca:
+            flat_config["cluster_aware_twoaxis_use_pid_red_target"] = bool(ca["twoaxis_use_pid_red_target"])
+        if "twoaxis_halo_weight" in ca:
+            flat_config["cluster_aware_twoaxis_halo_weight"] = float(ca["twoaxis_halo_weight"])
 
     # Generalized Taylor pruning configuration (vision)
     if isinstance(pruning_block.get("generalized_taylor"), dict):
@@ -1443,6 +1464,24 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     elif "base_output_dir" in nested_config:
         flat_config["base_output_dir"] = nested_config["base_output_dir"]
 
+    # -----------------------------------------------------------------------
+    # Passthrough: copy any top-level keys from the input that are valid
+    # ExperimentConfig fields but were not explicitly mapped above.  This
+    # prevents new dataclass fields (e.g. model_checkpoint, hybrid_taylor_allocation)
+    # from being silently dropped when loading already-flat JSON/YAML configs.
+    # -----------------------------------------------------------------------
+    try:
+        import dataclasses as _dc
+
+        from alignment.experiments.base import ExperimentConfig as _EC
+
+        valid_fields = {f.name for f in _dc.fields(_EC)}
+        for key, value in nested_config.items():
+            if key in valid_fields and key not in flat_config:
+                flat_config[key] = value
+    except Exception:
+        pass  # Graceful fallback if ExperimentConfig cannot be imported
+
     return flat_config
 
 
@@ -1581,6 +1620,16 @@ def load_config_with_overrides(
             "pruning.cluster_aware.early_gamma": "cluster_aware_early_gamma",
             "pruning.cluster_aware.late_alpha": "cluster_aware_late_alpha",
             "pruning.cluster_aware.late_gamma": "cluster_aware_late_gamma",
+            "pruning.cluster_aware.twoaxis_depth_switch": "cluster_aware_twoaxis_depth_switch",
+            "pruning.cluster_aware.twoaxis_depth_sharpness": "cluster_aware_twoaxis_depth_sharpness",
+            "pruning.cluster_aware.twoaxis_ixy_weight": "cluster_aware_twoaxis_ixy_weight",
+            "pruning.cluster_aware.twoaxis_red_internal_weight": "cluster_aware_twoaxis_red_internal_weight",
+            "pruning.cluster_aware.twoaxis_syn_weight": "cluster_aware_twoaxis_syn_weight",
+            "pruning.cluster_aware.twoaxis_early_task_weight": "cluster_aware_twoaxis_early_task_weight",
+            "pruning.cluster_aware.twoaxis_late_task_weight": "cluster_aware_twoaxis_late_task_weight",
+            "pruning.cluster_aware.twoaxis_red_target_weight": "cluster_aware_twoaxis_red_target_weight",
+            "pruning.cluster_aware.twoaxis_use_pid_red_target": "cluster_aware_twoaxis_use_pid_red_target",
+            "pruning.cluster_aware.twoaxis_halo_weight": "cluster_aware_twoaxis_halo_weight",
             # Pruning distribution safety caps
             "pruning.distribution": "pruning_distribution",
             "pruning.dependency_aware": "dependency_aware_pruning",

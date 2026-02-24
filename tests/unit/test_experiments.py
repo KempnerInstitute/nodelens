@@ -24,6 +24,8 @@ class TestExperimentConfig:
         config = ExperimentConfig(name="test")
         assert config.experiment_type == "alignment_analysis"
         assert config.seed == 42
+        assert config.task_target_permutation == "none"
+        assert config.mi_in_proxy_sigma_mode == "median"
 
 
 class TestPruningConfig:
