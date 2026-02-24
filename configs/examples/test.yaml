@@ -16,16 +16,10 @@ model:
   torch_dtype: "bfloat16"
   device_map: "auto"
   
-  # LLaMA MLP: up_proj has 14336 intermediate neurons (pruning target)
-  # Note: HFCausalLM wraps LlamaForCausalLM, so paths include 'model.model.'
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
     - "model.model.layers.*.mlp.gate_proj"
     - "model.model.layers.*.mlp.down_proj"
-
-  # tracked_layers:
-  #   - "model.model.layers.10.mlp.up_proj"     # 14336 intermediate neurons
-  #   - "model.model.layers.10.mlp.down_proj"   # For SCAR: hooks capture 14336-dim input
 
 # ========================================================================================================================
 
@@ -84,3 +78,20 @@ supernode:
 visualization:
   format: "png"
   dpi: 300
+
+analysis:
+  save_scores: true             # Save importance scores for post-hoc analysis
+  generate_plots: true
+
+  plots:
+    histograms: true            # Score distributions
+    scatter_plots: true         # Metric correlations
+    pruning_curves: true        # Accuracy/perplexity vs sparsity
+    redundancy_heatmaps: true   # Layer-wise redundancy patterns
+
+  # Metric pairs for scatter plot analysis
+  scatter_pairs:
+    - ["activation_l2_norm", "scar_loss_proxy"]
+    - ["activation_l2_norm", "scar_activation_power"]
+    - ["activation_l2_norm", "scar_curvature"]
+    - ["activation_l2_norm", "scar_taylor"]
