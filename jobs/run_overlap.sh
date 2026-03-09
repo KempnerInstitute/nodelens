@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=run_exp
-#SBATCH --output=logs/run_exp_%j.out
-#SBATCH --error=logs/run_exp_%j.err
+#SBATCH --job-name=overlap_run_exp
+#SBATCH --output=logs/overlap_run_exp_%j.out
+#SBATCH --error=logs/overlap_run_exp_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
@@ -39,7 +39,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 
 python scripts/run_experiment.py \
-    --config configs/examples/llama3_activation_vs_scar.yaml \
+    --config configs/examples/llama3_activation_vs_scar_overlap.yaml \
     --device cuda \
     --allow-dirty
 

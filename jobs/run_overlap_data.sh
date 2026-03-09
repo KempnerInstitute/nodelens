@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=run_exp
-#SBATCH --output=logs/run_exp_%j.out
-#SBATCH --error=logs/run_exp_%j.err
+#SBATCH --job-name=dataset_overlap_run
+#SBATCH --output=logs/dataset_overlap_run_%j.out
+#SBATCH --error=logs/dataset_overlap_run_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=02:00:00
 #SBATCH --mem=80GB
-#SBATCH --partition=kempner_h100
+#SBATCH --partition=kempner
 #SBATCH --account=kempner_undergrads
 
 
@@ -38,10 +38,8 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 # export HF_TOKEN=$(cat /n/home13/hsafaai/.cache/huggingface/token)
 
 
-python scripts/run_experiment.py \
-    --config configs/examples/llama3_activation_vs_scar.yaml \
-    --device cuda \
-    --allow-dirty
+python scripts/compare_supernode_dataset_overlap.py \
+    --config configs/examples/llama3_dataset_supernode_overlap.yaml
 
 echo ""
 echo "============================================================================"

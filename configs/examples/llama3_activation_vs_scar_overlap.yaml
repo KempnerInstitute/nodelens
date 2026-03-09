@@ -6,7 +6,7 @@ experiment:
   type: "llm_alignment"
   seed: 42
   device: "cuda"
-  output_dir: "./results/llama3_pruning"
+  output_dir: "./results/top0p1_scar_lp_llama3_pruning"
 
 # ========================================================================================================================
 
@@ -78,6 +78,19 @@ supernode:
   follower_fraction: 0.10                # Top 10% by weight from supernodes
 
   compare_by_connection: true            # Compare high vs low connected neurons
+
+# ========================================================================================================================
+
+# Cross-metric overlap analysis (Jaccard) between SCAR and activation supernodes
+supernode_robustness:
+  enabled: true
+  supernode_fraction: 0.001
+  num_bootstrap_samples: 10
+  batch_size: 16
+  max_samples: 128
+  metrics:
+    - "scar_loss_proxy"
+    - "activation_l2_norm"
 
 # ========================================================================================================================
 

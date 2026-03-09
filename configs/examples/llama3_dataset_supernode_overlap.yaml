@@ -1,0 +1,64 @@
+# Compare supernode overlap across multiple calibration datasets.
+# Run with:
+#   python scripts/compare_supernode_dataset_overlap.py \
+#       --config configs/examples/llama3_dataset_supernode_overlap.yaml
+
+model:
+  model_id: "meta-llama/Llama-3.1-8B"
+  device: "cuda"
+  torch_dtype: "bfloat16"
+  trust_remote_code: true
+  tracked_layers:
+    - "model.layers.*.mlp.down_proj"
+
+analysis:
+  # Top fraction of neurons considered supernodes per layer.
+  # Options:
+  # - activation_l2_norm (or activation_l2)
+  # - scar_activation_power, scar_taylor, scar_curvature, scar_loss_proxy, scar_loss_proxy_factored
+  # - rayleigh_quotient (or rq)
+  # - gaussian_mi_analytic (or mutual_information, mi)
+  supernode_metric: "scar_loss_proxy"
+  supernode_fraction: 0.01
+  # Set false to skip Jaccard heatmaps.
+  jaccard_heatmap: false
+  # Optional: set false to disable Jaccard fraction sweep even if configured.
+  # If omitted, sweep runs when `fraction_sweep` is provided.
+  # jaccard_sweep: true
+  # Optional: fractions used for Jaccard-vs-fraction sweep plots (x-axis).
+  # If omitted, sweep plots are disabled.
+  fraction_sweep: [1.0e-5, 5.0e-5, 1.0e-4, 1.5e-4, 2.0e-4, 3.0e-4, 5.0e-4, 7.5e-4, 1.0e-3, 5.0e-3, 1.0e-2, 5.0e-2, 1.0e-1, 5.0e-1, 1.0]
+  batch_size: 2
+  max_length: 512
+
+output:
+  output_dir: "./results/llama3_dataset_supernode_overlap"
+  unique_subdir: true
+
+datasets:
+  - name: "wikitext"
+    split: "test"
+    max_samples: 128
+    max_length: 512
+    kwargs:
+      dataset_name: "wikitext-2-raw-v1"
+
+  - name: "c4"
+    split: "validation"
+    max_samples: 128
+    max_length: 512
+
+  - name: "code"
+    split: "train"
+    max_samples: 128
+    max_length: 512
+    kwargs:
+      language: "python"
+
+  - name: "arxiv"
+    split: "train"
+    max_samples: 128
+    max_length: 512
+    kwargs:
+      hf_dataset: "ccdv/arxiv-summarization"
+      text_field: "article"
