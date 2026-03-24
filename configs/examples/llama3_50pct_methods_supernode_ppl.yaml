@@ -1,0 +1,112 @@
+# LLaMA-3 50% sparsity comparison across multiple pruning methods.
+# Tracks supernode pruning diagnostics and perplexity for each method.
+# Run with:
+#   python scripts/run_experiment.py \
+#       --config configs/examples/llama3_50pct_methods_supernode_ppl.yaml \
+#       --device cuda --allow-dirty
+
+experiment:
+  name: "llama3_50pct_methods_supernode_ppl"
+  type: "llm_alignment"
+  seed: 42
+  device: "cuda"
+  output_dir: "./results/llama3_50pct_methods_supernode_ppl"
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-8B"
+  dtype: "bfloat16"
+  device_map: "auto"
+
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+metrics:
+  enabled:
+    - "activation_l2_norm"
+  num_samples: 32
+
+# metrics:
+#   enabled:
+#     - "rayleigh_quotient"
+#     - "activation_l2_norm"
+#   num_samples: 32
+
+#   rayleigh_quotient:
+#     relative: true
+#     regularization: 1.0e-6
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 32
+  scar_max_length: 512
+
+  evaluate_perplexity: true
+  evaluation_num_samples: 50
+  evaluation_metrics:
+    - "perplexity"
+
+supernode:
+  enabled: true
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  # Use SCAR loss-proxy for supernode identification.
+  score_metric: "scar_loss_proxy"
+  protect_core: false
+  cross_layer_analysis: true
+  compare_by_connection: true
+  compute_metrics:
+    - "activation"
+    # - "rayleigh_quotient"
+
+pruning:
+  enabled: true
+  sparsity_levels: [0.5]
+  selection_modes: ["low"]
+  distribution: "uniform"
+  structured: true
+  dependency_aware: true
+
+  algorithms:
+    - "weight_magnitude"              # Magnitude
+    - "activation_l2_norm"            # Act-L2
+    - "wanda"                         # Wanda
+    - "sparsegpt"                     # SparseGPT
+    - "llm_pruner"                    # LLM-Pruner
+    - "flap"                          # FLAP
+    - "ria"                           # RIA
+    - "scar_loss_proxy"               # SCAR-lp
+    - "supernode_protection_score"    # SCAR-prot
+    - "supernode_connectivity_score"  # SCAR-conn
+
+  single_strategy: null
+
+  fine_tune:
+    enabled: false
+
+do_directed_redundancy: true
+do_connectivity_pruning: true
+
+performance:
+  eval_batches: null
+
+analysis:
+  save_scores: true
+  generate_plots: false
+  plots:
+    histograms: false
+    scatter_plots: false
+    pruning_curves: true
+    redundancy_heatmaps: false
+
+visualization:
+  format: "png"
+  dpi: 200

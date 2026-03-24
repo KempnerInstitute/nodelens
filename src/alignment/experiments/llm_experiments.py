@@ -7995,6 +7995,59 @@ class LLMAlignmentExperiment(BaseExperiment):
         layers_with_super = 0
         layers_with_super_pruned = 0
 
+        # Actual channel pruning diagnostics from realized masks (not config targets).
+        nodes_total = 0
+        nodes_pruned = 0
+
+        # Overlap diagnostic: channels classified as supernodes by BOTH
+        # SCAR-LP and activation_l2_norm, and how many of those are pruned.
+        both_total = 0
+        both_pruned = 0
+
+        supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+
+        def _make_supernode_mask(metric_scores: torch.Tensor) -> torch.Tensor:
+            num_neurons = int(metric_scores.numel())
+            if num_neurons <= 0:
+                return torch.zeros_like(metric_scores, dtype=torch.bool)
+
+            top_k_cfg = supernode_cfg.get("top_k")
+            core_fraction = float(supernode_cfg.get("core_fraction", 0.1))
+            min_core = max(1, int(supernode_cfg.get("min_core_neurons", 1)))
+
+            if top_k_cfg is not None:
+                num_core = min(num_neurons, int(top_k_cfg))
+            else:
+                num_core = max(1, int(round(core_fraction * num_neurons)))
+
+            num_core = max(num_core, min_core)
+            num_core = min(num_core, num_neurons)
+
+            _, top_indices = torch.topk(metric_scores, k=num_core, largest=True)
+            out = torch.zeros_like(metric_scores, dtype=torch.bool)
+            out[top_indices] = True
+            return out
+
+        def _get_layer_metric_scores(base_layer_name: str, layer_idx: str, metric_name: str) -> Optional[torch.Tensor]:
+            # Resolve common naming variants so metrics from SCAR hooks and wrapper
+            # activations can both be found for the same logical MLP layer.
+            key_candidates = [
+                base_layer_name,
+                base_layer_name.replace("model.model.", "model."),
+                base_layer_name.replace("model.", "model.model.", 1),
+                f"model.layers.{layer_idx}.mlp.down_proj",
+                f"model.model.layers.{layer_idx}.mlp.down_proj",
+                f"model.layers.{layer_idx}.mlp.gate_proj",
+                f"model.model.layers.{layer_idx}.mlp.gate_proj",
+                f"model.layers.{layer_idx}.mlp.up_proj",
+                f"model.model.layers.{layer_idx}.mlp.up_proj",
+            ]
+            for cand in key_candidates:
+                metric_vals = (self.importance_scores.get(cand) or {}).get(metric_name)
+                if torch.is_tensor(metric_vals):
+                    return metric_vals
+            return None
+
         for layer_name in self.importance_scores.keys():
             if metric not in self.importance_scores[layer_name]:
                 continue
@@ -8058,6 +8111,14 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
 
+            # Diagnostic: actual per-layer channel pruning from the realized mask.
+            try:
+                nodes_total += int(mask.numel())
+                nodes_pruned += int((mask == 0).sum().item())
+            except Exception:
+                # Never fail pruning due to diagnostics.
+                pass
+
             # Diagnostic: how many supernodes did we prune in this layer?
             if core_mask is not None:
                 try:
@@ -8077,6 +8138,24 @@ class LLMAlignmentExperiment(BaseExperiment):
                 except Exception:
                     # Never fail pruning due to diagnostics.
                     pass
+
+            # Diagnostic: how many channels are in SCAR-LP ∩ Act-L2 supernodes,
+            # and how many of those are pruned by this method?
+            try:
+                scar_lp_scores = _get_layer_metric_scores(layer_name, layer_idx, "scar_loss_proxy")
+                act_l2_scores = _get_layer_metric_scores(layer_name, layer_idx, "activation_l2_norm")
+                if torch.is_tensor(scar_lp_scores) and torch.is_tensor(act_l2_scores):
+                    if scar_lp_scores.numel() == act_l2_scores.numel() == mask.numel():
+                        scar_mask = _make_supernode_mask(scar_lp_scores.to(device=mask.device, dtype=torch.float32))
+                        act_mask = _make_supernode_mask(act_l2_scores.to(device=mask.device, dtype=torch.float32))
+                        both_mask = scar_mask & act_mask
+                        pruned = mask == 0
+
+                        both_total += int(both_mask.sum().item())
+                        both_pruned += int((pruned & both_mask).sum().item())
+            except Exception:
+                # Never fail pruning due to diagnostics.
+                pass
 
             # Get the MLP module - use underlying model to handle HFCausalLM wrapper
             underlying_model = self._get_underlying_model()
@@ -8154,6 +8233,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "supernodes_total": int(super_total),
                 "supernodes_pruned": int(super_pruned),
                 "supernodes_pruned_frac": (float(super_pruned) / float(super_total)) if super_total > 0 else None,
+                "nodes_total": int(nodes_total),
+                "nodes_pruned": int(nodes_pruned),
+                "nodes_pruned_frac": (float(nodes_pruned) / float(nodes_total)) if nodes_total > 0 else None,
+                "supernodes_both_scar_lp_activation_l2_total": int(both_total),
+                "supernodes_both_scar_lp_activation_l2_pruned": int(both_pruned),
+                "supernodes_both_scar_lp_activation_l2_pruned_frac": (float(both_pruned) / float(both_total)) if both_total > 0 else None,
                 "layers_with_supernodes": int(layers_with_super),
                 "layers_with_supernodes_pruned": int(layers_with_super_pruned),
             }
