@@ -893,7 +893,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # Map training configuration
-    # Auto-disable training when using pretrained models (unless explicitly enabled)
+    # Preserve legacy flat training keys when present, and only fall back to
+    # pretrained-based defaults when the config truly leaves training
+    # unspecified.
     is_pretrained = flat_config.get("pretrained", False)
 
     if "training" in nested_config:
@@ -925,6 +927,31 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         # No training block - auto-disable for pretrained models
         if is_pretrained:
             flat_config["do_train"] = False
+
+    # Legacy flat-format overrides. Many existing paper configs specify
+    # training controls at top level rather than under a nested `training`
+    # block. Respect those explicit values instead of replacing them with the
+    # pretrained default above.
+    if "do_train" in nested_config:
+        flat_config["do_train"] = nested_config["do_train"]
+    if "training_epochs" in nested_config:
+        flat_config["training_epochs"] = nested_config["training_epochs"]
+    if "learning_rate" in nested_config:
+        flat_config["learning_rate"] = nested_config["learning_rate"]
+    if "optimizer" in nested_config:
+        flat_config["optimizer"] = str(nested_config["optimizer"]).lower()
+    if "train_before_dropout" in nested_config:
+        flat_config["train_before_dropout"] = nested_config["train_before_dropout"]
+    if "scheduler" in nested_config:
+        flat_config["scheduler"] = nested_config["scheduler"]
+    if "scheduler_config" in nested_config:
+        flat_config["scheduler_config"] = nested_config["scheduler_config"]
+    if "momentum" in nested_config:
+        flat_config["momentum"] = nested_config["momentum"]
+    if "weight_decay" in nested_config:
+        flat_config["weight_decay"] = nested_config["weight_decay"]
+    if "num_networks" in nested_config:
+        flat_config["num_networks"] = nested_config["num_networks"]
 
     # Map alignment/metrics settings
     # Priority: metrics.enabled > alignment.methods > alignment_methods > default

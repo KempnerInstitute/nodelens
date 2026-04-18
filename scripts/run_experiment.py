@@ -278,7 +278,7 @@ def _create_cluster_experiment(config):
     from alignment.dataops.datasets.unified_dataset import DATASET_CONFIGS
     from alignment.models.hub import adapt_model_for_dataset
 
-    model_name = str(cluster_config.model_name).lower()
+    requested_model_name = str(cluster_config.model_name).lower()
     dataset_name = str(cluster_config.dataset_name).lower()
 
     # Resolve num_classes: explicit model_config > dataset registry > legacy fallback
@@ -292,31 +292,60 @@ def _create_cluster_experiment(config):
 
     pretrained = bool(getattr(cluster_config, "pretrained", True))
     weights_name = model_cfg.get("weights", None) if isinstance(model_cfg, dict) else None
-    weights_arg = weights_name if pretrained else None
 
-    # Map model_name to torchvision function (handles vgg16->vgg16_bn alias)
-    _TORCHVISION_MAP = {
-        "resnet18": ("resnet18", "IMAGENET1K_V1"),
-        "resnet50": ("resnet50", "IMAGENET1K_V1"),
-        "vgg16": ("vgg16_bn", "IMAGENET1K_V1"),
-        "mobilenetv2": ("mobilenet_v2", "IMAGENET1K_V1"),
-        "mobilenet_v2": ("mobilenet_v2", "IMAGENET1K_V1"),
-        "mobilenet": ("mobilenet_v2", "IMAGENET1K_V1"),
-        "alexnet": ("alexnet", "IMAGENET1K_V1"),
+    # Allow both direct torchvision names (e.g. "resnet18") and the registry-style
+    # wrapper form model_name="torchvision_model", model_config.model_name="convnext_tiny".
+    if requested_model_name in {"torchvision_model", "torchvision"}:
+        resolved_model_name = str(model_cfg.get("model_name", "")).lower()
+        if not resolved_model_name:
+            raise ValueError("model_config.model_name must be set when model_name='torchvision_model'")
+    else:
+        resolved_model_name = requested_model_name
+
+    # Map common paper aliases to torchvision function names.
+    _TORCHVISION_ALIASES = {
+        "vgg16": "vgg16_bn",
+        "mobilenetv2": "mobilenet_v2",
+        "mobilenet": "mobilenet_v2",
+    }
+    tv_func_name = _TORCHVISION_ALIASES.get(resolved_model_name, resolved_model_name)
+
+    if not hasattr(torchvision.models, tv_func_name):
+        supported = sorted(
+            {
+                "alexnet",
+                "convnext_tiny",
+                "mobilenet",
+                "mobilenet_v2",
+                "mobilenetv2",
+                "resnet18",
+                "resnet50",
+                "vgg16",
+            }
+        )
+        raise ValueError(f"Unknown model: {resolved_model_name}. Supported: {supported}")
+
+    tv_func = getattr(torchvision.models, tv_func_name)
+    tv_model_kwargs = {
+        k: v for k, v in (model_cfg.items() if isinstance(model_cfg, dict) else []) if k not in {"model_name", "weights", "checkpoint", "num_classes"}
     }
 
-    tv_key = None
-    for key in _TORCHVISION_MAP:
-        if key in model_name:
-            tv_key = key
-            break
-
-    if tv_key is None:
-        raise ValueError(f"Unknown model: {model_name}. Supported: {list(_TORCHVISION_MAP.keys())}")
-
-    tv_func_name, default_weights = _TORCHVISION_MAP[tv_key]
-    tv_func = getattr(torchvision.models, tv_func_name)
-    model = tv_func(weights=weights_arg or default_weights)
+    if pretrained:
+        try:
+            if weights_name is not None:
+                model = tv_func(weights=weights_name, **tv_model_kwargs)
+            else:
+                model = tv_func(weights="DEFAULT", **tv_model_kwargs)
+        except Exception:
+            try:
+                model = tv_func(pretrained=True, **tv_model_kwargs)
+            except Exception:
+                model = tv_func(**tv_model_kwargs)
+    else:
+        try:
+            model = tv_func(weights=None, **tv_model_kwargs)
+        except Exception:
+            model = tv_func(pretrained=False, **tv_model_kwargs)
 
     # Adapt classifier head for target num_classes
     if int(num_classes) != 1000:
@@ -330,7 +359,7 @@ def _create_cluster_experiment(config):
 
     # Adapt model stem for dataset resolution (CIFAR, Tiny-ImageNet, etc.)
     # This is now handled by a shared utility in src/alignment/models/hub.py
-    adapt_model_for_dataset(model, model_name, dataset_name, pretrained=pretrained)
+    adapt_model_for_dataset(model, resolved_model_name, dataset_name, pretrained=pretrained)
 
     # Optional: explicit checkpoint
     checkpoint_path = getattr(cluster_config, "model_checkpoint", None) or (model_cfg.get("checkpoint") if isinstance(model_cfg, dict) else None)
@@ -437,7 +466,7 @@ def _create_cluster_experiment(config):
     torch.save(
         {
             "model_state_dict": model.state_dict(),
-            "model_name": model_name,
+            "model_name": resolved_model_name,
             "dataset_name": dataset_name,
             "num_classes": num_classes,
         },

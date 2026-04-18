@@ -466,6 +466,8 @@ def plot_centroid_evolution(
         ("red", "syn", "Redundancy", "Synergy"),
     ]
 
+    scatter = None
+
     for ax, (x_key, y_key, x_label, y_label) in zip(axes, pairs):
         for ctype in types:
             traj = trajectories[ctype]
@@ -497,8 +499,9 @@ def plot_centroid_evolution(
         ax.legend(loc="best", fontsize=9)
 
     # Add colorbar for depth
-    cbar = fig.colorbar(scatter, ax=axes, orientation="horizontal", fraction=0.05, pad=0.12, aspect=40)
-    cbar.set_label("Layer Depth", fontsize=11)
+    if scatter is not None:
+        cbar = fig.colorbar(scatter, ax=axes, orientation="horizontal", fraction=0.05, pad=0.12, aspect=40)
+        cbar.set_label("Layer Depth", fontsize=11)
 
     fig.suptitle("Cluster Centroid Evolution Across Network Depth\n(○ = early layers, ■ = late layers)", fontsize=13, fontweight="bold")
     plt.tight_layout(rect=[0, 0.08, 1, 0.95])

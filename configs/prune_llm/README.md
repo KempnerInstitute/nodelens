@@ -13,14 +13,19 @@ Configurations for generating results in the SCAR LLM pruning paper.
 
 ## Quick Start
 
-Run all experiments:
-```bash
-bash slurm_jobs/prune_llm/run_all_paper.sh
-```
-
 Run single model:
 ```bash
 python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
+```
+
+Paper batch launchers now live under:
+```bash
+drafts/LLM_prune/paper/slurm_jobs/
+```
+
+See:
+```bash
+drafts/LLM_prune/paper/slurm_jobs/README.md
 ```
 
 Override base output directory:
