@@ -1,0 +1,130 @@
+# ============================================================================
+# OLMo-2-7B CHECKPOINT MECHANISM PROBE (TEMPLATE)
+# ============================================================================
+# Purpose:
+# - Compute LP concentration for a *single* OLMo-2-1124-7B training checkpoint.
+# - Identical mechanism-only setup to llama3_70b_scale_mechanism.yaml so the
+#   resulting JSONs are aggregable across model / checkpoint.
+# - The placeholders main and main are substituted per-checkpoint
+#   by paper/slurm_jobs/run_olmo2_7b_checkpoint_trajectory.sh.
+# ============================================================================
+
+experiment:
+  name: "olmo2_7b_ckpt_main"
+  type: "llm_alignment"
+  output_dir: "./results/paper/olmo2_7b_ckpt_main"
+  seed: 42
+  device: "cuda"
+  save_activations: false
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "allenai/OLMo-2-1124-7B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+# Passed through to AutoModelForCausalLM.from_pretrained
+model_kwargs:
+  revision: "main"
+
+# Passed through to AutoTokenizer.from_pretrained
+tokenizer_kwargs:
+  revision: "main"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+calibration:
+  dataset: "wikitext"
+  subset: "wikitext-2-raw-v1"
+  split: "train"
+  num_samples: 64
+  max_length: 512
+  batch_size: 1
+
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+  num_samples: 64
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+do_scar_metrics: true
+scar_num_samples: 64
+scar_max_length: 512
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 64
+  scar_max_length: 512
+  evaluate_perplexity: false
+  evaluation_metrics: []
+  wikitext_subset: "wikitext-2-raw-v1"
+
+analysis:
+  generate_plots: false
+  save_scores: true
+
+generate_plots: false
+save_scores: true
+
+do_connectivity_pruning: false
+do_directed_redundancy: false
+do_halo_analysis: false
+do_generalized_importance: false
+
+supernode:
+  enabled: true
+  score_metric: "scar_loss_proxy"
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  halo_fraction: 0.10
+  connectivity_topk: 256
+  connectivity_rank_normalize: false
+  connectivity_power: 1.0
+  protect_core: true
+  protect_core_metrics:
+    - "scar_loss_proxy"
+  cross_layer_analysis: false
+  compare_by_connection: false
+  compute_metrics:
+    - "activation"
+
+  read_halo_analysis:
+    enabled: false
+
+  conditional_halo_ablation:
+    enabled: false
+
+  lp_ablation_validation:
+    enabled: false
+
+supernode_robustness:
+  enabled: false
+
+supernode_summary:
+  enabled: true
+  outlier_analysis: true
+
+halo_analysis:
+  enabled: false
+
+cross_layer:
+  enabled: false
+
+generalized_importance:
+  enabled: false
+
+pruning:
+  enabled: false
+
+evaluation:
+  enabled: false
