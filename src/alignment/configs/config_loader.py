@@ -835,7 +835,18 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
                 flat_config["pretrained"] = external.get("pretrained", False)
 
         # Handle HuggingFace model config (for LLMs)
-        hf_fields = ["model_id", "model_backend", "dtype", "torch_dtype", "device_map"]
+        # `revision` and `trust_remote_code` forward through the hf_causal_lm
+        # registry constructor (HFCausalLM) into AutoModelForCausalLM.from_pretrained,
+        # so they must survive config flattening.
+        hf_fields = [
+            "model_id",
+            "model_backend",
+            "dtype",
+            "torch_dtype",
+            "device_map",
+            "revision",
+            "trust_remote_code",
+        ]
         for field in hf_fields:
             if field in model:
                 # Normalize dtype field name (prefer 'dtype', but accept 'torch_dtype')
