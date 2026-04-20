@@ -23,16 +23,19 @@ model:
   model_id: "allenai/OLMo-2-1124-7B"
   dtype: "bfloat16"
   device_map: "auto"
+  # NOTE: the registry constructor for hf_causal_lm (HFCausalLM in models/hub.py)
+  # reads `revision` directly from this block and passes it to
+  # AutoModelForCausalLM.from_pretrained, so checkpoint selection MUST go here
+  # rather than in a top-level model_kwargs: block.
+  revision: "stage1-step600000-tokens2517B"
+  torch_dtype: "bfloat16"
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
     - "model.model.layers.*.mlp.gate_proj"
     - "model.model.layers.*.mlp.down_proj"
 
-# Passed through to AutoModelForCausalLM.from_pretrained
-model_kwargs:
-  revision: "stage1-step600000-tokens2517B"
-
-# Passed through to AutoTokenizer.from_pretrained
+# Tokenizer does not change across OLMo-2 training checkpoints, but we pass
+# the revision defensively so tokenizer and model remain paired.
 tokenizer_kwargs:
   revision: "stage1-step600000-tokens2517B"
 

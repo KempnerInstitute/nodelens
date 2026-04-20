@@ -24,14 +24,14 @@ model:
   model_id: "allenai/OLMo-2-1124-7B"
   dtype: "bfloat16"
   device_map: "auto"
+  # Final released weights (after stage2). revision goes here so the registry
+  # constructor (HFCausalLM) passes it to AutoModelForCausalLM.from_pretrained.
+  revision: "main"
+  torch_dtype: "bfloat16"
   tracked_layers:
     - "model.model.layers.*.mlp.up_proj"
     - "model.model.layers.*.mlp.gate_proj"
     - "model.model.layers.*.mlp.down_proj"
-
-# Use final (main) checkpoint for pruning.
-model_kwargs:
-  revision: "main"
 
 tokenizer_kwargs:
   revision: "main"
