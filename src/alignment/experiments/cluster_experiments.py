@@ -176,6 +176,67 @@ class _VarAccumulator:
         return np.clip(var, 1e-12, None)
 
 
+def _maybe_permute_task_target(target: np.ndarray, mode: str, rng: np.random.Generator) -> np.ndarray:
+    """
+    Optional target permutation control for task-directed metrics.
+
+    mode:
+      - "none": no permutation
+      - "batch"/"shuffle": shuffle target values within each batch
+    """
+    t = np.asarray(target, dtype=np.float64).reshape(-1)
+    m = str(mode or "none").strip().lower()
+    if m in {"none", "off", "false", "0"}:
+        return t
+    if t.size <= 1:
+        return t
+    if m in {"batch", "within_batch", "shuffle", "permute"}:
+        return t[rng.permutation(t.size)]
+    return t
+
+
+def _mi_in_proxy_from_signal_power(
+    signal_power: np.ndarray,
+    *,
+    sigma_mode: str = "median",
+    sigma_fixed: float = 0.0,
+    sigma_quantile: float = 50.0,
+) -> Tuple[np.ndarray, float]:
+    """
+    Compute MI-in proxy with configurable reference noise level sigma0^2.
+
+    sigma_mode:
+      - "median" (default), "mean", "p75", "p90", "quantile", "fixed"
+    """
+    sp = np.asarray(signal_power, dtype=np.float64).reshape(-1)
+    sp = np.clip(sp, 0.0, None)
+    finite = sp[np.isfinite(sp)]
+    if finite.size == 0:
+        finite = np.array([1e-12], dtype=np.float64)
+
+    mode = str(sigma_mode or "median").strip().lower()
+    if mode == "mean":
+        sigma0_sq = float(np.mean(finite))
+    elif mode in {"p75", "q75"}:
+        sigma0_sq = float(np.percentile(finite, 75.0))
+    elif mode in {"p90", "q90"}:
+        sigma0_sq = float(np.percentile(finite, 90.0))
+    elif mode in {"quantile", "percentile"}:
+        q = float(np.clip(float(sigma_quantile), 1.0, 99.0))
+        sigma0_sq = float(np.percentile(finite, q))
+    elif mode == "fixed":
+        sigma0_sq = float(sigma_fixed)
+    else:
+        sigma0_sq = float(np.median(finite))
+
+    if not np.isfinite(sigma0_sq) or sigma0_sq <= 0.0:
+        sigma0_sq = float(np.median(np.clip(finite, 1e-12, None)))
+    sigma0_sq = max(sigma0_sq, 1e-12)
+
+    mi_in_proxy = 0.5 * np.log1p(sp / sigma0_sq)
+    return mi_in_proxy.astype(np.float64), float(sigma0_sq)
+
+
 from .base import ExperimentConfig
 
 # ---------------------------------------------------------------------
@@ -704,6 +765,7 @@ class ClusterAnalysisExperiment:
             task_mode = activation_mode
         samples_per_img = int(self.config.spatial_samples_per_image)
         samples_per_img = max(1, samples_per_img)
+        target_perm_mode = str(getattr(self.config, "task_target_permutation", "none") or "none")
 
         rng = np.random.default_rng(int(self.config.seed))
 
@@ -735,6 +797,7 @@ class ClusterAnalysisExperiment:
                 mask[torch.arange(bsz, device=logits.device), y] = False
                 max_incorrect = logits.masked_fill(~mask, float("-inf")).max(dim=1)[0]
                 T_img = (correct_logits - max_incorrect).detach().cpu().numpy()  # [B]
+                T_img = _maybe_permute_task_target(T_img, target_perm_mode, rng)
 
                 # Update each layer accumulator using the captured activations
                 for name, layer in self.layers:
@@ -888,19 +951,44 @@ class ClusterAnalysisExperiment:
             metrics["weight_norm_sq"] = weight_norm[:n_channels].astype(np.float64)
             metrics["activation_var"] = var_y[:n_channels].astype(np.float64)
 
-            # 1b) Input MI proxy (scale-sensitive): 0.5 * log(1 + RQ * ||w||^2 / sigma0^2)
-            # We use a per-layer reference sigma0^2 to make the proxy comparable across depth.
-            signal_power = (metrics["rq"] * weight_norm[:n_channels]).astype(np.float64)
-            sigma0_sq = float(np.median(signal_power)) + 1e-12
-            metrics["mi_in_proxy"] = (0.5 * np.log1p(signal_power / sigma0_sq)).astype(np.float64)
+            # 1b) Input MI proxy (Gaussian channel MI):
+            #   I_X(i) = 0.5 * log(1 + J_i / sigma0^2)
+            # where J_i = w_i^T Sigma_X w_i is signal power.
+            #
+            # signal_power = rq * ||w||^2. When rq_exact is active (covariance-based),
+            # this approximates w^T Sigma_X w directly. When rq_equiv is used
+            # (streaming Var(Y_postact) / ||w||^2), the product equals Var(Y_postact),
+            # which approximates w^T Sigma_X w up to nonlinearity effects (BN, ReLU).
+            # Rank-order between exact and streaming paths: Kendall tau > 0.99 (verified).
+            #
+            # Prefer rq_exact when available for the correct w^T Sigma_X w computation.
+            if metrics.get("rq_exact") is not None:
+                signal_power = (metrics["rq_exact"] * weight_norm[:n_channels]).astype(np.float64)
+            else:
+                signal_power = (metrics["rq"] * weight_norm[:n_channels]).astype(np.float64)
+            sigma_mode = str(getattr(self.config, "mi_in_proxy_sigma_mode", "median") or "median")
+            sigma_fixed = float(getattr(self.config, "mi_in_proxy_sigma_fixed", 0.0) or 0.0)
+            sigma_quantile = float(getattr(self.config, "mi_in_proxy_sigma_quantile", 50.0) or 50.0)
+            mi_in_proxy, sigma0_sq = _mi_in_proxy_from_signal_power(
+                signal_power,
+                sigma_mode=sigma_mode,
+                sigma_fixed=sigma_fixed,
+                sigma_quantile=sigma_quantile,
+            )
+            metrics["mi_in_proxy"] = mi_in_proxy
+            metrics["signal_power"] = signal_power  # J_i = w^T Sigma_X w (or streaming approx)
+            metrics["mi_in_proxy_sigma0_sq"] = np.full(n_channels, sigma0_sq, dtype=np.float64)
 
-            # 2) Redundancy via Gaussian MI from correlations
+            # 2) Within-layer shared information via Gaussian MI from correlations
+            #    R_X(i,j) = -0.5 * log(1 - rho_{ij}^2), per-channel: bar_R_X(i) = mean_j R_X(i,j)
+            #    This is pairwise Gaussian MI, NOT a PID redundancy atom.
             denom = np.sqrt(np.outer(var_y, var_y)) + 1e-12
             corr = cov_yy / denom
             corr = np.clip(corr, -0.999, 0.999)
             mi_matrix = -0.5 * np.log(1.0 - corr**2)
             np.fill_diagonal(mi_matrix, 0.0)
-            metrics["redundancy"] = mi_matrix.mean(axis=1).astype(np.float64)
+            metrics["redundancy"] = mi_matrix.mean(axis=1).astype(np.float64)  # bar_R_X(i)
+            metrics["shared_info_internal"] = metrics["redundancy"]  # alias (new name)
 
             # 3) TaskMI + Synergy with scalar target under Gaussian approximation (MMI)
             #
@@ -917,6 +1005,8 @@ class ClusterAnalysisExperiment:
             top_m = max(1, min(top_m, candidate_pool - 1))
 
             synergy = np.zeros(n_channels, dtype=np.float64)
+            pid_redundancy_t = np.zeros(n_channels, dtype=np.float64)  # PID redundancy about target
+            pid_unique_t = np.zeros(n_channels, dtype=np.float64)  # PID unique info about target
 
             # Partner ordering by redundancy (Gaussian MI) on task-level pooled activations.
             denom_task = np.sqrt(np.outer(var_y_task, var_y_task)) + 1e-12
@@ -955,6 +1045,7 @@ class ClusterAnalysisExperiment:
 
                 mi_i = float(mi_t[i])
                 syn_pairs: List[Tuple[float, int]] = []
+                pid_red_pairs: List[float] = []
                 for j in cand:
                     j = int(j)
                     mi_j = float(mi_t[j])
@@ -967,12 +1058,17 @@ class ClusterAnalysisExperiment:
                         cov_t_j=float(cov_ty_task[j]),
                         cov_i_j=cov_i_j,
                     )
-                    s = mi_joint - mi_i - mi_j + min(mi_i, mi_j)
+                    r_t = min(mi_i, mi_j)  # PID redundancy about target (MMI)
+                    s = mi_joint - mi_i - mi_j + r_t
                     syn_pairs.append((float(s), j))
+                    pid_red_pairs.append(float(r_t))
 
                 if syn_pairs:
                     syn_pairs.sort(key=lambda x: x[0], reverse=True)
                     synergy[i] = float(np.mean([s for (s, _j) in syn_pairs[:top_m]]))
+                if pid_red_pairs:
+                    pid_redundancy_t[i] = float(np.mean(pid_red_pairs))
+                    pid_unique_t[i] = max(0.0, mi_i - pid_redundancy_t[i])
                     if collect_within and syn_idx is not None and syn_val is not None:
                         top_edges = syn_pairs[:syn_k]
                         if top_edges:
@@ -980,6 +1076,8 @@ class ClusterAnalysisExperiment:
                             syn_val[i, : len(top_edges)] = np.asarray([s for (s, _j) in top_edges], dtype=np.float32)
 
             metrics["synergy"] = synergy
+            metrics["pid_redundancy_t"] = pid_redundancy_t
+            metrics["pid_unique_t"] = pid_unique_t
 
             if collect_within and red_idx is not None and red_val is not None and syn_idx is not None and syn_val is not None:
                 self._within_layer_neighbors[name] = {
@@ -1168,6 +1266,7 @@ class ClusterAnalysisExperiment:
         run_ablation: Optional[bool] = None,
         first_metric: Optional[str] = None,
         clustering_importance_mode: Optional[str] = None,
+        clustering_feature_set: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Cluster channels in each layer.
@@ -1184,6 +1283,10 @@ class ClusterAnalysisExperiment:
                          - "score_augmented": k-means with importance score as extra feature
                          - "importance_reassign": k-means geometry, reassign types by score
                          - "quantile": Partition by composite score quartiles
+            clustering_feature_set: Override for clustering feature set. One of:
+                         - "internal": (first_metric, redundancy, synergy) — original
+                         - "pid": (task_MI, pid_redundancy_t, synergy) — target-directed PID
+                         Uses config.clustering_feature_set if not specified.
 
         Returns:
             Dict with cluster results (and ablation results if enabled)
@@ -1199,11 +1302,18 @@ class ClusterAnalysisExperiment:
             metric_key = "rq"
             metric_label = "RQ"
 
+        # Determine clustering feature set
+        feat_set = clustering_feature_set or getattr(self.config, "clustering_feature_set", "internal")
+        feat_set = str(feat_set).lower()
+
         # Determine clustering importance mode
         c_mode = clustering_importance_mode or getattr(self.config, "clustering_importance_mode", "geometric")
         c_mode = str(c_mode).lower()
 
-        logger.info(f"Clustering channels using {metric_label} as first metric, mode={c_mode}...")
+        if feat_set == "pid":
+            logger.info(f"Clustering channels using PID features (task_MI, pid_redundancy_t, synergy), mode={c_mode}...")
+        else:
+            logger.info(f"Clustering channels using {metric_label} as first metric, mode={c_mode}...")
 
         run_ablation = run_ablation if run_ablation is not None else bool(self.config.run_metric_ablation)
 
@@ -1221,19 +1331,34 @@ class ClusterAnalysisExperiment:
         gamma = float(getattr(self.config, "cluster_aware_gamma", 0.3))
 
         for name, metrics in self.layer_metrics.items():
-            # Get the first metric (RQ or I(X;Y))
-            first_values = metrics.get(metric_key)
-            if first_values is None:
-                first_values = metrics.get("rq", np.ones(1))
-                if first_metric == "ixy":
-                    logger.warning(f"  {name}: mi_in_proxy not available, falling back to RQ")
+            # Select clustering features based on feature set
+            if feat_set == "pid":
+                # PID features: (task_MI, pid_redundancy_t, synergy)
+                first_values = metrics.get("task_mi")
+                if first_values is None:
+                    first_values = metrics.get(metric_key, np.ones(1))
+                    logger.warning(f"  {name}: task_mi not available, falling back to {metric_label}")
+                clust_redundancy = metrics.get("pid_redundancy_t")
+                if clust_redundancy is None:
+                    clust_redundancy = metrics.get("redundancy", np.zeros(1))
+                    logger.warning(f"  {name}: pid_redundancy_t not available, falling back to internal redundancy")
+                clust_synergy = metrics.get("synergy", np.zeros(1))
+            else:
+                # Internal features: (first_metric, redundancy, synergy)
+                first_values = metrics.get(metric_key)
+                if first_values is None:
+                    first_values = metrics.get("rq", np.ones(1))
+                    if first_metric == "ixy":
+                        logger.warning(f"  {name}: mi_in_proxy not available, falling back to RQ")
+                clust_redundancy = metrics.get("redundancy", np.zeros(1))
+                clust_synergy = metrics.get("synergy", np.zeros(1))
 
             # Compute importance scores for non-geometric modes
             importance_scores = None
             if c_mode != "geometric":
                 fv = np.asarray(first_values, dtype=np.float64).flatten()
-                rd = np.asarray(metrics.get("redundancy", np.zeros_like(fv)), dtype=np.float64).flatten()
-                sy = np.asarray(metrics.get("synergy", np.zeros_like(fv)), dtype=np.float64).flatten()
+                rd = np.asarray(clust_redundancy, dtype=np.float64).flatten()
+                sy = np.asarray(clust_synergy, dtype=np.float64).flatten()
                 n = min(len(fv), len(rd), len(sy))
                 if n > 0:
                     fv, rd, sy = fv[:n], rd[:n], sy[:n]
@@ -1247,8 +1372,8 @@ class ClusterAnalysisExperiment:
 
             result = clusterer.fit(
                 first_values,
-                metrics["redundancy"],
-                metrics["synergy"],
+                clust_redundancy,
+                clust_synergy,
                 name,
                 importance_scores=importance_scores,
                 clustering_mode=c_mode,
@@ -1262,6 +1387,7 @@ class ClusterAnalysisExperiment:
                 "layer_name": name,
                 "ablation_mode": "all",
                 "first_metric": first_metric,
+                "feature_set": feat_set,
                 "clustering_mode": c_mode,
             }
             logger.info(f"  {name}: silhouette={result.silhouette:.3f}, types={result.type_counts}")
@@ -1928,7 +2054,15 @@ class ClusterAnalysisExperiment:
                 selection_mode = self._selection_mode_for_method(prune_method)
 
                 try:
-                    if prune_method.startswith("cluster_aware") or prune_method in ("cap_ixy", "composite_ixy"):
+                    if prune_method.startswith("cluster_aware") or prune_method in (
+                        "cap_ixy",
+                        "composite_ixy",
+                        "composite_twoaxis",
+                        "composite_twoaxis_ixy",
+                        "composite_pid",
+                        "composite_pid_no_red",
+                        "composite_pid_unique",
+                    ):
                         pipeline_result = self._run_cluster_aware_pruning(
                             model_copy,
                             layer_modules=layer_modules,
@@ -2863,9 +2997,13 @@ class ClusterAnalysisExperiment:
             "lp_low": "loss_proxy",
             "lp_high": "loss_proxy",
         }
-        for name, layer in modules.items():
+        layer_names = list(modules.keys())
+        depth_den = max(1, len(layer_names) - 1)
+        for idx, name in enumerate(layer_names):
+            layer = modules.get(name)
             if layer is None or not hasattr(layer, "weight"):
                 continue
+            depth_frac = float(idx) / float(depth_den)
             weight = layer.weight
             device = weight.device
             metrics = self.layer_metrics.get(name, {})
@@ -2987,16 +3125,30 @@ class ClusterAnalysisExperiment:
                 if values is None:
                     continue
                 layer_scores[name] = torch.as_tensor(values, dtype=torch.float32, device=device)
-            elif method in {
-                "composite",
-                "composite_pos_red",
-                "rq_minus_red",
-                "rq_plus_red",
-                "magnitude_plus_rq",
-                "magnitude_minus_red",
-                "magnitude_plus_red",
-            }:
-                comp = self._compute_composite_metric(method, metrics, layer)
+            elif (
+                method
+                in {
+                    "composite",
+                    "composite_pos_red",
+                    "composite_twoaxis",
+                    "composite_twoaxis_ixy",
+                    "composite_pid",
+                    "composite_pid_no_red",
+                    "composite_pid_unique",
+                    "ixy_minus_red",
+                    "ixy_plus_red",
+                    "rq_minus_red",
+                    "rq_plus_red",
+                    "magnitude_plus_rq",
+                    "magnitude_plus_ixy",
+                    "magnitude_minus_red",
+                    "magnitude_plus_red",
+                }
+                or method.startswith("magnitude_plus_ixy_w")
+                or method.startswith("ixy_minus_red_w")
+                or method.startswith("two_axis_a")
+            ):
+                comp = self._compute_composite_metric(method, metrics, layer, depth_frac=depth_frac)
                 if comp is not None:
                     layer_scores[name] = comp.to(device)
             # ------------------------------------------------------------------
@@ -3163,12 +3315,21 @@ class ClusterAnalysisExperiment:
                 return {}
         return layer_scores
 
-    def _compute_composite_metric(self, method: str, metrics: Dict[str, np.ndarray], layer: nn.Module) -> Optional[torch.Tensor]:
+    def _compute_composite_metric(
+        self,
+        method: str,
+        metrics: Dict[str, np.ndarray],
+        layer: nn.Module,
+        depth_frac: float = 0.5,
+    ) -> Optional[torch.Tensor]:
         rq = np.log(np.clip(metrics.get("rq", np.ones(layer.weight.shape[0])), 1e-10, None))
         redundancy = metrics.get("redundancy", np.zeros_like(rq))
         synergy = metrics.get("synergy", np.zeros_like(rq))
         # I(X;Y) - mutual information proxy (already in log scale from computation)
         ixy = metrics.get("mi_in_proxy", rq)  # fallback to rq if not available
+        # PID target-directed metrics
+        task_mi = metrics.get("task_mi", ixy)  # fallback to ixy
+        pid_red_t = metrics.get("pid_redundancy_t", redundancy)  # fallback to internal redundancy
 
         def normalize(arr: np.ndarray) -> np.ndarray:
             if arr.size == 0:
@@ -3179,10 +3340,20 @@ class ClusterAnalysisExperiment:
                 return np.zeros_like(arr)
             return (arr - min_v) / (max_v - min_v)
 
+        def parse_weight_suffix(name: str, prefix: str) -> Optional[float]:
+            if not name.startswith(prefix):
+                return None
+            suffix = name[len(prefix) :]
+            if not suffix.isdigit():
+                return None
+            return float(int(suffix)) / 100.0
+
         rq_norm = normalize(rq)
         ixy_norm = normalize(ixy)
         red_norm = normalize(redundancy)
         syn_norm = normalize(synergy)
+        task_mi_norm = normalize(task_mi)
+        pid_red_t_norm = normalize(pid_red_t)
 
         if method == "composite":
             scores = rq_norm + 0.5 * syn_norm - 0.3 * red_norm
@@ -3194,6 +3365,53 @@ class ClusterAnalysisExperiment:
             scores = ixy_norm + 0.5 * syn_norm - 0.3 * red_norm
         elif method == "composite_ixy_pos_red":
             scores = ixy_norm + 0.5 * syn_norm + 0.3 * red_norm
+        # Two-axis Rule-1 score: alpha * I_X - beta * I(T;Y).
+        # Named variants two_axis_a{alpha}_b{beta}, with 'p' as decimal point.
+        # E.g. two_axis_a1_b0p25 = alpha=1.0, beta=0.25.
+        elif method.startswith("two_axis_a"):
+            try:
+                remainder = method[len("two_axis_a") :]
+                a_str, b_str = remainder.split("_b")
+                alpha = float(a_str.replace("p", "."))
+                beta = float(b_str.replace("p", "."))
+            except (ValueError, IndexError):
+                logger.warning(f"Could not parse two-axis variant '{method}', using alpha=1,beta=0")
+                alpha, beta = 1.0, 0.0
+            scores = alpha * ixy_norm - beta * task_mi_norm
+        # Depth-adaptive two-axis composite (score-only; no halo term)
+        elif method in {"composite_twoaxis", "composite_twoaxis_ixy"}:
+            # Local axis: first metric (RQ or IXY), internal redundancy, synergy.
+            # Target axis: task-directed MI and (optionally) target-directed PID redundancy.
+            use_ixy = method.endswith("_ixy")
+            first_norm = ixy_norm if use_ixy else rq_norm
+            red_target_norm = pid_red_t_norm if bool(self.config.cluster_aware_twoaxis_use_pid_red_target) else red_norm
+
+            switch = float(self.config.cluster_aware_twoaxis_depth_switch)
+            sharp = float(self.config.cluster_aware_twoaxis_depth_sharpness)
+            early_task_w = float(self.config.cluster_aware_twoaxis_early_task_weight)
+            late_task_w = float(self.config.cluster_aware_twoaxis_late_task_weight)
+            task_gate = 1.0 / (1.0 + np.exp(-np.clip((float(depth_frac) - switch) * sharp, -60.0, 60.0)))
+            task_w = early_task_w + task_gate * (late_task_w - early_task_w)
+
+            local = (
+                float(self.config.cluster_aware_twoaxis_ixy_weight) * first_norm
+                + float(self.config.cluster_aware_twoaxis_syn_weight) * syn_norm
+                - float(self.config.cluster_aware_twoaxis_red_internal_weight) * red_norm
+            )
+            target = task_w * (task_mi_norm - float(self.config.cluster_aware_twoaxis_red_target_weight) * red_target_norm)
+            scores = local + target
+        # PID target-directed composite variants
+        elif method == "composite_pid":
+            # Score = α·task_MI + β·Syn - γ·pid_redundancy_T
+            scores = task_mi_norm + 0.5 * syn_norm - 0.3 * pid_red_t_norm
+        elif method == "composite_pid_no_red":
+            # Score = task_MI only (since pid_red_t ≈ task_MI, check unique_T matters)
+            scores = task_mi_norm
+        elif method == "composite_pid_unique":
+            # Score based on unique target information: unique_T + synergy
+            unique_t = metrics.get("pid_unique_t", task_mi)
+            unique_t_norm = normalize(unique_t)
+            scores = unique_t_norm + 0.5 * syn_norm
         elif method == "ixy_minus_red":
             scores = ixy_norm - 0.5 * red_norm
         elif method == "ixy_plus_red":
@@ -3218,10 +3436,126 @@ class ClusterAnalysisExperiment:
             w = layer.weight.detach().view(layer.weight.shape[0], -1)
             mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
             scores = mag + 0.3 * red_norm
+        elif (weight := parse_weight_suffix(method, "magnitude_plus_ixy_w")) is not None:
+            w = layer.weight.detach().view(layer.weight.shape[0], -1)
+            mag = normalize(w.norm(p=2, dim=1).cpu().numpy())
+            scores = mag + weight * ixy_norm
+        elif (weight := parse_weight_suffix(method, "ixy_minus_red_w")) is not None:
+            scores = ixy_norm - weight * red_norm
         else:
             return None
 
         return torch.as_tensor(scores, dtype=torch.float32)
+
+    def _get_pairwise_matrices(
+        self,
+        layer_name: str,
+        n_channels: int,
+        max_samples: int = 1000,
+        num_syn_partners: int = 10,
+    ) -> Optional[tuple]:
+        """Compute pairwise R and S matrices for a layer.
+
+        Collects activations from the calibration loader, computes:
+          R(i,j) = -0.5 * log(1 - rho(Y_i, Y_j)^2)  — pairwise redundancy
+          S(T; Y_i, Y_j) = I(T; Y_i, Y_j) - I(T; Y_i) - I(T; Y_j) + min(...)  — pairwise synergy
+
+        Results are cached on self._pairwise_cache.
+        """
+        if not hasattr(self, "_pairwise_cache"):
+            self._pairwise_cache: Dict[str, tuple] = {}
+        if layer_name in self._pairwise_cache:
+            return self._pairwise_cache[layer_name]
+
+        import torch as _th
+
+        device = next(self.model.parameters()).device if self.model is not None else "cpu"
+        module_map = dict(self.model.named_modules())
+        target_module = module_map.get(layer_name)
+        if target_module is None:
+            return None
+
+        # Collect GAP activations + logits via forward hook
+        acts_list: list = []
+        logits_list: list = []
+        labels_list: list = []
+
+        def _hook(_mod, _inp, out):
+            o = out.detach()
+            if o.ndim == 4:
+                o = o.mean(dim=(2, 3))
+            acts_list.append(o.cpu())
+
+        h = target_module.register_forward_hook(_hook)
+        n_seen = 0
+        try:
+            self.model.eval()
+            with _th.no_grad():
+                for x, y in self._get_calibration_loader():
+                    if n_seen >= max_samples:
+                        break
+                    logits = self.model(x.to(device))
+                    logits_list.append(logits.cpu())
+                    labels_list.append(y)
+                    n_seen += int(x.shape[0])
+        finally:
+            h.remove()
+
+        if not acts_list:
+            return None
+
+        acts = _th.cat(acts_list, 0).numpy()[:, :n_channels]
+        logits = _th.cat(logits_list, 0).numpy()
+        gt_labels = _th.cat(labels_list, 0).numpy()
+        B, N = acts.shape
+        eps = 1e-8
+
+        # Pairwise R
+        corr = np.corrcoef(acts.T)
+        corr = np.nan_to_num(corr, nan=0.0)
+        corr = np.clip(corr, -0.999, 0.999)
+        R = -0.5 * np.log(1 - corr**2)
+        np.fill_diagonal(R, 0)
+
+        # Pairwise S (sparse, top-K partners)
+        correct_logits = logits[np.arange(B), gt_labels]
+        mask = np.ones_like(logits, dtype=bool)
+        mask[np.arange(B), gt_labels] = False
+        max_incorrect = np.where(mask, logits, -np.inf).max(axis=1)
+        T = correct_logits - max_incorrect
+
+        T_c = T - T.mean()
+        T_std = T_c.std() + eps
+        acts_c = acts - acts.mean(axis=0)
+        acts_std = acts_c.std(axis=0) + eps
+        rho_ind = (T_c[:, None] * acts_c).mean(axis=0) / (T_std * acts_std)
+        rho_ind = np.clip(rho_ind, -1 + eps, 1 - eps)
+        mi_ind = np.maximum(0, -0.5 * np.log(1 - rho_ind**2))
+
+        S = np.zeros((N, N))
+        kp = min(num_syn_partners, N - 1)
+        for i in range(N):
+            partners = np.argsort(-mi_ind)[: kp + 1]
+            partners = [j for j in partners if j != i][:kp]
+            for j in partners:
+                if S[i, j] != 0:
+                    continue
+                joint = np.column_stack([T, acts[:, i], acts[:, j]])
+                joint_c = joint - joint.mean(axis=0)
+                cov = (joint_c.T @ joint_c) / (B - 1 + eps) + eps * np.eye(3)
+                var_T = cov[0, 0]
+                cov_Y = cov[1:, 1:]
+                det_all = np.linalg.det(cov)
+                det_Y = np.linalg.det(cov_Y)
+                if det_all <= 0 or det_Y <= 0 or var_T <= 0:
+                    continue
+                mi_joint = max(0, 0.5 * np.log(var_T * det_Y / det_all))
+                s = mi_joint - mi_ind[i] - mi_ind[j] + min(mi_ind[i], mi_ind[j])
+                S[i, j] = s
+                S[j, i] = s
+
+        self._pairwise_cache[layer_name] = (R, S)
+        return (R, S)
 
     def _compute_halo_syn_proxy(
         self,
@@ -3445,23 +3779,44 @@ class ClusterAnalysisExperiment:
 
         method_name = str(method).lower()
         # Normalize CAP aliases so variant logic below can be shared between
-        # RQ-first and I(X;Y)-first versions (e.g., *_ixy methods).
+        # RQ-first, I(X;Y)-first, and PID-first versions (e.g., *_ixy, *_pid methods).
         base_method = method_name
         if base_method in ("cap_ixy",):
             base_method = "cluster_aware"
+        # Strip _ixy suffix/infix
         if base_method.endswith("_ixy"):
             base_method = base_method[:-4]
         if "_ixy_" in base_method:
             base_method = base_method.replace("_ixy_", "_")
+        # Strip _pid suffix/infix (for CAP variants like cluster_aware_stratified_pid)
+        if base_method.endswith("_pid"):
+            base_method = base_method[:-4]
+        if "_pid_" in base_method:
+            base_method = base_method.replace("_pid_", "_")
 
         # Flag to track whether we should use I(X;Y) instead of RQ
         use_ixy_metric = method_name.endswith("_ixy") or "_ixy_" in method_name
+
+        # Flag for PID target-directed metric mode.
+        # PID methods use task_MI instead of RQ/IXY, and pid_redundancy_t instead of internal redundancy.
+        use_pid_metric = method_name.startswith("composite_pid") or "_pid_" in method_name or method_name.endswith("_pid")
+        if use_pid_metric:
+            use_ixy_metric = False  # PID uses task_mi directly, not IXY
+            # Normalize PID composite variants to base_method="composite"
+            if base_method.startswith("composite_pid"):
+                base_method = "composite"
 
         # Detect importance-aware clustering mode from method name.
         # E.g., "cluster_aware_importance_gradient_weighted_ixy" -> clustering_override = "importance_reassign"
         # The clustering suffix is removed from base_method so variant dispatch works normally.
         _clustering_override: Optional[str] = None
         for _csuffix, _cmode in [
+            ("_spectral_pid_rs", "spectral_pid_rs"),
+            ("_spectral_pid_rt", "spectral_pid_rt"),
+            ("_spectral_pid_s", "spectral_pid_s"),
+            ("_spectral_rs", "spectral_rs"),
+            ("_spectral_r", "spectral_r"),
+            ("_spectral_s", "spectral_s"),
             ("_importance", "importance_reassign"),
             ("_quantile", "quantile"),
             ("_score_augmented", "score_augmented"),
@@ -3478,6 +3833,7 @@ class ClusterAnalysisExperiment:
             "cluster_aware_stratified",
             "cluster_aware_stratified_nohalo",
             "cluster_aware_region_stratified",
+            "cluster_aware_stratified_twoaxis_adaptive",
         }:
             # Label-free variants: avoid type-priority heuristics and treat clusters as structure only.
             cfg.target_redundant = False
@@ -3505,7 +3861,7 @@ class ClusterAnalysisExperiment:
             # Use I(X;Y) instead of RQ in the CAP score
             # Score_i = α·log(I(X;Y)_i) + β·Syn_i - γ·Red_i + λ·HaloSyn_i
             use_ixy_metric = True
-        elif base_method == "composite":
+        elif base_method in {"composite", "composite_twoaxis"}:
             # Score-only baseline (no halo term, no type constraints).
             # This branch is primarily used by "composite_ixy" so the
             # first metric can be switched to I(X;Y) while keeping the
@@ -3637,9 +3993,22 @@ class ClusterAnalysisExperiment:
                 except Exception:
                     pass
 
-            # Prepare metrics for the pruner - optionally use I(X;Y) instead of RQ
+            # Prepare metrics for the pruner - optionally use I(X;Y) or PID metrics instead of RQ
             pruner_metrics = pre_metrics.copy() if hasattr(pre_metrics, "copy") else dict(pre_metrics)
-            if use_ixy_metric:
+            if use_pid_metric:
+                # Replace RQ with task_MI and redundancy with pid_redundancy_t for PID-based scoring
+                task_mi_values = pre_metrics.get("task_mi")
+                pid_red_values = pre_metrics.get("pid_redundancy_t")
+                if task_mi_values is not None:
+                    pruner_metrics = dict(pre_metrics)
+                    pruner_metrics["rq"] = task_mi_values  # Score formula uses "rq" key
+                    logger.debug(f"  {layer_name}: Using task_MI instead of RQ for PID score")
+                else:
+                    logger.warning(f"  {layer_name}: task_mi not available, using RQ")
+                if pid_red_values is not None:
+                    pruner_metrics["redundancy"] = pid_red_values
+                    logger.debug(f"  {layer_name}: Using pid_redundancy_t instead of internal redundancy")
+            elif use_ixy_metric:
                 # Replace RQ with I(X;Y) (mi_in_proxy) for the CAP score
                 ixy_values = pre_metrics.get("mi_in_proxy")
                 if ixy_values is not None:
@@ -3680,7 +4049,71 @@ class ClusterAnalysisExperiment:
             # Importance-aware clustering overrides: re-cluster with importance-based
             # type assignment at pruning time (uses the same k-means geometry but
             # reassigns types by composite score, or uses quantile partitioning).
-            if _clustering_override is not None:
+            # Spectral overrides: use pairwise R/S matrices for spectral clustering.
+            if _clustering_override is not None and _clustering_override.startswith("spectral"):
+                # Spectral clustering on pairwise R and/or S affinity matrices
+                try:
+                    _is_pid_spectral = "pid" in _clustering_override
+                    _pairwise = self._get_pairwise_matrices(layer_name, n_channels)
+                    if _pairwise is not None:
+                        _R_internal, _S_target = _pairwise
+                        from sklearn.cluster import SpectralClustering as _SC
+
+                        _k = min(int(cfg.n_clusters), n_channels - 1)
+
+                        if _is_pid_spectral:
+                            # PID pairwise matrices:
+                            # R_T(i,j) = min(I(T;Y_i), I(T;Y_j)) — target-directed redundancy
+                            # S_T(i,j) = already target-directed (same _S_target)
+                            _tmi = np.asarray(pre_metrics.get("task_mi", np.zeros(n_channels)), dtype=np.float64).reshape(-1)[:n_channels]
+                            _R_T = np.minimum(_tmi[:, None], _tmi[None, :])
+                            np.fill_diagonal(_R_T, 0)
+
+                            if _clustering_override == "spectral_pid_rt":
+                                _aff = np.maximum(np.nan_to_num(_R_T, nan=0.0), 0)
+                            elif _clustering_override == "spectral_pid_s":
+                                _aff = np.maximum(np.nan_to_num(np.abs(_S_target), nan=0.0), 0)
+                            else:  # spectral_pid_rs
+                                _RT_n = _R_T / (np.nanmax(_R_T) + 1e-12)
+                                _S_abs = np.abs(_S_target)
+                                _S_n = _S_abs / (np.nanmax(_S_abs) + 1e-12)
+                                _aff = np.maximum(np.nan_to_num(0.5 * _RT_n + 0.5 * _S_n, nan=0.0), 0)
+                        else:
+                            # Internal pairwise matrices
+                            if _clustering_override == "spectral_r":
+                                _aff = np.maximum(np.nan_to_num(_R_internal, nan=0.0), 0)
+                            elif _clustering_override == "spectral_s":
+                                _aff = np.maximum(np.nan_to_num(np.abs(_S_target), nan=0.0), 0)
+                            else:  # spectral_rs
+                                _R_n = _R_internal / (np.nanmax(_R_internal) + 1e-12)
+                                _S_abs = np.abs(_S_target)
+                                _S_n = _S_abs / (np.nanmax(_S_abs) + 1e-12)
+                                _aff = np.maximum(np.nan_to_num(0.5 * _R_n + 0.5 * _S_n, nan=0.0), 0)
+
+                        np.fill_diagonal(_aff, 0)
+                        if _aff.max() > 0 and _k >= 2:
+                            _sc = _SC(
+                                n_clusters=_k,
+                                affinity="precomputed",
+                                random_state=int(self.config.seed),
+                                n_init=10,
+                                assign_labels="kmeans",
+                            )
+                            _spec_labels = _sc.fit_predict(_aff)
+                            pruner_labels = _spec_labels[:n_channels]
+                            # Build proportional type mapping (no semantic types)
+                            pruner_type_mapping = {int(c): f"cluster_{c}" for c in np.unique(pruner_labels)}
+                            logger.debug(
+                                "  %s: spectral(%s) k=%d, cluster sizes=%s",
+                                layer_name,
+                                _clustering_override,
+                                _k,
+                                [int(np.sum(pruner_labels == c)) for c in np.unique(pruner_labels)],
+                            )
+                except Exception as e:
+                    logger.warning("  %s: spectral clustering failed (%s), using default", layer_name, e)
+
+            elif _clustering_override is not None:
                 try:
                     _rq = np.asarray(pruner_metrics.get("rq", []), dtype=np.float64).reshape(-1)[:n_channels]
                     _red = np.asarray(pruner_metrics.get("redundancy", []), dtype=np.float64).reshape(-1)[:n_channels]
@@ -3719,8 +4152,17 @@ class ClusterAnalysisExperiment:
                 "cluster_aware_stratified",
                 "cluster_aware_stratified_nohalo",
                 "cluster_aware_region_stratified",
+                "cluster_aware_stratified_twoaxis_adaptive",
             }:
                 PrunerCls = ClusterAwareStratifiedPruning
+            # Spectral clustering modes use stratified (proportional) pruning
+            # since analysis showed proportional budgets work best with spectral clusters.
+            # Disable type-based constraints since spectral clusters don't have semantic labels.
+            if _clustering_override is not None and _clustering_override.startswith("spectral"):
+                PrunerCls = ClusterAwareStratifiedPruning
+                cfg.target_redundant = False
+                cfg.synergy_pair_constraint = False
+                cfg.protect_critical_frac = 1.0
 
             pruner = PrunerCls(
                 cfg,
@@ -3957,6 +4399,89 @@ class ClusterAnalysisExperiment:
 
                     scores = torch.from_numpy(score_np).float().to(scores.device)
 
+            # ------------------------------------------------------------------
+            # OPTION 7: two-axis adaptive score
+            # Local axis (RQ/IXY, internal redundancy, synergy) + target axis
+            # (task MI, optional target redundancy), with depth-adaptive blending.
+            # For composite_twoaxis* this acts as score-only (no halo term).
+            # ------------------------------------------------------------------
+            elif base_method in {
+                "cluster_aware_twoaxis_adaptive",
+                "cluster_aware_stratified_twoaxis_adaptive",
+                "composite_twoaxis",
+            }:
+                lm = pruner_metrics
+                first_metric = np.asarray(
+                    lm.get("rq", pre_metrics.get("rq", [])),
+                    dtype=np.float64,
+                ).reshape(-1)
+                red_internal = np.asarray(
+                    lm.get("redundancy", pre_metrics.get("redundancy", [])),
+                    dtype=np.float64,
+                ).reshape(-1)
+                syn = np.asarray(
+                    lm.get("synergy", pre_metrics.get("synergy", [])),
+                    dtype=np.float64,
+                ).reshape(-1)
+                task_mi = np.asarray(
+                    pre_metrics.get("task_mi", pre_metrics.get("mi_in_proxy", first_metric)),
+                    dtype=np.float64,
+                ).reshape(-1)
+                red_target_pid = np.asarray(
+                    pre_metrics.get("pid_redundancy_t", red_internal),
+                    dtype=np.float64,
+                ).reshape(-1)
+
+                n = min(
+                    n_channels,
+                    len(first_metric),
+                    len(red_internal),
+                    len(syn),
+                    len(task_mi),
+                    len(red_target_pid),
+                    len(halo_syn),
+                )
+                if n > 0:
+                    first_metric = first_metric[:n]
+                    red_internal = red_internal[:n]
+                    syn = syn[:n]
+                    task_mi = task_mi[:n]
+                    red_target_pid = red_target_pid[:n]
+                    halo_n = np.asarray(halo_syn[:n], dtype=np.float64)
+
+                    if not (use_ixy_metric or use_pid_metric):
+                        # Keep RQ numerically stable and comparable to prior CAP scoring.
+                        first_metric = np.log(np.clip(first_metric, 1e-10, None))
+
+                    def _n01(x):
+                        x = np.asarray(x, dtype=np.float64)
+                        lo, hi = x.min(), x.max()
+                        if hi - lo < 1e-12:
+                            return np.zeros_like(x)
+                        return (x - lo) / (hi - lo)
+
+                    switch = float(self.config.cluster_aware_twoaxis_depth_switch)
+                    sharp = float(self.config.cluster_aware_twoaxis_depth_sharpness)
+                    gate = 1.0 / (1.0 + np.exp(-np.clip((float(depth_frac) - switch) * sharp, -60.0, 60.0)))
+                    early_task_w = float(self.config.cluster_aware_twoaxis_early_task_weight)
+                    late_task_w = float(self.config.cluster_aware_twoaxis_late_task_weight)
+                    task_w = early_task_w + gate * (late_task_w - early_task_w)
+
+                    red_target = red_target_pid if bool(self.config.cluster_aware_twoaxis_use_pid_red_target) else red_internal
+
+                    local = (
+                        float(self.config.cluster_aware_twoaxis_ixy_weight) * _n01(first_metric)
+                        + float(self.config.cluster_aware_twoaxis_syn_weight) * _n01(syn)
+                        - float(self.config.cluster_aware_twoaxis_red_internal_weight) * _n01(red_internal)
+                    )
+                    target = task_w * (_n01(task_mi) - float(self.config.cluster_aware_twoaxis_red_target_weight) * _n01(red_target))
+
+                    score_np = local + target
+                    if base_method != "composite_twoaxis":
+                        score_np = score_np + float(self.config.cluster_aware_twoaxis_halo_weight) * _n01(halo_n)
+
+                    scores = torch.from_numpy(score_np).float().to(scores.device)
+
             layer_scores[layer_name] = scores.detach()
             layer_pruners[layer_name] = pruner
 
@@ -3969,6 +4494,32 @@ class ClusterAnalysisExperiment:
             }
 
         # Compute per-layer amounts using the shared distribution manager.
+        #
+        # Hybrid Taylor allocation: when enabled, use Taylor channel scores for
+        # the *allocation* step (deciding how many channels each layer loses)
+        # while keeping the method's own IXY/CAP scores for the *ranking* step
+        # (deciding which channels to prune within each layer).
+        allocation_scores = layer_scores
+        if getattr(self.config, "hybrid_taylor_allocation", False) and distribution != "uniform":
+            if "taylor" not in self._pruning_score_cache:
+                self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(self.model)
+            taylor_cache = self._pruning_score_cache.get("taylor", {})
+            taylor_alloc: Dict[str, "torch.Tensor"] = {}
+            n_taylor = 0
+            for nm in layer_scores:
+                if nm in taylor_cache:
+                    taylor_alloc[nm] = taylor_cache[nm]
+                    n_taylor += 1
+                else:
+                    taylor_alloc[nm] = layer_scores[nm]
+            if taylor_alloc:
+                allocation_scores = taylor_alloc
+                logger.info(
+                    "Hybrid Taylor allocation: using Taylor scores for %d/%d layers",
+                    n_taylor,
+                    len(layer_scores),
+                )
+
         try:
             from ..pruning.distribution import PruningDistributionManager
 
@@ -3980,8 +4531,8 @@ class ClusterAnalysisExperiment:
                 max_per_layer_sparsity_cap=float(self.config.pruning_max_per_layer_sparsity_cap),
             )
             # Only include layers we actually scored
-            scored_names = [nm for nm in layer_names_all if nm in layer_scores]
-            per_layer_amounts = manager.compute_distribution(model, scored_names, layer_scores=layer_scores)
+            scored_names = [nm for nm in layer_names_all if nm in allocation_scores]
+            per_layer_amounts = manager.compute_distribution(model, scored_names, layer_scores=allocation_scores)
         except Exception as exc:
             logger.warning(
                 "Cluster-aware pruning: failed to compute distribution '%s' (%s); falling back to uniform",

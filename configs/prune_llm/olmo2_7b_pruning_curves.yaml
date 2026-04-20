@@ -1,0 +1,143 @@
+# ============================================================================
+# OLMo-2-1124-7B STRUCTURED PRUNING CURVES
+# ============================================================================
+# Purpose:
+# - Extend the cross-model generalisation suite (Llama-3.1-8B, Mistral-7B,
+#   Llama-2-7B, Qwen2-7B) to a fifth SwiGLU model from a different training
+#   lineage (Allen AI OLMo-2), and replicate the SCAR-vs-baseline pruning gap.
+# - Pair with the checkpoint-trajectory analysis so the paper reports BOTH
+#   that supernodes exist in OLMo-main AND that protecting them improves
+#   structured pruning in the same way as the existing four models.
+# ============================================================================
+
+experiment:
+  name: "olmo2_7b_pruning_curves"
+  type: "llm_alignment"
+  output_dir: "./results/paper/olmo2_7b_pruning_curves"
+  seed: 42
+  device: "cuda"
+  save_activations: false
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "allenai/OLMo-2-1124-7B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  # Final released weights (after stage2). revision goes here so the registry
+  # constructor (HFCausalLM) passes it to AutoModelForCausalLM.from_pretrained.
+  revision: "main"
+  torch_dtype: "bfloat16"
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+tokenizer_kwargs:
+  revision: "main"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+calibration:
+  dataset: "wikitext"
+  subset: "wikitext-2-raw-v1"
+  split: "train"
+  num_samples: 64
+  max_length: 512
+  batch_size: 1
+
+metrics:
+  enabled:
+    - "activation_l2_norm"
+  num_samples: 64
+
+do_scar_metrics: true
+scar_num_samples: 64
+scar_max_length: 512
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 64
+  scar_max_length: 512
+  evaluate_perplexity: true
+  evaluation_num_samples: 100
+  evaluation_metrics:
+    - "perplexity"
+  perplexity_protocol: "oats"
+  wikitext_subset: "wikitext-2-raw-v1"
+  perplexity_seq_len: 2048
+
+analysis:
+  generate_plots: false
+  save_scores: true
+
+generate_plots: false
+save_scores: true
+
+do_connectivity_pruning: true
+do_directed_redundancy: false
+do_halo_analysis: false
+do_generalized_importance: false
+
+supernode:
+  enabled: true
+  score_metric: "scar_loss_proxy"
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  halo_fraction: 0.10
+  connectivity_topk: 256
+  connectivity_rank_normalize: false
+  connectivity_power: 1.0
+  protect_core: true
+  protect_core_metrics:
+    - "scar_loss_proxy"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+  cross_layer_analysis: false
+  compare_by_connection: true
+  compute_metrics:
+    - "activation"
+
+supernode_robustness:
+  enabled: false
+
+supernode_summary:
+  enabled: false
+  outlier_analysis: false
+
+halo_analysis:
+  enabled: false
+
+cross_layer:
+  enabled: false
+
+generalized_importance:
+  enabled: false
+
+pruning:
+  enabled: true
+  target: "ffn"
+  structured: true
+  dependency_aware: true
+  distribution: "uniform"
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+
+  # Match the shape of the 70B curves (30/50/70) plus the 20-60 points used
+  # for the 8B cross-model figure; keep the list compact to stay within time.
+  sparsity_levels: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+  selection_modes: ["low"]
+  algorithms:
+    - "scar_loss_proxy"
+    - "supernode_protection_score"
+    - "supernode_connectivity_score"
+    - "activation_l2_norm"
+    - "weight_magnitude"
+    - "wanda"
+    - "random"
+
+evaluation:
+  enabled: true

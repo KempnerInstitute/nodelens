@@ -2129,6 +2129,52 @@ class LLMAlignmentExperiment(BaseExperiment):
 
             self.importance_scores[layer_name] = layer_scores
 
+        # For FFN channel comparisons and structured pruning, down_proj should use
+        # the FFN-channel-side activation score (intermediate width), not the hidden
+        # output width of down_proj itself. Reuse sibling gate/up activation scores
+        # when they match the down_proj input width.
+        try:
+            module_map = dict(self.wrapped_model._model.named_modules())
+            for layer_name, layer_scores in list(self.importance_scores.items()):
+                if "mlp.down_proj" not in layer_name:
+                    continue
+
+                layer_module = module_map.get(layer_name)
+                if layer_module is None or not hasattr(layer_module, "weight"):
+                    continue
+                target_dim = int(layer_module.weight.shape[1])
+
+                act_scores = layer_scores.get("activation_l2_norm")
+                if torch.is_tensor(act_scores) and int(act_scores.numel()) == target_dim:
+                    continue
+
+                replacement = None
+                replacement_src = None
+                for sibling_proj in ("gate_proj", "up_proj"):
+                    sibling_name = layer_name.replace("down_proj", sibling_proj)
+                    sibling_scores = (self.importance_scores.get(sibling_name) or {}).get("activation_l2_norm")
+                    if torch.is_tensor(sibling_scores) and int(sibling_scores.numel()) == target_dim:
+                        replacement = sibling_scores.detach().clone()
+                        replacement_src = sibling_name
+                        break
+
+                if replacement is not None:
+                    layer_scores["activation_l2_norm"] = replacement
+                    if getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}):
+                        try:
+                            composite_score = layer_scores.get("composite")
+                            self._apply_supernode_selection(layer_scores, composite_score if torch.is_tensor(composite_score) else None)
+                        except Exception:
+                            pass
+                    self.importance_scores[layer_name] = layer_scores
+                    logger.info(
+                        "Aligned activation_l2_norm for %s using FFN-channel activations from %s",
+                        layer_name,
+                        replacement_src,
+                    )
+        except Exception as align_err:
+            logger.debug(f"Failed to align down_proj activation scores: {align_err}")
+
         return self.importance_scores
 
     def compute_scar_supernode_metrics(
@@ -3585,8 +3631,25 @@ class LLMAlignmentExperiment(BaseExperiment):
                 if not layer_matches:
                     continue
 
-            # Get the metric for supernode identification (configurable)
+            # Get the metric for supernode identification (configurable).
+            # SCAR metrics live in `scar_scores`, while baseline metrics such as
+            # activation_l2_norm live in `self.importance_scores`.
+            def _get_importance_metric(name: str, metric_name: str) -> Optional[torch.Tensor]:
+                candidates = [name]
+                normalized = name.replace("model.model.", "model.")
+                denormalized = name.replace("model.", "model.model.", 1) if name.startswith("model.") else name
+                for cand in (normalized, denormalized):
+                    if cand not in candidates:
+                        candidates.append(cand)
+                for cand in candidates:
+                    metric_scores = (self.importance_scores.get(cand) or {}).get(metric_name)
+                    if metric_scores is not None:
+                        return metric_scores
+                return None
+
             supernode_scores = layer_metrics.get(supernode_metric)
+            if supernode_scores is None:
+                supernode_scores = _get_importance_metric(layer_name, supernode_metric)
             if supernode_scores is None:
                 # Fallback to activation power if requested metric not available
                 supernode_scores = layer_metrics.get("scar_activation_power")
@@ -3885,6 +3948,25 @@ class LLMAlignmentExperiment(BaseExperiment):
         results = {}
         viz = UnifiedVisualizer()
 
+        def _lookup_importance_metric(layer_name: str, metric_name: str) -> Optional[torch.Tensor]:
+            # importance_scores keys can vary (model.layers vs model.model.layers, etc.)
+            candidates = [
+                layer_name,
+                layer_name.replace("model.layers.", "model.model.layers."),
+                layer_name.replace("model.model.layers.", "model.layers."),
+                layer_name.replace("model.", ""),
+            ]
+            seen = set()
+            for key in candidates:
+                if key in seen:
+                    continue
+                seen.add(key)
+                layer_scores = self.importance_scores.get(key) or {}
+                metric_scores = layer_scores.get(metric_name)
+                if metric_scores is not None:
+                    return metric_scores
+            return None
+
         for layer_name, layer_module in down_proj_layers:
             logger.info(f"\n  Analyzing layer: {layer_name}")
 
@@ -3929,10 +4011,11 @@ class LLMAlignmentExperiment(BaseExperiment):
                     # SCAR metrics from compute_scar_supernode_metrics
                     if metric_name in scar_scores:
                         metric_scores_layer[metric_name] = scar_scores[metric_name].float().cpu()
-                elif metric_name in self.importance_scores.get(layer_name, {}):
-                    # Pre-computed importance scores
-                    metric_scores_layer[metric_name] = self.importance_scores[layer_name][metric_name].float().cpu()
                 else:
+                    precomputed_scores = _lookup_importance_metric(layer_name, metric_name)
+                    if precomputed_scores is not None:
+                        metric_scores_layer[metric_name] = precomputed_scores.float().cpu()
+                        continue
                     # Try computing on the fly
                     try:
                         if metric_name == "activation_l2_norm":
@@ -4125,25 +4208,27 @@ class LLMAlignmentExperiment(BaseExperiment):
         # Summary statistics across all layers
         # =========================================================
         if results:
+            jaccard_means = []
+            spearman_means = []
+            stable_fracs = []
+            for layer_result in results.values():
+                n_metrics = len(layer_result.get("metrics_analyzed", []))
+                if n_metrics >= 2 and "jaccard_matrix" in layer_result:
+                    j_vals = np.array(layer_result["jaccard_matrix"])[np.triu_indices(n_metrics, k=1)]
+                    if j_vals.size:
+                        jaccard_means.append(float(np.mean(j_vals)))
+                if n_metrics >= 2 and "spearman_matrix" in layer_result:
+                    s_vals = np.array(layer_result["spearman_matrix"])[np.triu_indices(n_metrics, k=1)]
+                    if s_vals.size:
+                        spearman_means.append(float(np.mean(s_vals)))
+                if "num_highly_stable" in layer_result and "num_supernodes" in layer_result and layer_result["num_supernodes"] > 0:
+                    stable_fracs.append(float(layer_result["num_highly_stable"]) / float(layer_result["num_supernodes"]))
+
             summary = {
                 "num_layers_analyzed": len(results),
-                "avg_jaccard_across_metrics": np.mean(
-                    [
-                        np.mean(np.array(r["jaccard_matrix"])[np.triu_indices(len(r["metrics_analyzed"]), k=1)])
-                        for r in results.values()
-                        if "jaccard_matrix" in r
-                    ]
-                ),
-                "avg_spearman_across_metrics": np.mean(
-                    [
-                        np.mean(np.array(r["spearman_matrix"])[np.triu_indices(len(r["metrics_analyzed"]), k=1)])
-                        for r in results.values()
-                        if "spearman_matrix" in r
-                    ]
-                ),
-                "avg_highly_stable_fraction": np.mean(
-                    [r["num_highly_stable"] / r["num_supernodes"] for r in results.values() if "num_highly_stable" in r]
-                ),
+                "avg_jaccard_across_metrics": float(np.mean(jaccard_means)) if jaccard_means else float("nan"),
+                "avg_spearman_across_metrics": float(np.mean(spearman_means)) if spearman_means else float("nan"),
+                "avg_highly_stable_fraction": float(np.mean(stable_fracs)) if stable_fracs else float("nan"),
             }
             results["summary"] = summary
 
@@ -4202,6 +4287,8 @@ class LLMAlignmentExperiment(BaseExperiment):
             with torch.no_grad():
                 for i in range(0, len(texts), batch_size):
                     batch_texts = texts[i : i + batch_size]
+                    if getattr(self.tokenizer, "pad_token_id", None) is None and getattr(self.tokenizer, "eos_token", None) is not None:
+                        self.tokenizer.pad_token = self.tokenizer.eos_token
                     inputs = self.tokenizer(
                         batch_texts,
                         return_tensors="pt",
@@ -7802,8 +7889,15 @@ class LLMAlignmentExperiment(BaseExperiment):
         if metric not in {"wanda_unstructured", "sparsegpt_unstructured"}:
             raise ValueError(f"Unknown unstructured baseline metric: {metric}")
 
-        # Ensure baseline calibrations exist
-        num_calib = getattr(self.config, "scar_num_samples", 128)
+        # Ensure baseline calibrations exist. Some runs disable SCAR metrics entirely,
+        # which can leave scar_num_samples at 0 even though a general calibration
+        # budget is configured elsewhere.
+        num_calib = (
+            getattr(self.config, "scar_num_samples", None)
+            or getattr(self.config, "alignment_data_num_samples", None)
+            or getattr(self.config, "n_calibration", None)
+            or 128
+        )
         if metric == "wanda_unstructured":
             wanda = getattr(self, "_wanda_baseline", None)
             if wanda is None:
@@ -7994,6 +8088,52 @@ class LLMAlignmentExperiment(BaseExperiment):
         super_pruned = 0
         layers_with_super = 0
         layers_with_super_pruned = 0
+        nodes_total = 0
+        nodes_pruned = 0
+        both_total = 0
+        both_pruned = 0
+
+        supernode_cfg = getattr(self.config, "supernode", {}) or getattr(self.config, "supernode_config", {}) or {}
+
+        def _make_supernode_mask(metric_scores: torch.Tensor) -> torch.Tensor:
+            num_neurons = int(metric_scores.numel())
+            if num_neurons <= 0:
+                return torch.zeros_like(metric_scores, dtype=torch.bool)
+
+            top_k_cfg = supernode_cfg.get("top_k")
+            core_fraction = float(supernode_cfg.get("core_fraction", 0.1))
+            min_core = max(1, int(supernode_cfg.get("min_core_neurons", 1)))
+
+            if top_k_cfg is not None:
+                num_core = min(num_neurons, int(top_k_cfg))
+            else:
+                num_core = max(1, int(round(core_fraction * num_neurons)))
+
+            num_core = max(num_core, min_core)
+            num_core = min(num_core, num_neurons)
+
+            _, top_indices = torch.topk(metric_scores, k=num_core, largest=True)
+            out = torch.zeros_like(metric_scores, dtype=torch.bool)
+            out[top_indices] = True
+            return out
+
+        def _get_layer_metric_scores(base_layer_name: str, layer_idx: str, metric_name: str) -> Optional[torch.Tensor]:
+            key_candidates = [
+                base_layer_name,
+                base_layer_name.replace("model.model.", "model."),
+                base_layer_name.replace("model.", "model.model.", 1),
+                f"model.layers.{layer_idx}.mlp.down_proj",
+                f"model.model.layers.{layer_idx}.mlp.down_proj",
+                f"model.layers.{layer_idx}.mlp.gate_proj",
+                f"model.model.layers.{layer_idx}.mlp.gate_proj",
+                f"model.layers.{layer_idx}.mlp.up_proj",
+                f"model.model.layers.{layer_idx}.mlp.up_proj",
+            ]
+            for cand in key_candidates:
+                metric_vals = (self.importance_scores.get(cand) or {}).get(metric_name)
+                if torch.is_tensor(metric_vals):
+                    return metric_vals
+            return None
 
         for layer_name in self.importance_scores.keys():
             if metric not in self.importance_scores[layer_name]:
@@ -8058,6 +8198,12 @@ class LLMAlignmentExperiment(BaseExperiment):
             # Create mask based on importance scores
             mask = pruner.create_pruning_mask(scores)
 
+            try:
+                nodes_total += int(mask.numel())
+                nodes_pruned += int((mask == 0).sum().item())
+            except Exception:
+                pass
+
             # Diagnostic: how many supernodes did we prune in this layer?
             if core_mask is not None:
                 try:
@@ -8077,6 +8223,21 @@ class LLMAlignmentExperiment(BaseExperiment):
                 except Exception:
                     # Never fail pruning due to diagnostics.
                     pass
+
+            try:
+                scar_lp_scores = _get_layer_metric_scores(layer_name, layer_idx, "scar_loss_proxy")
+                act_l2_scores = _get_layer_metric_scores(layer_name, layer_idx, "activation_l2_norm")
+                if torch.is_tensor(scar_lp_scores) and torch.is_tensor(act_l2_scores):
+                    if scar_lp_scores.numel() == act_l2_scores.numel() == mask.numel():
+                        scar_mask = _make_supernode_mask(scar_lp_scores.to(device=mask.device, dtype=torch.float32))
+                        act_mask = _make_supernode_mask(act_l2_scores.to(device=mask.device, dtype=torch.float32))
+                        both_mask = scar_mask & act_mask
+                        pruned = mask == 0
+
+                        both_total += int(both_mask.sum().item())
+                        both_pruned += int((pruned & both_mask).sum().item())
+            except Exception:
+                pass
 
             # Get the MLP module - use underlying model to handle HFCausalLM wrapper
             underlying_model = self._get_underlying_model()
@@ -8154,6 +8315,12 @@ class LLMAlignmentExperiment(BaseExperiment):
                 "supernodes_total": int(super_total),
                 "supernodes_pruned": int(super_pruned),
                 "supernodes_pruned_frac": (float(super_pruned) / float(super_total)) if super_total > 0 else None,
+                "nodes_total": int(nodes_total),
+                "nodes_pruned": int(nodes_pruned),
+                "nodes_pruned_frac": (float(nodes_pruned) / float(nodes_total)) if nodes_total > 0 else None,
+                "supernodes_both_scar_lp_activation_l2_total": int(both_total),
+                "supernodes_both_scar_lp_activation_l2_pruned": int(both_pruned),
+                "supernodes_both_scar_lp_activation_l2_pruned_frac": (float(both_pruned) / float(both_total)) if both_total > 0 else None,
                 "layers_with_supernodes": int(layers_with_super),
                 "layers_with_supernodes_pruned": int(layers_with_super_pruned),
             }
@@ -9024,9 +9191,15 @@ class LLMAlignmentExperiment(BaseExperiment):
         logger.info(f"Checking baseline strategies: pruning_strategies={pruning_strategies}, baseline_strategies={baseline_strategies}")
         if baseline_strategies:
             try:
+                baseline_num_calib = (
+                    getattr(self.config, "scar_num_samples", None)
+                    or getattr(self.config, "alignment_data_num_samples", None)
+                    or getattr(self.config, "n_calibration", None)
+                    or 128
+                )
                 baseline_scores = self.compute_baseline_pruning_scores(
                     strategies=baseline_strategies,
-                    num_calibration_samples=getattr(self.config, "scar_num_samples", 128),
+                    num_calibration_samples=baseline_num_calib,
                 )
                 logger.info(f"Computed baseline pruning scores for {len(baseline_scores)} layers")
             except Exception as base_err:

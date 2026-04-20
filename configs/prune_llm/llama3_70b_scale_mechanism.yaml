@@ -1,0 +1,126 @@
+# ============================================================================
+# LLAMA-3.1-70B SCALE CHECK: MECHANISM / CONCENTRATION ONLY
+# ============================================================================
+#
+# Purpose:
+# - Test whether the main supernode concentration phenomenon persists at 70B.
+# - Keep the run limited to the reviewer-relevant scale question:
+#   - LP concentration / supernode identification
+#   - optional outlier summary
+# - Skip pruning sweeps, downstream tasks, halo controls, and true ablation probes.
+#
+# This is designed as a rebuttal-focused replication, not a full paper rerun.
+# ============================================================================
+
+experiment:
+  name: "llama3_70b_scale_mechanism"
+  type: "llm_alignment"
+  output_dir: "./results/paper/llama3_70b_scale_mechanism"
+  seed: 42
+  device: "cuda"
+  save_activations: false
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-70B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+calibration:
+  dataset: "wikitext"
+  subset: "wikitext-2-raw-v1"
+  split: "train"
+  num_samples: 64
+  max_length: 512
+  batch_size: 1
+
+metrics:
+  enabled:
+    - "rayleigh_quotient"
+  num_samples: 64
+  rayleigh_quotient:
+    relative: true
+    regularization: 1.0e-6
+
+do_scar_metrics: true
+scar_num_samples: 64
+scar_max_length: 512
+
+llm:
+  scar_metrics: true
+  scar_num_samples: 64
+  scar_max_length: 512
+  evaluate_perplexity: false
+  evaluation_metrics: []
+  wikitext_subset: "wikitext-2-raw-v1"
+
+analysis:
+  generate_plots: false
+  save_scores: true
+
+generate_plots: false
+save_scores: true
+
+do_connectivity_pruning: false
+do_directed_redundancy: false
+do_halo_analysis: false
+do_generalized_importance: false
+
+supernode:
+  enabled: true
+  score_metric: "scar_loss_proxy"
+  core_fraction: 0.01
+  follower_fraction: 0.10
+  halo_fraction: 0.10
+  connectivity_topk: 256
+  connectivity_rank_normalize: false
+  connectivity_power: 1.0
+  protect_core: true
+  protect_core_metrics:
+    - "scar_loss_proxy"
+  cross_layer_analysis: false
+  compare_by_connection: false
+  compute_metrics:
+    - "activation"
+
+  read_halo_analysis:
+    enabled: false
+
+  conditional_halo_ablation:
+    enabled: false
+
+  lp_ablation_validation:
+    enabled: false
+
+supernode_robustness:
+  enabled: false
+
+supernode_summary:
+  enabled: true
+  outlier_analysis: true
+
+halo_analysis:
+  enabled: false
+
+cross_layer:
+  enabled: false
+
+generalized_importance:
+  enabled: false
+
+pruning:
+  enabled: false
+
+evaluation:
+  enabled: false

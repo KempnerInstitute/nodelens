@@ -5,6 +5,22 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 
+# Archetype names (formerly: critical, redundant, synergistic, background).
+# New names avoid overloading PID terminology.
+# Geometric meaning is unchanged: high I_X low R_X, high R_X, moderate I_X low R_X, low both.
+TYPE_ESSENTIAL = "essential"  # formerly "critical"
+TYPE_SUBSTITUTABLE = "substitutable"  # formerly "redundant"
+TYPE_SPECIALIZED = "specialized"  # formerly "synergistic"
+TYPE_DORMANT = "dormant"  # formerly "background"
+
+# Backward compatibility: map old names to new
+_OLD_TO_NEW = {
+    "critical": TYPE_ESSENTIAL,
+    "redundant": TYPE_SUBSTITUTABLE,
+    "synergistic": TYPE_SPECIALIZED,
+    "background": TYPE_DORMANT,
+}
+
 try:
     from sklearn.cluster import KMeans
     from sklearn.metrics import silhouette_score
@@ -248,12 +264,12 @@ class MetricSpaceClustering:
         """Assign type names by ranking clusters by mean importance score.
 
         Higher mean score -> higher-priority type:
-          rank 3 (highest) = "critical"
-          rank 2 = "synergistic"
-          rank 1 = "redundant"
-          rank 0 (lowest)  = "background"
+          rank 3 (highest) = "essential"
+          rank 2 = "specialized"
+          rank 1 = "substitutable"
+          rank 0 (lowest)  = "dormant"
         """
-        type_names_ranked = ["background", "redundant", "synergistic", "critical"]
+        type_names_ranked = [TYPE_DORMANT, TYPE_SUBSTITUTABLE, TYPE_SPECIALIZED, TYPE_ESSENTIAL]
         scores = np.asarray(scores).flatten()
         mean_scores = []
         for c in range(n_clusters):
@@ -266,7 +282,7 @@ class MetricSpaceClustering:
             if r < len(type_names_ranked):
                 mapping[c] = type_names_ranked[r]
             else:
-                mapping[c] = "background"
+                mapping[c] = TYPE_DORMANT
         return mapping
 
     def _fit_quantile(
@@ -310,10 +326,10 @@ class MetricSpaceClustering:
             sil = 0.0
 
         # Type mapping: quartile 0 = background (lowest), k-1 = critical (highest)
-        type_names_ranked = ["background", "redundant", "synergistic", "critical"]
+        type_names_ranked = [TYPE_DORMANT, TYPE_SUBSTITUTABLE, TYPE_SPECIALIZED, TYPE_ESSENTIAL]
         tm: Dict[int, str] = {}
         for i in range(k):
-            tm[i] = type_names_ranked[i] if i < len(type_names_ranked) else "background"
+            tm[i] = type_names_ranked[i] if i < len(type_names_ranked) else TYPE_DORMANT
         tc = {t: int((lab == k_id).sum()) for k_id, t in tm.items()}
 
         return ClusterResult(
@@ -394,22 +410,22 @@ class MetricSpaceClustering:
         used = set()
 
         i = int(np.argmax(c[:, 0] - c[:, 1]))
-        m[i] = "critical"
+        m[i] = TYPE_ESSENTIAL
         used.add(i)
 
         rem = [j for j in range(len(c)) if j not in used]
         i = rem[int(np.argmax([c[j, 1] for j in rem]))]
-        m[i] = "redundant"
+        m[i] = TYPE_SUBSTITUTABLE
         used.add(i)
 
         rem = [j for j in range(len(c)) if j not in used]
         i = rem[int(np.argmax([c[j, 2] for j in rem]))]
-        m[i] = "synergistic"
+        m[i] = TYPE_SPECIALIZED
         used.add(i)
 
         for j in range(len(c)):
             if j not in m:
-                m[j] = "background"
+                m[j] = TYPE_DORMANT
         return m
 
     def _solve_global_assignment(self, scores: np.ndarray) -> Dict[int, str]:
@@ -418,11 +434,11 @@ class MetricSpaceClustering:
 
         Args:
             scores: [n_clusters, 4] score matrix for
-                [critical, redundant, synergistic, background].
+                [essential, substitutable, specialized, dormant].
         """
         import itertools
 
-        type_names = ["critical", "redundant", "synergistic", "background"]
+        type_names = [TYPE_ESSENTIAL, TYPE_SUBSTITUTABLE, TYPE_SPECIALIZED, TYPE_DORMANT]
         n = int(scores.shape[0])
         best = None
         best_score = -1e30
@@ -442,7 +458,7 @@ class MetricSpaceClustering:
         # Any extra clusters (if n_clusters > 4) are treated as background.
         for j in range(n):
             if int(j) not in mapping:
-                mapping[int(j)] = "background"
+                mapping[int(j)] = TYPE_DORMANT
         return mapping
 
     def _scores_global_penalized(
@@ -460,13 +476,13 @@ class MetricSpaceClustering:
         w_syn = 1.0 if use_syn else 0.0
 
         scores = np.zeros((len(c), 4), dtype=np.float64)
-        # critical: high rq, low red
+        # essential: high I_X, low R_X
         scores[:, 0] = (w_rq * c[:, 0]) - (w_red * c[:, 1])
-        # redundant: high red (with mild penalty for high rq)
+        # substitutable: high R_X (with mild penalty for high I_X)
         scores[:, 1] = (w_red * c[:, 1]) - (0.25 * w_rq * c[:, 0])
-        # synergistic: high syn (with mild penalty for high red)
+        # specialized: high complementarity (with mild penalty for high R_X)
         scores[:, 2] = (w_syn * c[:, 2]) - (0.25 * w_red * c[:, 1])
-        # background: close to origin
+        # dormant: close to origin
         scores[:, 3] = -((w_rq * np.abs(c[:, 0])) + (w_red * np.abs(c[:, 1])) + (w_syn * np.abs(c[:, 2])))
         return scores
 
@@ -484,13 +500,13 @@ class MetricSpaceClustering:
         w_syn = 1.0 if use_syn else 0.0
 
         scores = np.zeros((len(c), 4), dtype=np.float64)
-        # critical: high rq, low red
+        # essential: high I_X, low R_X
         scores[:, 0] = (w_rq * c[:, 0]) - (w_red * c[:, 1])
-        # redundant: maximize redundancy
+        # substitutable: maximize shared information
         scores[:, 1] = w_red * c[:, 1]
-        # synergistic: maximize synergy
+        # specialized: maximize complementarity
         scores[:, 2] = w_syn * c[:, 2]
-        # background: low magnitude in active metric dimensions
+        # dormant: low magnitude in active metric dimensions
         scores[:, 3] = -((w_rq * np.abs(c[:, 0])) + (w_red * np.abs(c[:, 1])) + (w_syn * np.abs(c[:, 2])))
         return scores
 

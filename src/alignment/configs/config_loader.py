@@ -835,7 +835,18 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
                 flat_config["pretrained"] = external.get("pretrained", False)
 
         # Handle HuggingFace model config (for LLMs)
-        hf_fields = ["model_id", "model_backend", "dtype", "torch_dtype", "device_map"]
+        # `revision` and `trust_remote_code` forward through the hf_causal_lm
+        # registry constructor (HFCausalLM) into AutoModelForCausalLM.from_pretrained,
+        # so they must survive config flattening.
+        hf_fields = [
+            "model_id",
+            "model_backend",
+            "dtype",
+            "torch_dtype",
+            "device_map",
+            "revision",
+            "trust_remote_code",
+        ]
         for field in hf_fields:
             if field in model:
                 # Normalize dtype field name (prefer 'dtype', but accept 'torch_dtype')
@@ -893,7 +904,9 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # Map training configuration
-    # Auto-disable training when using pretrained models (unless explicitly enabled)
+    # Preserve legacy flat training keys when present, and only fall back to
+    # pretrained-based defaults when the config truly leaves training
+    # unspecified.
     is_pretrained = flat_config.get("pretrained", False)
 
     if "training" in nested_config:
@@ -925,6 +938,31 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         # No training block - auto-disable for pretrained models
         if is_pretrained:
             flat_config["do_train"] = False
+
+    # Legacy flat-format overrides. Many existing paper configs specify
+    # training controls at top level rather than under a nested `training`
+    # block. Respect those explicit values instead of replacing them with the
+    # pretrained default above.
+    if "do_train" in nested_config:
+        flat_config["do_train"] = nested_config["do_train"]
+    if "training_epochs" in nested_config:
+        flat_config["training_epochs"] = nested_config["training_epochs"]
+    if "learning_rate" in nested_config:
+        flat_config["learning_rate"] = nested_config["learning_rate"]
+    if "optimizer" in nested_config:
+        flat_config["optimizer"] = str(nested_config["optimizer"]).lower()
+    if "train_before_dropout" in nested_config:
+        flat_config["train_before_dropout"] = nested_config["train_before_dropout"]
+    if "scheduler" in nested_config:
+        flat_config["scheduler"] = nested_config["scheduler"]
+    if "scheduler_config" in nested_config:
+        flat_config["scheduler_config"] = nested_config["scheduler_config"]
+    if "momentum" in nested_config:
+        flat_config["momentum"] = nested_config["momentum"]
+    if "weight_decay" in nested_config:
+        flat_config["weight_decay"] = nested_config["weight_decay"]
+    if "num_networks" in nested_config:
+        flat_config["num_networks"] = nested_config["num_networks"]
 
     # Map alignment/metrics settings
     # Priority: metrics.enabled > alignment.methods > alignment_methods > default
@@ -1228,6 +1266,27 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["cluster_aware_late_alpha"] = float(ca["late_alpha"])
         if "late_gamma" in ca:
             flat_config["cluster_aware_late_gamma"] = float(ca["late_gamma"])
+        # Two-axis adaptive settings
+        if "twoaxis_depth_switch" in ca:
+            flat_config["cluster_aware_twoaxis_depth_switch"] = float(ca["twoaxis_depth_switch"])
+        if "twoaxis_depth_sharpness" in ca:
+            flat_config["cluster_aware_twoaxis_depth_sharpness"] = float(ca["twoaxis_depth_sharpness"])
+        if "twoaxis_ixy_weight" in ca:
+            flat_config["cluster_aware_twoaxis_ixy_weight"] = float(ca["twoaxis_ixy_weight"])
+        if "twoaxis_red_internal_weight" in ca:
+            flat_config["cluster_aware_twoaxis_red_internal_weight"] = float(ca["twoaxis_red_internal_weight"])
+        if "twoaxis_syn_weight" in ca:
+            flat_config["cluster_aware_twoaxis_syn_weight"] = float(ca["twoaxis_syn_weight"])
+        if "twoaxis_early_task_weight" in ca:
+            flat_config["cluster_aware_twoaxis_early_task_weight"] = float(ca["twoaxis_early_task_weight"])
+        if "twoaxis_late_task_weight" in ca:
+            flat_config["cluster_aware_twoaxis_late_task_weight"] = float(ca["twoaxis_late_task_weight"])
+        if "twoaxis_red_target_weight" in ca:
+            flat_config["cluster_aware_twoaxis_red_target_weight"] = float(ca["twoaxis_red_target_weight"])
+        if "twoaxis_use_pid_red_target" in ca:
+            flat_config["cluster_aware_twoaxis_use_pid_red_target"] = bool(ca["twoaxis_use_pid_red_target"])
+        if "twoaxis_halo_weight" in ca:
+            flat_config["cluster_aware_twoaxis_halo_weight"] = float(ca["twoaxis_halo_weight"])
 
     # Generalized Taylor pruning configuration (vision)
     if isinstance(pruning_block.get("generalized_taylor"), dict):
@@ -1443,6 +1502,24 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     elif "base_output_dir" in nested_config:
         flat_config["base_output_dir"] = nested_config["base_output_dir"]
 
+    # -----------------------------------------------------------------------
+    # Passthrough: copy any top-level keys from the input that are valid
+    # ExperimentConfig fields but were not explicitly mapped above.  This
+    # prevents new dataclass fields (e.g. model_checkpoint, hybrid_taylor_allocation)
+    # from being silently dropped when loading already-flat JSON/YAML configs.
+    # -----------------------------------------------------------------------
+    try:
+        import dataclasses as _dc
+
+        from alignment.experiments.base import ExperimentConfig as _EC
+
+        valid_fields = {f.name for f in _dc.fields(_EC)}
+        for key, value in nested_config.items():
+            if key in valid_fields and key not in flat_config:
+                flat_config[key] = value
+    except Exception:
+        pass  # Graceful fallback if ExperimentConfig cannot be imported
+
     return flat_config
 
 
@@ -1581,6 +1658,16 @@ def load_config_with_overrides(
             "pruning.cluster_aware.early_gamma": "cluster_aware_early_gamma",
             "pruning.cluster_aware.late_alpha": "cluster_aware_late_alpha",
             "pruning.cluster_aware.late_gamma": "cluster_aware_late_gamma",
+            "pruning.cluster_aware.twoaxis_depth_switch": "cluster_aware_twoaxis_depth_switch",
+            "pruning.cluster_aware.twoaxis_depth_sharpness": "cluster_aware_twoaxis_depth_sharpness",
+            "pruning.cluster_aware.twoaxis_ixy_weight": "cluster_aware_twoaxis_ixy_weight",
+            "pruning.cluster_aware.twoaxis_red_internal_weight": "cluster_aware_twoaxis_red_internal_weight",
+            "pruning.cluster_aware.twoaxis_syn_weight": "cluster_aware_twoaxis_syn_weight",
+            "pruning.cluster_aware.twoaxis_early_task_weight": "cluster_aware_twoaxis_early_task_weight",
+            "pruning.cluster_aware.twoaxis_late_task_weight": "cluster_aware_twoaxis_late_task_weight",
+            "pruning.cluster_aware.twoaxis_red_target_weight": "cluster_aware_twoaxis_red_target_weight",
+            "pruning.cluster_aware.twoaxis_use_pid_red_target": "cluster_aware_twoaxis_use_pid_red_target",
+            "pruning.cluster_aware.twoaxis_halo_weight": "cluster_aware_twoaxis_halo_weight",
             # Pruning distribution safety caps
             "pruning.distribution": "pruning_distribution",
             "pruning.dependency_aware": "dependency_aware_pruning",

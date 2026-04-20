@@ -134,6 +134,10 @@ class ExperimentConfig:
     # If you explicitly want to reuse the local sampling scheme, set to "match"
     # (not recommended: it repeats the same image-level target across spatial samples).
     task_activation_samples: Optional[str] = None
+    # Optional control for target-directed metrics:
+    # - "none": use true task target
+    # - "batch": shuffle target values within each calibration batch
+    task_target_permutation: str = "none"
     spatial_samples_per_image: int = 16  # used when activation_samples="flatten_spatial"
     n_clusters: int = 4
     synergy_target: str = "logit_margin"  # logit_margin, correct_logit, logit_pc1
@@ -167,6 +171,18 @@ class ExperimentConfig:
     # - "importance_reassign": Standard k-means geometry, reassign types by mean score
     # - "quantile": Partition by composite score quartiles (no k-means)
     clustering_importance_mode: str = "geometric"
+
+    # Clustering feature set: which 3 features to use for k-means clustering
+    # - "internal": (first_metric, internal_redundancy, synergy) — original features
+    # - "pid": (task_MI, pid_redundancy_t, synergy) — PID target-directed features
+    clustering_feature_set: str = "internal"
+
+    # Input MI proxy reference scale:
+    # mi_in_proxy = 0.5 * log(1 + signal_power / sigma0_sq)
+    # where signal_power = RQ * ||w||^2. Default reproduces legacy behavior.
+    mi_in_proxy_sigma_mode: str = "median"  # median|mean|p75|p90|quantile|fixed
+    mi_in_proxy_sigma_fixed: float = 0.0
+    mi_in_proxy_sigma_quantile: float = 50.0
 
     # Optional: compute per-channel loss proxy (Fisher/GN-style) on calibration data.
     compute_loss_proxy: bool = False
@@ -232,6 +248,23 @@ class ExperimentConfig:
     cluster_aware_late_gamma: float = 0.5  # Higher redundancy penalty late
     # Fraction of layers considered "early"
     cluster_aware_early_layer_frac: float = 0.3
+    # Two-axis adaptive CAP (local IXY/Red/Syn + target TaskMI/PID-Red blend).
+    # Blend weight to target branch follows a depth sigmoid:
+    #   mix(depth) = sigmoid(sharpness * (depth - depth_switch))
+    # where depth in [0,1].
+    cluster_aware_twoaxis_depth_switch: float = 0.5
+    cluster_aware_twoaxis_depth_sharpness: float = 10.0
+    # Local branch (IXY/internal Red/Syn) weights
+    cluster_aware_twoaxis_ixy_weight: float = 1.0
+    cluster_aware_twoaxis_red_internal_weight: float = 0.25
+    cluster_aware_twoaxis_syn_weight: float = 0.0
+    # Target branch (TaskMI/PID-Red) weights
+    cluster_aware_twoaxis_early_task_weight: float = 0.05
+    cluster_aware_twoaxis_late_task_weight: float = 0.35
+    cluster_aware_twoaxis_red_target_weight: float = 0.0
+    cluster_aware_twoaxis_use_pid_red_target: bool = True
+    # Halo contribution for the two-axis score.
+    cluster_aware_twoaxis_halo_weight: float = 0.3
 
     # ---------------------------------------------------------------------
     # Generalized Taylor pruning (vision)
@@ -298,6 +331,11 @@ class ExperimentConfig:
     # When enabled, per-layer prune counts are adjusted so the total number of
     # pruned channels matches round(target_sparsity * total_prunable_channels).
     pruning_enforce_exact_global_channel_budget: bool = False
+    # When True, use Taylor channel scores for computing per-layer pruning
+    # allocation (via the distribution manager), while the method's own scores
+    # are used for within-layer channel ranking.  This decouples allocation
+    # (gradient-aware) from ranking (substitutability-aware).
+    hybrid_taylor_allocation: bool = False
     fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
     # Optional cap for post-pruning fine-tuning speed (useful for ImageNet-scale runs)
     # None => use the full training loader each epoch.

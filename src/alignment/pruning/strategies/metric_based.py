@@ -60,6 +60,13 @@ class MetricPruningConfig(PruningConfig):
     synergistic_bonus: float = 0.2  # Bonus for synergistic channels
     background_penalty: float = 0.1  # Penalty for background channels
 
+    # Two-axis score (Rule 1): score = alpha * I_X - beta * I(T;Y)
+    # High score = keep; low score = prune.
+    # alpha=1, beta=0 recovers pure local I_X ranking.
+    # beta>0 penalises task-relevant channels (Q2 danger zone).
+    alpha_ix: float = 1.0
+    beta_ity: float = 0.0
+
 
 # =============================================================================
 # SINGLE METRIC PRUNING
@@ -140,6 +147,18 @@ class SingleMetricPruning(BasePruningStrategy):
                 + self.config.weight_redundancy * self._normalize(red)
                 + self.config.weight_mi * self._normalize(tmi)
             )
+
+        elif metric in {"two_axis", "ix_minus_ity", "two_axis_score"}:
+            # Rule 1 score: alpha * I_X - beta * I(T;Y).
+            # Uses the same mi_in_proxy field already populated by the metric pipeline
+            # (Gaussian input-capture proxy, i.e. I_X in the paper notation) and the
+            # task_mi field (task-direction MI). Both are normalized before combining
+            # so that alpha/beta have comparable scales.
+            ix = metrics.get("mi_in_proxy", np.zeros(n_channels))
+            ity = metrics.get("task_mi", metrics.get("mi_task", np.zeros(n_channels)))
+            alpha = float(getattr(self.config, "alpha_ix", 1.0))
+            beta = float(getattr(self.config, "beta_ity", 0.0))
+            scores = alpha * self._normalize(ix) - beta * self._normalize(ity)
 
         elif metric in {"magnitude", "mag"}:
             if hasattr(module, "weight"):
@@ -510,7 +529,38 @@ def create_metric_pruning_strategy(
     method = method.lower()
 
     # Single metric methods
-    single_metrics = {"rq", "redundancy", "synergy", "mi", "mi_in", "magnitude", "composite"}
+    single_metrics = {
+        "rq",
+        "redundancy",
+        "synergy",
+        "mi",
+        "mi_in",
+        "magnitude",
+        "composite",
+        "two_axis",
+        "ix_minus_ity",
+        "two_axis_score",
+    }
+
+    # Two-axis variants with embedded alpha/beta so configs can select them by
+    # name alone (no custom kwarg threading through the experiment runner).
+    # Convention: two_axis_aA_bB encodes alpha=A, beta=B with 'p' as decimal point.
+    # Examples: two_axis_a1_b0p25 (alpha=1, beta=0.25), two_axis_a1_b1 (alpha=1, beta=1).
+    if method.startswith("two_axis_a"):
+        try:
+            remainder = method[len("two_axis_a") :]
+            a_str, b_str = remainder.split("_b")
+            alpha = float(a_str.replace("p", "."))
+            beta = float(b_str.replace("p", "."))
+            config = MetricPruningConfig(
+                metric="two_axis",
+                alpha_ix=alpha,
+                beta_ity=beta,
+                **config_kwargs,
+            )
+            return SingleMetricPruning(config, precomputed_metrics)
+        except (ValueError, IndexError):
+            logger.warning(f"Could not parse two-axis variant '{method}', falling through")
 
     if method in single_metrics:
         config = MetricPruningConfig(metric=method, **config_kwargs)

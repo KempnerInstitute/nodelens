@@ -256,13 +256,22 @@ class GeneralizedTaylorPruning(BasePruningStrategy):
 
         elif variant == "redundancy_discounted_taylor":
             # Taylor / (1 + β·redundancy): discount redundant channels
+            # Layer-normalized: rescale to preserve layer-level mean.
             beta = self.config.redundancy_discount_beta
-            scores = taylor_norm / (1 + beta * red_norm)
+            modulated = taylor_norm / (1 + beta * red_norm)
+            orig_mean = float(np.mean(taylor_norm)) if taylor_norm.size > 0 else 1.0
+            mod_mean = float(np.mean(modulated)) if modulated.size > 0 else 1.0
+            scores = modulated * (orig_mean / mod_mean) if mod_mean > 1e-12 else modulated
 
         elif variant == "synergy_boosted_taylor":
             # Taylor × (1 + γ·synergy): boost synergistic channels
+            # Layer-normalized: rescale to preserve layer-level mean so that
+            # inter-layer calibration is maintained under global_threshold.
             gamma = self.config.synergy_boost_gamma
-            scores = taylor_norm * (1 + gamma * syn_norm)
+            modulated = taylor_norm * (1 + gamma * syn_norm)
+            orig_mean = float(np.mean(taylor_norm)) if taylor_norm.size > 0 else 1.0
+            mod_mean = float(np.mean(modulated)) if modulated.size > 0 else 1.0
+            scores = modulated * (orig_mean / mod_mean) if mod_mean > 1e-12 else modulated
 
         elif variant == "structural_taylor":
             # |∂L/∂a| × structural_score
@@ -328,10 +337,18 @@ class GeneralizedTaylorPruning(BasePruningStrategy):
 
         elif variant == "mi_taylor":
             # Taylor × MI(channel, task)
-            scores = taylor_norm * (mi_norm + float(self.config.structural_eps))
+            # Layer-normalized: rescale to preserve layer-level mean.
+            modulated = taylor_norm * (mi_norm + float(self.config.structural_eps))
+            orig_mean = float(np.mean(taylor_norm)) if taylor_norm.size > 0 else 1.0
+            mod_mean = float(np.mean(modulated)) if modulated.size > 0 else 1.0
+            scores = modulated * (orig_mean / mod_mean) if mod_mean > 1e-12 else modulated
 
         elif variant == "cluster_type_taylor":
             # Taylor × type_multiplier based on cluster membership
+            # Layer-normalized: after multiplying, rescale so that the layer-level
+            # mean matches the original Taylor mean.  This preserves Taylor's
+            # inter-layer calibration (critical for global_threshold distribution)
+            # while changing only the within-layer ranking.
             clusters = self.precomputed_clusters
             labels = np.asarray(clusters.get("labels", np.zeros(n_channels, dtype=int)))[:n_channels]
             type_mapping = clusters.get("type_mapping", {})
@@ -351,7 +368,15 @@ class GeneralizedTaylorPruning(BasePruningStrategy):
                     mask = labels == cluster_id
                     multipliers[mask] = mult
 
-            scores = taylor_norm * multipliers
+            modulated = taylor_norm * multipliers
+
+            # Rescale to preserve layer-level mean (inter-layer calibration)
+            orig_mean = float(np.mean(taylor_norm)) if taylor_norm.size > 0 else 1.0
+            mod_mean = float(np.mean(modulated)) if modulated.size > 0 else 1.0
+            if mod_mean > 1e-12:
+                scores = modulated * (orig_mean / mod_mean)
+            else:
+                scores = modulated
 
         elif variant == "full_generalized":
             # |∇L|^α × |a|^β × f(metrics)

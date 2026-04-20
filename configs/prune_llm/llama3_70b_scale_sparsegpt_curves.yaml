@@ -1,0 +1,92 @@
+# ============================================================================
+# LLAMA-3.1-70B SCALE CHECK: SPARSEGPT CURVES
+# ============================================================================
+#
+# Purpose:
+# - Complete the 70B scale-comparison figure/table for SparseGPT so the method
+#   is reported consistently across 30% / 50% / 70% FFN sparsity.
+# - Keep the run narrow:
+#   - SparseGPT only
+#   - perplexity only
+#   - same calibration/eval budget as the other 70B scale checks
+# ============================================================================
+
+experiment:
+  name: "llama3_70b_scale_sparsegpt_curves"
+  type: "llm_alignment"
+  output_dir: "./results/paper/llama3_70b_scale_sparsegpt_curves"
+  seed: 42
+  device: "cuda"
+  save_activations: false
+  num_networks: 1
+
+model:
+  name: "hf_causal_lm"
+  model_id: "meta-llama/Llama-3.1-70B"
+  dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+  tracked_layers:
+    - "model.model.layers.*.mlp.up_proj"
+    - "model.model.layers.*.mlp.gate_proj"
+    - "model.model.layers.*.mlp.down_proj"
+
+dataset:
+  name: "wikitext"
+  batch_size: 1
+  num_workers: 0
+
+calibration:
+  dataset: "wikitext"
+  subset: "wikitext-2-raw-v1"
+  split: "train"
+  num_samples: 64
+  max_length: 512
+  batch_size: 1
+
+metrics:
+  enabled:
+    - "activation_l2_norm"
+  num_samples: 64
+
+do_scar_metrics: false
+
+llm:
+  evaluate_perplexity: true
+  evaluation_num_samples: 100
+  evaluation_metrics:
+    - "perplexity"
+  perplexity_protocol: "oats"
+  wikitext_subset: "wikitext-2-raw-v1"
+  perplexity_seq_len: 2048
+
+analysis:
+  generate_plots: false
+  save_scores: true
+
+generate_plots: false
+save_scores: true
+
+do_connectivity_pruning: false
+do_directed_redundancy: false
+do_halo_analysis: false
+do_generalized_importance: false
+
+pruning:
+  enabled: true
+  target: "ffn"
+  structured: true
+  dependency_aware: true
+  distribution: "uniform"
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+
+  sparsity_levels: [0.3, 0.5, 0.7]
+  selection_modes: ["low"]
+  algorithms:
+    - "sparsegpt"
+
+  single_strategy: "sparsegpt"
+
+evaluation:
+  enabled: true
