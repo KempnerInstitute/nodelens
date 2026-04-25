@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this code or the Supernodes and SCAR artifacts, please cite the paper and archived release."
+title: "LossLens"
+version: "0.2.0"
+repository-code: "https://github.com/KempnerInstitute/alignment"
+url: "https://github.com/KempnerInstitute/alignment"
+license: "MIT"
+authors:
+  - family-names: "Cherilyn"
+    given-names: "Audrey"
+    affiliation: "Kempner Institute at Harvard University"
+  - family-names: "Safaai"
+    given-names: "Houman"
+    affiliation: "Kempner Institute at Harvard University"
+preferred-citation:
+  type: article
+  title: "Supernodes and Halos: Loss-Critical Hubs in LLM Feed-Forward Layers"
+  authors:
+    - family-names: "Cherilyn"
+      given-names: "Audrey"
+      affiliation: "Kempner Institute at Harvard University"
+    - family-names: "Safaai"
+      given-names: "Houman"
+      affiliation: "Kempner Institute at Harvard University"
+  year: 2026
+  url: "https://github.com/KempnerInstitute/alignment"
+  identifiers:
+    - type: url
+      value: "https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts"

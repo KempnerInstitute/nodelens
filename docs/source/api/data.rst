@@ -1,7 +1,7 @@
 Data API Reference
 ==================
 
-This section documents the data handling components of the alignment framework.
+This section documents the data handling components of LossLens.
 
 Dataset Wrappers
 ----------------

@@ -1,7 +1,7 @@
 Experiments API Reference
 =========================
 
-This section provides detailed documentation for all experiment types available in the alignment framework.
+This section provides detailed documentation for all experiment types available in LossLens.
 
 .. contents:: Table of Contents
    :local:

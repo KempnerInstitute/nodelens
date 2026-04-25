@@ -2,7 +2,7 @@ Developer Guide
 ===============
 
 This section contains documentation for developers who want to extend or contribute
-to the alignment framework.
+to LossLens.
 
 .. toctree::
    :maxdepth: 2
@@ -13,7 +13,7 @@ to the alignment framework.
 Overview
 --------
 
-The alignment framework is designed to be highly extensible. You can add:
+LossLens is designed to be highly extensible. You can add:
 
 - **Custom Metrics**: Define new per-neuron alignment metrics
 - **Custom Analyzers**: Create new analysis pipelines (clustering, halo, etc.)

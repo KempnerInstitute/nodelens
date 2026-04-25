@@ -1,7 +1,7 @@
 Infrastructure API Reference
 ============================
 
-This section documents the infrastructure and utility components of the alignment framework.
+This section documents the infrastructure and utility components of LossLens.
 
 Configuration
 -------------

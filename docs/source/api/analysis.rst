@@ -1,7 +1,7 @@
 Analysis API Reference
 ======================
 
-This section documents the analysis and visualization components of the alignment framework.
+This section documents the analysis and visualization components of LossLens.
 
 Result Aggregation
 ------------------

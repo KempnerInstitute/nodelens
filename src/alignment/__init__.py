@@ -1,8 +1,9 @@
 """
-Neural Network Alignment Framework
+LossLens compatibility package.
 
-A comprehensive framework for analyzing neural network representations
-through information-theoretic metrics and alignment measures.
+The public project studies loss-sensitive neural network structure and
+structured pruning. The import name remains ``alignment`` for backward
+compatibility with existing configs and scripts.
 """
 
 # Core functionality

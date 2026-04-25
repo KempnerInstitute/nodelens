@@ -1,7 +1,7 @@
 Pruning Guide
 =============
 
-This guide covers the pruning capabilities in the alignment framework, including different strategies and experiment types.
+This guide covers the pruning capabilities in LossLens, including different strategies and experiment types.
 
 Overview
 --------

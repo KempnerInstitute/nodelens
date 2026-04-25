@@ -1,7 +1,7 @@
 Training API Reference
 ======================
 
-This section documents the training components of the alignment framework.
+This section documents the training components of LossLens.
 
 Base Training
 -------------

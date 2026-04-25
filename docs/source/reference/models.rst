@@ -193,7 +193,7 @@ Complete Model Examples
 
 See ``configs/examples/`` for complete working configurations:
 
-- ``resnet18_analysis.yaml`` - ResNet-18 on CIFAR-10
+- ``mnist_basic.yaml`` - MLP on MNIST
 - ``alexnet_analysis.yaml`` - AlexNet configuration
 - ``vit_b16_analysis.yaml`` - Vision Transformer setup
 - ``vision_networks_master.yaml`` - All models with options

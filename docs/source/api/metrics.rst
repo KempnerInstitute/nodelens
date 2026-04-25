@@ -1,7 +1,7 @@
 Metrics API Reference
 =====================
 
-This section provides detailed documentation for all metrics available in the alignment framework.
+This section provides detailed documentation for all metrics available in LossLens.
 
 .. contents:: Table of Contents
    :local:
@@ -10,7 +10,7 @@ This section provides detailed documentation for all metrics available in the al
 Overview
 --------
 
-The alignment framework provides 36+ metrics for analyzing neural network behavior, organized into several categories:
+LossLens provides 36+ metrics for analyzing neural network behavior, organized into several categories:
 
 - **Alignment Metrics**: Measure how well neurons align with input statistics
 - **Information Theory Metrics**: Quantify information flow and dependencies

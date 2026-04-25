@@ -79,7 +79,7 @@ Spectral Metrics
      - Distribution of eigenvalues
 
 Task-Specific Metrics
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1

@@ -1,12 +1,12 @@
 Pruning Strategies Guide
 ========================
 
-This guide documents all pruning strategies available in the alignment framework and their use cases.
+This guide documents all pruning strategies available in LossLens and their use cases.
 
 Overview
 --------
 
-Pruning is a technique for reducing neural network size by removing parameters while maintaining performance. The alignment framework provides several pruning strategies to analyze how network sparsity affects alignment metrics.
+Pruning is a technique for reducing neural network size by removing parameters while maintaining performance. LossLens provides several pruning strategies to analyze how network sparsity affects alignment metrics.
 
 Available Pruning Strategies
 ----------------------------
@@ -293,6 +293,6 @@ Issue: Memory Not Reduced After Pruning
 See Also
 --------
 
-- :doc:`/api/pruning` - Complete API reference
+- ``alignment.pruning`` - Pruning API entry point
 - :doc:`experiments` - Pruning experiments guide
-- :doc:`/examples/pruning_experiments` - Example code
+- Repository examples and configs - Example code

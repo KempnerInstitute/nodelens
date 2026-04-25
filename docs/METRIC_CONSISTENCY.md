@@ -130,8 +130,8 @@ Pruning strategies may consume these via "precomputed metrics" dicts.
 ```python
 from alignment.metrics import get_metric
 
-rq = get_metric("rayleigh_quotient")         # RQ(w; Σ_X)
-red = get_metric("average_redundancy")      # -0.5 log(1-ρ²) aggregated per neuron
+rq = get_metric("rayleigh_quotient")         # RQ(w; Sigma_X)
+red = get_metric("average_redundancy")      # -0.5 log(1-rho^2) aggregated per neuron
 syn = get_metric("gaussian_pid_synergy_mmi")# MMI Gaussian PID synergy
 ```
 

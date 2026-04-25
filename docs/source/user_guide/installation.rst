@@ -70,5 +70,5 @@ Next Steps
 ----------
 
 - See :doc:`quickstart` for basic usage
-- Check :doc:`/examples/index` for examples
-- Read :doc:`/api/index` for API documentation
+- Check the repository ``examples/`` folder for runnable examples
+- Read the top-level README for current API entry points

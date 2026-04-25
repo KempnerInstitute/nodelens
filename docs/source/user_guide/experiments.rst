@@ -1,7 +1,7 @@
 Experiments Guide
 =================
 
-This guide covers the different types of experiments available in the alignment framework.
+This guide covers the different types of experiments available in LossLens.
 
 Overview
 --------

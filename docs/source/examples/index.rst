@@ -1,7 +1,7 @@
 Examples and Tutorials
 ======================
 
-This section contains examples and tutorials for using the alignment framework.
+This section contains examples and tutorials for using LossLens.
 
 Quick Start Examples
 --------------------

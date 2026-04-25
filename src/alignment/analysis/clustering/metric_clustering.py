@@ -5,20 +5,28 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 
-# Archetype names (formerly: critical, redundant, synergistic, background).
-# New names avoid overloading PID terminology.
-# Geometric meaning is unchanged: high I_X low R_X, high R_X, moderate I_X low R_X, low both.
-TYPE_ESSENTIAL = "essential"  # formerly "critical"
-TYPE_SUBSTITUTABLE = "substitutable"  # formerly "redundant"
-TYPE_SPECIALIZED = "specialized"  # formerly "synergistic"
-TYPE_DORMANT = "dormant"  # formerly "background"
+# Public archetype names used across configs, pruning logic, plots, and tests.
+# Geometric meaning: high I_X low R_X, high R_X, high complementarity, low all.
+TYPE_CRITICAL = "critical"
+TYPE_REDUNDANT = "redundant"
+TYPE_SYNERGISTIC = "synergistic"
+TYPE_BACKGROUND = "background"
 
-# Backward compatibility: map old names to new
-_OLD_TO_NEW = {
-    "critical": TYPE_ESSENTIAL,
-    "redundant": TYPE_SUBSTITUTABLE,
-    "synergistic": TYPE_SPECIALIZED,
-    "background": TYPE_DORMANT,
+# Backward compatibility for an unpublished naming pass.
+TYPE_ESSENTIAL = TYPE_CRITICAL
+TYPE_SUBSTITUTABLE = TYPE_REDUNDANT
+TYPE_SPECIALIZED = TYPE_SYNERGISTIC
+TYPE_DORMANT = TYPE_BACKGROUND
+
+_TYPE_ALIASES = {
+    "essential": TYPE_CRITICAL,
+    "substitutable": TYPE_REDUNDANT,
+    "specialized": TYPE_SYNERGISTIC,
+    "dormant": TYPE_BACKGROUND,
+    TYPE_CRITICAL: TYPE_CRITICAL,
+    TYPE_REDUNDANT: TYPE_REDUNDANT,
+    TYPE_SYNERGISTIC: TYPE_SYNERGISTIC,
+    TYPE_BACKGROUND: TYPE_BACKGROUND,
 }
 
 try:
@@ -264,10 +272,10 @@ class MetricSpaceClustering:
         """Assign type names by ranking clusters by mean importance score.
 
         Higher mean score -> higher-priority type:
-          rank 3 (highest) = "essential"
-          rank 2 = "specialized"
-          rank 1 = "substitutable"
-          rank 0 (lowest)  = "dormant"
+          rank 3 (highest) = "critical"
+          rank 2 = "synergistic"
+          rank 1 = "redundant"
+          rank 0 (lowest)  = "background"
         """
         type_names_ranked = [TYPE_DORMANT, TYPE_SUBSTITUTABLE, TYPE_SPECIALIZED, TYPE_ESSENTIAL]
         scores = np.asarray(scores).flatten()
@@ -434,7 +442,7 @@ class MetricSpaceClustering:
 
         Args:
             scores: [n_clusters, 4] score matrix for
-                [essential, substitutable, specialized, dormant].
+                [critical, redundant, synergistic, background].
         """
         import itertools
 
@@ -476,13 +484,13 @@ class MetricSpaceClustering:
         w_syn = 1.0 if use_syn else 0.0
 
         scores = np.zeros((len(c), 4), dtype=np.float64)
-        # essential: high I_X, low R_X
+        # critical: high I_X, low R_X
         scores[:, 0] = (w_rq * c[:, 0]) - (w_red * c[:, 1])
-        # substitutable: high R_X (with mild penalty for high I_X)
+        # redundant: high R_X (with mild penalty for high I_X)
         scores[:, 1] = (w_red * c[:, 1]) - (0.25 * w_rq * c[:, 0])
-        # specialized: high complementarity (with mild penalty for high R_X)
+        # synergistic: high complementarity (with mild penalty for high R_X)
         scores[:, 2] = (w_syn * c[:, 2]) - (0.25 * w_red * c[:, 1])
-        # dormant: close to origin
+        # background: close to origin
         scores[:, 3] = -((w_rq * np.abs(c[:, 0])) + (w_red * np.abs(c[:, 1])) + (w_syn * np.abs(c[:, 2])))
         return scores
 
@@ -500,13 +508,13 @@ class MetricSpaceClustering:
         w_syn = 1.0 if use_syn else 0.0
 
         scores = np.zeros((len(c), 4), dtype=np.float64)
-        # essential: high I_X, low R_X
+        # critical: high I_X, low R_X
         scores[:, 0] = (w_rq * c[:, 0]) - (w_red * c[:, 1])
-        # substitutable: maximize shared information
+        # redundant: maximize shared information
         scores[:, 1] = w_red * c[:, 1]
-        # specialized: maximize complementarity
+        # synergistic: maximize complementarity
         scores[:, 2] = w_syn * c[:, 2]
-        # dormant: low magnitude in active metric dimensions
+        # background: low magnitude in active metric dimensions
         scores[:, 3] = -((w_rq * np.abs(c[:, 0])) + (w_red * np.abs(c[:, 1])) + (w_syn * np.abs(c[:, 2])))
         return scores
 

@@ -1,7 +1,7 @@
 Models API Reference
 ====================
 
-This section documents the model components of the alignment framework.
+This section documents the model components of LossLens.
 
 Model Architectures
 -------------------

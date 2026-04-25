@@ -1,7 +1,7 @@
 Reference Documentation
 ========================
 
-Complete reference materials for the alignment framework.
+Complete reference materials for LossLens.
 
 .. toctree::
    :maxdepth: 2

@@ -1,7 +1,7 @@
 Contributing Guide
 ==================
 
-We welcome contributions to the alignment framework! This guide will help you get started.
+We welcome contributions to LossLens. This guide will help you get started.
 
 Getting Started
 ---------------
@@ -11,7 +11,7 @@ Getting Started
 3. Create a new branch for your feature or bugfix
 4. Make your changes
 5. Submit a pull request
-6. Check out the kempner computing handbook for more information on how to contribute to the project.
+6. Check the project documentation for repository-specific conventions.
 
 Development Setup
 -----------------
@@ -19,7 +19,7 @@ Development Setup
 .. code-block:: bash
 
    # Clone the repository
-   git clone https://github.com/yourusername/alignment.git
+   git clone https://github.com/KempnerInstitute/alignment.git
    cd alignment
 
    # Install in development mode with all extras
@@ -33,9 +33,9 @@ Code Style
 
 We use the following tools to maintain code quality:
 
+- **ruff**: Linting
 - **black**: Code formatting
 - **isort**: Import sorting
-- **flake8**: Linting
 - **mypy**: Type checking
 
 Run all checks:
@@ -49,7 +49,7 @@ Run all checks:
    isort src/ tests/
 
    # Run linting
-   flake8 src/ tests/
+   ruff check src tests
 
    # Type checking
    mypy src/
@@ -104,7 +104,7 @@ Pull Request Guidelines
 2. **Description**: Explain what changes you made and why
 3. **Tests**: Ensure all tests pass
 4. **Documentation**: Update docs if needed
-5. **Changelog**: Add entry to CHANGELOG.md
+5. **Release notes**: For paper-facing changes, update the relevant file under ``projects/``
 
 Example PR description:
 
@@ -142,4 +142,4 @@ Questions?
 - Start a discussion for general questions
 - Check existing issues before creating new ones
 
-Thank you for contributing to the alignment framework!
+Thank you for contributing to LossLens.

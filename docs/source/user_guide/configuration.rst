@@ -1,7 +1,7 @@
 Configuration Guide
 ===================
 
-This guide explains all configuration options available in the alignment framework.
+This guide explains all configuration options available in LossLens.
 
 .. contents:: Table of Contents
    :local:
@@ -10,7 +10,7 @@ This guide explains all configuration options available in the alignment framewo
 Overview
 --------
 
-The alignment framework uses a hierarchical configuration system that allows fine-grained control over experiments, metrics, training, and analysis.
+LossLens uses a hierarchical configuration system that allows fine-grained control over experiments, metrics, training, and analysis.
 
 Configuration can be specified via:
 
@@ -525,5 +525,5 @@ Best Practices
 See Also
 --------
 
-- :doc:`/api/experiments` - Experiment API documentation
+- ``alignment.experiments`` - Experiment API entry point
 - :doc:`experiments` - Experiments user guide

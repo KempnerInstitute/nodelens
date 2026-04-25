@@ -1,7 +1,7 @@
 API Reference
 =============
 
-This section contains the complete API reference for the alignment framework.
+This section contains the complete API reference for LossLens.
 
 .. toctree::
    :maxdepth: 2

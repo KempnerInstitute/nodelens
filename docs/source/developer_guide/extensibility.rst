@@ -1,7 +1,7 @@
 Extending the Framework
 =======================
 
-This guide explains how to extend the alignment framework with custom components
+This guide explains how to extend LossLens with custom components
 using the registry system.
 
 Overview

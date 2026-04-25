@@ -1,0 +1,57 @@
+project: supernodes_scar
+paper_title: "Supernodes and Halos: Loss-Critical Hubs in LLM Feed-Forward Layers"
+code_package: alignment
+code_license: MIT
+
+public_release:
+  code:
+    location: https://github.com/KempnerInstitute/alignment
+    include:
+      - src/alignment
+      - scripts/run_experiment.py
+      - configs/prune_llm
+      - configs/paper
+      - projects/supernodes_scar
+      - tests
+      - README.md
+      - LICENSE
+      - pyproject.toml
+    exclude:
+      - drafts
+      - checkpoints
+      - raw datasets
+      - logs
+      - results
+      - Python caches
+
+  artifacts:
+    location: https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts
+    include:
+      - paper figures
+      - paper LaTeX table fragments
+      - derived JSON summaries
+      - sanitized locked result JSON files compressed as .json.gz
+      - paper configs
+      - active paper figure/table scripts
+      - checksums and release metadata
+      - sanitized result-source index
+    exclude:
+      - pretrained model weights
+      - raw calibration/evaluation datasets
+      - private cluster paths
+      - SLURM logs
+      - checkpoints
+      - LaTeX build files
+
+  archival:
+    location: Zenodo
+    include:
+      - GitHub release snapshot
+      - optional artifact bundle snapshot
+    purpose: DOI and long-term citation stability
+
+artifact_builder:
+  command: >-
+    python projects/supernodes_scar/scripts/prepare_hf_artifacts.py
+    --output-dir outputs/supernodes_scar_hf
+    --clean

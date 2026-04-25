@@ -145,14 +145,14 @@ outputs = runner.run()
 
 ```
 results/experiment_YYYYMMDD_HHMMSS/
-├── experiment_config.yaml
-├── experiment.log
-├── results_YYYYMMDD_HHMMSS.json
-├── checkpoints/
-└── plots/
-    ├── training_loss.png
-    ├── pruning_accuracy.png
-    └── ...
+|-- experiment_config.yaml
+|-- experiment.log
+|-- results_YYYYMMDD_HHMMSS.json
+|-- checkpoints/
+`-- plots/
+    |-- training_loss.png
+    |-- pruning_accuracy.png
+    `-- ...
 ```
 
 ## Workflow Examples

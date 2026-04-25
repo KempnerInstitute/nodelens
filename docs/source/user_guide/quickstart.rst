@@ -1,7 +1,7 @@
 Quickstart Guide
 ================
 
-This guide will get you up and running with the alignment framework in minutes.
+This guide will get you up and running with LossLens in minutes.
 
 .. contents:: Table of Contents
    :local:
@@ -31,8 +31,8 @@ Full Installation
    pip install -e .[all]
 
    # Or install specific extras
-   pip install -e .[viz]      # Visualization tools
-   pip install -e .[all]      # All optional dependencies
+   pip install -e .[train]    # Training and large-model utilities
+   pip install -e .[all]      # Development and training extras
    pip install -e .[docs]     # Documentation building
 
 Your First Experiment
@@ -394,8 +394,8 @@ Next Steps
 - :doc:`/user_guide/experiments` - Detailed experiment guide
 - :doc:`/user_guide/metrics` - All available metrics
 - :doc:`/user_guide/configuration` - Configuration options
-- :doc:`/examples/pruning_experiments` - Advanced examples
-- :doc:`/api/index` - Full API reference
+- Repository examples and configs - Advanced examples
+- Top-level README - Current API entry points
 
 Common Issues
 -------------

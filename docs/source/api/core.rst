@@ -1,7 +1,7 @@
 Core API Reference
 ==================
 
-This section documents the core components of the alignment framework.
+This section documents the core components of LossLens.
 
 Registry System
 ---------------
