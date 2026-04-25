@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from alignment.models import ModelWrapper
-from alignment.services.activation_capture import ActivationCaptureService
+from nodelens.models import ModelWrapper
+from nodelens.services.activation_capture import ActivationCaptureService
 
 
 def test_activation_capture_conv2d_unfold_matches_conv(device):

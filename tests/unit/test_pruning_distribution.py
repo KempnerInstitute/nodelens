@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.distribution import DistributionStrategy, PruningDistributionManager
+from nodelens.pruning.distribution import DistributionStrategy, PruningDistributionManager
 
 # ---------------------------------------------------------------------------
 # Helpers

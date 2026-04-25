@@ -1,7 +1,7 @@
 Pruning Guide
 =============
 
-This guide covers the pruning capabilities in the alignment framework, including different strategies and experiment types.
+This guide covers the pruning capabilities in NodeLens, including different strategies and experiment types.
 
 Overview
 --------
@@ -15,7 +15,7 @@ The framework provides comprehensive pruning capabilities:
 Pruning Strategies
 ------------------
 
-The framework includes several pruning strategies in ``alignment.pruning.strategies``:
+The framework includes several pruning strategies in ``nodelens.pruning.strategies``:
 
 Magnitude-based Pruning
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -24,7 +24,7 @@ Prunes weights or neurons based on their magnitude:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import MagnitudePruning
+    from nodelens.pruning.strategies import MagnitudePruning
 
     strategy = MagnitudePruning()
     masks = strategy.compute_masks(model, pruning_ratio=0.5)
@@ -36,7 +36,7 @@ Uses gradient information to determine importance:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import GradientPruning
+    from nodelens.pruning.strategies import GradientPruning
 
     strategy = GradientPruning()
     masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
@@ -48,7 +48,7 @@ Baseline strategy that randomly prunes connections:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import RandomPruning
+    from nodelens.pruning.strategies import RandomPruning
 
     strategy = RandomPruning(seed=42)
     masks = strategy.compute_masks(model, pruning_ratio=0.5)
@@ -60,7 +60,7 @@ Uses alignment metrics to guide pruning decisions:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import AlignmentPruning
+    from nodelens.pruning.strategies import AlignmentPruning
 
     strategy = AlignmentPruning(metric="rayleigh_quotient")
     masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
@@ -75,7 +75,7 @@ Applies the same pruning rate across all layers:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
+    from nodelens.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
 
     config = GlobalDropoutConfig(
         experiment_name="global_pruning_mnist",
@@ -96,7 +96,7 @@ Analyzes the effect of pruning individual layers:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
+    from nodelens.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
 
     config = LayerIsolatedConfig(
         experiment_name="layer_analysis",
@@ -117,7 +117,7 @@ Progressive pruning that cascades through network layers:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
+    from nodelens.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
 
     config = CascadingConfig(
         experiment_name="cascading_analysis",
@@ -138,7 +138,7 @@ Uses spectral analysis for pruning:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
+    from nodelens.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
 
     config = EigenvectorConfig(
         experiment_name="eigenvector_pruning",
@@ -226,7 +226,7 @@ Implement custom strategies by extending the base class:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import BasePruningStrategy
+    from nodelens.pruning.strategies import BasePruningStrategy
 
     class MyCustomPruning(BasePruningStrategy):
         def compute_importance_scores(self, model, dataloader=None):

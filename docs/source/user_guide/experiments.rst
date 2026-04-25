@@ -1,7 +1,7 @@
 Experiments Guide
 =================
 
-This guide covers the different types of experiments available in the alignment framework.
+This guide covers the different types of experiments available in NodeLens.
 
 Overview
 --------
@@ -26,7 +26,7 @@ The main experiment class that supports:
 
 .. code-block:: python
 
-    from alignment.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
+    from nodelens.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
 
     config = GeneralAlignmentConfig(
         experiment_name="mnist_alignment",
@@ -74,7 +74,7 @@ Analyze the effect of pruning individual layers:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
+    from nodelens.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
 
     config = LayerIsolatedConfig(
         experiment_name="layer_analysis",
@@ -95,7 +95,7 @@ Apply the same pruning rate across all layers:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
+    from nodelens.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
 
     config = GlobalDropoutConfig(
         experiment_name="global_pruning",
@@ -115,7 +115,7 @@ Progressive pruning that cascades through the network:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
+    from nodelens.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
 
     config = CascadingConfig(
         experiment_name="cascading_analysis",
@@ -135,7 +135,7 @@ Use eigendecomposition for pruning decisions:
 
 .. code-block:: python
 
-    from alignment.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
+    from nodelens.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
 
     config = EigenvectorConfig(
         experiment_name="eigenvector_pruning",
@@ -193,7 +193,7 @@ From Python
 
 .. code-block:: python
 
-    from alignment.experiments import create_experiment_from_config
+    from nodelens.experiments import create_experiment_from_config
     import yaml
 
     # Load configuration
@@ -265,7 +265,7 @@ Add custom alignment metrics:
 
 .. code-block:: python
 
-    from alignment.metrics import register_metric
+    from nodelens.metrics import register_metric
 
     @register_metric("my_custom_metric")
     def my_metric(model, dataloader, device):
@@ -279,7 +279,7 @@ Implement custom pruning strategies:
 
 .. code-block:: python
 
-    from alignment.pruning.strategies import BasePruningStrategy
+    from nodelens.pruning.strategies import BasePruningStrategy
 
     class MyPruningStrategy(BasePruningStrategy):
         def compute_importance_scores(self, model, dataloader):

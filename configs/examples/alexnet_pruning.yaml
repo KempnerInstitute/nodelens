@@ -17,7 +17,7 @@ model:
 # ImageNet dataset path on Kempner cluster
 dataset:
   name: "imagenet"
-  data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
+  data_path: "/path/to/datasets/imagenet_1k"
   batch_size: 128
   num_workers: 4
 

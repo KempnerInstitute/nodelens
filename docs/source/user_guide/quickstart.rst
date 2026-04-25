@@ -1,7 +1,7 @@
 Quickstart Guide
 ================
 
-This guide will get you up and running with the alignment framework in minutes.
+This guide will get you up and running with NodeLens in minutes.
 
 .. contents:: Table of Contents
    :local:
@@ -16,8 +16,8 @@ Basic Installation
 .. code-block:: bash
 
    # Clone the repository
-   git clone https://github.com/KempnerInstitute/alignment.git
-   cd alignment
+   git clone https://github.com/KempnerInstitute/nodelens.git
+   cd nodelens
 
    # Install the package
    pip install -e .
@@ -31,8 +31,8 @@ Full Installation
    pip install -e .[all]
 
    # Or install specific extras
-   pip install -e .[viz]      # Visualization tools
-   pip install -e .[all]      # All optional dependencies
+   pip install -e .[train]    # Training and large-model utilities
+   pip install -e .[all]      # Development and training extras
    pip install -e .[docs]     # Documentation building
 
 Your First Experiment
@@ -44,7 +44,7 @@ Your First Experiment
 .. code-block:: python
 
    import torch
-   from alignment.metrics import RayleighQuotient
+   from nodelens.metrics import RayleighQuotient
 
    # Create some sample data
    inputs = torch.randn(100, 512)    # 100 samples, 512 features
@@ -62,8 +62,8 @@ Your First Experiment
 
 .. code-block:: python
 
-   from alignment.models import ModelWrapper
-   from alignment.metrics import get_metric
+   from nodelens.models import ModelWrapper
+   from nodelens.metrics import get_metric
    import torchvision.models as models
 
    # Load a pre-trained ResNet
@@ -94,8 +94,8 @@ Your First Experiment
 
 .. code-block:: python
 
-   from alignment.experiments import ProgressiveDropoutExperiment
-   from alignment.experiments.base import ExperimentConfig
+   from nodelens.experiments import ProgressiveDropoutExperiment
+   from nodelens.experiments.base import ExperimentConfig
 
    # Configure experiment
    config = ExperimentConfig(
@@ -133,8 +133,8 @@ Comparing Network Architectures
 
 .. code-block:: python
 
-   from alignment.experiments import ExperimentRunner
-   from alignment.experiments.base import ExperimentConfig
+   from nodelens.experiments import ExperimentRunner
+   from nodelens.experiments.base import ExperimentConfig
 
    # Define experiments for different architectures
    architectures = ["resnet18", "vgg16", "efficientnet_b0"]
@@ -161,8 +161,8 @@ Analyzing Layer Importance
 
 .. code-block:: python
 
-   from alignment.experiments import LayerIsolatedPruningExperiment
-   from alignment.analysis import LayerImportanceAnalyzer
+   from nodelens.experiments import LayerIsolatedPruningExperiment
+   from nodelens.analysis import LayerImportanceAnalyzer
 
    config = ExperimentConfig(
        name="layer_importance_analysis",
@@ -187,8 +187,8 @@ Custom Metric Implementation
 
 .. code-block:: python
 
-   from alignment.metrics.base import BaseMetric
-   from alignment.core import register_metric
+   from nodelens.metrics.base import BaseMetric
+   from nodelens.core import register_metric
    import torch
 
    @register_metric("gradient_alignment")
@@ -278,8 +278,8 @@ Loading and Running
 
 .. code-block:: python
 
-   from alignment.infrastructure.configuration import load_config
-   from alignment.experiments import create_experiment
+   from nodelens.infrastructure.configuration import load_config
+   from nodelens.experiments import create_experiment
 
    # Load configuration
    config = load_config("experiment_config.yaml")
@@ -299,7 +299,7 @@ Plotting Metrics
 
 .. code-block:: python
 
-   from alignment.analysis import MetricVisualizer
+   from nodelens.analysis import MetricVisualizer
 
    # Load results
    results = load_results("results/my_experiment/")
@@ -326,7 +326,7 @@ Generating Reports
 
 .. code-block:: python
 
-   from alignment.analysis import ReportGenerator
+   from nodelens.analysis import ReportGenerator
 
    # Generate comprehensive report
    generator = ReportGenerator(results)
@@ -394,8 +394,8 @@ Next Steps
 - :doc:`/user_guide/experiments` - Detailed experiment guide
 - :doc:`/user_guide/metrics` - All available metrics
 - :doc:`/user_guide/configuration` - Configuration options
-- :doc:`/examples/pruning_experiments` - Advanced examples
-- :doc:`/api/index` - Full API reference
+- Repository examples and configs - Advanced examples
+- Top-level README - Current API entry points
 
 Common Issues
 -------------
@@ -429,10 +429,10 @@ Common Issues
 .. code-block:: bash
 
    # Ensure you're in the right directory
-   cd alignment
+   cd nodelens
 
    # Reinstall in development mode
    pip install -e .
 
    # Check installation
-   python -c "import alignment; print(alignment.__version__)"
+   python -c "import nodelens; print(nodelens.__version__)"

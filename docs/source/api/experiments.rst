@@ -1,7 +1,7 @@
 Experiments API Reference
 =========================
 
-This section provides detailed documentation for all experiment types available in the alignment framework.
+This section provides detailed documentation for all experiment types available in NodeLens.
 
 .. contents:: Table of Contents
    :local:
@@ -10,7 +10,7 @@ This section provides detailed documentation for all experiment types available 
 Base Experiment Classes
 -----------------------
 
-.. automodule:: alignment.experiments.base
+.. automodule:: nodelens.experiments.base
    :members:
    :undoc-members:
    :show-inheritance:
@@ -18,7 +18,7 @@ Base Experiment Classes
 ExperimentConfig
 ~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.experiments.base.ExperimentConfig
+.. autoclass:: nodelens.experiments.base.ExperimentConfig
    :members:
    :undoc-members:
 
@@ -69,12 +69,12 @@ ExperimentConfig
 Progressive Dropout Experiment
 ------------------------------
 
-.. automodule:: alignment.experiments.progressive_dropout
+.. automodule:: nodelens.experiments.progressive_dropout
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: alignment.experiments.progressive_dropout.ProgressiveDropoutExperiment
+.. autoclass:: nodelens.experiments.progressive_dropout.ProgressiveDropoutExperiment
    :members:
    :undoc-members:
 
@@ -137,8 +137,8 @@ Progressive Dropout Experiment
 
    .. code-block:: python
 
-      from alignment.experiments import ProgressiveDropoutExperiment
-      from alignment.experiments.base import ExperimentConfig
+      from nodelens.experiments import ProgressiveDropoutExperiment
+      from nodelens.experiments.base import ExperimentConfig
 
       config = ExperimentConfig(
           name="progressive_dropout_resnet",
@@ -163,12 +163,12 @@ Progressive Dropout Experiment
 Experiment Runner
 -----------------
 
-.. automodule:: alignment.experiments.runner
+.. automodule:: nodelens.experiments.runner
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: alignment.experiments.runner.ExperimentRunner
+.. autoclass:: nodelens.experiments.runner.ExperimentRunner
    :members:
    :undoc-members:
 
@@ -189,8 +189,8 @@ Experiment Runner
 
    .. code-block:: python
 
-      from alignment.experiments import ExperimentRunner
-      from alignment.experiments.base import ExperimentConfig
+      from nodelens.experiments import ExperimentRunner
+      from nodelens.experiments.base import ExperimentConfig
 
       # Define multiple experiments
       configs = []

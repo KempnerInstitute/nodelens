@@ -1,12 +1,12 @@
 Models API Reference
 ====================
 
-This section documents the model components of the alignment framework.
+This section documents the model components of NodeLens.
 
 Model Architectures
 -------------------
 
-.. automodule:: alignment.models.architectures
+.. automodule:: nodelens.models.architectures
    :members:
    :undoc-members:
    :show-inheritance:
@@ -16,7 +16,7 @@ Pre-defined Models
 
 The framework includes several pre-defined model architectures:
 
-.. autofunction:: alignment.models.architectures.get_model
+.. autofunction:: nodelens.models.architectures.get_model
 
 Available Models
 ^^^^^^^^^^^^^^^^
@@ -31,7 +31,7 @@ Available Models
 Model Registry
 --------------
 
-.. automodule:: alignment.models.registry
+.. automodule:: nodelens.models.registry
    :members:
    :undoc-members:
    :show-inheritance:
@@ -39,7 +39,7 @@ Model Registry
 Model Utilities
 ---------------
 
-.. automodule:: alignment.models.utils
+.. automodule:: nodelens.models.utils
    :members:
    :undoc-members:
    :show-inheritance:

@@ -26,13 +26,13 @@ jobs:
         pip install "black==25.9.0" isort flake8 mypy ruff
 
     - name: Run black (code formatting)
-      run: black --check --diff src/alignment/ tests/ scripts/
+      run: black --check --diff src/nodelens/ tests/ scripts/
 
     - name: Run isort (import sorting)
-      run: isort --check-only --diff --profile black src/alignment/ tests/ scripts/
+      run: isort --check-only --diff --profile black src/nodelens/ tests/ scripts/
 
     - name: Run flake8 (linting)
-      run: flake8 src/alignment/ tests/ scripts/ --max-line-length=100 --ignore=E203,W503 || echo "Flake8 has warnings"
+      run: flake8 src/nodelens/ tests/ scripts/ --max-line-length=100 --ignore=E203,W503 || echo "Flake8 has warnings"
 
     - name: Run mypy (type checking)
-      run: mypy src/alignment/ --ignore-missing-imports --no-strict-optional || echo "Type checking has warnings"
+      run: mypy src/nodelens/ --ignore-missing-imports --no-strict-optional || echo "Type checking has warnings"

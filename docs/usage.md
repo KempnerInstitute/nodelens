@@ -2,7 +2,7 @@
 
 ## Running Experiments
 
-Experiments are configured via YAML files:
+Experiments are configured with YAML files:
 
 ```bash
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
@@ -23,16 +23,30 @@ python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
 | Config | Description |
 |--------|-------------|
-| `configs/examples/mnist_basic.yaml` | MLP on MNIST |
-| `configs/examples/resnet_pruning.yaml` | ResNet-18 pruning on CIFAR-10 |
-| `configs/examples/llm_alignment.yaml` | LLM importance scoring |
+| `configs/examples/mnist_basic.yaml` | Fast MNIST smoke test |
+| `configs/examples/resnet_pruning.yaml` | Small vision pruning example |
+| `configs/vision_prune/resnet18_cifar10_unified.yaml` | Vision clustering, halo, cascade, and pruning |
+| `configs/prune_llm/llama3_8b_unified.yaml` | Main LLM supernode and SCAR suite |
+| `configs/prune_llm/llama3_70b_scale_mechanism.yaml` | Large-model mechanism check |
+| `configs/prune_llm/olmo2_7b_pruning_curves.yaml` | OLMo pruning replication |
+
+See [the config catalog](../configs/README.md) for a fuller list.
+
+## Experiment Types
+
+| Type | What it runs | Typical configs |
+|------|--------------|-----------------|
+| `alignment_analysis` | General activation/alignment metrics and small-model pruning | `configs/examples/*.yaml` |
+| `cluster_analysis` | Vision channel clustering, halo analysis, cascade tests, and structured pruning | `configs/vision_prune/*.yaml` |
+| `llm_alignment` | Hugging Face LLM metrics, supernodes, SCAR, and structured FFN pruning | `configs/prune_llm/*.yaml` |
+| `vision_synergy` | Older focused vision synergy experiments | `configs/examples/vision_synergy.yaml` |
 
 ## Configuration Structure
 
 ```yaml
 experiment:
   name: "my_experiment"
-  type: "general_alignment"  # or "llm_alignment"
+  type: "cluster_analysis"  # or "alignment_analysis", "llm_alignment"
   seed: 42
   device: "cuda"
 
@@ -64,6 +78,9 @@ visualization:
 ```
 
 See `configs/template.yaml` for all parameters.
+
+New work should prefer the unified-format configs, especially files ending in
+`_unified.yaml`. Older example configs are still supported for compatibility.
 
 ## Pruning Configuration
 
@@ -119,7 +136,7 @@ python scripts/run_analysis.py --config configs/analysis_template.yaml \
 ### Programmatic Analysis
 
 ```python
-from alignment.analysis import AnalysisRunner, AnalysisConfig
+from nodelens.analysis import AnalysisRunner, AnalysisConfig
 
 config = AnalysisConfig(
     results_dir="./results",
@@ -145,14 +162,14 @@ outputs = runner.run()
 
 ```
 results/experiment_YYYYMMDD_HHMMSS/
-├── experiment_config.yaml
-├── experiment.log
-├── results_YYYYMMDD_HHMMSS.json
-├── checkpoints/
-└── plots/
-    ├── training_loss.png
-    ├── pruning_accuracy.png
-    └── ...
+|-- experiment_config.yaml
+|-- experiment.log
+|-- results_YYYYMMDD_HHMMSS.json
+|-- checkpoints/
+`-- plots/
+    |-- training_loss.png
+    |-- pruning_accuracy.png
+    `-- ...
 ```
 
 ## Workflow Examples
@@ -160,13 +177,13 @@ results/experiment_YYYYMMDD_HHMMSS/
 ### Vision Experiment
 
 ```bash
-python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_unified.yaml
 ```
 
 ### LLM Analysis
 
 ```bash
-python scripts/run_experiment.py --config configs/examples/llm_alignment.yaml
+python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
 ```
 
 ## Supernode Analysis (LLM)

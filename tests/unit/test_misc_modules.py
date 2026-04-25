@@ -8,11 +8,11 @@ import pandas as pd
 import pytest
 import torch
 
-from alignment.analysis.dynamic_scoring import DynamicScoreAggregator, compute_dynamic_importance
-from alignment.analysis.reporting.json_reporter import JSONReporter
-from alignment.analysis.reporting.markdown import MarkdownReporter
-from alignment.metrics.pairwise_base import PairwiseMetric
-from alignment.metrics.rayleigh.delta_alignment import DeltaAlignment, NormalizedDeltaAlignment
+from nodelens.analysis.dynamic_scoring import DynamicScoreAggregator, compute_dynamic_importance
+from nodelens.analysis.reporting.json_reporter import JSONReporter
+from nodelens.analysis.reporting.markdown import MarkdownReporter
+from nodelens.metrics.pairwise_base import PairwiseMetric
+from nodelens.metrics.rayleigh.delta_alignment import DeltaAlignment, NormalizedDeltaAlignment
 
 # =========================================================================
 # DynamicScoreAggregator
@@ -181,7 +181,7 @@ class TestMarkdownReporter:
         assert len(reporter.sections) == 1
 
     def test_add_table(self):
-        pytest.importorskip("tabulate")
+        pytest.importorskip("tabulate", exc_type=ImportError)
         reporter = MarkdownReporter()
         df = pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})
         reporter.add_table("Data", df)

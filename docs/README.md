@@ -1,11 +1,15 @@
 # Documentation
 
+NodeLens is the public project name. The Python package is imported as
+`nodelens`.
+
 ## Guides
 
 - [Usage Guide](usage.md) - Running experiments and configuration
 - [API Reference](api_reference.md) - Core classes and functions
 - [LLM Guide](llm_guide.md) - LLM-specific analysis and pruning
 - [Metric Consistency](METRIC_CONSISTENCY.md) - Theory-code verification
+- [Architecture](ARCHITECTURE.md) - Library and project-release layout
 
 ## Configuration
 
@@ -41,7 +45,7 @@
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
 # LLM analysis
-python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_full.yaml
+python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
 
 # Cluster-based analysis
 python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml

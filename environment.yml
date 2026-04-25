@@ -1,4 +1,4 @@
-name: alignment
+name: nodelens
 channels:
   - pytorch
   - nvidia

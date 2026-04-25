@@ -12,7 +12,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.analysis.cascade_analysis import CascadeAnalysis, CascadeResult
+from nodelens.analysis.cascade_analysis import CascadeAnalysis, CascadeResult
 
 # ---------------------------------------------------------------------------
 # Tiny model + dataset

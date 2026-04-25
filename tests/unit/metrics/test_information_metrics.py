@@ -5,7 +5,13 @@ Unit tests for information-theoretic metrics.
 import pytest
 import torch
 
-from alignment.metrics.information import ConditionalMutualInformation, MIProjectionVsMeanInput, MutualInformationBinning, MutualInformationGaussian
+from nodelens.metrics.information import (
+    ConditionalMutualInformation,
+    LayerRedundancy,
+    MIProjectionVsMeanInput,
+    MutualInformationBinning,
+    MutualInformationGaussian,
+)
 
 
 class TestMutualInformation:
@@ -177,6 +183,41 @@ class TestMIProjection:
 
         assert scores.shape == (4,)
         assert not torch.isnan(scores).any()
+
+
+class TestLayerRedundancy:
+    """Test layer-level redundancy aggregation and matrix output."""
+
+    def test_scalar_redundancy(self):
+        metric = LayerRedundancy()
+        inputs = torch.randn(40, 8)
+        weights = torch.randn(5, 8)
+
+        score = metric.compute(inputs=inputs, weights=weights)
+
+        assert score.shape == (1,)
+        assert torch.isfinite(score).all()
+        assert (score >= 0).all()
+
+    def test_return_matrix(self):
+        metric = LayerRedundancy(return_matrix=True)
+        inputs = torch.randn(40, 8)
+        weights = torch.randn(5, 8)
+
+        matrix = metric.compute(inputs=inputs, weights=weights)
+
+        assert matrix.shape == (5, 5)
+        assert torch.allclose(matrix, matrix.T, atol=1e-5)
+        assert torch.allclose(matrix.diag(), torch.zeros(5), atol=1e-5)
+        assert (matrix >= 0).all()
+
+    def test_return_matrix_size_guard(self):
+        metric = LayerRedundancy(return_matrix=True, max_matrix_neurons=3)
+        inputs = torch.randn(40, 8)
+        weights = torch.randn(5, 8)
+
+        with pytest.raises(ValueError, match="would allocate"):
+            metric.compute(inputs=inputs, weights=weights)
 
 
 class TestEdgeCases:

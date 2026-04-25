@@ -15,8 +15,8 @@ import torch.nn as nn
 # Skip entire module if transformers not installed
 pytest.importorskip("transformers")
 
-from alignment.experiments.base import ExperimentConfig
-from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+from nodelens.experiments.base import ExperimentConfig
+from nodelens.experiments.llm_experiments import LLMAlignmentExperiment
 
 
 class _TinySelfAttention(nn.Module):
@@ -129,7 +129,7 @@ class _Wrapper:
 def tiny_llm_experiment(monkeypatch):
     """Create an LLMAlignmentExperiment with a tiny transformer backend."""
     # Avoid initializing full metric stack for this tiny synthetic test.
-    from alignment.experiments.base import BaseExperiment
+    from nodelens.experiments.base import BaseExperiment
 
     monkeypatch.setattr(BaseExperiment, "_initialize_components", lambda self: None)
     monkeypatch.setattr(BaseExperiment, "_setup_directories", lambda self: None)

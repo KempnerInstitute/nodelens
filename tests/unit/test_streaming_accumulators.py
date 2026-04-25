@@ -10,7 +10,7 @@ Tests validate:
 import numpy as np
 import pytest
 
-from alignment.experiments.cluster_experiments import _CovAccumulator, _VarAccumulator
+from nodelens.experiments.cluster_experiments import _CovAccumulator, _VarAccumulator
 
 # ---------------------------------------------------------------------------
 # Tests: _CovAccumulator

@@ -1,32 +1,63 @@
-# Alignment Framework
+# NodeLens
 
-Neural network analysis and structured pruning using alignment metrics and information theory.
+Node and channel metrics for neural network interpretability, importance, and interventions.
 
-[![Lint](https://github.com/KempnerInstitute/alignment/actions/workflows/lint.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/lint.yml)
-[![Pre-commit](https://github.com/KempnerInstitute/alignment/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/pre-commit.yml)
-[![Code Lines](https://img.shields.io/tokei/lines/github/KempnerInstitute/alignment?logo=files&logoColor=white)](https://github.com/KempnerInstitute/alignment)
-[![CLI](https://img.shields.io/badge/CLI-scripts%2Frun_experiment.py-121011?logo=gnubash&logoColor=white)](scripts/run_experiment.py)
+[![Tests](https://github.com/KempnerInstitute/nodelens/actions/workflows/test.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/test.yml)
+[![Lint](https://github.com/KempnerInstitute/nodelens/actions/workflows/lint.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/lint.yml)
+[![Documentation](https://github.com/KempnerInstitute/nodelens/actions/workflows/docs.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/docs.yml)
+[![Release](https://github.com/KempnerInstitute/nodelens/actions/workflows/release.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/release.yml)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.8-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Artifacts](https://img.shields.io/badge/Hugging%20Face-artifacts-ffcc33)](https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Overview
+NodeLens is a research codebase for studying which channels, neurons, and
+features matter most for model behavior. The Python package is imported as
+`nodelens`.
 
-This framework provides tools for analyzing and pruning neural networks through:
+The repository supports two related workflows:
 
-- **Alignment metrics**: Rayleigh quotient, activation-based importance
-- **Information-theoretic analysis**: Mutual information, redundancy, synergy
-- **Cluster-based analysis**: Functional type identification, cross-layer halo tracking
-- **Structured pruning**: Channel/neuron removal with multiple scoring strategies
+- General metric analysis for vision models, transformers, and LLMs.
+- Paper-specific releases under `projects/`, including the Supernodes and SCAR
+  artifact workflow.
 
-**Supported architectures**: MLPs, CNNs (ResNet, VGG, MobileNet), Transformers, LLMs (LLaMA, Mistral, Qwen)
+## What The Code Does
+
+```mermaid
+flowchart LR
+    A[Model + calibration data] --> B[Capture activations and gradients]
+    B --> C[Compute channel metrics]
+    C --> D[Identify loss-critical cores]
+    C --> E[Estimate redundancy and halo structure]
+    D --> F[Structured pruning and ablation probes]
+    E --> F
+    F --> G[Figures, tables, manifests, HF artifacts]
+```
+
+Core capabilities:
+
+- Loss-sensitive channel scoring, including SCAR loss-proxy metrics.
+- Activation, curvature, Taylor, Rayleigh quotient, and information-theoretic metrics.
+- Structured pruning strategies for channel-level model analysis.
+- Cluster and halo-style analyses for local redundancy structure.
+- Reproducible project folders for paper artifacts and public releases.
+
+Supported model families include MLPs, CNNs, transformer language models, and
+LLM backends through Hugging Face causal language models.
 
 ## Installation
 
 ```bash
-git clone https://github.com/KempnerInstitute/alignment.git
-cd alignment
+git clone https://github.com/KempnerInstitute/nodelens.git
+cd nodelens
 conda env create -f environment.yml
-conda activate alignment
+conda activate nodelens
 pip install -e .
+```
+
+For documentation and optional analysis tools:
+
+```bash
+pip install -e .[all]
 ```
 
 ## Quick Start
@@ -36,129 +67,84 @@ pip install -e .
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
 # CNN pruning
-python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
 
-# LLM analysis
-python scripts/run_experiment.py --config configs/paper/llama3_8b_full.yaml
-
-# Cluster-based analysis
-python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
+# LLM supernode and SCAR analysis
+python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
 ```
 
-## Experiment Types
+Package the public Supernodes and SCAR artifacts:
 
-| Type | Description | Config Example |
-|------|-------------|----------------|
-| `alignment_analysis` | General alignment metrics | `mnist_basic.yaml` |
-| `llm_alignment` | LLM supernode/SCAR analysis | `llama3_8b_full.yaml` |
-| `cluster_analysis` | Metric-space clustering with halos | `resnet18_cifar10_full.yaml` |
+```bash
+python projects/supernodes_scar/scripts/prepare_hf_artifacts.py \
+  --output-dir outputs/supernodes_scar_hf \
+  --clean
 
-## Metrics
-
-| Category | Metrics |
-|----------|---------|
-| Activation | `activation_l2_norm`, `activation_variance`, `activation_outlier_index` |
-| Alignment | `rayleigh_quotient`, `delta_alignment` |
-| Information | `mutual_information_gaussian`, `pairwise_redundancy_gaussian`, `gaussian_pid_synergy_mmi` |
-| SCAR (LLM) | `scar_activation_power`, `scar_taylor`, `scar_curvature`, `scar_loss_proxy` |
-| Synergy | `synergy_continuous_target` (with logit margin) |
-
-## Cluster-Based Analysis
-
-The cluster analysis framework groups channels/neurons into functional types:
-
-| Type | Characteristics | Pruning Implication |
-|------|-----------------|---------------------|
-| Critical | High RQ, Low Redundancy, High Synergy | Protect |
-| Redundant | Moderate RQ, High Redundancy | Target for pruning |
-| Synergistic | Moderate RQ, High Synergy | Preserve pairs |
-| Background | Low on all metrics | Safe to remove |
-
-Cross-layer halo analysis tracks downstream dependencies to predict cascade effects.
-
-## Pruning Strategies
-
-| Strategy | Description |
-|----------|-------------|
-| `magnitude` | Prune by weight magnitude |
-| `alignment` | Prune by alignment score |
-| `composite` | Combine multiple metrics |
-| `cluster_aware` | Use cluster membership and halo analysis |
-| `random` | Random baseline |
-
-## Project Structure
-
-```
-alignment/
-├── configs/
-|   ├── cluster_analysis/   # Cluster-based analysis configs
-|   ├── paper/              # Paper experiment configs
-|   └── examples/           # Example configs
-├── scripts/
-|   ├── run_experiment.py   # Main entry point
-|   └── run_analysis.py     # Post-hoc analysis
-├── src/alignment/
-|   ├── analysis/           # Visualization, clustering, cascade analysis
-|   ├── experiments/        # Experiment classes
-|   ├── metrics/            # Importance metrics
-|   ├── models/             # Model wrappers
-|   └── pruning/            # Pruning strategies
-├── tests/                  # Unit tests
-└── docs/                   # Documentation
+python projects/supernodes_scar/scripts/verify_hf_artifacts.py \
+  outputs/supernodes_scar_hf
 ```
 
-## Key Modules
+## Paper Releases
 
-### Analysis
-- `MetricSpaceClustering`: K-means clustering in (RQ, Redundancy, Synergy) space
-- `CrossLayerHaloAnalysis`: Track downstream channel dependencies
-- `CascadeAnalysis`: Validate importance via ablation
-- `UnifiedVisualizer`: Generate analysis plots
+Paper-specific release material lives under `projects/`. Reusable library code
+stays in `src/nodelens`, while each project folder records the exact configs,
+artifact layout, reproducibility notes, and release checklist for a paper.
 
-### Experiments
-- `GeneralAlignmentExperiment`: Vision model analysis
-- `LLMAlignmentExperiment`: LLM supernode and SCAR analysis
-- `ClusterAnalysisExperiment`: Cluster-based analysis for any architecture
+Current project:
 
-### Metrics
-- `RayleighQuotient`: Input-weight alignment
-- `PairwiseRedundancyGaussian`: Gaussian MI-based redundancy
-- `SynergyContinuousTarget`: PID synergy with continuous target
-- SCAR metrics for LLMs
+- `projects/supernodes_scar/`: release material for "Supernodes and Halos:
+  Loss-Critical Hubs in LLM Feed-Forward Layers".
+
+Derived artifacts for this project are staged on Hugging Face:
+
+- `https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts`
+
+## Main Concepts
+
+| Area | Examples |
+|------|----------|
+| Activation metrics | `activation_l2_norm`, `activation_variance`, `activation_outlier_index` |
+| Alignment metrics | `rayleigh_quotient`, `delta_alignment` |
+| Information metrics | `mutual_information_gaussian`, `pairwise_redundancy_gaussian`, `gaussian_pid_synergy_mmi` |
+| SCAR metrics | `scar_activation_power`, `scar_taylor`, `scar_curvature`, `scar_loss_proxy` |
+| Pruning strategies | `magnitude`, `alignment`, `composite`, `cluster_aware`, `random` |
+
+## Repository Layout
+
+```text
+nodelens/
+|-- configs/
+|   |-- prune_llm/          # LLM and SCAR configs
+|   |-- vision_prune/       # Vision pruning configs
+|   `-- examples/           # Small example configs
+|-- projects/               # Paper-specific release material
+|-- scripts/
+|   |-- run_experiment.py   # Main experiment entry point
+|   `-- run_analysis.py     # Post-hoc analysis
+|-- src/nodelens/
+|   |-- analysis/           # Visualization, clustering, cascade analysis
+|   |-- experiments/        # Experiment classes
+|   |-- metrics/            # Importance metrics
+|   |-- models/             # Model wrappers
+|   `-- pruning/            # Pruning strategies
+|-- tests/                  # Unit tests
+`-- docs/                   # Documentation
+```
 
 ## Documentation
 
-- [Usage Guide](docs/usage.md) - Running experiments and configuration
-- [API Reference](docs/api_reference.md) - Core classes and functions
-- [LLM Guide](docs/llm_guide.md) - LLM-specific analysis
-- [Metric Consistency](docs/METRIC_CONSISTENCY.md) - Theory-code verification
+- [Usage Guide](docs/usage.md)
+- [API Reference](docs/api_reference.md)
+- [LLM Guide](docs/llm_guide.md)
+- [Metric Consistency](docs/METRIC_CONSISTENCY.md)
+- [Supernodes and SCAR Release Notes](projects/supernodes_scar/README.md)
 
-## Configuration
+Build the Sphinx docs locally:
 
-```yaml
-experiment_type: cluster_analysis  # or llm_alignment, alignment_analysis
-
-model:
-  name: resnet18
-  pretrained: true
-
-dataset:
-  name: cifar10
-  batch_size: 128
-
-clustering:
-  n_clusters: 4
-  compute_stability: true
-
-halo_analysis:
-  percentile: 90.0
-
-pruning:
-  ratios: [0.3, 0.5, 0.7]
-  methods: [magnitude, taylor, cluster_aware]
+```bash
+cd docs
+make html
 ```
-
-See `configs/template.yaml` for complete parameter reference.
 
 ## Testing
 
@@ -167,6 +153,11 @@ pytest tests/
 pytest tests/unit/ -v
 ```
 
+## Citation
+
+If you use the Supernodes and SCAR release, please cite the paper and the
+archived code/artifact versions listed in `CITATION.cff`.
+
 ## License
 
-See LICENSE file.
+This repository is released under the MIT license. See [LICENSE](LICENSE).

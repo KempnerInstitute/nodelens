@@ -477,7 +477,7 @@ visualization:
 # Uses job directory structure: creates unique folders for each run
 # Directory format: {base_dir}/{experiment_name}_{timestamp}_{job_id}/
 output:
-  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+  base_dir: "/path/to/results/Prune_LLM"
   dir: "./results/vision/resnet18_cifar10"
   save_metrics: true
   save_clusters: true

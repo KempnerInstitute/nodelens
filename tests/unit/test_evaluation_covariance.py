@@ -6,8 +6,8 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.dataops.processing.covariance import CovarianceEstimator, estimate_covariance
-from alignment.training.evaluation import EvaluationManager, evaluate_classification, evaluate_model, evaluate_regression
+from nodelens.dataops.processing.covariance import CovarianceEstimator, estimate_covariance
+from nodelens.training.evaluation import EvaluationManager, evaluate_classification, evaluate_model, evaluate_regression
 
 # ---------------------------------------------------------------------------
 # Helpers

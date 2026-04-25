@@ -5,8 +5,8 @@
 # - Compute LP concentration for a *single* OLMo-2-1124-7B training checkpoint.
 # - Identical mechanism-only setup to llama3_70b_scale_mechanism.yaml so the
 #   resulting JSONs are aggregable across model / checkpoint.
-# - The placeholders @REVISION@ and @RUN_TAG@ are substituted per-checkpoint
-#   by paper/slurm_jobs/run_olmo2_7b_checkpoint_trajectory.sh.
+# - Template tokens @REVISION@ and @RUN_TAG@ are substituted per checkpoint
+#   by the OLMo checkpoint sweep launcher used for the paper.
 # ============================================================================
 
 experiment:

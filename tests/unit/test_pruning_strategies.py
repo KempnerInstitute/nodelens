@@ -12,11 +12,11 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.base import PrecomputedScorePruning, PruningConfig
-from alignment.pruning.strategies.gradient import FisherPruning, GradientPruning, MomentumPruning
-from alignment.pruning.strategies.magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, MagnitudePruning
-from alignment.pruning.strategies.movement import AdaptiveMovementPruning, MovementPruning
-from alignment.pruning.strategies.random import BernoulliPruning, LayerwiseRandomPruning, RandomPruning
+from nodelens.pruning.base import PrecomputedScorePruning, PruningConfig
+from nodelens.pruning.strategies.gradient import FisherPruning, GradientPruning, MomentumPruning
+from nodelens.pruning.strategies.magnitude import GlobalMagnitudePruning, IterativeMagnitudePruning, MagnitudePruning
+from nodelens.pruning.strategies.movement import AdaptiveMovementPruning, MovementPruning
+from nodelens.pruning.strategies.random import BernoulliPruning, LayerwiseRandomPruning, RandomPruning
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -522,12 +522,12 @@ class TestCascadingAlignmentPruning:
         """Test init by monkeypatching get_metric to return a class."""
         from unittest.mock import MagicMock, patch
 
-        from alignment.pruning.strategies.cascading import CascadingAlignmentPruning
+        from nodelens.pruning.strategies.cascading import CascadingAlignmentPruning
 
         mock_metric_cls = MagicMock()
         mock_metric_cls.return_value = MagicMock()
 
-        with patch("alignment.pruning.strategies.cascading.get_metric", return_value=mock_metric_cls):
+        with patch("nodelens.pruning.strategies.cascading.get_metric", return_value=mock_metric_cls):
             strategy = CascadingAlignmentPruning(
                 metric="rayleigh_quotient",
                 direction="forward",
@@ -538,12 +538,12 @@ class TestCascadingAlignmentPruning:
     def test_compute_importance_requires_inputs(self):
         from unittest.mock import MagicMock, patch
 
-        from alignment.pruning.strategies.cascading import CascadingAlignmentPruning
+        from nodelens.pruning.strategies.cascading import CascadingAlignmentPruning
 
         mock_metric_cls = MagicMock()
         mock_metric_cls.return_value = MagicMock()
 
-        with patch("alignment.pruning.strategies.cascading.get_metric", return_value=mock_metric_cls):
+        with patch("nodelens.pruning.strategies.cascading.get_metric", return_value=mock_metric_cls):
             strategy = CascadingAlignmentPruning(metric="rayleigh_quotient")
         layer = _conv2d(3, 8, 3)
         with pytest.raises(ValueError, match="requires inputs"):

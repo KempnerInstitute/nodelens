@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.infrastructure.storage.checkpoint import load_checkpoint, save_checkpoint, save_model_for_inference
+from nodelens.infrastructure.storage.checkpoint import load_checkpoint, save_checkpoint, save_model_for_inference
 
 
 class DummyModelWithHooks(nn.Module):

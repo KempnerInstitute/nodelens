@@ -3,15 +3,16 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "alignment"
-version = "0.1.0"
-description = "A package for performing alignment analysis on different models."
+name = "nodelens"
+version = "0.2.0"
+description = "Node and channel metrics for neural network interpretability, importance, and intervention studies."
 authors = [
     { name = "Research and Engineering at Kempner Institute", email = "kempner-research-engineering@g.harvard.edu" },
 ]
 readme = "README.md"
 requires-python = ">=3.8"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "numpy",
     "torch",
@@ -26,7 +27,10 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["alignment"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nodelens*"]
 
 
 [project.optional-dependencies]
@@ -54,7 +58,7 @@ train = [
     "msgspec>=0.14.0",
 ]
 all = [
-    "alignment[dev,train]",
+    "nodelens[dev,train]",
 ]
 
 docs = [
@@ -72,12 +76,10 @@ docs = [
 
 
 [project.urls]
-Homepage = "https://github.com/KempnerInstitute/alignment"
-Repository = "https://github.com/KempnerInstitute/alignment"
-
-[tool.setuptools.dynamic]
-version = { attr = "alignment.__version__" }
-
+Homepage = "https://github.com/KempnerInstitute/nodelens"
+Repository = "https://github.com/KempnerInstitute/nodelens"
+Documentation = "https://github.com/KempnerInstitute/nodelens#readme"
+Artifacts = "https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts"
 
 [tool.black]
 line-length = 150
@@ -94,7 +96,7 @@ extend-ignore = ["E402", "E721", "E722"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__ files (used for exports)
-"src/alignment/external/**" = ["E721", "E722"]  # Allow in external code
+"src/nodelens/external/**" = ["E721", "E722"]  # Allow in external code
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

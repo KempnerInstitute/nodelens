@@ -19,10 +19,10 @@ Create and activate the conda environment:
 .. code-block:: bash
 
    git clone <repository-url>
-   cd alignment
+   cd nodelens
 
    conda env create -f environment.yml
-   conda activate alignment
+   conda activate nodelens
 
    pip install -e .
 
@@ -34,7 +34,7 @@ Install directly from source:
 .. code-block:: bash
 
    git clone <repository-url>
-   cd alignment
+   cd nodelens
    pip install -e .
 
 Verification
@@ -44,8 +44,8 @@ Test the installation:
 
 .. code-block:: python
 
-   import alignment
-   from alignment.metrics import METRIC_REGISTRY
+   import nodelens
+   from nodelens.metrics import METRIC_REGISTRY
 
    # List available metrics
    print(METRIC_REGISTRY.list())
@@ -70,5 +70,5 @@ Next Steps
 ----------
 
 - See :doc:`quickstart` for basic usage
-- Check :doc:`/examples/index` for examples
-- Read :doc:`/api/index` for API documentation
+- Check the repository ``examples/`` folder for runnable examples
+- Read the top-level README for current API entry points

@@ -7,7 +7,7 @@ from typing import Tuple
 import pytest
 import torch
 
-from alignment.metrics import get_metric, list_metrics
+from nodelens.metrics import get_metric, list_metrics
 
 
 class TestMetricRegistry:

@@ -5,7 +5,7 @@ Unit tests for class-conditioned Rayleigh Quotient.
 import pytest
 import torch
 
-from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
+from nodelens.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 
 
 class TestClassConditionedRQ:

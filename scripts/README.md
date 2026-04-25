@@ -14,7 +14,7 @@ python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_full.yaml
 
 # Cluster-based analysis
-python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
 ```
 
 Options:

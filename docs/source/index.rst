@@ -1,36 +1,39 @@
-Alignment Analysis Framework Documentation
-==========================================
+NodeLens Documentation
+======================
 
-A framework for analyzing neural network alignment, pruning, and information-theoretic properties.
+NodeLens is a research codebase for node- and channel-level metrics,
+interpretability analysis, and structured interventions. The Python package is
+imported as ``nodelens``.
 
 Overview
 --------
 
-The Alignment Analysis Framework provides tools for:
+The codebase provides tools for:
 
 - Computing alignment metrics between neural representations and task structure
 - Implementing and testing pruning strategies on neural networks
-- Training and analyzing multiple networks with parallel execution
+- Estimating channel-level loss sensitivity in LLM feed-forward layers
 - Evaluating information-theoretic properties of learned representations
+- Packaging paper artifacts for public release
 
 Key Features
 ------------
 
-- 30+ alignment metrics including Rayleigh quotient, mutual information, and spectral methods
+- Alignment metrics including Rayleigh quotient, mutual information, and spectral methods
 - Multiple pruning strategies: magnitude-based, gradient-based, and alignment-based
 - Support for vision models (ResNet, VGG, EfficientNet, ViT) and language models
 - Flexible experiment framework with YAML configuration
-- GPU-optimized implementations
+- Paper-specific release folders under ``projects/``
 
 Quick Start
 -----------
 
 .. code-block:: python
 
-    from alignment.experiments import GeneralAlignmentExperiment
-    from alignment.configs.config_loader import load_config
+    from nodelens.experiments import GeneralAlignmentExperiment
+    from nodelens.configs.config_loader import load_config
 
-    config = load_config('configs/examples/resnet18_analysis.yaml')
+    config = load_config('configs/examples/mnist_basic.yaml')
     experiment = GeneralAlignmentExperiment(config)
     results = experiment.run()
 
@@ -43,6 +46,7 @@ Quick Start
    user_guide/experiments
    user_guide/metrics
    user_guide/pruning
+   user_guide/pruning_strategies
    user_guide/configuration
 
 .. toctree::
@@ -53,23 +57,6 @@ Quick Start
    reference/metrics
    reference/models
    reference/configuration
-
-.. toctree::
-   :maxdepth: 2
-   :caption: API Documentation
-
-   api/index
-   api/experiments
-   api/metrics
-   api/pruning
-   api/models
-   api/data
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Examples
-
-   examples/index
 
 .. toctree::
    :maxdepth: 1

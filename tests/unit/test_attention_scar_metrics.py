@@ -16,8 +16,8 @@ import torch.nn as nn
 # Skip entire module if transformers not installed
 pytest.importorskip("transformers")
 
-from alignment.experiments.base import BaseExperiment, ExperimentConfig
-from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+from nodelens.experiments.base import BaseExperiment, ExperimentConfig
+from nodelens.experiments.llm_experiments import LLMAlignmentExperiment
 
 
 class _TinySelfAttention(nn.Module):
@@ -259,7 +259,7 @@ class TestAttentionSCARVisualization:
 
     def test_plot_attention_head_heatmap_import(self):
         """Test that visualization function exists and is importable."""
-        from alignment.analysis.visualization import UnifiedVisualizer
+        from nodelens.analysis.visualization import UnifiedVisualizer
 
         viz = UnifiedVisualizer()
         assert hasattr(viz, "plot_attention_head_heatmap"), "Missing plot_attention_head_heatmap method"
@@ -271,7 +271,7 @@ class TestAttentionSCARVisualization:
         import os
         import tempfile
 
-        from alignment.analysis.visualization import UnifiedVisualizer
+        from nodelens.analysis.visualization import UnifiedVisualizer
 
         viz = UnifiedVisualizer()
 

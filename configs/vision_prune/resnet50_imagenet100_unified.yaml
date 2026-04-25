@@ -330,7 +330,7 @@ visualization:
 # OUTPUT
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+  base_dir: "/path/to/results/Prune_LLM"
   dir: "./results/vision/resnet50_imagenet100"
   save_metrics: true
   save_clusters: true

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from alignment.training.base import BaseTrainer, TrainingConfig
+from nodelens.training.base import BaseTrainer, TrainingConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,7 +1,7 @@
 Metrics API Reference
 =====================
 
-This section provides detailed documentation for all metrics available in the alignment framework.
+This section provides detailed documentation for all metrics available in NodeLens.
 
 .. contents:: Table of Contents
    :local:
@@ -10,7 +10,7 @@ This section provides detailed documentation for all metrics available in the al
 Overview
 --------
 
-The alignment framework provides 36+ metrics for analyzing neural network behavior, organized into several categories:
+NodeLens provides 36+ metrics for analyzing neural network behavior, organized into several categories:
 
 - **Alignment Metrics**: Measure how well neurons align with input statistics
 - **Information Theory Metrics**: Quantify information flow and dependencies
@@ -21,12 +21,12 @@ The alignment framework provides 36+ metrics for analyzing neural network behavi
 Base Metric Classes
 -------------------
 
-.. automodule:: alignment.metrics.base
+.. automodule:: nodelens.metrics.base
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: alignment.metrics.base.BaseMetric
+.. autoclass:: nodelens.metrics.base.BaseMetric
    :members:
    :undoc-members:
 
@@ -43,7 +43,7 @@ Alignment Metrics
 Rayleigh Quotient (RQ)
 ~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.rayleigh.RayleighQuotient
+.. autoclass:: nodelens.metrics.rayleigh.RayleighQuotient
    :members:
    :undoc-members:
 
@@ -66,7 +66,7 @@ Rayleigh Quotient (RQ)
 
    .. code-block:: python
 
-      from alignment.metrics import RayleighQuotient
+      from nodelens.metrics import RayleighQuotient
 
       rq = RayleighQuotient(scale_by_norm=True)
       scores = rq.compute(
@@ -84,7 +84,7 @@ Rayleigh Quotient (RQ)
 Generalized Rayleigh Quotient
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.rayleigh.GeneralizedRayleighQuotient
+.. autoclass:: nodelens.metrics.rayleigh.GeneralizedRayleighQuotient
    :members:
    :undoc-members:
 
@@ -108,7 +108,7 @@ Information Theory Metrics
 Mutual Information (MI)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.information.MutualInformationGaussian
+.. autoclass:: nodelens.metrics.information.MutualInformationGaussian
    :members:
    :undoc-members:
 
@@ -133,7 +133,7 @@ Mutual Information (MI)
 
    .. code-block:: python
 
-      from alignment.metrics import MutualInformationGaussian
+      from nodelens.metrics import MutualInformationGaussian
 
       mi = MutualInformationGaussian(estimation_method="knn")
       scores = mi.compute(
@@ -144,7 +144,7 @@ Mutual Information (MI)
 Conditional Mutual Information
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.information.ConditionalMutualInformation
+.. autoclass:: nodelens.metrics.information.ConditionalMutualInformation
    :members:
    :undoc-members:
 
@@ -163,7 +163,7 @@ Conditional Mutual Information
 Partial Information Decomposition (PID)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.information.PartialInformationDecomposition
+.. autoclass:: nodelens.metrics.information.PartialInformationDecomposition
    :members:
    :undoc-members:
 
@@ -187,7 +187,7 @@ Partial Information Decomposition (PID)
 
    .. code-block:: python
 
-      from alignment.metrics import PartialInformationDecomposition
+      from nodelens.metrics import PartialInformationDecomposition
 
       pid = PartialInformationDecomposition(method="broja")
       results = pid.compute(
@@ -206,7 +206,7 @@ Similarity Metrics
 Centered Kernel Alignment (CKA)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.similarity.CKA
+.. autoclass:: nodelens.metrics.similarity.CKA
    :members:
    :undoc-members:
 
@@ -230,7 +230,7 @@ Centered Kernel Alignment (CKA)
 
    .. code-block:: python
 
-      from alignment.metrics import CKA
+      from nodelens.metrics import CKA
 
       cka = CKA(kernel="rbf", sigma=1.0)
       similarity = cka.compute(
@@ -242,7 +242,7 @@ Centered Kernel Alignment (CKA)
 Canonical Correlation Analysis (CCA)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.similarity.CCA
+.. autoclass:: nodelens.metrics.similarity.CCA
    :members:
    :undoc-members:
 
@@ -260,7 +260,7 @@ Canonical Correlation Analysis (CCA)
 Procrustes Distance
 ~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.similarity.ProcrustesDistance
+.. autoclass:: nodelens.metrics.similarity.ProcrustesDistance
    :members:
    :undoc-members:
 
@@ -281,7 +281,7 @@ Spectral Metrics
 Spectral Analysis
 ~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.spectral.SpectralAnalysis
+.. autoclass:: nodelens.metrics.spectral.SpectralAnalysis
    :members:
    :undoc-members:
 
@@ -296,7 +296,7 @@ Spectral Analysis
 
    .. code-block:: python
 
-      from alignment.metrics import SpectralAnalysis
+      from nodelens.metrics import SpectralAnalysis
 
       spectral = SpectralAnalysis()
       results = spectral.compute(weights=layer_weights)
@@ -308,7 +308,7 @@ Spectral Analysis
 Weight Spectral Norm
 ~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.spectral.WeightSpectralNorm
+.. autoclass:: nodelens.metrics.spectral.WeightSpectralNorm
    :members:
    :undoc-members:
 
@@ -326,7 +326,7 @@ Task-Specific Metrics
 Classification Metrics
 ~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.task_specific.ClassificationAlignment
+.. autoclass:: nodelens.metrics.task_specific.ClassificationAlignment
    :members:
    :undoc-members:
 
@@ -339,7 +339,7 @@ Classification Metrics
 Regression Metrics
 ~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.task_specific.RegressionAlignment
+.. autoclass:: nodelens.metrics.task_specific.RegressionAlignment
    :members:
    :undoc-members:
 
@@ -355,7 +355,7 @@ Advanced Metric Features
 Metric Collections
 ~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: alignment.metrics.MetricCollection
+.. autoclass:: nodelens.metrics.MetricCollection
    :members:
    :undoc-members:
 
@@ -363,7 +363,7 @@ Metric Collections
 
    .. code-block:: python
 
-      from alignment.metrics import MetricCollection
+      from nodelens.metrics import MetricCollection
 
       metrics = MetricCollection([
           RayleighQuotient(scale_by_norm=True),
@@ -421,8 +421,8 @@ Creating Custom Metrics
 
 .. code-block:: python
 
-   from alignment.metrics.base import BaseMetric
-   from alignment.core import register_metric
+   from nodelens.metrics.base import BaseMetric
+   from nodelens.core import register_metric
 
    @register_metric("my_custom_metric")
    class MyCustomMetric(BaseMetric):
@@ -451,9 +451,9 @@ Creating Custom Metrics
 Metric Registry
 ~~~~~~~~~~~~~~~
 
-.. autofunction:: alignment.core.registry.register_metric
-.. autofunction:: alignment.core.registry.get_metric
-.. autofunction:: alignment.core.registry.list_metrics
+.. autofunction:: nodelens.core.registry.register_metric
+.. autofunction:: nodelens.core.registry.get_metric
+.. autofunction:: nodelens.core.registry.list_metrics
 
 Performance Considerations
 --------------------------

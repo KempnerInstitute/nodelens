@@ -379,7 +379,7 @@ visualization:
 output:
   # Base directory for job-specific outputs (recommended for cluster runs)
   # Each experiment creates a unique subdirectory with timestamp and job ID
-  base_dir: null  # e.g., "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM"
+  base_dir: null  # e.g., "/path/to/results/Prune_LLM"
 
   # Direct output directory (legacy, used if base_dir is null)
   dir: "./results"

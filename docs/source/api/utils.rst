@@ -1,17 +1,17 @@
 Infrastructure API Reference
 ============================
 
-This section documents the infrastructure and utility components of the alignment framework.
+This section documents the infrastructure and utility components of NodeLens.
 
 Configuration
 -------------
 
-.. automodule:: alignment.infrastructure.configuration
+.. automodule:: nodelens.infrastructure.configuration
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: alignment.infrastructure.configuration.config
+.. automodule:: nodelens.infrastructure.configuration.config
    :members:
    :undoc-members:
    :show-inheritance:
@@ -19,7 +19,7 @@ Configuration
 Distributed Computing
 ---------------------
 
-.. automodule:: alignment.infrastructure.computing.distributed
+.. automodule:: nodelens.infrastructure.computing.distributed
    :members:
    :undoc-members:
    :show-inheritance:
@@ -27,7 +27,7 @@ Distributed Computing
 Storage and Logging
 -------------------
 
-.. automodule:: alignment.infrastructure.storage
+.. automodule:: nodelens.infrastructure.storage
    :members:
    :undoc-members:
    :show-inheritance:
@@ -35,7 +35,7 @@ Storage and Logging
 Checkpointing
 ~~~~~~~~~~~~~
 
-.. automodule:: alignment.infrastructure.storage.checkpoint
+.. automodule:: nodelens.infrastructure.storage.checkpoint
    :members:
    :undoc-members:
    :show-inheritance:
@@ -43,7 +43,7 @@ Checkpointing
 Logging
 ~~~~~~~
 
-.. automodule:: alignment.infrastructure.storage.logging
+.. automodule:: nodelens.infrastructure.storage.logging
    :members:
    :undoc-members:
    :show-inheritance:
@@ -51,7 +51,7 @@ Logging
 Experiment Tracking
 -------------------
 
-.. automodule:: alignment.experiments.tracking
+.. automodule:: nodelens.experiments.tracking
    :members:
    :undoc-members:
    :show-inheritance:

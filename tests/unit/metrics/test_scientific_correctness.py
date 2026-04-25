@@ -10,9 +10,9 @@ import sys
 import pytest
 import torch
 
-from alignment.metrics.information.pairwise_gaussian import PairwiseRedundancyGaussian
-from alignment.metrics.information.synergy_mmi import SynergyGaussianMMI
-from alignment.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
+from nodelens.metrics.information.pairwise_gaussian import PairwiseRedundancyGaussian
+from nodelens.metrics.information.synergy_mmi import SynergyGaussianMMI
+from nodelens.metrics.rayleigh.rayleigh_quotient import RayleighQuotient
 
 
 class TestRedundancyCorrectness:

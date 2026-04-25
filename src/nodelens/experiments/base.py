@@ -1,0 +1,926 @@
+"""
+Base classes for experiments.
+
+This module provides the foundation for all experiment types,
+handling common functionality like checkpointing, logging, and metrics.
+"""
+
+import json
+import logging
+from abc import abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+import torch
+
+from nodelens.core.base import BaseExperiment as CoreBaseExperiment
+from nodelens.core.registry import DATASET_REGISTRY
+from nodelens.dataops.loaders import create_distributed_loader
+from nodelens.models import ModelWrapper
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExperimentConfig:
+    """Configuration for experiments."""
+
+    # Experiment identification
+    name: str
+    description: str = ""
+    tags: List[str] = field(default_factory=list)
+
+    experiment_type: str = "alignment_analysis"
+
+    # Model configuration
+    model_name: str = "resnet18"
+    model_config: Dict[str, Any] = field(default_factory=dict)
+    pretrained: bool = False
+    # Optional explicit checkpoint path (used by scripts/run_experiment.py)
+    model_checkpoint: Optional[str] = None
+
+    # Dataset configuration
+    dataset_name: str = "cifar10"
+    dataset_config: Dict[str, Any] = field(default_factory=dict)
+    data_path: Optional[str] = None
+
+    # Training configuration
+    batch_size: int = 128
+    num_workers: int = 4
+    device: str = "cuda"
+    seed: int = 42
+    train_before_dropout: bool = True
+    training_epochs: int = 10
+    learning_rate: float = 0.001
+    optimizer: str = "adam"
+    scheduler: Optional[str] = None
+    scheduler_config: Dict[str, Any] = field(default_factory=dict)
+    weight_decay: float = 0.0
+    momentum: float = 0.9
+
+    # Multi-network configuration
+    num_networks: int = 1
+
+    # Training control flags
+    do_train: bool = True
+
+    # Metrics configuration
+    metrics: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
+    metric_configs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Optimization options for metric computation (use_jit, use_gpu_acceleration, etc.)
+    metric_optimization: Dict[str, Any] = field(default_factory=dict)
+    tracked_layers: Optional[List[str]] = None
+    scale_by_norm: bool = False  # Whether to scale alignment scores by weight norm
+    force_cpu_for_large_metric_ops: bool = True  # Move large operations to CPU
+    cnn_rq_aggregation_op: str = "mean"  # "mean", "max", "var", "sum" for CNN RQ
+    exclude_classification_layer: bool = True  # Whether to exclude classification layer from analysis
+
+    # Alignment-specific configuration
+    alignment_methods: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
+    compute_alignment: bool = True
+    save_alignment_history: bool = True
+    measure_alignment_during_training: bool = True
+    alignment_frequency: int = 1
+    alignment_data_num_samples: int = 1
+    alignment_computation_texts: List[str] = field(default_factory=list)
+    alignment_composite_weights: Dict[str, float] = field(default_factory=dict)
+    supernode_config: Dict[str, Any] = field(default_factory=dict)
+
+    # CNN-specific configuration
+    cnn_mode: str = "unfold"  # Options: "unfold", "patchwise", "batch_patch_combined"
+
+    # ---------------------------------------------------------------------
+    # Vision / cluster-analysis extras (used by ClusterAnalysisExperiment)
+    # ---------------------------------------------------------------------
+    # Calibration loader selection:
+    # - "indices": deterministic Subset loader based on saved indices (recommended)
+    # - "train_loader": iterate the provided train_loader directly (non-reproducible; may include augmentation + shuffle)
+    calibration_mode: str = "indices"
+    calibration_num_workers: int = 0
+    # Number of calibration examples used for cluster metrics (RQ/Red/Syn/TaskMI, etc.)
+    n_calibration: int = 5000
+
+    # ---------------------------------------------------------------------
+    # Reproducibility helper for legacy runs (vision / cluster analysis)
+    # ---------------------------------------------------------------------
+    # Some historical runs performed training before metric computation, and then
+    # computed metrics by iterating a *shuffled* DataLoader (train_loader) for the
+    # first `n_calibration` samples. In that regime, the exact calibration subset
+    # depends on the RNG state after training because DataLoader/RandomSampler
+    # consumes torch RNG when creating each epoch iterator.
+    #
+    # When loading a checkpoint (do_train=false), you can optionally advance the
+    # torch RNG state to approximate the "post-training" shuffle state before
+    # computing calibration-based metrics in calibration_mode="train_loader".
+    #
+    # Default: 0 (disabled).
+    simulate_post_train_shuffle_epochs: int = 0
+    # Whether to also simulate the RNG consumption from creating a test_loader
+    # iterator once per epoch (common in training loops).
+    simulate_post_train_include_eval: bool = True
+
+    # How to form channel samples from Conv outputs Y[B,C,H,W]
+    # - "flatten_spatial": treat spatial positions as samples (subsample per image)
+    # - "gap": global-average-pool per image (one sample per image)
+    # Where to read the channel signal for within-layer statistics:
+    # - "pre_bn": hook Conv2d outputs (pre-BN, pre-ReLU). (Backward compatible default.)
+    # - "post_bn": hook BatchNorm outputs when available (post-BN, pre-ReLU).
+    activation_point: str = "pre_bn"
+    activation_samples: str = "flatten_spatial"
+    # How to form samples for task-level metrics (TaskMI, synergy).
+    # Default: None -> use GAP (avoids pseudo-replication).
+    # If you explicitly want to reuse the local sampling scheme, set to "match"
+    # (not recommended: it repeats the same image-level target across spatial samples).
+    task_activation_samples: Optional[str] = None
+    # Optional control for target-directed metrics:
+    # - "none": use true task target
+    # - "batch": shuffle target values within each calibration batch
+    task_target_permutation: str = "none"
+    spatial_samples_per_image: int = 16  # used when activation_samples="flatten_spatial"
+    n_clusters: int = 4
+    synergy_target: str = "logit_margin"  # logit_margin, correct_logit, logit_pc1
+    synergy_candidate_pool: int = 50
+    synergy_pairs: int = 10
+    # RQ estimator used in cluster-analysis metrics:
+    # - "equivalent_streaming": Eq. (Var(Y_i) / ||w_i||^2) from streamed output moments
+    # - "covariance_exact": explicit Eq. (w^T Σ_X w / ||w||^2) on sampled conv inputs
+    # - "both": compute both; use covariance_exact for downstream "rq" and store diagnostics
+    rq_definition: str = "both"
+
+    # Cluster type mapping mode:
+    # - "greedy": greedy sequential assignment (semantically interpretable; default).
+    #   "critical" = highest (RQ - Red), "redundant" = highest Red, etc.
+    # - "global": permutation-based one-to-one assignment (stable across layers).
+    type_mapping_mode: str = "greedy"
+
+    # Ablation / permutation diagnostics (vision)
+    run_metric_ablation: bool = False
+    metric_ablations: List[str] = field(default_factory=lambda: ["all", "rq_red", "rq_syn", "red_syn"])
+    run_permutation_baseline: bool = False
+    n_permutations: int = 100
+
+    # Clustering first metric: "rq" (default) or "ixy" (mutual information I(X;Y))
+    # When set to "ixy", clustering uses mi_in_proxy instead of rq as the first dimension
+    clustering_first_metric: str = "rq"
+
+    # Clustering importance mode: how types are assigned during channel clustering.
+    # - "geometric": Standard k-means, types by centroid coordinates (default)
+    # - "score_augmented": k-means on (Score, log_RQ, Red, Syn); types by mean importance
+    # - "importance_reassign": Standard k-means geometry, reassign types by mean score
+    # - "quantile": Partition by composite score quartiles (no k-means)
+    clustering_importance_mode: str = "geometric"
+
+    # Clustering feature set: which 3 features to use for k-means clustering
+    # - "internal": (first_metric, internal_redundancy, synergy) — original features
+    # - "pid": (task_MI, pid_redundancy_t, synergy) — PID target-directed features
+    clustering_feature_set: str = "internal"
+
+    # Input MI proxy reference scale:
+    # mi_in_proxy = 0.5 * log(1 + signal_power / sigma0_sq)
+    # where signal_power = RQ * ||w||^2. Default reproduces legacy behavior.
+    mi_in_proxy_sigma_mode: str = "median"  # median|mean|p75|p90|quantile|fixed
+    mi_in_proxy_sigma_fixed: float = 0.0
+    mi_in_proxy_sigma_quantile: float = 50.0
+
+    # Optional: compute per-channel loss proxy (Fisher/GN-style) on calibration data.
+    compute_loss_proxy: bool = False
+    loss_proxy_n_calibration: int = 1024
+
+    # Optional: within-layer connectivity summaries (vision).
+    # These are analysis artifacts to support within-layer organization claims (graph/community structure).
+    # When enabled, we compute lightweight adjacency summaries (top-k neighbors) and aggregate them into
+    # small type×type connectivity matrices per layer (stored in results.json).
+    compute_within_layer_connectivity: bool = False
+    within_layer_red_topk: int = 20
+    within_layer_syn_topk: int = 10
+
+    # Between-layer routing metrics (vision)
+    # These are computed from the same effective influence matrix used for halos.
+    routing_bottleneck_topk: int = 5  # top-k mass summaries for bottleneck metrics
+    outred_candidate_pool: int = 64  # candidate sources per channel when estimating outgoing overlap
+    outred_topm: int = 8  # average of top-m overlaps for OutRed
+    bottleneck_protect_percentile: float = 95.0  # used by bottleneck-protect pruning variants
+
+    # Cross-layer halo analysis parameters (vision)
+    halo_percentile: float = 90.0
+    use_activation_weight: bool = True
+
+    # Cascade/damage testing parameters (vision)
+    cascade_n_remove: int = 5
+    damage_sample_frac: float = 0.2
+
+    # Pruning-score baselines (vision)
+    taylor_samples: int = 1024
+    # Activation-based Taylor (Molchanov-style) uses the same calibration loader, but is
+    # heavier (stores activation grads). By default we reuse taylor_samples unless overridden.
+    taylor_act_samples: int = 1024
+    # Cap per-batch size for activation-based Taylor to bound peak memory when retaining grads.
+    taylor_act_batch_size: int = 16
+    geometric_median_iters: int = 10
+    geometric_median_eps: float = 1e-8
+    hrank_images: int = 256
+    hrank_pool: int = 8
+    hrank_sv_eps: float = 1e-3
+    # CHIP (Channel Independence-based Pruning, Sui et al. NeurIPS 2021)
+    chip_images: int = 256
+
+    # Cluster-aware pruning score weights (for sweeps / ablations)
+    cluster_aware_alpha: float = 1.0
+    cluster_aware_beta: float = 0.5
+    cluster_aware_gamma: float = 0.3
+    cluster_aware_lambda_halo: float = 0.5
+    cluster_aware_protect_critical_frac: float = 0.3
+    # Annealing window used by the cluster-aware (annealed) variant
+    cluster_aware_anneal_start: float = 0.70
+    cluster_aware_anneal_end: float = 0.90
+
+    # NEW: Additional cluster-aware method variants
+    # Weight for Taylor component in cluster_aware_taylor_blend method
+    cluster_aware_taylor_weight: float = 0.3
+    # Enable depth-adaptive score weights (early layers more conservative)
+    cluster_aware_depth_adaptive: bool = False
+    # Early/late layer weight profiles for depth-adaptive mode
+    cluster_aware_early_alpha: float = 1.5  # Higher RQ weight early
+    cluster_aware_early_gamma: float = 0.1  # Lower redundancy penalty early
+    cluster_aware_late_alpha: float = 0.8  # Lower RQ weight late
+    cluster_aware_late_gamma: float = 0.5  # Higher redundancy penalty late
+    # Fraction of layers considered "early"
+    cluster_aware_early_layer_frac: float = 0.3
+    # Two-axis adaptive CAP (local IXY/Red/Syn + target TaskMI/PID-Red blend).
+    # Blend weight to target branch follows a depth sigmoid:
+    #   mix(depth) = sigmoid(sharpness * (depth - depth_switch))
+    # where depth in [0,1].
+    cluster_aware_twoaxis_depth_switch: float = 0.5
+    cluster_aware_twoaxis_depth_sharpness: float = 10.0
+    # Local branch (IXY/internal Red/Syn) weights
+    cluster_aware_twoaxis_ixy_weight: float = 1.0
+    cluster_aware_twoaxis_red_internal_weight: float = 0.25
+    cluster_aware_twoaxis_syn_weight: float = 0.0
+    # Target branch (TaskMI/PID-Red) weights
+    cluster_aware_twoaxis_early_task_weight: float = 0.05
+    cluster_aware_twoaxis_late_task_weight: float = 0.35
+    cluster_aware_twoaxis_red_target_weight: float = 0.0
+    cluster_aware_twoaxis_use_pid_red_target: bool = True
+    # Halo contribution for the two-axis score.
+    cluster_aware_twoaxis_halo_weight: float = 0.3
+
+    # ---------------------------------------------------------------------
+    # Generalized Taylor pruning (vision)
+    # ---------------------------------------------------------------------
+    # These parameters control the analytically-motivated "generalized Taylor" family
+    # (see src/nodelens/pruning/strategies/generalized_taylor.py). They are exposed
+    # here so they can be set in YAML and saved into experiment_config.yaml for
+    # reproducibility.
+    generalized_taylor_weight_rq: float = 1.0
+    generalized_taylor_weight_redundancy: float = 0.3
+    generalized_taylor_weight_synergy: float = 0.5
+    generalized_taylor_gradient_exponent: float = 1.0
+    generalized_taylor_activation_exponent: float = 1.0
+    generalized_taylor_redundancy_discount_beta: float = 1.0
+    generalized_taylor_synergy_boost_gamma: float = 0.5
+    generalized_taylor_critical_multiplier: float = 1.5
+    generalized_taylor_redundant_multiplier: float = 0.5
+    generalized_taylor_synergistic_multiplier: float = 1.2
+    generalized_taylor_background_multiplier: float = 0.8
+    generalized_taylor_gate_mode: str = "sigmoid"  # "linear" | "sigmoid"
+    generalized_taylor_gate_temperature: float = 6.0
+    generalized_taylor_gate_bias: float = 0.5
+    generalized_taylor_gate_eps: float = 0.05
+    generalized_taylor_gate_min: float = 0.0
+    generalized_taylor_gate_include_cluster_multiplier: bool = True
+    # Numerical stability knobs (kept explicit so they can be overridden in configs if needed)
+    generalized_taylor_structural_eps: float = 0.1
+    generalized_taylor_rq_log_eps: float = 1e-10
+    generalized_taylor_grad_over_act_eps: float = 1e-8
+    generalized_taylor_lp_optimal_l2_reg: float = 0.01
+
+    # Analysis control flags
+    do_dropout_analysis: bool = False
+    do_eigenfeature_analysis: bool = False
+    do_pruning_experiments: bool = False
+
+    # Dropout analysis configuration
+    dropout_rates: List[float] = field(default_factory=lambda: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])
+    dropout_mode: str = "scaled"  # "scaled" or "unscaled"
+
+    # Distribution analysis
+    measure_expected_distribution: bool = True
+    distribution_bins: int = 50
+
+    # Pruning configuration
+    # pruning_strategies: List of metrics to use for pruning (derived from metrics.enabled)
+    pruning_strategies: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
+    pruning_amounts: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7, 0.9])
+    # pruning_selection_mode: Can be str or List[str] - "low", "high", "random"
+    pruning_selection_mode: Union[str, List[str]] = field(default_factory=lambda: ["low", "high", "random"])
+    fine_tune_after_pruning: bool = True
+    fine_tune_epochs: int = 5
+    # pruning_alignment_metric: Backward compatibility - single metric fallback
+    pruning_alignment_metric: str = "rayleigh_quotient"
+    pruning_hybrid_alpha: float = 0.5
+    pruning_scope: str = "layer"  # "global" or "layer"
+    pruning_distribution: str = "uniform"
+    pruning_min_per_layer: float = 0.0
+    pruning_max_per_layer: float = 0.95
+    # Safety cap for per-layer sparsity when using global-threshold style distributions.
+    # Set to 1.0 to disable (legacy behavior).
+    pruning_max_per_layer_sparsity_cap: float = 1.00
+    # Optional strict global budget enforcement for structured channel pruning.
+    # When enabled, per-layer prune counts are adjusted so the total number of
+    # pruned channels matches round(target_sparsity * total_prunable_channels).
+    pruning_enforce_exact_global_channel_budget: bool = False
+    # When True, use Taylor channel scores for computing per-layer pruning
+    # allocation (via the distribution manager), while the method's own scores
+    # are used for within-layer channel ranking.  This decouples allocation
+    # (gradient-aware) from ranking (substitutability-aware).
+    hybrid_taylor_allocation: bool = False
+    fine_tune_learning_rate: Optional[float] = None  # Will default to learning_rate * 0.1
+    # Optional cap for post-pruning fine-tuning speed (useful for ImageNet-scale runs)
+    # None => use the full training loader each epoch.
+    fine_tune_max_batches: Optional[int] = None
+    fine_tune_weight_decay: float = 0.0
+    # Optional type-aware post-pruning fine-tuning.
+    # When enabled, channel gradients can be scaled per cluster type.
+    fine_tune_type_aware_enabled: bool = False
+    # If non-empty, only these methods use type-aware fine-tuning. Method names may
+    # include explicit aliases such as "cluster_aware_typeft".
+    fine_tune_type_aware_methods: List[str] = field(default_factory=list)
+    fine_tune_type_aware_lr_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "critical": 0.5,
+            "synergistic": 1.0,
+            "redundant": 1.5,
+            "background": 1.5,
+        }
+    )
+    fine_tune_type_aware_wd_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "critical": 0.5,
+            "synergistic": 1.0,
+            "redundant": 1.25,
+            "background": 1.5,
+        }
+    )
+    fine_tune_type_aware_scale_batchnorm: bool = True
+    fine_tune_type_aware_scale_classifier: bool = False
+    # Record per-epoch test accuracy during post-pruning fine-tuning.
+    fine_tune_track_epoch_accuracy: bool = False
+    # How often (in epochs) to evaluate during FT when track_epoch_accuracy=True.
+    # Default 5 means eval at epoch 5, 10, 15, ... and always at the last epoch.
+    fine_tune_eval_frequency: int = 5
+    # Use AMP (automatic mixed precision) during fine-tuning for faster training.
+    fine_tune_use_amp: bool = True
+    alignment_structured_pruning: bool = False  # Use structured pruning for alignment
+    cascading_direction: str = "forward"  # Direction for cascading pruning
+    dependency_aware_pruning: bool = False  # Propagate masks across dependent layers
+    # Single-layer pruning: specify a layer name to prune only that layer
+    # None = prune all layers, string = prune only that layer
+    pruning_target_layer: Optional[str] = None
+
+    # Optional: restrict which convs are prunable (useful for MobileNet-style nets)
+    pruning_pointwise_only: bool = False  # prune only 1x1 conv layers
+    pruning_skip_depthwise: bool = False  # skip depthwise conv layers
+
+    # Plotting and visualization
+    generate_plots: bool = True
+    plot_format: str = "png"
+    plot_dpi: int = 300
+    visualization_options: Dict[str, Any] = field(default_factory=dict)
+
+    # Post-experiment analysis (runs after experiment completes)
+    # When set, AnalysisRunner generates additional visualizations from results
+    post_analysis: Dict[str, Any] = field(default_factory=dict)
+
+    # Checkpointing
+    checkpoint_dir: str = "./checkpoints"
+    checkpoint_interval: int = 1000
+    save_best: bool = True
+
+    # Logging and Output Directories
+    log_dir: str = "./logs"
+    log_interval: int = 100
+    plots_dir: str = "./plots"  # Directory for saving plots
+    experiment_dir: Optional[str] = None  # Root experiment directory (set by runner)
+    base_output_dir: Optional[str] = None  # Base directory for creating job-specific output folders
+    wandb_project: Optional[str] = None
+    wandb_entity: Optional[str] = None
+
+    # Distributed training
+    distributed: bool = False
+    world_size: int = 1
+    rank: int = 0
+
+    # Evaluation / LLM
+    do_perplexity_computation: bool = False
+    evaluation_dataset: str = "wikitext"
+    evaluation_num_samples: int = 100
+    evaluation_metrics: List[str] = field(default_factory=lambda: ["perplexity"])
+    llm: Dict[str, Any] = field(default_factory=dict)  # Full LLM config block
+
+    # Few-shot evaluation settings (NVIDIA Minitron compatible)
+    use_nvidia_fewshot: bool = False  # Use NVIDIA Minitron official few-shot settings
+    use_chain_of_thought: bool = False  # Enable chain-of-thought for GSM8k
+    fewshot_settings: Dict[str, int] = field(default_factory=dict)  # Per-benchmark few-shot counts
+
+    # Directed redundancy and connectivity pruning
+    do_directed_redundancy: bool = True
+    do_connectivity_pruning: bool = True
+
+    # SCAR / supernode-specific options for LLMs
+    do_scar_metrics: bool = False  # Whether to compute SCAR-style supernode metrics (T_i, R_i, L_i) for FFN
+    do_attention_scar_metrics: bool = False  # Whether to compute SCAR-style metrics for attention heads
+    scar_num_samples: int = 0  # Number of calibration samples for SCAR (0 => align with alignment_data_num_samples)
+    scar_max_length: int = 512  # Max sequence length for SCAR calibration passes
+
+    # Supernode analysis configs (nested dicts from YAML)
+    supernode: Dict[str, Any] = field(default_factory=dict)  # Core supernode analysis config
+    supernode_robustness: Dict[str, Any] = field(default_factory=dict)  # Robustness analysis config
+    supernode_summary: Dict[str, Any] = field(default_factory=dict)  # Summary visualization config
+    halo_analysis: Dict[str, Any] = field(default_factory=dict)  # Halo vs non-halo analysis
+    generalized_importance: Dict[str, Any] = field(default_factory=dict)  # Generalized importance config
+    do_halo_analysis: bool = False  # Flag for halo analysis
+    do_generalized_importance: bool = False  # Flag for generalized importance
+    do_scar_optimal: bool = False  # Flag for SCAR-optimal (learned component weights)
+    do_random_supernode_ablation: bool = False  # Flag for random supernode ablation control
+    do_supernode_hit_rate_sweep: bool = False  # Flag for hit-rate dose-response sweep (random masks)
+    supernode_hit_rate_sweep: Dict[str, Any] = field(default_factory=dict)  # Config for hit-rate sweep (LLMs)
+
+    # Performance optimization
+    eval_batches: Optional[int] = None  # Limit evaluation to N batches (None = all)
+    use_tensorized_training: bool = True  # Always enabled
+    use_tensorized_pruning: bool = True  # Always enabled
+    use_ultra_parallel_eval: bool = True  # Always enabled
+
+    # Misc
+    tokenizer_kwargs: Dict[str, Any] = field(default_factory=dict)
+    model_kwargs: Dict[str, Any] = field(default_factory=dict)
+    analysis_options: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert config to dictionary."""
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
+
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "ExperimentConfig":
+        """Create config from dictionary."""
+        return cls(**config_dict)
+
+    def save(self, path: Union[str, Path]):
+        """Save config to JSON file."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "ExperimentConfig":
+        """Load config from JSON file."""
+        with open(path, "r") as f:
+            return cls.from_dict(json.load(f))
+
+
+class BaseExperiment(CoreBaseExperiment):
+    """
+    Extended base experiment class with common functionality.
+
+    This class provides:
+    - Model and dataset initialization
+    - Metric computation
+    - Checkpointing
+    - Logging
+    - Result tracking
+    """
+
+    def __init__(self, config: ExperimentConfig):
+        """
+        Initialize experiment.
+
+        Args:
+            config: Experiment configuration
+        """
+        super().__init__(config.name, config.to_dict())
+        self._experiment_config = config
+
+        # Set random seed
+        self._set_seed(self._experiment_config.seed)
+
+        # Initialize components
+        self.model = None
+        self.wrapped_model = None
+        self.dataset = None
+        self.data_loader = None
+        self.metrics = {}
+        self.results = {"config": config.to_dict(), "metrics": {}, "checkpoints": [], "start_time": datetime.now().isoformat()}
+
+        # Setup directories
+        self._setup_directories()
+
+        # Initialize components
+        self._initialize_components()
+
+    @property
+    def config(self) -> ExperimentConfig:
+        """Access the experiment configuration."""
+        return self._experiment_config
+
+    def _set_seed(self, seed: int):
+        """Set random seed for reproducibility."""
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
+    def _setup_directories(self):
+        """Create necessary directories."""
+        Path(self.config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.config.log_dir).mkdir(parents=True, exist_ok=True)
+
+    def _initialize_components(self):
+        """Initialize model, dataset, and metrics."""
+        # Initialize model
+        self._initialize_model()
+
+        # Initialize dataset
+        self._initialize_dataset()
+
+        # Initialize metrics
+        self._initialize_metrics()
+
+        logger.info(f"Initialized experiment: {self.config.name}")
+
+    def _initialize_model(self):
+        """Initialize model and wrapper."""
+        # Check if model was already provided in config
+        if hasattr(self.config, "model") and self.config.model is not None:
+            self.model = self.config.model
+        else:
+            # Try to get model from registry first
+            try:
+                from nodelens.core.registry import MODEL_REGISTRY
+
+                # Handle parameter mapping for specific models
+                model_kwargs = self.config.model_config.copy()
+
+                # Remove 'name' from kwargs if it exists to avoid conflict
+                model_kwargs.pop("name", None)
+                # Remove cnn_mode as it's not a model parameter but a wrapper parameter
+                model_kwargs.pop("cnn_mode", None)
+                # Remove other model-specific configs that don't apply to current model
+                model_kwargs.pop("cnn_config", None)
+                model_kwargs.pop("external_config", None)
+                model_kwargs.pop("model_backend", None)
+
+                # Special handling for MLP model
+                if self.config.model_name.lower() == "mlp":
+                    # Extract mlp_config parameters if present
+                    if "mlp_config" in model_kwargs:
+                        mlp_config = model_kwargs.pop("mlp_config")
+                        # Merge mlp_config parameters into model_kwargs
+                        model_kwargs.update(mlp_config)
+
+                    # Map common parameter names
+                    if "num_classes" in model_kwargs and "output_dim" not in model_kwargs:
+                        model_kwargs["output_dim"] = model_kwargs.pop("num_classes")
+                    # Remove parameters that MLP doesn't accept
+                    for param in ["pretrained", "num_layers", "dropout", "norm_type", "use_batchnorm"]:
+                        model_kwargs.pop(param, None)
+                    # Set default input_dim for MNIST if using MNIST dataset
+                    if self.config.dataset_name.lower() == "mnist" and "input_dim" not in model_kwargs:
+                        model_kwargs["input_dim"] = 784
+                    # Map activation to activation_type if present
+                    if "activation" in model_kwargs and "activation_type" not in model_kwargs:
+                        model_kwargs["activation_type"] = model_kwargs.pop("activation")
+                    # Map dropout to dropout_rate if present
+                    if "dropout" in model_kwargs and "dropout_rate" not in model_kwargs:
+                        model_kwargs["dropout_rate"] = model_kwargs.pop("dropout")
+
+                self.model = MODEL_REGISTRY.create(name=self.config.model_name, **model_kwargs)
+                logger.info(f"Created model '{self.config.model_name}' from registry")
+            except KeyError:
+                # Model not in registry, try torchvision
+                import torchvision.models as models
+
+                if hasattr(models, self.config.model_name):
+                    model_fn = getattr(models, self.config.model_name)
+                    # Prepare model kwargs, avoiding duplicate 'pretrained'
+                    model_kwargs = self.config.model_config.copy()
+                    if "pretrained" not in model_kwargs:
+                        model_kwargs["pretrained"] = self.config.pretrained
+                    self.model = model_fn(**model_kwargs)
+                    logger.info(f"Created model '{self.config.model_name}' from torchvision")
+                else:
+                    raise ValueError(f"Unknown model: {self.config.model_name}")
+
+        # Move to device (handle "auto" device)
+        device_str = self.config.device
+        if device_str == "auto":
+            device_str = "cuda" if torch.cuda.is_available() else "cpu"
+            # Update config so all code uses the resolved device
+            object.__setattr__(self.config, "device", device_str)
+        device = torch.device(device_str)
+        if self.config.model_name.lower() == "hf_causal_lm":
+            # For HuggingFace causal LMs we may be using accelerate's device_map.
+            # Only move the model if no explicit device_map was provided.
+            device_map = self.config.model_config.get("device_map") or self.config.model_config.get("hf_device_map")
+            if device_map is None:
+                self.model = self.model.to(device)
+        else:
+            self.model = self.model.to(device)
+
+        # Wrap model
+        wrapper_kwargs = {"tracked_layers": self.config.tracked_layers}
+
+        # Add CNN mode if specified
+        if hasattr(self.config, "cnn_mode"):
+            wrapper_kwargs["cnn_mode"] = self.config.cnn_mode
+
+        self.wrapped_model = ModelWrapper(self.model, **wrapper_kwargs)
+
+        logger.info(f"Initialized model: {self.config.model_name}")
+        logger.info(f"Tracked layers: {self.wrapped_model.tracked_layers}")
+
+        if self.config.model_name.lower() == "hf_causal_lm":
+            model_id = self.config.model_config.get("model_id")
+            if model_id is None:
+                raise ValueError("model_id must be set in model_config for hf_causal_lm")
+            try:
+                from transformers import AutoTokenizer
+
+                self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+                logger.info(f"Loaded tokenizer for HF model '{model_id}'")
+            except ImportError:
+                logger.warning("transformers not installed; tokenizer not loaded")
+                self.tokenizer = None
+
+    def _initialize_dataset(self):
+        """Initialize dataset and data loader."""
+        # Get dataset class from registry (not instance). Some experiment types
+        # (e.g., LLM alignment) manage their own text datasets, so we fall back
+        # gracefully if the dataset is not registered.
+        try:
+            dataset_class = DATASET_REGISTRY.get(self.config.dataset_name)
+        except KeyError:
+            if self.config.experiment_type in {"llm_alignment", "llm_supernode", "llm"}:
+                logger.info(
+                    f"No registry dataset found for '{self.config.dataset_name}' in "
+                    f"LLM experiment '{self.config.experiment_type}'; dataset will "
+                    f"be initialized by the experiment class."
+                )
+                self.dataset = None
+                self.data_loader = None
+                return
+            # For non-LLM experiments, surface the original error
+            raise
+
+        # Debug logging
+        logger.info(f"Creating dataset with data_path: {self.config.data_path}")
+        logger.info(f"Dataset config: {self.config.dataset_config}")
+
+        # Prepare dataset kwargs, avoiding duplicate 'data_path'
+        dataset_kwargs = self.config.dataset_config.copy()
+        # Remove 'name' from kwargs if it exists to avoid conflict
+        dataset_kwargs.pop("name", None)
+        # Remove DataLoader parameters that don't belong in dataset initialization
+        dataset_kwargs.pop("batch_size", None)
+        dataset_kwargs.pop("num_workers", None)
+        # Remove other parameters that torchvision datasets don't accept
+        dataset_kwargs.pop("augmentation", None)
+        dataset_kwargs.pop("train_split", None)
+        dataset_kwargs.pop("val_split", None)
+        dataset_kwargs.pop("augmentation_config", None)
+        dataset_kwargs.pop("normalize", None)
+        # Keep download parameter as it's needed for torchvision datasets
+        if self.config.data_path is not None and "data_path" not in dataset_kwargs:
+            dataset_kwargs["data_path"] = self.config.data_path
+
+        # If model (e.g., HF model) has a tokenizer, include it
+        if hasattr(self, "tokenizer") and self.tokenizer is not None:
+            dataset_kwargs["tokenizer"] = self.tokenizer
+
+        # Create dataset
+        self.dataset = dataset_class(**dataset_kwargs)
+
+        # Create data loader
+        self.data_loader = create_distributed_loader(
+            self.dataset, batch_size=self.config.batch_size, num_workers=self.config.num_workers, pin_memory=True
+        )
+
+        logger.info(f"Initialized dataset: {self.config.dataset_name}")
+        # Some datasets (e.g., streaming/IterableDataset) do not implement __len__.
+        # Avoid crashing LLM runs that use streaming C4.
+        try:
+            logger.info(f"Dataset size: {len(self.dataset)}")
+        except (TypeError, NotImplementedError):
+            logger.info("Dataset size: unknown (no __len__)")
+
+    def _initialize_metrics(self):
+        """Initialize metrics."""
+        import inspect
+
+        from nodelens.core.registry import METRIC_REGISTRY
+
+        # Combine primary metrics and alignment-specific methods so that
+        # alignment-only metrics (e.g., synergy / redundancy) are also
+        # instantiated and available during training.
+        metric_names = set(self.config.metrics)
+        alignment_methods = getattr(self.config, "alignment_methods", None)
+        if alignment_methods:
+            metric_names.update(alignment_methods)
+
+        for metric_name in metric_names:
+            # Get the metric class from registry
+            metric_class = METRIC_REGISTRY.get(metric_name)
+            metric_config = self.config.metric_configs.get(metric_name, {}).copy()
+
+            # Get the parameters accepted by this metric's __init__
+            try:
+                sig = inspect.signature(metric_class.__init__)
+                accepted_params = set(sig.parameters.keys()) - {"self"}
+                # Check if metric accepts **kwargs
+                accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            except (ValueError, TypeError):
+                # If we can't inspect, assume it accepts everything
+                accepted_params = set()
+                accepts_kwargs = True
+
+            # Only add global options if the metric accepts them
+            if accepts_kwargs or "scale_by_norm" in accepted_params:
+                if "scale_by_norm" not in metric_config:
+                    metric_config["scale_by_norm"] = self.config.scale_by_norm
+            if accepts_kwargs or "force_cpu" in accepted_params:
+                if "force_cpu" not in metric_config:
+                    metric_config["force_cpu"] = self.config.force_cpu_for_large_metric_ops
+            if accepts_kwargs or "aggregation_op" in accepted_params:
+                if "aggregation_op" not in metric_config and "cnn" in metric_name.lower():
+                    metric_config["aggregation_op"] = self.config.cnn_rq_aggregation_op
+
+            # Filter out any config keys not accepted by this metric
+            if not accepts_kwargs and accepted_params:
+                metric_config = {k: v for k, v in metric_config.items() if k in accepted_params}
+
+            # Create metric instance
+            self.metrics[metric_name] = metric_class(**metric_config)
+
+        logger.info(f"Initialized metrics: {list(self.metrics.keys())}")
+
+    def compute_metrics(
+        self, inputs: torch.Tensor, targets: Optional[torch.Tensor] = None, return_all: bool = False
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Compute all configured metrics.
+
+        Args:
+            inputs: Input data
+            targets: Target labels (optional)
+            return_all: Whether to return all metric values or just means
+
+        Returns:
+            Dictionary mapping metric names to layer results
+        """
+        results = {}
+
+        # Forward pass with activation tracking
+        outputs, activations = self.wrapped_model.forward_with_activations(inputs)
+
+        # Get weights
+        weights = self.wrapped_model.get_layer_weights()
+
+        # Compute each metric
+        for metric_name, metric in self.metrics.items():
+            metric_results = {}
+
+            for layer_name in self.wrapped_model.tracked_layers:
+                # Get layer inputs and weights
+                layer_inputs = activations.get(f"{layer_name}_input")
+                layer_weights = weights.get(layer_name)
+
+                if layer_inputs is None or layer_weights is None:
+                    continue
+
+                # Compute metric
+                try:
+                    if hasattr(metric, "requires_outputs") and metric.requires_outputs:
+                        # Some metrics need outputs
+                        scores = metric.compute(
+                            inputs=layer_inputs, weights=layer_weights, outputs=activations.get(f"{layer_name}_output") or activations.get(layer_name)
+                        )
+                    else:
+                        scores = metric.compute(inputs=layer_inputs, weights=layer_weights)
+
+                    if return_all:
+                        metric_results[layer_name] = scores
+                    else:
+                        metric_results[layer_name] = scores.mean().item()
+
+                except Exception as e:
+                    logger.error(f"Error computing {metric_name} for {layer_name}: {e}")
+                    metric_results[layer_name] = float("nan")
+
+            results[metric_name] = metric_results
+
+        return results
+
+    def save_checkpoint(self, step: int, metrics: Optional[Dict[str, Any]] = None):
+        """
+        Save experiment checkpoint.
+
+        Args:
+            step: Current step/iteration
+            metrics: Optional metrics to save
+        """
+        checkpoint = {
+            "step": step,
+            "model_state_dict": self.model.state_dict(),
+            "config": self.config.to_dict(),
+            "metrics": metrics or {},
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        # Save checkpoint
+        checkpoint_path = Path(self.config.checkpoint_dir) / f"{self.config.name}_step_{step}.pt"
+        torch.save(checkpoint, checkpoint_path)
+
+        # Track in results
+        self.results["checkpoints"].append({"step": step, "path": str(checkpoint_path), "metrics": metrics})
+
+        logger.info(f"Saved checkpoint at step {step}")
+
+    def load_checkpoint(self, checkpoint_path: Union[str, Path]):
+        """Load experiment checkpoint."""
+        checkpoint = torch.load(checkpoint_path, map_location=self.config.device)
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        logger.info(f"Loaded checkpoint from {checkpoint_path}")
+        return checkpoint
+
+    def log_metrics(self, step: int, metrics: Dict[str, Any]):
+        """
+        Log metrics.
+
+        Args:
+            step: Current step
+            metrics: Metrics to log
+        """
+        # Store in results
+        if step not in self.results["metrics"]:
+            self.results["metrics"][step] = {}
+        self.results["metrics"][step].update(metrics)
+
+        # Log to console
+        logger.info(f"Step {step}: {metrics}")
+
+        # Log to wandb if configured
+        if self.config.wandb_project:
+            try:
+                import wandb
+
+                wandb.log(metrics, step=step)
+            except ImportError:
+                logger.warning("wandb not installed, skipping wandb logging")
+
+    def save_results(self):
+        """Save experiment results."""
+        self.results["end_time"] = datetime.now().isoformat()
+        results_path = Path(self.config.log_dir) / f"{self.config.name}_results.json"
+
+        # Convert tensors to lists for JSON serialization
+        serializable_results = self._make_serializable(self.results)
+
+        with open(results_path, "w") as f:
+            json.dump(serializable_results, f, indent=2)
+
+        logger.info(f"Saved results to {results_path}")
+
+    def _make_serializable(self, obj):
+        """Convert PyTorch tensors and numpy arrays to lists for JSON serialization."""
+        import numpy as np
+
+        if isinstance(obj, torch.Tensor):
+            return obj.cpu().tolist()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        elif isinstance(obj, dict):
+            return {k: self._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_serializable(v) for v in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._make_serializable(v) for v in obj)
+        else:
+            return obj
+
+    def setup(self) -> None:
+        """Setup the experiment (implementation of abstract method from CoreBaseExperiment)."""
+        # Setup is already done in __init__, so this is just to satisfy the abstract method
+        pass
+
+    @abstractmethod
+    def run(self) -> Dict[str, Any]:
+        """
+        Run the experiment.
+
+        Returns:
+            Experiment results
+        """
+        pass

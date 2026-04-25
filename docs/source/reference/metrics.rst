@@ -79,7 +79,7 @@ Spectral Metrics
      - Distribution of eigenvalues
 
 Task-Specific Metrics
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -99,7 +99,7 @@ Usage Example
 
 .. code-block:: python
 
-   from alignment.metrics import get_metric
+   from nodelens.metrics import get_metric
 
    # Single metric
    metric = get_metric("rayleigh_quotient")

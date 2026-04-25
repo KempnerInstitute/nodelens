@@ -14,7 +14,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig, CompositePruning
+from nodelens.pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig, CompositePruning
 
 # ---------------------------------------------------------------------------
 # Helpers

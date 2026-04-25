@@ -1,0 +1,75 @@
+"""
+Configuration management for the Neural Network Alignment framework.
+
+This module provides:
+- Legacy config loading (load_config)
+- Unified config schema (UnifiedConfig)
+- Config validation
+
+Usage:
+    # Legacy (still works)
+    from nodelens.configs import load_config
+    config = load_config("path/to/config.yaml")
+
+    # New unified config (recommended)
+    from nodelens.configs import load_unified_config, UnifiedConfig
+    config = load_unified_config("path/to/config.yaml")
+
+    # Programmatic config
+    from nodelens.configs import UnifiedConfig, ExperimentConfig
+    config = UnifiedConfig(
+        experiment=ExperimentConfig(name="my_exp", type="cluster_analysis"),
+        ...
+    )
+"""
+
+from .config_loader import load_config, save_config
+from .config_validator import validate_config
+
+# Unified config system
+from .unified_config import (  # Main config class; Sub-config classes; Loading functions
+    CalibrationConfig,
+    CascadeConfig,
+    ClusteringConfig,
+    DatasetConfig,
+    EvaluationConfig,
+    ExperimentConfig,
+    HaloConfig,
+    MetricItemConfig,
+    MetricsConfig,
+    ModelConfig,
+    OutputConfig,
+    PruningConfig,
+    PruningMethodConfig,
+    SupernodeConfig,
+    UnifiedConfig,
+    VisualizationConfig,
+    create_config_template,
+    load_unified_config,
+)
+
+__all__ = [
+    # Legacy
+    "load_config",
+    "save_config",
+    "validate_config",
+    # Unified config
+    "UnifiedConfig",
+    "ExperimentConfig",
+    "ModelConfig",
+    "DatasetConfig",
+    "CalibrationConfig",
+    "MetricsConfig",
+    "MetricItemConfig",
+    "ClusteringConfig",
+    "SupernodeConfig",
+    "HaloConfig",
+    "CascadeConfig",
+    "PruningConfig",
+    "PruningMethodConfig",
+    "EvaluationConfig",
+    "VisualizationConfig",
+    "OutputConfig",
+    "load_unified_config",
+    "create_config_template",
+]

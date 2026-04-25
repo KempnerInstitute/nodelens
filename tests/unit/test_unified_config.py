@@ -5,7 +5,7 @@ Tests for configs/unified_config.py: unified config dataclasses and helpers.
 import pytest
 import yaml
 
-from alignment.configs.unified_config import (
+from nodelens.configs.unified_config import (
     CalibrationConfig,
     CascadeConfig,
     ClusteringConfig,

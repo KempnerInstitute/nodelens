@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.models.hooks import HookManager, PersistentHookManager
+from nodelens.models.hooks import HookManager, PersistentHookManager
 
 
 class SimpleModel(nn.Module):

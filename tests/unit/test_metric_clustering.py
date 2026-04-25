@@ -11,7 +11,7 @@ Tests validate:
 import numpy as np
 import pytest
 
-from alignment.analysis.clustering.metric_clustering import ClusterResult, MetricSpaceClustering
+from nodelens.analysis.clustering.metric_clustering import ClusterResult, MetricSpaceClustering
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -5,7 +5,7 @@ Tests for metrics/conditional_metrics.py: class-conditioned metrics.
 import pytest
 import torch
 
-from alignment.metrics.conditional_metrics import ConditionalActivationNorm, ConditionalMIGaussian, ConditionalRayleighQuotient, DeltaRQ, MIAboutClass
+from nodelens.metrics.conditional_metrics import ConditionalActivationNorm, ConditionalMIGaussian, ConditionalRayleighQuotient, DeltaRQ, MIAboutClass
 
 # ---------------------------------------------------------------------------
 # Helpers

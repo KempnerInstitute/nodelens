@@ -1,6 +1,8 @@
-# Cluster Analysis Experiment Configurations
+# Vision Clustering And Pruning Configurations
 
-This directory contains configurations for **cluster-based neural network analysis** - a general framework that works on any architecture.
+This directory contains reusable configs for vision channel analysis, metric
+clustering, halo-style cross-layer analysis, cascade tests, and structured
+channel pruning.
 
 ## Overview
 
@@ -14,18 +16,24 @@ The cluster-based analysis pipeline identifies functional types of neurons/chann
 
 ## Supported Architectures
 
-- **Vision**: ResNet, VGG, MobileNet, EfficientNet, etc.
-- **LLMs**: Can be adapted for FFN analysis (see LLM configs)
-- **Any model** with Conv2d or Linear layers
+- ResNet, VGG, AlexNet, MobileNetV2, and related ConvNet models.
+- Any model with Conv2d or Linear layers can usually be adapted by adding a config.
+- LLM FFN analysis uses the separate configs in `configs/prune_llm/`.
 
 ## Configuration Files
 
 | Config | Model | Dataset | Purpose |
 |--------|-------|---------|---------|
 | `resnet18_cifar10_full.yaml` | ResNet-18 | CIFAR-10 | Full analysis |
+| `resnet18_cifar10_unified.yaml` | ResNet-18 | CIFAR-10 | Unified-format full analysis |
+| `resnet18_cifar100_unified.yaml` | ResNet-18 | CIFAR-100 | Cross-dataset check |
 | `vgg16_cifar10_full.yaml` | VGG-16-BN | CIFAR-10 | Full analysis |
 | `mobilenetv2_cifar10_full.yaml` | MobileNetV2 | CIFAR-10 | Full analysis |
 | `resnet50_imagenet100.yaml` | ResNet-50 | ImageNet-100 | Large-scale analysis |
+| `alexnet_imagenet1k_unified_fastprune.yaml` | AlexNet | ImageNet-1k | Fast pruning-oriented run |
+
+Large private sweep grids are intentionally not kept here. This directory is
+for reusable public examples and representative benchmark configs.
 
 ## Running Experiments
 
@@ -33,16 +41,16 @@ Use the unified `run_experiment.py` script (same as all other experiments):
 
 ```bash
 # Run full analysis (experiment_type is read from config)
-python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
 
 # Override device
-python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml --device cuda:1
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml --device cuda:1
 
 # Override seed for reproducibility study
-python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml --seed 123
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml --seed 123
 
 # Specify output directory
-python scripts/run_experiment.py --config configs/cluster_analysis/vgg16_cifar10_full.yaml \
+python scripts/run_experiment.py --config configs/vision_prune/vgg16_cifar10_full.yaml \
     --output-dir results/cluster_analysis/vgg16_run1
 ```
 
@@ -128,7 +136,15 @@ The 4-cluster structure identifies:
 | **Synergistic** | Mod RQ, Low Red, High Syn | Preserve pairs |
 | **Background** | Low on all metrics | Safe to remove |
 
-## Related Papers
+## Choosing A Vision Config
 
-- Vision paper: `drafts/alignment_notes/alignment_red.tex`
-- LLM paper: `drafts/LLM_prune/scar_paper_icml_v4.tex`
+| Need | Recommended config |
+|------|--------------------|
+| Fast local check | `configs/examples/resnet_pruning.yaml` |
+| Full CIFAR-10 clustering and pruning | `resnet18_cifar10_unified.yaml` |
+| Compare architecture effects | `vgg16_cifar10_unified.yaml`, `mobilenetv2_cifar10_unified.yaml` |
+| Test larger input/model scale | `resnet50_imagenet100_unified.yaml` |
+| Run fast pruning without full clustering detail | `alexnet_imagenet1k_unified_fastprune.yaml` |
+
+Use the `_unified.yaml` files for new work. The `_full.yaml` files are kept for
+compatibility with older experiments.

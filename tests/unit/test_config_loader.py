@@ -7,7 +7,7 @@ import json
 import pytest
 import yaml
 
-from alignment.configs.config_loader import (
+from nodelens.configs.config_loader import (
     METRIC_ORIGINAL_TO_UNIFIED,
     METRIC_UNIFIED_TO_ORIGINAL,
     _convert_unified_to_original,
@@ -251,7 +251,7 @@ class TestLoadSaveConfig:
             load_config(fpath)
 
     def test_save_yaml(self, tmp_path):
-        from alignment.experiments.base import ExperimentConfig
+        from nodelens.experiments.base import ExperimentConfig
 
         config = ExperimentConfig(name="save_test")
         fpath = tmp_path / "saved.yaml"
@@ -261,7 +261,7 @@ class TestLoadSaveConfig:
         assert loaded["name"] == "save_test"
 
     def test_save_json(self, tmp_path):
-        from alignment.experiments.base import ExperimentConfig
+        from nodelens.experiments.base import ExperimentConfig
 
         config = ExperimentConfig(name="save_json")
         fpath = tmp_path / "saved.json"
@@ -270,7 +270,7 @@ class TestLoadSaveConfig:
         assert loaded["name"] == "save_json"
 
     def test_save_unsupported_format(self, tmp_path):
-        from alignment.experiments.base import ExperimentConfig
+        from nodelens.experiments.base import ExperimentConfig
 
         config = ExperimentConfig(name="test")
         with pytest.raises(ValueError, match="Unsupported"):

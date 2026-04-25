@@ -1,17 +1,17 @@
 Data API Reference
 ==================
 
-This section documents the data handling components of the alignment framework.
+This section documents the data handling components of NodeLens.
 
 Dataset Wrappers
 ----------------
 
-.. automodule:: alignment.data.datasets
+.. automodule:: nodelens.data.datasets
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: alignment.data.datasets.DatasetWrapper
+.. autoclass:: nodelens.data.datasets.DatasetWrapper
    :members:
    :special-members: __init__
    :undoc-members:
@@ -19,7 +19,7 @@ Dataset Wrappers
 Data Processing
 ---------------
 
-.. automodule:: alignment.data.processing
+.. automodule:: nodelens.data.processing
    :members:
    :undoc-members:
    :show-inheritance:
@@ -27,23 +27,23 @@ Data Processing
 Batch Processing
 ~~~~~~~~~~~~~~~~
 
-.. automodule:: alignment.data.processing.batch
+.. automodule:: nodelens.data.processing.batch
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: alignment.data.processing.batch.BatchMetricProcessor
+.. autoclass:: nodelens.data.processing.batch.BatchMetricProcessor
    :members:
    :undoc-members:
 
-.. autoclass:: alignment.data.processing.batch.StreamingMetricComputer
+.. autoclass:: nodelens.data.processing.batch.StreamingMetricComputer
    :members:
    :undoc-members:
 
 Data Utilities
 --------------
 
-.. automodule:: alignment.data.utils
+.. automodule:: nodelens.data.utils
    :members:
    :undoc-members:
    :show-inheritance:

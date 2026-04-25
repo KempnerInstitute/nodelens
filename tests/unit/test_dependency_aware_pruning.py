@@ -5,7 +5,7 @@ Unit tests for dependency-aware structured pruning.
 import torch
 import torch.nn as nn
 
-from alignment.pruning.dependency_aware import DependencyAwarePruning
+from nodelens.pruning.dependency_aware import DependencyAwarePruning, DependencyGraph
 
 
 class _TinyCNN(nn.Module):
@@ -23,6 +23,21 @@ class _TinyCNN(nn.Module):
         x = self.conv1(x)
         x = self.conv2(x)
         return x
+
+
+class _ResidualLikeBlock(nn.Module):
+    """Small module with residual-compatible convolutions for graph metadata tests."""
+
+    def __init__(self):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(4, 4, kernel_size=3, padding=1, bias=False),
+            nn.ReLU(),
+            nn.Conv2d(4, 4, kernel_size=3, padding=1, bias=False),
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
 
 
 class TestDependencyAwarePruning:
@@ -83,3 +98,13 @@ class TestDependencyAwarePruning:
             assert "Invalid pruning plan" in str(e)
         else:
             assert False, "Expected ValueError due to invalid pruning plan"
+
+    def test_marks_residual_compatible_conv_candidates(self):
+        """DependencyGraph records same-parent, channel-preserving conv candidates."""
+        graph = DependencyGraph(_ResidualLikeBlock())
+
+        first = graph.graph["block.0"]
+        second = graph.graph["block.2"]
+
+        assert first.skip_connection_with == ["block.2"]
+        assert second.skip_connection_with == ["block.0"]

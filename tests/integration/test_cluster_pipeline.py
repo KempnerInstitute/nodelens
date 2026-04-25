@@ -10,10 +10,10 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.analysis.cascade_analysis import CascadeAnalysis
-from alignment.analysis.clustering.cross_layer_halo import CrossLayerHaloAnalysis
-from alignment.analysis.clustering.metric_clustering import MetricSpaceClustering
-from alignment.pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig
+from nodelens.analysis.cascade_analysis import CascadeAnalysis
+from nodelens.analysis.clustering.cross_layer_halo import CrossLayerHaloAnalysis
+from nodelens.analysis.clustering.metric_clustering import MetricSpaceClustering
+from nodelens.pruning.strategies.cluster_aware import ClusterAwarePruning, ClusterAwarePruningConfig
 
 # ---------------------------------------------------------------------------
 # Tiny model

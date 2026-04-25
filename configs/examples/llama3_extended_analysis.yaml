@@ -8,7 +8,8 @@
 # 3. Cross-layer redundancy (redundancy with previous layer)
 # 4. Layer transition efficiency (new information per layer)
 #
-# Based on theoretical framework in drafts/alignment_notes/alignment_red.tex
+# Use this as a heavier LLM analysis example after the smaller llm_alignment
+# example is working in your environment.
 # ============================================================================
 
 experiment:

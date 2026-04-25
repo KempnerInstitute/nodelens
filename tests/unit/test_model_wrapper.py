@@ -5,8 +5,8 @@ Tests for models/base.py: BaseModelWrapper, and models/hooks.py: HookManager.
 import torch
 import torch.nn as nn
 
-from alignment.models.base import BaseModelWrapper
-from alignment.models.hooks import HookManager
+from nodelens.models.base import BaseModelWrapper
+from nodelens.models.hooks import HookManager
 
 # ---------------------------------------------------------------------------
 # Helpers

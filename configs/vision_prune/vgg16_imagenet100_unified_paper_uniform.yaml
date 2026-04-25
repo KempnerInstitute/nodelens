@@ -164,7 +164,7 @@ visualization:
   sensitivity_curves: true
 
 output:
-  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red/PAPER"
+  base_dir: "/path/to/results/losslens_vision/PAPER"
   dir: "./results/vision/vgg16_imagenet100"
   save_metrics: true
   save_clusters: true

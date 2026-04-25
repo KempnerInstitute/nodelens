@@ -1,6 +1,6 @@
 import torch
 
-from alignment.metrics.information.synergy_continuous import SynergyContinuousTarget
+from nodelens.metrics.information.synergy_continuous import SynergyContinuousTarget
 
 
 def test_synergy_continuous_target_aggregates_unfolded_outputs(device):

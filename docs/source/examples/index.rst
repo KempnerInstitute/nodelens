@@ -1,7 +1,7 @@
 Examples and Tutorials
 ======================
 
-This section contains examples and tutorials for using the alignment framework.
+This section contains examples and tutorials for using NodeLens.
 
 Quick Start Examples
 --------------------
@@ -109,7 +109,7 @@ Loading and Running Experiments
 
 .. code-block:: python
 
-   from alignment.experiments import GeneralAlignmentExperiment
+   from nodelens.experiments import GeneralAlignmentExperiment
 
    # From configuration file
    experiment = GeneralAlignmentExperiment.from_yaml("config.yaml")
@@ -120,7 +120,7 @@ Computing Metrics on a Model
 
 .. code-block:: python
 
-   from alignment import ModelWrapper, get_metric
+   from nodelens import ModelWrapper, get_metric
 
    wrapped_model = ModelWrapper(model)
    metric = get_metric("rayleigh_quotient")()
@@ -139,7 +139,7 @@ Batch Processing Multiple Metrics
 
 .. code-block:: python
 
-   from alignment.dataops.processing import BatchMetricProcessor
+   from nodelens.dataops.processing import BatchMetricProcessor
 
    processor = BatchMetricProcessor(
        metrics=["rayleigh_quotient", "mutual_information_gaussian"],

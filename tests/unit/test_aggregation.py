@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from alignment.analysis.aggregation.layers import LayerAggregator
-from alignment.analysis.aggregation.metrics import MetricAggregator
-from alignment.analysis.aggregation.results import ResultAggregator
+from nodelens.analysis.aggregation.layers import LayerAggregator
+from nodelens.analysis.aggregation.metrics import MetricAggregator
+from nodelens.analysis.aggregation.results import ResultAggregator
 
 # =========================================================================
 # MetricAggregator
