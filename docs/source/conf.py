@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../../src"))
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "LossLens"
+project = "NodeLens"
 copyright = f"{datetime.now().year}"
 author = "Kempner Institute"
 release = "0.2.0"

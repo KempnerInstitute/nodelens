@@ -181,7 +181,7 @@ The cross-layer analysis traces how supernodes in layer N influence layer N+1:
 ## Programmatic Usage
 
 ```python
-from alignment.experiments import LLMAlignmentExperiment
+from nodelens.experiments import LLMAlignmentExperiment
 
 experiment = LLMAlignmentExperiment(config)
 experiment.setup()
@@ -202,7 +202,7 @@ perplexity = experiment.evaluate_perplexity("wikitext", "test", num_samples=100)
 ## Visualization
 
 ```python
-from alignment.analysis.visualization import UnifiedVisualizer
+from nodelens.analysis.visualization import UnifiedVisualizer
 
 viz = UnifiedVisualizer()
 

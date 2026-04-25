@@ -4,7 +4,7 @@ This folder is the public-release entry point for the paper:
 
 > Supernodes and Halos: Loss-Critical Hubs in LLM Feed-Forward Layers
 
-The reusable implementation lives in the main `alignment` package. This project
+The reusable implementation lives in the main `nodelens` package. This project
 folder records the paper-specific configs, artifact layout, and release process.
 
 ## What To Release
@@ -26,7 +26,7 @@ Install the package:
 
 ```bash
 conda env create -f environment.yml
-conda activate alignment
+conda activate nodelens
 pip install -e .
 ```
 
@@ -109,7 +109,7 @@ Do not upload:
 ## Release Checklist
 
 - `python -m pip install -e . --no-deps --dry-run` succeeds.
-- `PYTHONPATH=src python -c "import alignment; print(alignment.__version__)"`
+- `PYTHONPATH=src python -c "import nodelens; print(nodelens.__version__)"`
   succeeds.
 - The artifact bundle has no `.pyc`, `__pycache__`, `.aux`, `.log`, `.out`,
   model checkpoint, or raw dataset files.

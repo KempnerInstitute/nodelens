@@ -1,9 +1,9 @@
-LossLens Documentation
+NodeLens Documentation
 ======================
 
-LossLens is a research codebase for loss-sensitive neural network analysis and
-structured pruning. The Python package is imported as ``alignment`` for
-backward compatibility with existing configs and scripts.
+NodeLens is a research codebase for node- and channel-level metrics,
+interpretability analysis, and structured interventions. The Python package is
+imported as ``nodelens``.
 
 Overview
 --------
@@ -30,8 +30,8 @@ Quick Start
 
 .. code-block:: python
 
-    from alignment.experiments import GeneralAlignmentExperiment
-    from alignment.configs.config_loader import load_config
+    from nodelens.experiments import GeneralAlignmentExperiment
+    from nodelens.configs.config_loader import load_config
 
     config = load_config('configs/examples/mnist_basic.yaml')
     experiment = GeneralAlignmentExperiment(config)

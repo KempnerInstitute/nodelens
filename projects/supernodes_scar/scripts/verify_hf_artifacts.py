@@ -25,12 +25,9 @@ FORBIDDEN_SUFFIXES = (
 )
 
 PRIVATE_PATTERNS = (
-    b"/n/",
-    b"holylabs",
-    b"holylfs",
-    b"kempner_dev",
-    b"Users/hsafaai",
-    b"/home13/hsafaai",
+    ("/" + "n/").encode(),
+    ("Users" + "/").encode(),
+    ("/" + "home").encode(),
     b"HF_TOKEN",
     b"WANDB_API_KEY",
 )

@@ -3,9 +3,9 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "alignment"
+name = "nodelens"
 version = "0.2.0"
-description = "Loss-sensitive neural network analysis and structured pruning tools."
+description = "Node and channel metrics for neural network interpretability, importance, and intervention studies."
 authors = [
     { name = "Research and Engineering at Kempner Institute", email = "kempner-research-engineering@g.harvard.edu" },
 ]
@@ -30,7 +30,7 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["alignment*"]
+include = ["nodelens*"]
 
 
 [project.optional-dependencies]
@@ -58,7 +58,7 @@ train = [
     "msgspec>=0.14.0",
 ]
 all = [
-    "alignment[dev,train]",
+    "nodelens[dev,train]",
 ]
 
 docs = [
@@ -76,9 +76,9 @@ docs = [
 
 
 [project.urls]
-Homepage = "https://github.com/KempnerInstitute/alignment"
-Repository = "https://github.com/KempnerInstitute/alignment"
-Documentation = "https://github.com/KempnerInstitute/alignment#readme"
+Homepage = "https://github.com/KempnerInstitute/nodelens"
+Repository = "https://github.com/KempnerInstitute/nodelens"
+Documentation = "https://github.com/KempnerInstitute/nodelens#readme"
 Artifacts = "https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts"
 
 [tool.black]
@@ -96,7 +96,7 @@ extend-ignore = ["E402", "E721", "E722"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__ files (used for exports)
-"src/alignment/external/**" = ["E721", "E722"]  # Allow in external code
+"src/nodelens/external/**" = ["E721", "E722"]  # Allow in external code
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

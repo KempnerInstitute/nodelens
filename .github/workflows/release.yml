@@ -36,15 +36,15 @@ jobs:
       with:
         files: dist/*
         body: |
-          Public research-code release for LossLens.
+          Public research-code release for NodeLens.
 
-          The Python package is currently imported as `alignment`.
+          The Python package is imported as `nodelens`.
 
           ## Install From Source
 
           ```bash
-          git clone https://github.com/KempnerInstitute/alignment.git
-          cd alignment
+          git clone https://github.com/KempnerInstitute/nodelens.git
+          cd nodelens
           pip install -e .
           ```
 

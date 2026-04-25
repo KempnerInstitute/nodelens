@@ -1,44 +1,70 @@
 # Configuration Files
 
-## Structure
-
-```
-configs/
-├── template.yaml              # Complete template with all options
-├── unified_template.yaml      # Unified format template
-├── vision_prune/              # Vision model pruning configs
-|   ├── resnet18_cifar10_full.yaml
-|   ├── resnet18_cifar10_unified.yaml  # Unified format version
-|   ├── resnet50_imagenet100.yaml
-|   ├── vgg16_cifar10_full.yaml
-|   └── mobilenetv2_cifar10_full.yaml
-├── prune_llm/                 # LLM pruning configs
-|   ├── llama3_8b_full.yaml
-|   ├── llama3_8b_unified.yaml  # Unified format version
-|   ├── llama2_7b_full.yaml
-|   ├── mistral_7b_full.yaml
-|   └── qwen2_7b_full.yaml
-└── examples/                  # Example configs
-    ├── mnist_basic.yaml
-    ├── resnet_pruning.yaml
-    └── llm_alignment.yaml
-```
-
-## Usage
+NodeLens experiments are driven by YAML configs. The same runner is used for
+small examples, vision pruning studies, and LLM supernode/SCAR experiments:
 
 ```bash
-python scripts/run_experiment.py --config configs/cluster_analysis/resnet18_cifar10_full.yaml
-python scripts/run_experiment.py --config configs/paper/llama3_8b_full.yaml
-python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+python scripts/run_experiment.py --config path/to/config.yaml
 ```
+
+The Python package is imported as `nodelens`.
+
+## Directory Map
+
+```text
+configs/
+|-- template.yaml              # Full legacy-format reference
+|-- unified_template.yaml      # Unified-format reference
+|-- examples/                  # Small runnable examples and smoke tests
+|-- vision_prune/              # Vision clustering, halo, and channel pruning
+`-- prune_llm/                 # LLM supernode, SCAR, and paper-scale configs
+```
+
+Large private sweep grids are not kept in the public config tree. Public
+release material for a paper lives under `projects/<project_name>/`; reusable
+experiment configs live here.
+
+## Which Config Should I Use?
+
+| Goal | Start with |
+|------|------------|
+| Quick install check on MNIST | `configs/examples/mnist_basic.yaml` |
+| Small vision pruning example | `configs/examples/resnet_pruning.yaml` |
+| Vision metric clustering and halo analysis | `configs/vision_prune/resnet18_cifar10_unified.yaml` |
+| Larger vision pruning benchmark | `configs/vision_prune/resnet50_imagenet100_unified.yaml` |
+| Minimal LLM supernode example | `configs/examples/llm_alignment.yaml` |
+| Main 8B LLM SCAR suite | `configs/prune_llm/llama3_8b_unified.yaml` |
+| Cross-model 7B/8B LLM checks | `configs/prune_llm/{llama2,mistral,qwen2}_7b_unified.yaml` |
+| 70B mechanism check | `configs/prune_llm/llama3_70b_scale_mechanism.yaml` |
+| 70B structured pruning curves | `configs/prune_llm/llama3_70b_scale_pruning_curves.yaml` |
+| OLMo checkpoint trajectory | `configs/prune_llm/olmo2_7b_ckpt_template.yaml` |
 
 ## Experiment Types
 
-| Type | Description |
-|------|-------------|
-| `alignment_analysis` | General alignment metrics |
-| `llm_alignment` | LLM supernode/SCAR analysis |
-| `cluster_analysis` | Metric-space clustering with halos |
+| Type | Used for | Typical configs |
+|------|----------|-----------------|
+| `alignment_analysis` | General activation, alignment, and pruning analysis for small models | `configs/examples/*.yaml` |
+| `cluster_analysis` | Vision channel metrics, metric-space clustering, halo analysis, cascade tests, and structured pruning | `configs/vision_prune/*.yaml` |
+| `llm_alignment` | Hugging Face causal LMs, SCAR loss-proxy metrics, supernodes, halos, perplexity, and LLM structured pruning | `configs/prune_llm/*.yaml` |
+| `vision_synergy` | Older focused vision synergy experiments | `configs/examples/vision_synergy.yaml` |
+
+## Common Commands
+
+```bash
+# Quick smoke test
+python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+
+# Vision clustering and pruning
+python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_unified.yaml
+
+# LLM supernode and SCAR analysis
+python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
+
+# Override output location without editing the YAML
+python scripts/run_experiment.py \
+  --config configs/prune_llm/llama3_8b_unified.yaml \
+  --base-output-dir /path/to/results
+```
 
 ## Configuration Blocks
 
@@ -54,6 +80,10 @@ python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
 | `supernode` | Detection settings for LLMs |
 | `pruning` | Strategy, sparsity_levels, scoring |
 | `llm` | LLM-specific: scar_metrics, evaluate_perplexity |
+
+Not every block is used by every experiment type. Vision configs usually use
+`clustering`, `halo_analysis`, and `cascade_analysis`; LLM configs usually use
+`supernode`, `halo_analysis`, `llm`, and `pruning`.
 
 ## Metrics
 
@@ -95,23 +125,31 @@ cascade_analysis:
   n_remove_per_cluster: 5
 ```
 
-## LLM Configuration
+## Minimal LLM Configuration
 
 ```yaml
-experiment_type: llm_alignment
+experiment:
+  type: "llm_alignment"
 
-model_config:
+model:
+  name: "hf_causal_lm"
   model_id: "meta-llama/Llama-3.1-8B"
-  torch_dtype: "bfloat16"
+  dtype: "bfloat16"
 
-do_scar_metrics: true
-scar_num_samples: 100
+metrics:
+  scar:
+    enabled: true
+    num_samples: 64
+    max_length: 512
 
 supernode:
   enabled: true
   core_fraction: 0.01
   protect_core: true
 ```
+
+LLM configs require access to the model provider, enough GPU memory, and the
+right license acceptance for gated models.
 
 ## Unified Configuration Format
 
@@ -190,7 +228,7 @@ output:
 ### Loading Unified Configs
 
 ```python
-from alignment.configs import load_unified_config
+from nodelens.configs import load_unified_config
 
 # Works with both old and unified formats!
 config = load_unified_config("configs/vision_prune/resnet18_cifar10_unified.yaml")

@@ -5,7 +5,7 @@ Tests for pruning/dependency_aware.py: DependencyAwarePruning.
 import torch
 import torch.nn as nn
 
-from alignment.pruning.dependency_aware import DependencyAwarePruning
+from nodelens.pruning.dependency_aware import DependencyAwarePruning
 
 # ---------------------------------------------------------------------------
 # Helpers

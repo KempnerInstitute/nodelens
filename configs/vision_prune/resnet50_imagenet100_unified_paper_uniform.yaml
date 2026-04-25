@@ -170,7 +170,7 @@ visualization:
   sensitivity_curves: true
 
 output:
-  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red"
+  base_dir: "/path/to/results/losslens_vision"
   dir: "./results/vision/resnet50_imagenet100"
   save_metrics: true
   save_clusters: true

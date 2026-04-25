@@ -1,7 +1,7 @@
 Configuration Guide
 ===================
 
-This guide explains all configuration options available in LossLens.
+This guide explains all configuration options available in NodeLens.
 
 .. contents:: Table of Contents
    :local:
@@ -10,7 +10,7 @@ This guide explains all configuration options available in LossLens.
 Overview
 --------
 
-LossLens uses a hierarchical configuration system that allows fine-grained control over experiments, metrics, training, and analysis.
+NodeLens uses a hierarchical configuration system that allows fine-grained control over experiments, metrics, training, and analysis.
 
 Configuration can be specified via:
 
@@ -27,7 +27,7 @@ Using Python
 
 .. code-block:: python
 
-   from alignment.experiments.base import ExperimentConfig
+   from nodelens.experiments.base import ExperimentConfig
 
    config = ExperimentConfig(
        name="my_experiment",
@@ -55,7 +55,7 @@ Loading configuration:
 
 .. code-block:: python
 
-   from alignment.infrastructure.configuration import load_config
+   from nodelens.infrastructure.configuration import load_config
 
    config = load_config("config.yaml")
 
@@ -391,7 +391,7 @@ Weights & Biases Integration
 
    wandb_config = {
        "use_wandb": True,
-       "wandb_project": "alignment",
+       "wandb_project": "nodelens",
        "wandb_entity": "your-entity",
        "wandb_tags": ["experiment"],
        "wandb_notes": "Experiment notes",
@@ -500,7 +500,7 @@ The framework validates configurations:
 
 .. code-block:: python
 
-   from alignment.infrastructure.configuration import validate_config
+   from nodelens.infrastructure.configuration import validate_config
 
    # Validate configuration
    errors = validate_config(config)
@@ -508,7 +508,7 @@ The framework validates configurations:
        print("Configuration errors:", errors)
 
    # Auto-fix common issues
-   from alignment.infrastructure.configuration import fix_config
+   from nodelens.infrastructure.configuration import fix_config
 
    fixed_config = fix_config(config)
 
@@ -525,5 +525,5 @@ Best Practices
 See Also
 --------
 
-- ``alignment.experiments`` - Experiment API entry point
+- ``nodelens.experiments`` - Experiment API entry point
 - :doc:`experiments` - Experiments user guide

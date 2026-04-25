@@ -1,7 +1,7 @@
 # Documentation
 
-LossLens is the public project name. The Python package is imported as
-`alignment` for backward compatibility.
+NodeLens is the public project name. The Python package is imported as
+`nodelens`.
 
 ## Guides
 

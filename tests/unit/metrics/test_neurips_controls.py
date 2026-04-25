@@ -4,7 +4,7 @@ Unit tests for NeurIPS control knobs used in cluster-analysis experiments.
 
 import numpy as np
 
-from alignment.experiments.cluster_experiments import _maybe_permute_task_target, _mi_in_proxy_from_signal_power
+from nodelens.experiments.cluster_experiments import _maybe_permute_task_target, _mi_in_proxy_from_signal_power
 
 
 def test_target_permutation_none_is_identity():

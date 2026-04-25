@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from alignment.metrics.rayleigh import RayleighQuotient, RayleighQuotientAlternative
+from nodelens.metrics.rayleigh import RayleighQuotient, RayleighQuotientAlternative
 
 
 class TestRayleighQuotient:

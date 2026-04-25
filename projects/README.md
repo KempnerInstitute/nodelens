@@ -1,7 +1,7 @@
 # Paper Projects
 
 This directory contains paper-specific release material layered on top of the
-general `alignment` package. Keep reusable code in `src/alignment/`; keep
+general `nodelens` package. Keep reusable code in `src/nodelens/`; keep
 paper-specific commands, artifact manifests, and reproduction notes here.
 
 ## Projects

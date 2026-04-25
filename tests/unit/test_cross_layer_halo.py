@@ -11,7 +11,7 @@ Tests validate:
 import numpy as np
 import pytest
 
-from alignment.analysis.clustering.cross_layer_halo import CrossLayerHaloAnalysis, HaloResult
+from nodelens.analysis.clustering.cross_layer_halo import CrossLayerHaloAnalysis, HaloResult
 
 # ---------------------------------------------------------------------------
 # Fixtures

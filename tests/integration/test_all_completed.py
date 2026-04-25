@@ -23,18 +23,18 @@ def test_imports():
     logger.info("Testing imports...")
 
     try:
-        import alignment
+        import nodelens
 
         # Core / registry
-        from alignment.core import ModelWrapper  # noqa: F401
-        from alignment.metrics import METRIC_REGISTRY  # noqa: F401
-        from alignment.metrics.base import MetricComputer  # noqa: F401
+        from nodelens.core import ModelWrapper  # noqa: F401
+        from nodelens.metrics import METRIC_REGISTRY  # noqa: F401
+        from nodelens.metrics.base import MetricComputer  # noqa: F401
 
         # Pruning + services
-        from alignment.pruning import get_pruning_strategy  # noqa: F401
-        from alignment.services import MaskOperations  # noqa: F401
+        from nodelens.pruning import get_pruning_strategy  # noqa: F401
+        from nodelens.services import MaskOperations  # noqa: F401
 
-        logger.info(f"OK alignment imports OK (version={getattr(alignment, '__version__', 'unknown')})")
+        logger.info(f"OK NodeLens imports OK (version={getattr(nodelens, '__version__', 'unknown')})")
 
         logger.info("OK All imports successful")
         return True
@@ -48,8 +48,8 @@ def test_metric_computer():
     logger.info("\nTesting MetricComputer...")
 
     try:
-        from alignment.metrics import METRIC_REGISTRY
-        from alignment.metrics.base import MetricComputer
+        from nodelens.metrics import METRIC_REGISTRY
+        from nodelens.metrics.base import MetricComputer
 
         # Create metrics
         metrics = {
@@ -85,9 +85,9 @@ def test_parallel_processing():
         import torch.nn as nn
         from torch.utils.data import DataLoader, TensorDataset
 
-        from alignment.core import ModelWrapper
-        from alignment.metrics import METRIC_REGISTRY
-        from alignment.utils.batch_processing import compute_metrics_parallel
+        from nodelens.core import ModelWrapper
+        from nodelens.metrics import METRIC_REGISTRY
+        from nodelens.utils.batch_processing import compute_metrics_parallel
 
         # Create simple model and data
         model = nn.Sequential(nn.Linear(10, 20), nn.ReLU(), nn.Linear(20, 5))
@@ -116,7 +116,7 @@ def test_pruning_utilities():
     try:
         import torch.nn as nn
 
-        from alignment.utils.pruning import PruningUtilities, create_pruning_schedule
+        from nodelens.utils.pruning import PruningUtilities, create_pruning_schedule
 
         # Create test layer
         layer = nn.Linear(10, 20)
@@ -152,7 +152,7 @@ def test_experiment_tracking():
     logger.info("\nTesting experiment tracking...")
 
     try:
-        from alignment.utils.experiment_tracking import ExperimentTracker, create_tracker
+        from nodelens.utils.experiment_tracking import ExperimentTracker, create_tracker
 
         # Test base tracker (doesn't raise NotImplementedError anymore)
         tracker = ExperimentTracker("test", {"key": "value"})

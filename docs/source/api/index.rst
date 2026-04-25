@@ -1,7 +1,7 @@
 API Reference
 =============
 
-This section contains the complete API reference for LossLens.
+This section contains the complete API reference for NodeLens.
 
 .. toctree::
    :maxdepth: 2
@@ -34,34 +34,34 @@ Module Overview
 Core Modules
 ~~~~~~~~~~~~
 
-**alignment.core**
+**nodelens.core**
    Base classes, registries, and core functionality
 
-**alignment.models**
+**nodelens.models**
    Model wrappers and architecture definitions
 
-**alignment.metrics**
+**nodelens.metrics**
    36+ metrics for neural network analysis
 
-**alignment.experiments**
+**nodelens.experiments**
    Experiment runners and configurations
 
-**alignment.pruning**
+**nodelens.pruning**
    Pruning strategies and utilities
 
 Supporting Modules
 ~~~~~~~~~~~~~~~~~~
 
-**alignment.data**
+**nodelens.data**
    Dataset wrappers and data processing
 
-**alignment.training**
+**nodelens.training**
    Training loops and optimization
 
-**alignment.analysis**
+**nodelens.analysis**
    Result analysis and visualization
 
-**alignment.infrastructure**
+**nodelens.infrastructure**
    Configuration, logging, distributed computing
 
 Quick Links
@@ -70,17 +70,17 @@ Quick Links
 Most Common Classes
 ~~~~~~~~~~~~~~~~~~~
 
-- :class:`alignment.experiments.base.ExperimentConfig` - Configure experiments
-- :class:`alignment.metrics.RayleighQuotient` - Primary alignment metric
-- :class:`alignment.models.ModelWrapper` - Wrap models for analysis
-- :class:`alignment.experiments.ProgressiveDropoutExperiment` - Main pruning experiment
-- :class:`alignment.pruning.strategies.MagnitudePruning` - Standard pruning method
+- :class:`nodelens.experiments.base.ExperimentConfig` - Configure experiments
+- :class:`nodelens.metrics.RayleighQuotient` - Primary alignment metric
+- :class:`nodelens.models.ModelWrapper` - Wrap models for analysis
+- :class:`nodelens.experiments.ProgressiveDropoutExperiment` - Main pruning experiment
+- :class:`nodelens.pruning.strategies.MagnitudePruning` - Standard pruning method
 
 Key Functions
 ~~~~~~~~~~~~~
 
-- :func:`alignment.core.get_metric` - Get metric by name
-- :func:`alignment.core.get_experiment` - Get experiment by type
-- :func:`alignment.core.list_metrics` - List available metrics
-- :func:`alignment.infrastructure.configuration.load_config` - Load YAML config
-- :func:`alignment.analysis.load_results` - Load experiment results
+- :func:`nodelens.core.get_metric` - Get metric by name
+- :func:`nodelens.core.get_experiment` - Get experiment by type
+- :func:`nodelens.core.list_metrics` - List available metrics
+- :func:`nodelens.infrastructure.configuration.load_config` - Load YAML config
+- :func:`nodelens.analysis.load_results` - Load experiment results

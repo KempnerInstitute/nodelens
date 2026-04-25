@@ -16,10 +16,10 @@ model:
 
 # Dataset options:
 #   - cifar10/cifar100: ./data (auto-downloads, but ResNet expects 224x224)
-#   - imagenet: /n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k
+#   - imagenet: /path/to/datasets/imagenet_1k
 dataset:
   name: "imagenet"
-  data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
+  data_path: "/path/to/datasets/imagenet_1k"
   batch_size: 128
   num_workers: 4
 

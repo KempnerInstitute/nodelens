@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.strategies.adaptive import AdaptiveSensitivityPruning, LayerSensitivity
+from nodelens.pruning.strategies.adaptive import AdaptiveSensitivityPruning, LayerSensitivity
 
 # ---------------------------------------------------------------------------
 # Helpers

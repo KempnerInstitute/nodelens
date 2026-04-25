@@ -4,7 +4,7 @@ Unit tests for StreamingCovariance utilities.
 
 import torch
 
-from alignment.core.streaming import StreamingCovariance
+from nodelens.core.streaming import StreamingCovariance
 
 
 class TestStreamingCovariance:

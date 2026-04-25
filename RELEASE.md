@@ -5,7 +5,7 @@ draft files, cluster paths, logs, or model weights.
 
 ## Before Tagging
 
-- Confirm that paper-facing code lives in `src/alignment/` and
+- Confirm that paper-facing code lives in `src/nodelens/` and
   `projects/supernodes_scar/`.
 - Confirm that private draft material under `drafts/` is not tracked for the
   public release.
@@ -19,7 +19,7 @@ draft files, cluster paths, logs, or model weights.
 
 ```bash
 python -m pip install -e .
-PYTHONPATH=src python -c "import alignment; print(alignment.__version__)"
+PYTHONPATH=src python -c "import nodelens; print(nodelens.__version__)"
 pytest tests/unit -q
 cd docs && make html
 ```

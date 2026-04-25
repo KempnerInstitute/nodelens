@@ -9,7 +9,7 @@ Tests validate:
 import pytest
 import torch
 
-from alignment.metrics.cross_layer import compute_downstream_importance, compute_within_layer_redundancy
+from nodelens.metrics.cross_layer import compute_downstream_importance, compute_within_layer_redundancy
 
 # ---------------------------------------------------------------------------
 # Tests: compute_downstream_importance

@@ -3,7 +3,7 @@ Tests for configs/config_validator.py (validate_config, validate_experiment_conf
 check_compatibility).
 """
 
-from alignment.configs.config_validator import check_compatibility, validate_config, validate_experiment_config
+from nodelens.configs.config_validator import check_compatibility, validate_config, validate_experiment_config
 
 # =========================================================================
 # validate_config

@@ -53,7 +53,7 @@ sha256sum -c MANIFEST.sha256
 The corresponding code release is available at:
 
 ```text
-https://github.com/KempnerInstitute/alignment
+https://github.com/KempnerInstitute/nodelens
 ```
 
 Use the configs in `configs/` with `scripts/run_experiment.py` from the code

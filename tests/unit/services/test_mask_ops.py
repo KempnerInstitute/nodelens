@@ -5,7 +5,7 @@ Unit tests for MaskOperations.
 import pytest
 import torch
 
-from alignment.services.mask_ops import MaskOperations
+from nodelens.services.mask_ops import MaskOperations
 
 
 class TestMaskOperations:

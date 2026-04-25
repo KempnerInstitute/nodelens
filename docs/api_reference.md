@@ -7,7 +7,7 @@
 Wraps PyTorch models for activation capture and analysis.
 
 ```python
-from alignment import ModelWrapper
+from nodelens import ModelWrapper
 
 wrapper = ModelWrapper(
     model,                    # PyTorch model
@@ -38,7 +38,7 @@ metric.compute(inputs, weights, outputs, **kwargs)  # Returns scores
 ### Rayleigh Quotient
 
 ```python
-from alignment.metrics import get_metric
+from nodelens.metrics import get_metric
 
 rq = get_metric('rayleigh_quotient',
     relative=True,
@@ -61,7 +61,7 @@ scores = redundancy.compute(outputs=layer_outputs)
 ### Synergy (Continuous Target)
 
 ```python
-from alignment.metrics.information import SynergyContinuousTarget
+from nodelens.metrics.information import SynergyContinuousTarget
 
 synergy = SynergyContinuousTarget(
     target_type='logit_margin',  # or 'correct_logit', 'logit_pc1'
@@ -80,7 +80,7 @@ scores = synergy.compute(outputs=activations, logits=logits, labels=labels)
 Clusters channels in (RQ, Redundancy, Synergy) space.
 
 ```python
-from alignment.analysis.clustering import MetricSpaceClustering, ClusterResult
+from nodelens.analysis.clustering import MetricSpaceClustering, ClusterResult
 
 clusterer = MetricSpaceClustering(n_clusters=4, seed=42)
 result = clusterer.fit(rq_scores, redundancy_scores, synergy_scores, layer_name="conv1")
@@ -98,7 +98,7 @@ result.type_counts   # {'critical': N, ...}
 Analyzes downstream dependencies via halos.
 
 ```python
-from alignment.analysis.clustering import CrossLayerHaloAnalysis, HaloResult
+from nodelens.analysis.clustering import CrossLayerHaloAnalysis, HaloResult
 
 halo_analyzer = CrossLayerHaloAnalysis(percentile=90.0, use_activation_weight=True)
 
@@ -120,7 +120,7 @@ halo_result = halo_analyzer.analyze_halo(
 Validates importance via channel ablation.
 
 ```python
-from alignment.analysis import CascadeAnalysis, DamagePrediction
+from nodelens.analysis import CascadeAnalysis, DamagePrediction
 
 cascade = CascadeAnalysis(model, test_loader, device="cuda")
 baseline = cascade.baseline()
@@ -142,7 +142,7 @@ results = cascade.by_cluster(layer_name, labels, type_mapping, n_rm=5)
 General cluster-based analysis for any architecture.
 
 ```python
-from alignment.experiments import ClusterAnalysisExperiment, ClusterAnalysisConfig
+from nodelens.experiments import ClusterAnalysisExperiment, ClusterAnalysisConfig
 
 config = ClusterAnalysisConfig(
     name="resnet18_cifar10_cluster_analysis",
@@ -164,7 +164,7 @@ experiment.generate_figures()
 LLM-specific analysis with SCAR metrics.
 
 ```python
-from alignment.experiments import LLMAlignmentExperiment
+from nodelens.experiments import LLMAlignmentExperiment
 
 experiment = LLMAlignmentExperiment(config)
 experiment.setup()
@@ -180,7 +180,7 @@ perplexity = experiment.evaluate_perplexity("wikitext", "test", num_samples=100)
 Vision model alignment analysis.
 
 ```python
-from alignment.experiments import GeneralAlignmentExperiment
+from nodelens.experiments import GeneralAlignmentExperiment
 
 experiment = GeneralAlignmentExperiment.from_yaml("config.yaml")
 results = experiment.run()
@@ -193,7 +193,7 @@ results = experiment.run()
 ### Cluster Plots
 
 ```python
-from alignment.analysis.visualization import (
+from nodelens.analysis.visualization import (
     plot_metric_scatter,
     plot_cluster_evolution,
     plot_influence_matrix,
@@ -218,7 +218,7 @@ plot_cascade_test(cascade_results, save_path)
 ### UnifiedVisualizer
 
 ```python
-from alignment.analysis.visualization import UnifiedVisualizer
+from nodelens.analysis.visualization import UnifiedVisualizer
 
 viz = UnifiedVisualizer()
 viz.plot_layer_scores(scores, metric_name, plot_type='violin', save_path='plot.png')
@@ -234,7 +234,7 @@ viz.plot_heatmap(data, title, cmap, save_path)
 ### Quick Pruning
 
 ```python
-from alignment.pruning.orchestrator import prune_with_all_options
+from nodelens.pruning.orchestrator import prune_with_all_options
 
 result = prune_with_all_options(
     model,
@@ -250,7 +250,7 @@ result = prune_with_all_options(
 ### Dependency-Aware Pruning
 
 ```python
-from alignment.pruning.dependency_aware import DependencyAwarePruning
+from nodelens.pruning.dependency_aware import DependencyAwarePruning
 
 pruner = DependencyAwarePruning(model)
 result = pruner.prune(layer_scores={'conv1': scores1}, amount=0.5, mode='low')
@@ -263,7 +263,7 @@ result = pruner.prune(layer_scores={'conv1': scores1}, amount=0.5, mode='low')
 ### ActivationCaptureService
 
 ```python
-from alignment.services import ActivationCaptureService
+from nodelens.services import ActivationCaptureService
 
 capture = ActivationCaptureService(model_wrapper)
 data = capture.capture(input_batch, layers=['conv1'], include_weights=True)
@@ -272,7 +272,7 @@ data = capture.capture(input_batch, layers=['conv1'], include_weights=True)
 ### NodeScoringService
 
 ```python
-from alignment.services import NodeScoringService
+from nodelens.services import NodeScoringService
 
 scorer = NodeScoringService(
     metrics={'rq': rq_metric, 'redundancy': redundancy_metric},

@@ -10,7 +10,7 @@ Tests validate:
 import pytest
 import torch
 
-from alignment.services.scoring import CompositeScores, NodeScoringService, create_scoring_service
+from nodelens.services.scoring import CompositeScores, NodeScoringService, create_scoring_service
 
 # ---------------------------------------------------------------------------
 # Mock metric

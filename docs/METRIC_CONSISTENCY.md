@@ -1,12 +1,12 @@
 # Metric Definitions & Sign Conventions (Theory <-> Code)
 
-This document is a **codebase-facing** reference for the core metrics used throughout `src/alignment/`.
+This document is a **codebase-facing** reference for the core metrics used throughout `src/nodelens/`.
 It exists to prevent subtle drift in:
 - **Formulas** (what is computed),
 - **Keys** (how values are named/stored),
 - **Sign conventions** (what "high" means when used for pruning/scoring).
 
-It intentionally avoids referencing any paper draft; the canonical sources are the implementations under `src/alignment/metrics/` and the experiment pipeline that stores per-layer metric arrays.
+It intentionally avoids referencing any paper draft; the canonical sources are the implementations under `src/nodelens/metrics/` and the experiment pipeline that stores per-layer metric arrays.
 
 ---
 
@@ -46,7 +46,7 @@ For redundancy specifically:
 \]
 
 **Implementation**
-- `src/alignment/metrics/rayleigh/rayleigh_quotient.py`
+- `src/nodelens/metrics/rayleigh/rayleigh_quotient.py`
   - Computes covariance \(\Sigma_X\) from inputs (optionally class-conditioned) and returns per-output-channel RQ.
 
 **Notes**
@@ -65,7 +65,7 @@ I(Y_i;Y_j) = -\tfrac12 \log(1-\rho^2)
 We typically summarize "redundancy of channel \(i\)" as an **average MI** to other channels (or sampled references).
 
 **Implementation**
-- `src/alignment/metrics/information/redundancy.py`
+- `src/nodelens/metrics/information/redundancy.py`
   - Computes correlations between projected outputs and converts to MI using the formula above.
   - Returns **nonnegative** redundancy values (more redundancy => larger).
 
@@ -90,7 +90,7 @@ S(Z;Y_i,Y_j)= I(Z;[Y_i,Y_j]) - \max\{I(Z;Y_i),I(Z;Y_j)\}
 Per-channel synergy is commonly computed as an average over a sampled set of partner channels.
 
 **Implementation**
-- `src/alignment/metrics/information/gaussian_pid.py`
+- `src/nodelens/metrics/information/gaussian_pid.py`
 
 **Interpretation**
 - Synergy is a **pair-structure descriptor**, not a scalar importance proxy; it is often weakly correlated with loss sensitivity within layers.
@@ -104,7 +104,7 @@ A common composite importance score combines multiple signals:
 - decrease with redundancy.
 
 **Implementation**
-- `src/alignment/metrics/composite.py`
+- `src/nodelens/metrics/composite.py`
 
 **Typical sign pattern**
 - `+ logRQ`
@@ -128,7 +128,7 @@ Pruning strategies may consume these via "precomputed metrics" dicts.
 ## Quick verification snippet
 
 ```python
-from alignment.metrics import get_metric
+from nodelens.metrics import get_metric
 
 rq = get_metric("rayleigh_quotient")         # RQ(w; Sigma_X)
 red = get_metric("average_redundancy")      # -0.5 log(1-rho^2) aggregated per neuron

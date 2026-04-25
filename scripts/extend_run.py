@@ -97,7 +97,7 @@ def _build_cluster_experiment(repo_root: Path, cfg: Dict[str, Any]):
     sys.path.insert(0, str(repo_root))
     sys.path.insert(0, str(repo_root / "src"))
 
-    from alignment.experiments.base import ExperimentConfig
+    from nodelens.experiments.base import ExperimentConfig
 
     allowed = {f.name for f in fields(ExperimentConfig)}
     config = ExperimentConfig(**{k: v for k, v in cfg.items() if k in allowed})

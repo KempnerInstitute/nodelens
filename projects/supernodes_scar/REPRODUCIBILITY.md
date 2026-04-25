@@ -1,8 +1,13 @@
 # Reproducibility Notes
 
-This page describes the local workflow used for the paper release. It separates
-three different tasks: rerunning experiments, rebuilding figures and tables from
-locked outputs, and rebuilding the arXiv PDF.
+This page describes the release workflow for the paper. It separates three
+tasks: rerunning experiments, rebuilding figures and tables from locked outputs,
+and rebuilding the arXiv PDF.
+
+The public GitHub repository contains the reusable code, configs, project
+metadata, and artifact-packaging scripts. The private paper-source checkout may
+also contain draft-only LaTeX files and maintainer scripts; those paths are
+called out below when they are needed.
 
 ## 1. Rerun Experiments
 
@@ -10,7 +15,7 @@ Install the code:
 
 ```bash
 conda env create -f environment.yml
-conda activate alignment
+conda activate nodelens
 pip install -e .
 ```
 
@@ -36,8 +41,8 @@ release bundle stores those JSON files under `raw_results/` as sanitized
 metadata/result_sources.json
 ```
 
-The local working copy keeps the original output folders so the active paper
-scripts can be rerun without downloading anything:
+For maintainers with the private paper-source checkout, the active paper scripts
+can be rerun against the original locked output folders:
 
 ```bash
 python drafts/LLM_prune/paper/scripts/regenerate_fig1_overview.py
@@ -51,13 +56,15 @@ python drafts/LLM_prune/paper/scripts/collect_paper_artifacts.py \
 ```
 
 The public artifact bundle also includes the active paper scripts under
-`paper_scripts/`. Some scripts use path constants because they were designed for
-the locked local paper tree; update those constants or run the script from this
-repository with the original output folders available.
+`paper_scripts/`, plus compact derived summaries under
+`paper_artifacts/experiments/`. Some scripts use path constants because they
+were designed for the locked local paper tree; update those constants or run the
+script from a checkout that has the original output folders available.
 
 ## 3. Rebuild The Paper
 
-The paper has one shared body file:
+For maintainers with the private paper-source checkout, the paper has one shared
+body file:
 
 ```text
 drafts/LLM_prune/paper_body.tex
@@ -91,7 +98,8 @@ The verifier checks:
 
 ## 5. Local Storage Policy
 
-Uploading to Hugging Face is not a replacement for local retention. Keep:
+Uploading to Hugging Face is not a replacement for local retention. Maintainers
+should keep:
 
 - the frozen HF bundle under `outputs/supernodes_scar_hf`
 - the original locked result folders used to regenerate paper figures

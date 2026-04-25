@@ -5,7 +5,7 @@ Tests for pruning/pipeline.py: run_pruning_pipeline and helpers.
 import torch
 import torch.nn as nn
 
-from alignment.pruning.pipeline import PruningPipelineOptions, _ensure_tensor, run_pruning_pipeline
+from nodelens.pruning.pipeline import PruningPipelineOptions, _ensure_tensor, run_pruning_pipeline
 
 # ---------------------------------------------------------------------------
 # Helpers

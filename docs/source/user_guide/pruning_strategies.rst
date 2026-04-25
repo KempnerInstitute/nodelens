@@ -1,12 +1,12 @@
 Pruning Strategies Guide
 ========================
 
-This guide documents all pruning strategies available in LossLens and their use cases.
+This guide documents all pruning strategies available in NodeLens and their use cases.
 
 Overview
 --------
 
-Pruning is a technique for reducing neural network size by removing parameters while maintaining performance. LossLens provides several pruning strategies to analyze how network sparsity affects alignment metrics.
+Pruning is a technique for reducing neural network size by removing parameters while maintaining performance. NodeLens provides several pruning strategies to analyze how network sparsity affects alignment metrics.
 
 Available Pruning Strategies
 ----------------------------
@@ -14,7 +14,7 @@ Available Pruning Strategies
 1. Magnitude-Based Pruning
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Module**: :mod:`alignment.pruning.strategies.magnitude`
+**Module**: :mod:`nodelens.pruning.strategies.magnitude`
 
 **Classes**:
 
@@ -30,7 +30,7 @@ Available Pruning Strategies
 
 .. code-block:: python
 
-   from alignment.pruning import get_pruning_strategy
+   from nodelens.pruning import get_pruning_strategy
 
    # Basic magnitude pruning
    strategy = get_pruning_strategy("magnitude")
@@ -50,7 +50,7 @@ Available Pruning Strategies
 2. Random Pruning
 ~~~~~~~~~~~~~~~~~
 
-**Module**: :mod:`alignment.pruning.strategies.random`
+**Module**: :mod:`nodelens.pruning.strategies.random`
 
 **Classes**:
 
@@ -72,7 +72,7 @@ Available Pruning Strategies
 3. Gradient-Based Pruning
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Module**: :mod:`alignment.pruning.strategies.gradient`
+**Module**: :mod:`nodelens.pruning.strategies.gradient`
 
 **Classes**:
 
@@ -107,7 +107,7 @@ All strategies support structured pruning by setting ``structured=True``:
 
 .. code-block:: python
 
-   from alignment.pruning import PruningConfig
+   from nodelens.pruning import PruningConfig
 
    config = PruningConfig(
        strategy="magnitude",
@@ -126,7 +126,7 @@ The framework provides iterative pruning through dedicated strategies:
 
 .. code-block:: python
 
-   from alignment.pruning.strategies.magnitude import IterativeMagnitudePruning
+   from nodelens.pruning.strategies.magnitude import IterativeMagnitudePruning
 
    strategy = IterativeMagnitudePruning(
        iterations=10,
@@ -150,7 +150,7 @@ Create pruning schedules for gradual sparsification:
 
 .. code-block:: python
 
-   from alignment.pruning.schedules import PolynomialSchedule, LinearSchedule
+   from nodelens.pruning.schedules import PolynomialSchedule, LinearSchedule
 
    # Polynomial schedule (recommended)
    schedule = PolynomialSchedule(
@@ -219,7 +219,7 @@ Check Sparsity
 
 .. code-block:: python
 
-   from alignment.pruning.utils import get_sparsity, get_model_sparsity
+   from nodelens.pruning.utils import get_sparsity, get_model_sparsity
 
    # Layer sparsity
    sparsity = get_sparsity(layer)
@@ -232,7 +232,7 @@ Remove Pruning
 
 .. code-block:: python
 
-   from alignment.pruning.utils import remove_pruning
+   from nodelens.pruning.utils import remove_pruning
 
    # Makes pruning permanent and removes masks
    remove_pruning(layer)
@@ -250,7 +250,7 @@ Example analysis:
 
 .. code-block:: python
 
-   from alignment.experiments import GeneralAlignmentExperiment
+   from nodelens.experiments import GeneralAlignmentExperiment
 
    # Track how metrics change with pruning
    config = {
@@ -293,6 +293,6 @@ Issue: Memory Not Reduced After Pruning
 See Also
 --------
 
-- ``alignment.pruning`` - Pruning API entry point
+- ``nodelens.pruning`` - Pruning API entry point
 - :doc:`experiments` - Pruning experiments guide
 - Repository examples and configs - Example code

@@ -5,7 +5,7 @@ Tests for metrics/gradient_based.py: gradient-based metrics and utilities.
 import pytest
 import torch
 
-from alignment.metrics.gradient_based import (
+from nodelens.metrics.gradient_based import (
     GradientAlignment,
     GradientStatisticsTracker,
     LocalLearningRuleSearch,

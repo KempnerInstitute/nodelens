@@ -1,7 +1,7 @@
 # Vision Pruning Test (AlexNet on ImageNet)
 # Comprehensive metrics with pruning strategies
 #
-# Based on drafts/alignment_notes/alignment_red.tex:
+# Metric notes:
 # - RQ measures alignment with input covariance
 # - Gaussian MI is directly related to RQ for linear-Gaussian models
 # - Redundancy I(Y_i; Y_j) = -0.5 * log(1 - ρ²) measures overlap between neurons
@@ -22,10 +22,10 @@ model:
 
 # Dataset options:
 #   - cifar10/cifar100: ./data (auto-downloads)
-#   - imagenet: /n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k
+#   - imagenet: /path/to/datasets/imagenet_1k
 dataset:
   name: "imagenet"
-  data_path: "/n/holylfs06/LABS/kempner_shared/Everyone/testbed/vision/imagenet_1k"
+  data_path: "/path/to/datasets/imagenet_1k"
   batch_size: 16          # Reduced for memory efficiency with unfold mode
   num_workers: 4
 

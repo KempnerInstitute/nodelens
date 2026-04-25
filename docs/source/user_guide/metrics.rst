@@ -32,7 +32,7 @@ Usage
 
 .. code-block:: python
 
-   from alignment.metrics import RayleighQuotient
+   from nodelens.metrics import RayleighQuotient
 
    # Create metric instance
    rq_metric = RayleighQuotient(
@@ -70,7 +70,7 @@ Usage
 
 .. code-block:: python
 
-   from alignment.metrics import MutualInformationGaussian
+   from nodelens.metrics import MutualInformationGaussian
 
    # Create metric instance
    mi_metric = MutualInformationGaussian(
@@ -102,7 +102,7 @@ Usage
 
 .. code-block:: python
 
-   from alignment.metrics import PartialInformationDecomposition
+   from nodelens.metrics import PartialInformationDecomposition
 
    # Create metric instance
    pid_metric = PartialInformationDecomposition(
@@ -139,7 +139,7 @@ Usage
 
 .. code-block:: python
 
-   from alignment.metrics import CKA
+   from nodelens.metrics import CKA
 
    # Create metric instance
    cka_metric = CKA(
@@ -170,7 +170,7 @@ Usage
 
 .. code-block:: python
 
-   from alignment.metrics import CCA
+   from nodelens.metrics import CCA
 
    # Create metric instance
    cca_metric = CCA(
@@ -194,7 +194,7 @@ Usage
 
 .. code-block:: python
 
-   from alignment.metrics import GeneralizedRayleighQuotient
+   from nodelens.metrics import GeneralizedRayleighQuotient
 
    grq_metric = GeneralizedRayleighQuotient()
 
@@ -215,7 +215,7 @@ Usage
 
 .. code-block:: python
 
-   from alignment.metrics import SharedInformation
+   from nodelens.metrics import SharedInformation
 
    shared_info = SharedInformation(
        method="correlation"  # Method for measuring sharing
@@ -234,7 +234,7 @@ Batch Computation
 
 .. code-block:: python
 
-   from alignment.metrics import MetricCollection
+   from nodelens.metrics import MetricCollection
 
    # Create collection of metrics
    metrics = MetricCollection([
@@ -308,7 +308,7 @@ Creating a Custom Metric
 
 .. code-block:: python
 
-   from alignment.metrics.base import BaseMetric
+   from nodelens.metrics.base import BaseMetric
 
    class MyCustomMetric(BaseMetric):
        def __init__(self, parameter=1.0):
@@ -325,7 +325,7 @@ Registering Custom Metrics
 
 .. code-block:: python
 
-   from alignment.core.registry import register_metric
+   from nodelens.core.registry import register_metric
 
    @register_metric("my_metric")
    class MyMetric(BaseMetric):

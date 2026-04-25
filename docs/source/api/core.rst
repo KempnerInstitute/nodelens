@@ -1,12 +1,12 @@
 Core API Reference
 ==================
 
-This section documents the core components of LossLens.
+This section documents the core components of NodeLens.
 
 Registry System
 ---------------
 
-.. automodule:: alignment.core.registry
+.. automodule:: nodelens.core.registry
    :members:
    :undoc-members:
    :show-inheritance:
@@ -14,12 +14,12 @@ Registry System
 Model Wrapper
 -------------
 
-.. automodule:: alignment.core.wrappers
+.. automodule:: nodelens.core.wrappers
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: alignment.core.wrappers.ModelWrapper
+.. autoclass:: nodelens.core.wrappers.ModelWrapper
    :members:
    :special-members: __init__
    :undoc-members:
@@ -27,7 +27,7 @@ Model Wrapper
 Base Classes
 ------------
 
-.. automodule:: alignment.core.base
+.. automodule:: nodelens.core.base
    :members:
    :undoc-members:
    :show-inheritance:
@@ -35,7 +35,7 @@ Base Classes
 Configuration
 -------------
 
-.. automodule:: alignment.core.config
+.. automodule:: nodelens.core.config
    :members:
    :undoc-members:
    :show-inheritance:
@@ -43,7 +43,7 @@ Configuration
 Utilities
 ---------
 
-.. automodule:: alignment.core.utils
+.. automodule:: nodelens.core.utils
    :members:
    :undoc-members:
    :show-inheritance:

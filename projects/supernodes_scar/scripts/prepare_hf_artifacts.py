@@ -8,6 +8,7 @@ import datetime as dt
 import gzip
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,13 +37,10 @@ TEXT_SUFFIXES = {
     ".yml",
 }
 
-PATH_REPLACEMENTS = {
-    "/n/holylfs06/.../PAPER": "/path/to/results/Prune_LLM/PAPER",
-    "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM/PAPER": "/path/to/results/Prune_LLM/PAPER",
-    "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/Prune_LLM": "/path/to/results/Prune_LLM",
-    "/n/holylabs/kempner_dev/Users/hsafaai/Code/alignment": "/path/to/alignment",
-    "/n/home13/hsafaai": "/path/to/home",
-}
+PRIVATE_PATH_PATTERNS = (
+    (re.compile("/" + r"n/home[0-9]*/[^\s\"',)]+"), "/path/to/user_home"),
+    (re.compile("/" + r"n/[^\s\"',)]+"), "/path/to/internal_storage"),
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -87,8 +85,8 @@ def should_skip(path: Path) -> bool:
 
 
 def sanitize_text(text: str) -> str:
-    for old, new in PATH_REPLACEMENTS.items():
-        text = text.replace(old, new)
+    for pattern, replacement in PRIVATE_PATH_PATTERNS:
+        text = pattern.sub(replacement, text)
     return text
 
 
@@ -246,12 +244,18 @@ def main() -> int:
     copy_one(repo_root / "pyproject.toml", output_dir / "code_metadata" / "pyproject.toml", "code_metadata", entries)
 
     copy_tree_files(repo_root / "configs" / "prune_llm", output_dir / "configs" / "prune_llm", "configs", entries)
-    copy_tree_files(repo_root / "configs" / "paper", output_dir / "configs" / "paper", "configs", entries)
     copy_tree_files(paper_dir / "paper" / "configs", output_dir / "configs" / "paper_side", "configs", entries)
 
     copy_tree_files(paper_dir / "figures", output_dir / "paper_artifacts" / "figures", "paper_figures", entries)
     copy_tree_files(paper_dir / "paper_artifacts" / "tables", output_dir / "paper_artifacts" / "tables", "paper_tables", entries)
     copy_one(paper_dir / "paper_artifacts" / "numbers.tex", output_dir / "paper_artifacts" / "numbers.tex", "paper_tables", entries)
+    for summary_name in ("olmo_trajectory.json", "olmo_pruning_summary.json"):
+        copy_one(
+            paper_dir / "paper_artifacts" / summary_name,
+            output_dir / "paper_artifacts" / "experiments" / summary_name,
+            "derived_experiment_summaries",
+            entries,
+        )
     copy_tree_files(
         paper_dir / "paper_artifacts" / "experiments",
         output_dir / "paper_artifacts" / "experiments",

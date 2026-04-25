@@ -1,7 +1,7 @@
 Contributing Guide
 ==================
 
-We welcome contributions to LossLens. This guide will help you get started.
+We welcome contributions to NodeLens. This guide will help you get started.
 
 Getting Started
 ---------------
@@ -19,8 +19,8 @@ Development Setup
 .. code-block:: bash
 
    # Clone the repository
-   git clone https://github.com/KempnerInstitute/alignment.git
-   cd alignment
+   git clone https://github.com/KempnerInstitute/nodelens.git
+   cd nodelens
 
    # Install in development mode with all extras
    pip install -e ".[all]"
@@ -63,7 +63,7 @@ All new features should include tests:
 
    # tests/test_my_feature.py
    import pytest
-   from alignment.my_module import my_function
+   from nodelens.my_module import my_function
 
    def test_my_function():
        result = my_function(input_data)
@@ -80,7 +80,7 @@ Run tests:
    pytest tests/test_metrics.py
 
    # Run with coverage
-   pytest --cov=alignment
+   pytest --cov=nodelens
 
 Documentation
 -------------
@@ -142,4 +142,4 @@ Questions?
 - Start a discussion for general questions
 - Check existing issues before creating new ones
 
-Thank you for contributing to LossLens.
+Thank you for contributing to NodeLens.

@@ -162,7 +162,7 @@ visualization:
   metric_distributions: true
 
 output:
-  base_dir: "/n/holylfs06/LABS/kempner_project_b/Lab/alignment/alignment_red"
+  base_dir: "/path/to/results/losslens_vision"
   dir: "./results/vision/mobilenetv2_cifar10"
   save_metrics: true
   save_clusters: true

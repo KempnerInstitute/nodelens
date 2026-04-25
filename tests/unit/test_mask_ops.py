@@ -5,7 +5,7 @@ Tests for services/mask_ops.py: MaskOperations static methods.
 import pytest
 import torch
 
-from alignment.services.mask_ops import MaskOperations
+from nodelens.services.mask_ops import MaskOperations
 
 
 class TestCreateStructuredMask:

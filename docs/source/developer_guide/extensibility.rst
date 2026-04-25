@@ -1,7 +1,7 @@
 Extending the Framework
 =======================
 
-This guide explains how to extend LossLens with custom components
+This guide explains how to extend NodeLens with custom components
 using the registry system.
 
 Overview
@@ -53,8 +53,8 @@ Here's how to create and register a custom alignment metric:
 
 .. code-block:: python
 
-   from alignment.core.registry import register_metric
-   from alignment.core.protocols import BaseMetric
+   from nodelens.core.registry import register_metric
+   from nodelens.core.protocols import BaseMetric
    import torch
 
    @register_metric(
@@ -124,8 +124,8 @@ Analyzers perform higher-level analysis on metrics:
 
 .. code-block:: python
 
-   from alignment.core.registry import register_analyzer
-   from alignment.core.protocols import BaseAnalyzer
+   from nodelens.core.registry import register_analyzer
+   from nodelens.core.protocols import BaseAnalyzer
    import numpy as np
 
    @register_analyzer(
@@ -174,8 +174,8 @@ Pruning strategies define how to select neurons for removal:
 
 .. code-block:: python
 
-   from alignment.core.registry import register_pruner
-   from alignment.core.protocols import BasePruner
+   from nodelens.core.registry import register_pruner
+   from nodelens.core.protocols import BasePruner
    import torch
 
    @register_pruner(
@@ -217,7 +217,7 @@ Once registered, custom components can be used by name:
 
 .. code-block:: python
 
-   from alignment.core.registry import get_metric, initialize_registries
+   from nodelens.core.registry import get_metric, initialize_registries
 
    # Initialize (discovers built-in + custom components)
    initialize_registries()
@@ -230,7 +230,7 @@ Once registered, custom components can be used by name:
    metric = get_metric("kurtosis")  # Same as "activation_kurtosis"
 
    # Search for metrics
-   from alignment.core import METRIC_REGISTRY
+   from nodelens.core import METRIC_REGISTRY
    statistical_metrics = METRIC_REGISTRY.search(tags=["statistics"])
 
 Plugin Discovery
@@ -239,7 +239,7 @@ Plugin Discovery
 Place your custom components in these locations for auto-discovery:
 
 - ``./plugins/`` (project-local)
-- ``~/.alignment/plugins/`` (user-global)
+- ``~/.nodelens/plugins/`` (user-global)
 
 They will be automatically loaded when the framework initializes.
 
@@ -247,7 +247,7 @@ Or manually load from a custom location:
 
 .. code-block:: python
 
-   from alignment.core.registry import discover_plugins
+   from nodelens.core.registry import discover_plugins
 
    discover_plugins(["./my_custom_plugins/"])
 

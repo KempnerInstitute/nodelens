@@ -5,7 +5,7 @@ search, aliases, create_from_config, and decorator functions.
 
 import pytest
 
-from alignment.core.registry import ComponentInfo, Registry, create_component, create_from_config, list_all_components
+from nodelens.core.registry import ComponentInfo, Registry, create_component, create_from_config, list_all_components
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,16 +1,15 @@
 project: supernodes_scar
 paper_title: "Supernodes and Halos: Loss-Critical Hubs in LLM Feed-Forward Layers"
-code_package: alignment
+code_package: nodelens
 code_license: MIT
 
 public_release:
   code:
-    location: https://github.com/KempnerInstitute/alignment
+    location: https://github.com/KempnerInstitute/nodelens
     include:
-      - src/alignment
+      - src/nodelens
       - scripts/run_experiment.py
       - configs/prune_llm
-      - configs/paper
       - projects/supernodes_scar
       - tests
       - README.md

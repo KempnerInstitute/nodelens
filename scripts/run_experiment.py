@@ -34,9 +34,9 @@ from typing import Any, Dict, Optional
 import torch
 
 try:
-    from alignment.experiments.cluster_experiments import ClusterAnalysisExperiment
-    from alignment.experiments.general_alignment import GeneralAlignmentExperiment
-    from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+    from nodelens.experiments.cluster_experiments import ClusterAnalysisExperiment
+    from nodelens.experiments.general_alignment import GeneralAlignmentExperiment
+    from nodelens.experiments.llm_experiments import LLMAlignmentExperiment
 except ImportError:
     # Repo-local runs (without installing the package): add project root + src/ to sys.path.
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -44,9 +44,9 @@ except ImportError:
     sys.path.insert(0, repo_root)
     sys.path.insert(0, os.path.join(repo_root, "src"))
 
-    from alignment.experiments.cluster_experiments import ClusterAnalysisExperiment  # backward compat
-    from alignment.experiments.general_alignment import GeneralAlignmentExperiment
-    from alignment.experiments.llm_experiments import LLMAlignmentExperiment
+    from nodelens.experiments.cluster_experiments import ClusterAnalysisExperiment  # backward compat
+    from nodelens.experiments.general_alignment import GeneralAlignmentExperiment
+    from nodelens.experiments.llm_experiments import LLMAlignmentExperiment
 
 # Configure tqdm to avoid ANSI escape codes in log files (common under SLURM).
 try:
@@ -275,8 +275,8 @@ def _create_cluster_experiment(config):
     # ---------------------------------------------------------------
     # Create model using torchvision + registry-based stem adaptation
     # ---------------------------------------------------------------
-    from alignment.dataops.datasets.unified_dataset import DATASET_CONFIGS
-    from alignment.models.hub import adapt_model_for_dataset
+    from nodelens.dataops.datasets.unified_dataset import DATASET_CONFIGS
+    from nodelens.models.hub import adapt_model_for_dataset
 
     requested_model_name = str(cluster_config.model_name).lower()
     dataset_name = str(cluster_config.dataset_name).lower()
@@ -358,7 +358,7 @@ def _create_cluster_experiment(config):
                 model.classifier = torch.nn.Linear(model.classifier.in_features, num_classes)
 
     # Adapt model stem for dataset resolution (CIFAR, Tiny-ImageNet, etc.)
-    # This is now handled by a shared utility in src/alignment/models/hub.py
+    # This is now handled by a shared utility in src/nodelens/models/hub.py
     adapt_model_for_dataset(model, resolved_model_name, dataset_name, pretrained=pretrained)
 
     # Optional: explicit checkpoint
@@ -392,7 +392,7 @@ def _create_cluster_experiment(config):
     if dataset_name not in DATASET_CONFIGS:
         raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(DATASET_CONFIGS.keys())}")
 
-    from alignment.dataops.datasets.unified_dataset import UnifiedDataset
+    from nodelens.dataops.datasets.unified_dataset import UnifiedDataset
 
     train_dataset = UnifiedDataset(
         dataset_type=dataset_name,
@@ -640,7 +640,7 @@ def run_post_analysis(config, results_file: Path, output_dir: Path):
     logger.info("Running post-experiment analysis...")
 
     try:
-        from alignment.analysis import AnalysisConfig, AnalysisRunner
+        from nodelens.analysis import AnalysisConfig, AnalysisRunner
 
         # Build analysis config from post_analysis block
         analysis_config = AnalysisConfig(
@@ -683,7 +683,7 @@ def _regenerate_llm_visualizations(experiment, results: dict, output_dir: Path):
     matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.pyplot as plt
 
-    from alignment.analysis.visualization import UnifiedVisualizer
+    from nodelens.analysis.visualization import UnifiedVisualizer
 
     # Determine plots directory
     if (output_dir / "figures").exists():
@@ -851,7 +851,7 @@ def _create_job_directory(config, args, timestamp: str) -> Path:
     Returns:
         Path to the created job directory.
     """
-    from alignment.infrastructure.storage import create_job_directory, get_slurm_job_id
+    from nodelens.infrastructure.storage import create_job_directory, get_slurm_job_id
 
     experiment_name = getattr(config, "name", "experiment")
 
@@ -928,7 +928,7 @@ def main():
     # Load config (support key=value overrides passed after args)
     # Example:
     #   python scripts/run_experiment.py --config ... name="llama3_8b_paper_main" supernode.protect_core=false
-    from alignment.configs.config_loader import load_config_with_overrides as proper_load_config
+    from nodelens.configs.config_loader import load_config_with_overrides as proper_load_config
 
     cli_overrides = [x for x in (unknown or []) if isinstance(x, str) and "=" in x]
     config = proper_load_config(args.config, overrides=overrides or None, cli_args=cli_overrides or None)

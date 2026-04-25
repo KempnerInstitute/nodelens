@@ -1,9 +1,9 @@
 cff-version: 1.2.0
 message: "If you use this code or the Supernodes and SCAR artifacts, please cite the paper and archived release."
-title: "LossLens"
+title: "NodeLens"
 version: "0.2.0"
-repository-code: "https://github.com/KempnerInstitute/alignment"
-url: "https://github.com/KempnerInstitute/alignment"
+repository-code: "https://github.com/KempnerInstitute/nodelens"
+url: "https://github.com/KempnerInstitute/nodelens"
 license: "MIT"
 authors:
   - family-names: "Cherilyn"
@@ -23,7 +23,7 @@ preferred-citation:
       given-names: "Houman"
       affiliation: "Kempner Institute at Harvard University"
   year: 2026
-  url: "https://github.com/KempnerInstitute/alignment"
+  url: "https://github.com/KempnerInstitute/nodelens"
   identifiers:
     - type: url
       value: "https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts"

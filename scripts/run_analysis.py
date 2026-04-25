@@ -25,7 +25,7 @@ Usage:
     python scripts/run_analysis.py --results-dir ./results --quick
 
 For more control, use the AnalysisRunner class directly:
-    from alignment.analysis import AnalysisRunner, AnalysisConfig
+    from nodelens.analysis import AnalysisRunner, AnalysisConfig
 
     config = AnalysisConfig(
         results_dir="./results",
@@ -42,11 +42,11 @@ import sys
 from pathlib import Path
 
 try:
-    from alignment.analysis import AnalysisConfig, AnalysisRunner
+    from nodelens.analysis import AnalysisConfig, AnalysisRunner
 except ImportError:
     # Add src to path for development (repo-local runs without installing the package)
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-    from alignment.analysis import AnalysisConfig, AnalysisRunner
+    from nodelens.analysis import AnalysisConfig, AnalysisRunner
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

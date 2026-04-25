@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from alignment.pruning.strategies.parallel import AsyncParallelPruning, ParallelModePruning, ParallelPruningResult, TensorizedPruning
+from nodelens.pruning.strategies.parallel import AsyncParallelPruning, ParallelModePruning, ParallelPruningResult, TensorizedPruning
 
 # ---------------------------------------------------------------------------
 # Helpers

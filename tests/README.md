@@ -8,7 +8,7 @@ Unit and integration tests.
 pytest tests/
 pytest tests/unit/ -v
 pytest tests/unit/test_models.py
-pytest tests/ --cov=alignment
+pytest tests/ --cov=nodelens
 ```
 
 ## Structure

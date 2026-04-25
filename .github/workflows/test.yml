@@ -45,7 +45,7 @@ jobs:
 
     - name: Run tests
       run: |
-        pytest tests/ -v --cov=src/alignment --cov-report=xml --cov-report=html --cov-report=term-missing --tb=short -ra
+        pytest tests/ -v --cov=src/nodelens --cov-report=xml --cov-report=html --cov-report=term-missing --tb=short -ra
 
     - name: Check coverage threshold
       run: |

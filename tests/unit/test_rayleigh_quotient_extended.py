@@ -11,7 +11,7 @@ Tests validate:
 import pytest
 import torch
 
-from alignment.metrics.rayleigh.rayleigh_quotient import FastRayleighQuotient, RayleighQuotient
+from nodelens.metrics.rayleigh.rayleigh_quotient import FastRayleighQuotient, RayleighQuotient
 
 # ---------------------------------------------------------------------------
 # Tests: _compute_from_covariance

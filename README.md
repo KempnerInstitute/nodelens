@@ -1,18 +1,18 @@
-# LossLens
+# NodeLens
 
-Loss-sensitive neural network analysis and structured pruning tools.
+Node and channel metrics for neural network interpretability, importance, and interventions.
 
-[![Tests](https://github.com/KempnerInstitute/alignment/actions/workflows/test.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/test.yml)
-[![Lint](https://github.com/KempnerInstitute/alignment/actions/workflows/lint.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/lint.yml)
-[![Documentation](https://github.com/KempnerInstitute/alignment/actions/workflows/docs.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/docs.yml)
-[![Release](https://github.com/KempnerInstitute/alignment/actions/workflows/release.yml/badge.svg)](https://github.com/KempnerInstitute/alignment/actions/workflows/release.yml)
+[![Tests](https://github.com/KempnerInstitute/nodelens/actions/workflows/test.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/test.yml)
+[![Lint](https://github.com/KempnerInstitute/nodelens/actions/workflows/lint.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/lint.yml)
+[![Documentation](https://github.com/KempnerInstitute/nodelens/actions/workflows/docs.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/docs.yml)
+[![Release](https://github.com/KempnerInstitute/nodelens/actions/workflows/release.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/release.yml)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.8-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Artifacts](https://img.shields.io/badge/Hugging%20Face-artifacts-ffcc33)](https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-LossLens is a research codebase for studying which channels, neurons, and
-features matter most for model behavior. The current Python package is imported
-as `alignment` for backward compatibility.
+NodeLens is a research codebase for studying which channels, neurons, and
+features matter most for model behavior. The Python package is imported as
+`nodelens`.
 
 The repository supports two related workflows:
 
@@ -47,10 +47,10 @@ LLM backends through Hugging Face causal language models.
 ## Installation
 
 ```bash
-git clone https://github.com/KempnerInstitute/alignment.git
-cd alignment
+git clone https://github.com/KempnerInstitute/nodelens.git
+cd nodelens
 conda env create -f environment.yml
-conda activate alignment
+conda activate nodelens
 pip install -e .
 ```
 
@@ -87,7 +87,7 @@ python projects/supernodes_scar/scripts/verify_hf_artifacts.py \
 ## Paper Releases
 
 Paper-specific release material lives under `projects/`. Reusable library code
-stays in `src/alignment`, while each project folder records the exact configs,
+stays in `src/nodelens`, while each project folder records the exact configs,
 artifact layout, reproducibility notes, and release checklist for a paper.
 
 Current project:
@@ -112,7 +112,7 @@ Derived artifacts for this project are staged on Hugging Face:
 ## Repository Layout
 
 ```text
-alignment/
+nodelens/
 |-- configs/
 |   |-- prune_llm/          # LLM and SCAR configs
 |   |-- vision_prune/       # Vision pruning configs
@@ -121,7 +121,7 @@ alignment/
 |-- scripts/
 |   |-- run_experiment.py   # Main experiment entry point
 |   `-- run_analysis.py     # Post-hoc analysis
-|-- src/alignment/
+|-- src/nodelens/
 |   |-- analysis/           # Visualization, clustering, cascade analysis
 |   |-- experiments/        # Experiment classes
 |   |-- metrics/            # Importance metrics

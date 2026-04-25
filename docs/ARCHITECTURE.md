@@ -1,12 +1,12 @@
 # Architecture
 
-LossLens is organized as a reusable library plus paper-specific project
+NodeLens is organized as a reusable library plus paper-specific project
 folders. The library code should remain general; each paper folder should only
 contain release notes, configs, and artifact packaging scripts for that paper.
 
 ```mermaid
 flowchart TB
-    subgraph Library[src/alignment]
+    subgraph Library[src/nodelens]
         M[metrics]
         P[pruning]
         E[experiments]
@@ -39,7 +39,7 @@ flowchart TB
 ## Design Rules
 
 - Keep reusable metrics, services, pruning code, and experiment classes in
-  `src/alignment/`.
+  `src/nodelens/`.
 - Keep paper release instructions and packaging scripts in `projects/`.
 - Keep generated outputs in `outputs/`, which is ignored by git.
 - Do not store model weights, raw datasets, cluster logs, or private paths in
