@@ -1,44 +1,31 @@
-# Supernodes and Halos Release
+# Supernodes and SCAR Project Workflow
 
-This folder is the public-release entry point for the paper:
+This folder documents the NodeLens workflow used for:
 
 > Supernodes and Halos: Loss-Critical Hubs in LLM Feed-Forward Layers
 
-The reusable implementation lives in the main `nodelens` package. This project
-folder records the paper-specific configs, artifact layout, and release process.
+The reusable implementation lives in `src/nodelens`. This project folder points
+to the configs, helper scripts, and derived artifacts used to reproduce the
+paper's LLM channel-analysis and structured-pruning results.
 
-## What To Release
+## What This Workflow Does
 
-The public release should have two parts:
+The workflow studies feed-forward network channels in causal language models.
+It uses NodeLens to:
 
-1. A GitHub release/tag for code, configs, and reproduction scripts.
-2. A Hugging Face dataset repository for derived artifacts: result JSON files,
-   paper figures, LaTeX tables, checksums, and a dataset card.
+- capture FFN activations and gradients on a calibration set
+- compute channel metrics such as activation power, Taylor scores, curvature,
+  and the SCAR loss proxy
+- identify small loss-sensitive channel cores and compare them with
+  activation-defined outliers
+- run structured FFN pruning and ablation probes
+- aggregate numeric summaries into paper figures, tables, and manifest files
 
-This split is intentional. Code belongs in GitHub; generated experiment outputs
-and larger derived artifacts are easier to consume and version through the
-Hugging Face Hub. A Zenodo DOI can additionally archive the GitHub release for
-citation stability.
+The halo analysis is a secondary diagnostic layer on top of the same metric
+outputs. It estimates local write-overlap and redundancy structure around the
+loss-sensitive core.
 
-## Reproduce The Main Runs
-
-Install the package:
-
-```bash
-conda env create -f environment.yml
-conda activate nodelens
-pip install -e .
-```
-
-Run a paper config:
-
-```bash
-python scripts/run_experiment.py \
-  --config configs/prune_llm/llama3_8b_unified.yaml \
-  --base-output-dir /path/to/results
-```
-
-Important paper configs include:
+## Main Configs
 
 ```text
 configs/prune_llm/llama3_8b_unified.yaml
@@ -50,14 +37,57 @@ configs/prune_llm/llama3_70b_scale_mechanism.yaml
 configs/prune_llm/llama3_70b_scale_benchmarks_50_papersafe.yaml
 ```
 
-The 7B/8B runs are feasible on one A100/H100-class GPU. The 70B validation is a
-targeted large-model check and needs substantially more memory or model
-parallelism depending on the environment.
+The 7B/8B runs are intended for one A100/H100-class GPU. The 70B configs are
+targeted validation runs and need substantially more memory or model
+parallelism, depending on the environment.
 
-## Build The Artifact Bundle
+## Run A Config
 
-The artifact bundle is prepared locally under `outputs/`, which is ignored by
-git:
+Install the package from the repository root:
+
+```bash
+conda env create -f environment.yml
+conda activate nodelens
+pip install -e .
+```
+
+Run a project config:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/prune_llm/llama3_8b_unified.yaml \
+  --base-output-dir outputs/supernodes_scar_runs
+```
+
+Each run writes a timestamped job directory containing the config copy, logs,
+result JSON files, and generated figures.
+
+## Inspect Existing Artifacts
+
+The public artifact dataset contains derived outputs rather than model weights
+or raw datasets. It includes compact result JSON files, selected figure/table
+inputs, checksums, and metadata describing which public artifact path
+corresponds to each paper result.
+
+Download and inspect it with:
+
+```bash
+huggingface-cli download hsafaai/supernodes-scar-artifacts \
+  --repo-type dataset \
+  --local-dir supernodes_scar_artifacts
+
+cd supernodes_scar_artifacts
+python -m json.tool MANIFEST.json | head
+sha256sum -c MANIFEST.sha256
+```
+
+See `ARTIFACTS.md` for the artifact layout and `REPRODUCIBILITY.md` for the
+local rerun workflow.
+
+## Build A Local Artifact Bundle
+
+If the expected result folders are present locally, the helper script can build
+a clean derived-artifact directory under `outputs/`:
 
 ```bash
 python projects/supernodes_scar/scripts/prepare_hf_artifacts.py \
@@ -68,55 +98,19 @@ python projects/supernodes_scar/scripts/verify_hf_artifacts.py \
   outputs/supernodes_scar_hf
 ```
 
-The script copies only releaseable material into a clean directory:
+The verifier checks checksums and scans the staged bundle for files that should
+not be included in a public derived-artifact dataset, such as Python caches,
+LaTeX build files, checkpoints, raw datasets, model weights, and local absolute
+paths.
 
-- paper figures and LaTeX tables
-- generated numeric summaries and JSON diagnostics
-- selected locked result JSON files, sanitized and compressed as `.json.gz`
-- experiment configs used by the paper
-- active paper-side figure/table scripts
-- checksums and a machine-readable manifest
-- a Hugging Face dataset-card README
+## What Is Not Included
 
-It intentionally excludes model weights, raw calibration datasets, logs,
-checkpoints, Python caches, LaTeX build files, and internal absolute paths.
+This repository and the public artifact dataset do not include:
 
-## Upload To Hugging Face
+- Llama, Mistral, Qwen, or OLMo model weights
+- raw WikiText-2, C4, MMLU, or LM Evaluation Harness datasets
+- cluster logs, SLURM stdout/stderr, checkpoints, or cache directories
+- private local paths or access tokens
 
-After inspecting `outputs/supernodes_scar_hf`, upload it as a dataset repo:
-
-```bash
-huggingface-cli login
-huggingface-cli repo create supernodes-scar-artifacts --type dataset
-huggingface-cli upload hsafaai/supernodes-scar-artifacts \
-  outputs/supernodes_scar_hf \
-  --repo-type dataset
-```
-
-For very large bundles, use the `huggingface_hub` large-folder upload workflow
-instead of the simple CLI upload.
-
-## What Not To Upload
-
-Do not upload:
-
-- Llama, Mistral, Qwen, or OLMo model weights.
-- Raw WikiText-2, C4, MMLU, or LM Evaluation Harness datasets.
-- Cluster logs, SLURM stdout/stderr, checkpoints, caches, or private paths.
-- Any file containing access tokens, usernames beyond public author metadata,
-  or absolute Harvard cluster paths.
-
-## Release Checklist
-
-- `python -m pip install -e . --no-deps --dry-run` succeeds.
-- `PYTHONPATH=src python -c "import nodelens; print(nodelens.__version__)"`
-  succeeds.
-- The artifact bundle has no `.pyc`, `__pycache__`, `.aux`, `.log`, `.out`,
-  model checkpoint, or raw dataset files.
-- A private-path scan over both plain text files and compressed `.json.gz`
-  files returns no internal cluster paths.
-- `MANIFEST.sha256` verifies all staged artifacts.
-- GitHub release tag, Hugging Face dataset revision, and arXiv version are
-  recorded together in the dataset card.
-
-See `REPRODUCIBILITY.md` for the local rerun and figure-regeneration workflow.
+Users should obtain model weights and benchmark datasets from their original
+providers and follow the relevant licenses.

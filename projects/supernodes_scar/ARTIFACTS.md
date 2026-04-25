@@ -1,67 +1,82 @@
-# Artifact Plan
+# Artifact Contents
 
-This document defines what should be shared alongside the paper and why.
+The Supernodes and SCAR artifact dataset contains derived outputs that help
+readers inspect the reported results without rerunning every large-model job.
+It does not contain model weights, raw benchmark datasets, checkpoints, or
+cluster logs.
 
-## Recommended Public Artifacts
-
-`paper_artifacts/figures/`
-: PNG figures used in the arXiv paper. These are useful for quick inspection
-and for checking that regenerated figures match the submitted version.
-
-`paper_artifacts/tables/`
-: LaTeX table fragments used by the paper.
-
-`paper_artifacts/experiments/`
-: Compact JSON summaries used for figure/table generation. These are derived
-statistics, not raw datasets.
-
-`raw_results/`
-: Locked result JSON files copied from the runs used by the paper, sanitized
-and compressed as `.json.gz`. The public paths are stable; internal cluster
-paths are not included.
-
-`configs/`
-: Paper experiment configs needed to rerun metric estimation, pruning, and
-evaluation.
-
-`paper_scripts/`
-: Active figure/table aggregation scripts used by the current draft.
-
-`metadata/`
-: Release metadata, checksums, git commit, and manifest files.
-
-## Large Or Restricted Items
-
-The public artifact repository should not contain model weights. Users should
-download models through their original providers and accept the relevant model
-licenses. The artifact repository should also not duplicate raw public
-benchmarks; instead, document dataset names and versions in the dataset card.
-
-## Hugging Face vs Zenodo
-
-Hugging Face Datasets is a good fit for browsable, versioned ML artifacts that
-users may download programmatically. Zenodo is better for a citable archival
-snapshot with a DOI. The strongest release pattern is:
-
-1. GitHub release tag for code.
-2. Hugging Face dataset repo for result artifacts.
-3. Zenodo archive of the GitHub release, plus optionally the artifact bundle,
-   for DOI-based citation.
-
-## Minimal Artifact Schema
-
-Each generated bundle should include:
+## Directory Layout
 
 ```text
 README.md
 MANIFEST.json
 MANIFEST.sha256
-metadata/release_metadata.json
+metadata/
 configs/
 paper_artifacts/
 paper_scripts/
 raw_results/
 ```
 
-`MANIFEST.json` should record relative path, size, SHA256, and artifact group
-for every file. It should not record private absolute paths.
+`MANIFEST.json`
+: Machine-readable inventory. Each entry records the relative path, size,
+SHA256 checksum, and artifact group.
+
+`MANIFEST.sha256`
+: Checksum file that can be verified with `sha256sum -c MANIFEST.sha256`.
+
+`metadata/`
+: Dataset-level metadata, source-result mapping, and bundle-generation
+information.
+
+`configs/`
+: Experiment configs for metric estimation, pruning, ablation, and 70B
+validation runs.
+
+`paper_artifacts/figures/`
+: PNG figures used for quick visual inspection.
+
+`paper_artifacts/tables/`
+: LaTeX table fragments generated from the locked results.
+
+`paper_artifacts/experiments/`
+: Compact JSON summaries used by figure and table scripts.
+
+`paper_scripts/`
+: Figure and table aggregation scripts that operate on the included summaries
+or on compatible local result folders.
+
+`raw_results/`
+: Selected locked result JSON files, sanitized and compressed as `.json.gz`.
+These are derived statistics from completed runs, not raw calibration data.
+
+## How To Use The Bundle
+
+After downloading the dataset, verify the checksums:
+
+```bash
+sha256sum -c MANIFEST.sha256
+```
+
+Inspect the source mapping:
+
+```bash
+python -m json.tool metadata/result_sources.json | less
+```
+
+Use `raw_results/` for exact numeric values, `paper_artifacts/experiments/` for
+compact figure inputs, and `configs/` to rerun matching experiments with the
+current NodeLens code.
+
+## Excluded Files
+
+The artifact dataset intentionally excludes:
+
+- model weights and tokenizer files
+- raw public benchmark datasets
+- checkpoints and optimizer states
+- Python caches and compiled bytecode
+- LaTeX build products
+- local absolute paths, scheduler logs, and access tokens
+
+Models and datasets should be downloaded from their original providers.

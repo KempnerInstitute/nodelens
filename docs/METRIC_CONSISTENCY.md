@@ -6,7 +6,7 @@ It exists to prevent subtle drift in:
 - **Keys** (how values are named/stored),
 - **Sign conventions** (what "high" means when used for pruning/scoring).
 
-It intentionally avoids referencing any paper draft; the canonical sources are the implementations under `src/nodelens/metrics/` and the experiment pipeline that stores per-layer metric arrays.
+It intentionally avoids relying on paper-specific wording; the canonical sources are the implementations under `src/nodelens/metrics/` and the experiment pipeline that stores per-layer metric arrays.
 
 ---
 

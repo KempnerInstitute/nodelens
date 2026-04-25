@@ -1,24 +1,17 @@
-Internal Developer Documentation
-================================
+Codebase Notes
+==============
 
-This section contains internal documentation about the codebase organization and development processes.
+This page summarizes the parts of NodeLens that contributors usually need to
+understand before adding metrics, experiment types, or pruning strategies.
 
-.. toctree::
-   :maxdepth: 1
+Core extension points:
 
-   CODEBASE_ORGANIZATION
-   DOCUMENTATION_OVERVIEW
-   DOCUMENTATION_STRUCTURE
-   setup_github_pages
+- ``src/nodelens/core/registry.py`` registers metrics, models, and experiments.
+- ``src/nodelens/metrics/`` contains metric implementations.
+- ``src/nodelens/models/`` wraps PyTorch and Hugging Face models for activation capture.
+- ``src/nodelens/pruning/`` contains masks, pruning configs, and strategies.
+- ``src/nodelens/experiments/`` connects configs, data, models, metrics, and evaluation.
+- ``configs/`` contains runnable YAML examples.
 
-Overview
---------
-
-These documents provide guidance for maintainers and contributors:
-
-- **Codebase Organization**: Current directory structure and module organization
-- **Documentation Overview**: Summary of all documentation created for the framework
-- **Documentation Structure**: How documentation is organized across the project
-- **GitHub Pages Setup**: Instructions for setting up and maintaining the documentation site
-
-These are primarily for maintainers and contributors who need to understand the codebase structure and documentation system.
+Keep reusable code in ``src/nodelens`` and keep project-specific workflows under
+``projects/``.

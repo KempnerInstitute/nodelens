@@ -104,7 +104,7 @@ Pull Request Guidelines
 2. **Description**: Explain what changes you made and why
 3. **Tests**: Ensure all tests pass
 4. **Documentation**: Update docs if needed
-5. **Release notes**: For paper-facing changes, update the relevant file under ``projects/``
+5. **Project docs**: For project-specific behavior, update the relevant file under ``projects/``
 
 Example PR description:
 

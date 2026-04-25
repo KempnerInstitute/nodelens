@@ -1,321 +1,138 @@
 # API Reference
 
-## Core Classes
+This page summarizes the main public APIs. For full experiments, the preferred
+entry point is still the YAML runner:
 
-### ModelWrapper
+```bash
+python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+```
 
-Wraps PyTorch models for activation capture and analysis.
+## Model Wrapping
+
+`ModelWrapper` wraps a PyTorch model and captures activations from selected
+layers.
 
 ```python
 from nodelens import ModelWrapper
 
-wrapper = ModelWrapper(
-    model,                    # PyTorch model
-    tracked_layers=None,      # Layer names or None (auto-detect)
-    track_inputs=True,
-    track_outputs=True
-)
-
+wrapper = ModelWrapper(model, tracked_layers=["layer1.0.conv1"])
 outputs, activations = wrapper.forward_with_activations(inputs)
-weights = wrapper.get_layer_weights(layers=None)
+weights = wrapper.get_layer_weights(layers=["layer1.0.conv1"])
 ```
-
-### BaseMetric
-
-All metrics inherit from `BaseMetric`:
-
-```python
-metric.requires_inputs   # bool
-metric.requires_weights  # bool
-metric.requires_outputs  # bool
-metric.compute(inputs, weights, outputs, **kwargs)  # Returns scores
-```
-
----
 
 ## Metrics
 
-### Rayleigh Quotient
+Metrics are created through the registry.
 
 ```python
-from nodelens.metrics import get_metric
+from nodelens.metrics import get_metric, list_metrics
 
-rq = get_metric('rayleigh_quotient',
-    relative=True,
-    regularization=1e-6
-)
-scores = rq.compute(inputs, weights)
+print(list_metrics())
+
+rq = get_metric("rayleigh_quotient", relative=True, regularization=1e-6)
+scores = rq.compute(inputs=layer_inputs, weights=layer_weights)
 ```
 
-### Redundancy
+Common metric families:
+
+| Family | Examples |
+|--------|----------|
+| Activation | `activation_l2_norm`, `activation_variance`, `activation_outlier_index` |
+| Alignment | `rayleigh_quotient`, `delta_alignment` |
+| Information | `mutual_information_gaussian`, `pairwise_redundancy_gaussian`, `average_redundancy` |
+| Synergy | `gaussian_pid_synergy_mmi`, `synergy_gaussian_mmi` |
+| Gradient | `taylor_saliency`, `gradient_alignment` |
+
+LLM experiments can also write SCAR-specific score keys such as
+`scar_activation_power`, `scar_taylor`, `scar_curvature`, and
+`scar_loss_proxy`. Those are produced by the LLM experiment pipeline rather
+than by the generic metric registry.
+
+## Clustering And Halo Analysis
+
+Metric-space clustering groups channels by score profile.
 
 ```python
-redundancy = get_metric('pairwise_redundancy_gaussian',
-    mode='output_based',
-    num_pairs=10,
-    aggregation='mean'
-)
-scores = redundancy.compute(outputs=layer_outputs)
-```
-
-### Synergy (Continuous Target)
-
-```python
-from nodelens.metrics.information import SynergyContinuousTarget
-
-synergy = SynergyContinuousTarget(
-    target_type='logit_margin',  # or 'correct_logit', 'logit_pc1'
-    num_pairs=10,
-    sampling_strategy='top_k'
-)
-scores = synergy.compute(outputs=activations, logits=logits, labels=labels)
-```
-
----
-
-## Clustering Analysis
-
-### MetricSpaceClustering
-
-Clusters channels in (RQ, Redundancy, Synergy) space.
-
-```python
-from nodelens.analysis.clustering import MetricSpaceClustering, ClusterResult
+from nodelens.analysis.clustering import MetricSpaceClustering
 
 clusterer = MetricSpaceClustering(n_clusters=4, seed=42)
-result = clusterer.fit(rq_scores, redundancy_scores, synergy_scores, layer_name="conv1")
-
-# Result attributes
-result.labels        # Cluster assignments [n_channels]
-result.centroids     # Cluster centers [n_clusters, 3]
-result.silhouette    # Silhouette score
-result.type_mapping  # {cluster_id: 'critical'|'redundant'|'synergistic'|'background'}
-result.type_counts   # {'critical': N, ...}
-```
-
-### CrossLayerHaloAnalysis
-
-Analyzes downstream dependencies via halos.
-
-```python
-from nodelens.analysis.clustering import CrossLayerHaloAnalysis, HaloResult
-
-halo_analyzer = CrossLayerHaloAnalysis(percentile=90.0, use_activation_weight=True)
-
-# Compute influence matrix
-influence = halo_analyzer.compute_influence(weights, activations)
-
-# Find halo for a cluster
-halo_indices, rel_influence = halo_analyzer.find_halo(influence, cluster_indices)
-
-# Analyze halo properties
-halo_result = halo_analyzer.analyze_halo(
-    halo_indices, next_layer_redundancy, next_layer_synergy,
-    layer_name="layer2", cluster_name="critical"
+result = clusterer.fit(
+    rq_scores,
+    redundancy_scores,
+    synergy_scores,
+    layer_name="conv1",
 )
 ```
 
-### CascadeAnalysis
-
-Validates importance via channel ablation.
-
-```python
-from nodelens.analysis import CascadeAnalysis, DamagePrediction
-
-cascade = CascadeAnalysis(model, test_loader, device="cuda")
-baseline = cascade.baseline()
-
-# Ablate specific channels
-result = cascade.ablate(layer_name="conv1", indices=[0, 5, 10])
-# result.accuracy_drop, result.loss_increase
-
-# Test by cluster type
-results = cascade.by_cluster(layer_name, labels, type_mapping, n_rm=5)
-```
-
----
-
-## Experiments
-
-### ClusterAnalysisExperiment
-
-General cluster-based analysis for any architecture.
+`CrossLayerHaloAnalysis` estimates downstream influence and local dependency
+structure.
 
 ```python
-from nodelens.experiments import ClusterAnalysisExperiment, ClusterAnalysisConfig
+from nodelens.analysis.clustering import CrossLayerHaloAnalysis
 
-config = ClusterAnalysisConfig(
-    name="resnet18_cifar10_cluster_analysis",
-    model_name="resnet18",
-    dataset_name="cifar10",
-    n_clusters=4,
-    synergy_target="logit_margin",
-    halo_percentile=90.0,
-    device="cuda"
-)
-
-experiment = ClusterAnalysisExperiment(config, model, train_loader, test_loader)
-results = experiment.run()
-experiment.generate_figures()
+halo = CrossLayerHaloAnalysis(percentile=90.0, use_activation_weight=True)
+influence = halo.compute_influence(weights, activations)
+halo_indices, rel_influence = halo.find_halo(influence, cluster_indices)
 ```
-
-### LLMAlignmentExperiment
-
-LLM-specific analysis with SCAR metrics.
-
-```python
-from nodelens.experiments import LLMAlignmentExperiment
-
-experiment = LLMAlignmentExperiment(config)
-experiment.setup()
-
-scores = experiment.compute_importance_scores(num_samples=100)
-scar_scores = experiment.compute_scar_supernode_metrics()
-masks = experiment.apply_pruning(sparsity=0.3, metric="scar_loss_proxy", mode="low")
-perplexity = experiment.evaluate_perplexity("wikitext", "test", num_samples=100)
-```
-
-### GeneralAlignmentExperiment
-
-Vision model alignment analysis.
-
-```python
-from nodelens.experiments import GeneralAlignmentExperiment
-
-experiment = GeneralAlignmentExperiment.from_yaml("config.yaml")
-results = experiment.run()
-```
-
----
-
-## Visualization
-
-### Cluster Plots
-
-```python
-from nodelens.analysis.visualization import (
-    plot_metric_scatter,
-    plot_cluster_evolution,
-    plot_influence_matrix,
-    plot_cascade_test,
-    plot_halo_properties
-)
-
-# Metric space scatter (RQ vs Red, RQ vs Syn, Red vs Syn)
-plot_metric_scatter(rq, redundancy, synergy, labels, type_mapping,
-                   layer_name, save_path)
-
-# Cluster composition across depth
-plot_cluster_evolution(layer_results, save_path)
-
-# Cross-cluster influence heatmap
-plot_influence_matrix(flow_dict, layer_name, save_path)
-
-# Cascade damage by cluster type
-plot_cascade_test(cascade_results, save_path)
-```
-
-### UnifiedVisualizer
-
-```python
-from nodelens.analysis.visualization import UnifiedVisualizer
-
-viz = UnifiedVisualizer()
-viz.plot_layer_scores(scores, metric_name, plot_type='violin', save_path='plot.png')
-viz.plot_importance_histogram(scores, layer_name, metric_name, plots_dir)
-viz.plot_scatter_2d(x, y, xlabel, ylabel, title, save_path)
-viz.plot_heatmap(data, title, cmap, save_path)
-```
-
----
 
 ## Pruning
 
-### Quick Pruning
+Use the pruning registry for direct scripts.
 
 ```python
-from nodelens.pruning.orchestrator import prune_with_all_options
+from nodelens.pruning import PruningConfig, get_pruning_strategy, list_pruning_strategies
 
-result = prune_with_all_options(
-    model,
-    target_sparsity=0.7,
-    distribution='adaptive_sensitivity',
-    scoring='composite',
-    direction='low',
-    val_loader=val_loader,
-    eval_fn=evaluate
+print(list_pruning_strategies())
+
+config = PruningConfig(amount=0.5, pruning_mode="low")
+strategy = get_pruning_strategy("magnitude", config=config)
+mask = strategy.prune(layer, amount=0.5)
+```
+
+For full-model pruning, prefer config-driven experiments under
+`configs/vision_prune/` and `configs/prune_llm/`, because they handle layer
+selection, dependency constraints, evaluation, and logging.
+
+## Experiments
+
+Load configs with `load_config` and instantiate the matching experiment family
+when writing custom scripts.
+
+```python
+from nodelens.configs.config_loader import load_config
+from nodelens.experiments import (
+    ClusterAnalysisExperiment,
+    GeneralAlignmentExperiment,
+    LLMAlignmentExperiment,
 )
+
+config = load_config("configs/examples/mnist_basic.yaml")
+
+if config.experiment_type == "llm_alignment":
+    experiment = LLMAlignmentExperiment(config)
+elif config.experiment_type == "cluster_analysis":
+    experiment = ClusterAnalysisExperiment(config)
+else:
+    experiment = GeneralAlignmentExperiment(config)
+
+results = experiment.run()
 ```
 
-### Dependency-Aware Pruning
+## Output Analysis
 
-```python
-from nodelens.pruning.dependency_aware import DependencyAwarePruning
+Most experiments write:
 
-pruner = DependencyAwarePruning(model)
-result = pruner.prune(layer_scores={'conv1': scores1}, amount=0.5, mode='low')
+- `experiment_config.yaml`
+- `logs/`
+- `results/`
+- `figures/`
+- `analysis/`
+
+Use `scripts/run_analysis.py` for post-hoc analysis when an experiment has
+already produced a results directory.
+
+```bash
+python scripts/run_analysis.py \
+  --results-dir outputs/my_run \
+  --output-dir outputs/my_run/analysis_extra
 ```
-
----
-
-## Services
-
-### ActivationCaptureService
-
-```python
-from nodelens.services import ActivationCaptureService
-
-capture = ActivationCaptureService(model_wrapper)
-data = capture.capture(input_batch, layers=['conv1'], include_weights=True)
-```
-
-### NodeScoringService
-
-```python
-from nodelens.services import NodeScoringService
-
-scorer = NodeScoringService(
-    metrics={'rq': rq_metric, 'redundancy': redundancy_metric},
-    gamma_redundancy=0.4,
-    delta_rq=0.3
-)
-scores = scorer.compute_composite_scores(inputs, weights, targets)
-```
-
----
-
-## Configuration Parameters
-
-### Metric Parameters
-
-**RayleighQuotient**
-- `relative` (bool): Normalize by trace
-- `regularization` (float): Diagonal regularization
-
-**PairwiseRedundancyGaussian**
-- `mode` (str): 'output_based' or 'covariance_based'
-- `num_pairs` (int): Partners to sample
-- `aggregation` (str): 'mean', 'median', 'max', 'sum'
-
-**SynergyContinuousTarget**
-- `target_type` (str): 'logit_margin', 'correct_logit', 'logit_pc1'
-- `num_pairs` (int): Partner neurons per channel
-- `sampling_strategy` (str): 'random', 'top_k', 'all'
-
-### Clustering Parameters
-
-**MetricSpaceClustering**
-- `n_clusters` (int): Number of clusters (default: 4)
-- `seed` (int): Random seed
-
-**CrossLayerHaloAnalysis**
-- `percentile` (float): Halo membership threshold (default: 90.0)
-- `use_activation_weight` (bool): Weight influence by activation std
-
-### Pruning Parameters
-
-**Strategy**: 'magnitude', 'alignment', 'composite', 'cluster_aware', 'random'
-
-**Distribution**: 'uniform', 'global_threshold', 'adaptive_sensitivity'
-
-**Direction**: 'low' (prune unimportant), 'high' (ablation)

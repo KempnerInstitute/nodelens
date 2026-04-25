@@ -29,7 +29,7 @@ paper scripts, and checksums.
 ```text
 MANIFEST.json
 MANIFEST.sha256
-metadata/release_metadata.json
+metadata/
 configs/
 paper_artifacts/
 paper_scripts/
@@ -50,10 +50,10 @@ cd supernodes_scar_artifacts
 sha256sum -c MANIFEST.sha256
 ```
 
-The corresponding code release is available at:
+The corresponding code repository is available at:
 
 ```text
-https://github.com/KempnerInstitute/nodelens
+https://github.com/KempnerInstitute/NodeLens
 ```
 
 Use the configs in `configs/` with `scripts/run_experiment.py` from the code

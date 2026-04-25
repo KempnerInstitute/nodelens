@@ -1,301 +1,105 @@
 Pruning Guide
 =============
 
-This guide covers the pruning capabilities in NodeLens, including different strategies and experiment types.
+NodeLens uses pruning as both an intervention tool and a compression baseline.
+The same metric scores used for interpretability can be turned into masks, then
+the pruned model can be evaluated to test whether those scores identify
+functionally important channels or weights.
 
-Overview
---------
+Available Strategies
+--------------------
 
-The framework provides comprehensive pruning capabilities:
+Registered strategies include:
 
-- **Multiple Pruning Strategies**: Magnitude, gradient, random, and alignment-based
-- **Structured and Unstructured Pruning**: Support for both approaches
-- **Various Experiment Types**: Global, layer-wise, cascading, and eigenvector-based
+- ``magnitude`` and ``global_magnitude``
+- ``gradient``, ``fisher``, and ``momentum``
+- ``alignment`` and ``global_alignment``
+- ``eigenvector``
+- ``movement`` and ``adaptive_movement``
+- ``random`` and ``bernoulli``
+- LLM baselines such as ``wanda`` and ``sparsegpt``
 
-Pruning Strategies
-------------------
-
-The framework includes several pruning strategies in ``nodelens.pruning.strategies``:
-
-Magnitude-based Pruning
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Prunes weights or neurons based on their magnitude:
-
-.. code-block:: python
-
-    from nodelens.pruning.strategies import MagnitudePruning
-
-    strategy = MagnitudePruning()
-    masks = strategy.compute_masks(model, pruning_ratio=0.5)
-
-Gradient-based Pruning
-^^^^^^^^^^^^^^^^^^^^^^
-
-Uses gradient information to determine importance:
+List strategies from Python:
 
 .. code-block:: python
 
-    from nodelens.pruning.strategies import GradientPruning
+   from nodelens.pruning import list_pruning_strategies
 
-    strategy = GradientPruning()
-    masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
+   print(list_pruning_strategies())
 
-Random Pruning
-^^^^^^^^^^^^^^
+Use A Strategy Directly
+-----------------------
 
-Baseline strategy that randomly prunes connections:
-
-.. code-block:: python
-
-    from nodelens.pruning.strategies import RandomPruning
-
-    strategy = RandomPruning(seed=42)
-    masks = strategy.compute_masks(model, pruning_ratio=0.5)
-
-Alignment-based Pruning
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Uses alignment metrics to guide pruning decisions:
+For low-level scripts, create a strategy from the registry:
 
 .. code-block:: python
 
-    from nodelens.pruning.strategies import AlignmentPruning
+   from nodelens.pruning import PruningConfig, get_pruning_strategy
 
-    strategy = AlignmentPruning(metric="rayleigh_quotient")
-    masks = strategy.compute_masks(model, dataloader, pruning_ratio=0.5)
+   config = PruningConfig(amount=0.5, pruning_mode="low")
+   strategy = get_pruning_strategy("magnitude", config=config)
+   mask = strategy.prune(layer, amount=0.5)
 
-Pruning Experiments
--------------------
+The exact method signature depends on the strategy. Config-driven experiments
+are the safer entry point for full-model pruning because they handle layer
+selection, dependency constraints, evaluation, and result logging.
 
-Global Pruning
-^^^^^^^^^^^^^^
+Run A Pruning Config
+--------------------
 
-Applies the same pruning rate across all layers:
+Vision example:
 
-.. code-block:: python
+.. code-block:: bash
 
-    from nodelens.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
+   python scripts/run_experiment.py \
+     --config configs/vision_prune/resnet18_cifar10_full.yaml
 
-    config = GlobalDropoutConfig(
-        experiment_name="global_pruning_mnist",
-        dataset_name="mnist",
-        model_name="mlp",
-        hidden_sizes=[128, 64],
-        dropout_rates=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
-        dropout_structure="magnitude"
-    )
+LLM example:
 
-    experiment = GlobalDropoutExperiment(config)
-    results = experiment.run()
+.. code-block:: bash
 
-Layer-wise Pruning
-^^^^^^^^^^^^^^^^^^
+   python scripts/run_experiment.py \
+     --config configs/prune_llm/llama3_8b_unified.yaml
 
-Analyzes the effect of pruning individual layers:
+Structured And Unstructured Masks
+---------------------------------
 
-.. code-block:: python
+Unstructured pruning removes individual weights. It is useful for sparsity
+experiments, but it may need sparse kernels to produce wall-clock speedups.
 
-    from nodelens.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
+Structured pruning removes complete channels, filters, or FFN units. It is
+coarser, but it is easier to connect to architecture-level interventions and
+hardware-friendly compression.
 
-    config = LayerIsolatedConfig(
-        experiment_name="layer_analysis",
-        dataset_name="mnist",
-        model_name="mlp",
-        pruning_ratios=[0.1, 0.3, 0.5, 0.7, 0.9],
-        pruning_strategy="magnitude",
-        layers_to_prune=["fc1", "fc2"]  # Specific layers
-    )
+NodeLens supports both settings through strategy-specific options and YAML
+configs. For LLM FFN studies, structured channel pruning is often the relevant
+setting because the goal is to ask which whole channels are functionally
+important.
 
-    experiment = LayerIsolatedPruningExperiment(config)
-    results = experiment.run()
+Interpreting Results
+--------------------
 
-Cascading Pruning
-^^^^^^^^^^^^^^^^^
+Pruning experiments typically report:
 
-Progressive pruning that cascades through network layers:
+- the requested sparsity or pruning fraction
+- the layer or channel groups that were masked
+- model performance after applying the mask
+- metric summaries for protected, pruned, or retained channels
+- optional figures and JSON summaries for downstream analysis
 
-.. code-block:: python
-
-    from nodelens.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
-
-    config = CascadingConfig(
-        experiment_name="cascading_analysis",
-        dataset_name="mnist",
-        model_name="mlp",
-        cascade_direction="forward",
-        base_pruning_ratio=0.2,
-        cascade_factor=1.5  # Increase pruning by 50% each layer
-    )
-
-    experiment = CascadingLayerPruningExperiment(config)
-    results = experiment.run()
-
-Eigenvector-based Pruning
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Uses spectral analysis for pruning:
-
-.. code-block:: python
-
-    from nodelens.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
-
-    config = EigenvectorConfig(
-        experiment_name="eigenvector_pruning",
-        dataset_name="mnist",
-        model_name="mlp",
-        num_components=10,
-        component_selection="top",  # or "bottom"
-        pruning_ratios=[0.1, 0.3, 0.5]
-    )
-
-    experiment = EigenvectorDropoutExperiment(config)
-    results = experiment.run()
-
-Structured vs Unstructured Pruning
------------------------------------
-
-Unstructured Pruning
-^^^^^^^^^^^^^^^^^^^^
-
-Removes individual weights/connections:
-
-.. code-block:: python
-
-    config = GlobalDropoutConfig(
-        structured_pruning=False,  # Default
-        pruning_strategy="magnitude"
-    )
-
-- **Pros**: Fine-grained control, potentially higher accuracy retention
-- **Cons**: Requires sparse matrix support for speedup
-
-Structured Pruning
-^^^^^^^^^^^^^^^^^^
-
-Removes entire neurons/channels/filters:
-
-.. code-block:: python
-
-    config = GlobalDropoutConfig(
-        structured_pruning=True,
-        pruning_strategy="magnitude",
-        structure_type="neuron"  # or "channel", "filter"
-    )
-
-- **Pros**: Direct speedup, hardware-friendly
-- **Cons**: Coarser granularity, potentially more accuracy loss
-
-Analyzing Pruning Results
--------------------------
-
-The experiments return comprehensive results:
-
-.. code-block:: python
-
-    results = experiment.run()
-
-    # Pruning performance
-    for ratio in results['pruning_ratios']:
-        metrics = results['pruning_results'][ratio]
-        print(f"Pruning {ratio*100}%:")
-        print(f"  Accuracy: {metrics['accuracy']:.2f}%")
-        print(f"  Remaining params: {metrics['remaining_params']}")
-
-    # Layer-wise analysis (for layer-wise experiments)
-    if 'layer_results' in results:
-        for layer, data in results['layer_results'].items():
-            print(f"\nLayer {layer}:")
-            print(f"  Sensitivity: {data['sensitivity']}")
-            print(f"  Optimal pruning: {data['optimal_ratio']}")
-
-Visualization
--------------
-
-The framework automatically generates pruning analysis plots:
-
-- Accuracy vs pruning ratio curves
-- Layer sensitivity heatmaps
-- Parameter reduction charts
-- Alignment metric evolution
-
-Custom Pruning Strategies
--------------------------
-
-Implement custom strategies by extending the base class:
-
-.. code-block:: python
-
-    from nodelens.pruning.strategies import BasePruningStrategy
-
-    class MyCustomPruning(BasePruningStrategy):
-        def compute_importance_scores(self, model, dataloader=None):
-            """Compute importance scores for each parameter."""
-            scores = {}
-            for name, param in model.named_parameters():
-                if 'weight' in name:
-                    # Your custom importance calculation
-                    scores[name] = custom_importance(param)
-            return scores
-
-        def create_masks(self, scores, pruning_ratio):
-            """Create binary masks from scores."""
-            masks = {}
-            for name, score in scores.items():
-                threshold = torch.quantile(score.flatten(), pruning_ratio)
-                masks[name] = score > threshold
-            return masks
+When comparing pruning methods, keep the pruning granularity fixed. A
+structured channel-pruning result should not be treated as directly comparable
+to an unstructured weight-pruning result unless the goal is explicitly to
+compare different deployment regimes.
 
 Best Practices
 --------------
 
-1. **Start Conservative**: Begin with small pruning ratios (10-30%)
-2. **Fine-tune After Pruning**: Allow the model to adapt after pruning
-3. **Compare Strategies**: Test multiple strategies on your specific task
-4. **Monitor Multiple Metrics**: Don't just track accuracy
-5. **Consider Hardware**: Choose structured/unstructured based on deployment
-
-Common Pitfalls
----------------
-
-1. **Pruning Too Aggressively**: Gradual pruning often works better
-2. **Ignoring Layer Sensitivity**: Some layers are more critical
-3. **Not Fine-tuning**: Models often recover performance with fine-tuning
-4. **Wrong Granularity**: Match pruning type to hardware constraints
-
-Advanced Topics
----------------
-
-Iterative Pruning
-^^^^^^^^^^^^^^^^^
-
-Prune in multiple rounds:
-
-.. code-block:: python
-
-    config = GlobalDropoutConfig(
-        iterative_pruning=True,
-        pruning_schedule=[0.2, 0.4, 0.6],  # Cumulative
-        fine_tune_epochs=5  # Between rounds
-    )
-
-Dynamic Pruning
-^^^^^^^^^^^^^^^
-
-Adjust pruning during training:
-
-.. code-block:: python
-
-    config = GlobalDropoutConfig(
-        dynamic_pruning=True,
-        initial_sparsity=0.0,
-        final_sparsity=0.9,
-        pruning_frequency=100  # Steps
-    )
-
-See Also
---------
-
-- :doc:`experiments` - Overview of experiment types
-- :doc:`metrics` - Alignment metrics for pruning
-- :doc:`configuration` - Detailed configuration options
+- Start with a small config and verify the output layout before launching a
+  large run.
+- Compare each informed strategy against random and magnitude baselines.
+- Record the calibration dataset, evaluation dataset, sparsity, and mask
+  granularity.
+- For LLM runs, keep structured and unstructured baselines clearly labeled.
+- Use ablation probes when the goal is scientific interpretation rather than
+  only compression quality.

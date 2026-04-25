@@ -10,32 +10,30 @@ Overview
 
 The codebase provides tools for:
 
-- Computing alignment metrics between neural representations and task structure
-- Implementing and testing pruning strategies on neural networks
-- Estimating channel-level loss sensitivity in LLM feed-forward layers
-- Evaluating information-theoretic properties of learned representations
-- Packaging paper artifacts for public release
+- Computing alignment, information, redundancy, activation, and loss-sensitive metrics
+- Capturing activations and gradients from vision models, transformers, and LLMs
+- Testing metric-defined channels with ablation, pruning, and sensitivity probes
+- Running reproducible experiments from YAML configuration files
+- Generating plots, tables, JSON summaries, and manifest files
 
 Key Features
 ------------
 
-- Alignment metrics including Rayleigh quotient, mutual information, and spectral methods
-- Multiple pruning strategies: magnitude-based, gradient-based, and alignment-based
-- Support for vision models (ResNet, VGG, EfficientNet, ViT) and language models
-- Flexible experiment framework with YAML configuration
-- Paper-specific release folders under ``projects/``
+- Metrics including Rayleigh quotient, mutual information, redundancy, synergy,
+  activation statistics, gradient scores, curvature scores, and SCAR loss proxies
+- Structured pruning strategies for channel-level model analysis
+- Support for vision models and Hugging Face causal language models
+- Project workflows under ``projects/`` that show complete applied analyses
+- Config-driven entry points for both small smoke tests and large LLM studies
 
 Quick Start
 -----------
 
-.. code-block:: python
+.. code-block:: bash
 
-    from nodelens.experiments import GeneralAlignmentExperiment
-    from nodelens.configs.config_loader import load_config
-
-    config = load_config('configs/examples/mnist_basic.yaml')
-    experiment = GeneralAlignmentExperiment(config)
-    results = experiment.run()
+    python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+    python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
+    python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
 
 .. toctree::
    :maxdepth: 2

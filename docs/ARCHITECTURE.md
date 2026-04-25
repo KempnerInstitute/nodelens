@@ -1,65 +1,101 @@
 # Architecture
 
-NodeLens is organized as a reusable library plus paper-specific project
-folders. The library code should remain general; each paper folder should only
-contain release notes, configs, and artifact packaging scripts for that paper.
+NodeLens is organized around a reusable Python package and a small set of
+configuration-driven workflows. The library code stays general; project folders
+show how the same components are combined for a concrete study.
 
-```mermaid
-flowchart TB
-    subgraph Library[src/nodelens]
-        M[metrics]
-        P[pruning]
-        E[experiments]
-        A[analysis]
-        S[services]
-    end
+## Data Flow
 
-    subgraph Inputs[Inputs]
-        C[configs]
-        D[calibration data]
-        N[model checkpoints]
-    end
+```text
+YAML config
+    |
+    v
+Experiment runner
+    |
+    |-- loads model and dataset
+    |-- selects tracked layers
+    |-- captures activations, gradients, weights, and masks
+    |
+    v
+Metric and scoring layer
+    |
+    |-- activation and norm statistics
+    |-- Rayleigh quotient and spectral metrics
+    |-- mutual information, redundancy, and synergy
+    |-- gradient, Taylor, curvature, and loss-proxy scores
+    |
+    v
+Analysis and intervention layer
+    |
+    |-- clustering and cross-layer analyses
+    |-- ablation and sensitivity probes
+    |-- structured pruning strategies
+    |-- plots, tables, JSON summaries, and reports
+```
 
-    subgraph Projects[projects]
-        R[supernodes_scar]
-    end
+## Package Layout
 
-    C --> E
-    D --> S
-    N --> S
-    S --> M
-    M --> P
-    M --> A
-    P --> E
-    A --> E
-    E --> R
-    R --> H[Hugging Face artifact bundle]
+```text
+src/nodelens/
+|-- analysis/        # Aggregation, clustering, visualization, reports
+|-- configs/         # Config loading and validation
+|-- core/            # Registries, protocols, base abstractions
+|-- dataops/         # Dataset loading and tensor preprocessing
+|-- experiments/     # Config-driven experiment classes
+|-- infrastructure/  # Logging, distributed helpers, storage utilities
+|-- metrics/         # Node and channel metrics
+|-- models/          # Model wrappers and model factory helpers
+|-- pruning/         # Pruning configs, masks, and strategies
+|-- services/        # Activation capture, scoring, and mask operations
+`-- training/        # Training and evaluation helpers
 ```
 
 ## Design Rules
 
-- Keep reusable metrics, services, pruning code, and experiment classes in
-  `src/nodelens/`.
-- Keep paper release instructions and packaging scripts in `projects/`.
+- Keep reusable metrics, model wrappers, pruning code, and experiment classes
+  in `src/nodelens/`.
+- Keep runnable experiment settings in `configs/`.
 - Keep generated outputs in `outputs/`, which is ignored by git.
-- Do not store model weights, raw datasets, cluster logs, or private paths in
-  the repository.
-- Use project manifests and checksums for anything uploaded as an artifact.
+- Keep project folders focused on reproducible usage: configs, helper scripts,
+  artifact descriptions, and notes that connect a study to the shared library.
+- Do not store model weights, raw datasets, checkpoints, scheduler logs, access
+  tokens, or private absolute paths in the repository.
 
-## Supernodes and SCAR Flow
+## Common Workflows
 
-```mermaid
-sequenceDiagram
-    participant Config as YAML config
-    participant Runner as run_experiment.py
-    participant Capture as activation and gradient capture
-    participant Metrics as SCAR metrics
-    participant Prune as structured pruning
-    participant Artifacts as artifact bundle
+### Metric Analysis
 
-    Config->>Runner: choose model, calibration data, sparsity, metrics
-    Runner->>Capture: collect layer-wise activations and gradients
-    Capture->>Metrics: compute LP, activation, curvature, and Taylor scores
-    Metrics->>Prune: protect supernode core and rank remaining channels
-    Prune->>Artifacts: write results, figures, tables, and manifests
+```text
+model + dataloader
+    -> activation capture
+    -> metric computation
+    -> per-layer channel scores
+    -> plots or JSON summaries
 ```
+
+Use this path for activation outliers, Rayleigh quotient scores, information
+metrics, redundancy estimates, or loss-proxy ranking.
+
+### Intervention Analysis
+
+```text
+channel scores
+    -> masks or ablation sets
+    -> model evaluation
+    -> sensitivity curves
+```
+
+Use this path to test whether a metric identifies channels that matter for
+accuracy, perplexity, robustness, pruning, or other downstream behavior.
+
+### Project Workflow
+
+```text
+shared package + configs
+    -> experiment outputs
+    -> aggregation scripts
+    -> figures, tables, and artifact manifests
+```
+
+Project folders under `projects/` should make a study easy to inspect without
+turning project-specific scripts into core library code.

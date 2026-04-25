@@ -1,298 +1,76 @@
 Pruning Strategies Guide
 ========================
 
-This guide documents all pruning strategies available in NodeLens and their use cases.
+This page summarizes the pruning strategy registry. For full experiments, use a
+YAML config and ``scripts/run_experiment.py``. Use the direct Python API when a
+custom script already owns the model, layer selection, and evaluation loop.
 
-Overview
+Registry
 --------
 
-Pruning is a technique for reducing neural network size by removing parameters while maintaining performance. NodeLens provides several pruning strategies to analyze how network sparsity affects alignment metrics.
-
-Available Pruning Strategies
-----------------------------
-
-1. Magnitude-Based Pruning
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Module**: :mod:`nodelens.pruning.strategies.magnitude`
-
-**Classes**:
-
-- :class:`MagnitudePruning`: Basic magnitude pruning
-- :class:`GlobalMagnitudePruning`: Global magnitude pruning across all layers
-- :class:`IterativeMagnitudePruning`: Gradual pruning with fine-tuning
-
-**Description**: Removes weights with the smallest absolute values.
-
-**Theory**: Small magnitude weights contribute less to the network's output and can be removed with minimal impact.
-
-**Usage**:
-
 .. code-block:: python
 
-   from nodelens.pruning import get_pruning_strategy
+   from nodelens.pruning import get_pruning_strategy, list_pruning_strategies
 
-   # Basic magnitude pruning
+   print(list_pruning_strategies())
    strategy = get_pruning_strategy("magnitude")
-   mask = strategy.compute_mask(layer.weight, amount=0.5)
-   strategy.apply_mask(layer, mask)
 
-   # Global magnitude pruning
-   strategy = get_pruning_strategy("global_magnitude")
-   masks = strategy.compute_masks_for_model(model, amount=0.5)
+Main Strategy Families
+----------------------
 
-**Parameters**:
+Magnitude-based
+   ``magnitude``, ``global_magnitude``, ``iterative_magnitude``. These remove
+   low-magnitude weights or channels and are useful default baselines.
 
-- ``amount``: Fraction of weights to prune (0-1)
-- ``structured``: If True, prunes entire channels/filters
-- ``dim``: Dimension for structured pruning (0=output, 1=input)
+Gradient-based
+   ``gradient``, ``fisher``, ``momentum``. These use gradients or
+   gradient-derived saliency and require a backward pass or stored gradients.
 
-2. Random Pruning
-~~~~~~~~~~~~~~~~~
+Alignment-based
+   ``alignment``, ``global_alignment``, ``cascading_alignment``. These use
+   NodeLens metric scores, such as Rayleigh quotient or activation statistics,
+   as pruning signals.
 
-**Module**: :mod:`nodelens.pruning.strategies.random`
+Random baselines
+   ``random`` and ``bernoulli``. These are useful controls for separating
+   metric value from sparsity effects.
 
-**Classes**:
+LLM baselines
+   ``wanda``, ``sparsegpt``, ``owl``, ``llm_pruner``, ``flap``, ``ria``, and
+   ``slimllm``. These are used by LLM configs when comparing channel or weight
+   pruning methods.
 
-- :class:`RandomPruning`: Uniform random pruning
-- :class:`LayerwiseRandomPruning`: Random pruning with per-layer control
-- :class:`BernoulliPruning`: Probabilistic pruning with Bernoulli sampling
+Parallel and adaptive strategies
+   ``parallel_mode``, ``tensorized``, ``async_parallel``,
+   ``adaptive_movement``, and ``adaptive_sensitivity``. These support larger
+   sweeps or adaptive pruning behavior.
 
-**Description**: Randomly removes weights regardless of their values.
+Structured Pruning
+------------------
 
-**Theory**: Used as a baseline to compare against informed pruning strategies.
+Structured pruning removes complete channels or filters. It is the right
+choice when the question is about channel-level importance, architecture-level
+compression, or hardware-friendly intervention.
 
-**Usage**:
+Unstructured pruning removes individual weights. It can preserve quality at
+higher sparsity, but it answers a different question and usually needs sparse
+runtime support for speedups.
 
-.. code-block:: python
+Example Configs
+---------------
 
-   strategy = get_pruning_strategy("random")
-   mask = strategy.compute_mask(layer.weight, amount=0.5)
+.. code-block:: bash
 
-3. Gradient-Based Pruning
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Module**: :mod:`nodelens.pruning.strategies.gradient`
-
-**Classes**:
-
-- :class:`GradientPruning`: Basic gradient magnitude pruning
-- :class:`FisherPruning`: Fisher information-based pruning
-- :class:`MomentumPruning`: Momentum-aware gradient pruning
-
-**Description**: Prunes weights based on gradient information.
-
-**Theory**: Weights with small gradients have less impact on the loss function.
-
-**Usage**:
-
-.. code-block:: python
-
-   strategy = get_pruning_strategy("gradient")
-
-   # Requires gradient computation
-   loss.backward()
-   mask = strategy.compute_mask(
-       layer.weight,
-       amount=0.5,
-       gradient=layer.weight.grad
-   )
-
-**Requirements**: Requires gradient computation via backpropagation.
-
-4. Structured Pruning
-~~~~~~~~~~~~~~~~~~~~~
-
-All strategies support structured pruning by setting ``structured=True``:
-
-.. code-block:: python
-
-   from nodelens.pruning import PruningConfig
-
-   config = PruningConfig(
-       strategy="magnitude",
-       amount=0.3,
-       structured=True,
-       dim=0  # Prune output channels
-   )
-
-   strategy = get_pruning_strategy(config.strategy)
-   mask = strategy.compute_mask(layer.weight, **config.to_dict())
-
-5. Iterative Pruning
-~~~~~~~~~~~~~~~~~~~~
-
-The framework provides iterative pruning through dedicated strategies:
-
-.. code-block:: python
-
-   from nodelens.pruning.strategies.magnitude import IterativeMagnitudePruning
-
-   strategy = IterativeMagnitudePruning(
-       iterations=10,
-       final_sparsity=0.9
-   )
-
-   for step in range(strategy.iterations):
-       mask = strategy.compute_mask_for_iteration(
-           layer.weight,
-           iteration=step
-       )
-       strategy.apply_mask(layer, mask)
-
-       # Fine-tune between iterations
-       fine_tune(model, epochs=5)
-
-Pruning Schedules
------------------
-
-Create pruning schedules for gradual sparsification:
-
-.. code-block:: python
-
-   from nodelens.pruning.schedules import PolynomialSchedule, LinearSchedule
-
-   # Polynomial schedule (recommended)
-   schedule = PolynomialSchedule(
-       initial_sparsity=0.0,
-       final_sparsity=0.9,
-       begin_step=1000,
-       end_step=10000,
-       power=3
-   )
-
-   # Get sparsity for current step
-   current_sparsity = schedule(step=5000)
-
-**Schedule Types**:
-
-- ``LinearSchedule``: Linear interpolation
-- ``PolynomialSchedule``: Smooth polynomial interpolation
-- ``ExponentialSchedule``: Exponential decay
-- ``CosineSchedule``: Cosine annealing
+   python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+   python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
+   python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
 
 Best Practices
 --------------
 
-1. Choosing a Strategy
-~~~~~~~~~~~~~~~~~~~~~~
-
-- **Magnitude pruning**: Good default choice, simple and effective
-- **Gradient-based**: When task-specific importance is crucial
-- **Fisher pruning**: For second-order importance estimation
-- **Structured**: When hardware efficiency is important
-
-2. Pruning Amount
-~~~~~~~~~~~~~~~~~
-
-- Start with small amounts (10-30%) for initial experiments
-- Most networks can handle 50-70% sparsity with minimal accuracy loss
-- 90%+ sparsity is possible but requires careful tuning
-
-3. Iterative vs One-Shot
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-- **One-shot**: Fast, good for analysis
-- **Iterative**: Better performance, allows adaptation
-
-4. Fine-Tuning
-~~~~~~~~~~~~~~
-
-Always fine-tune after pruning for best results:
-
-.. code-block:: python
-
-   # Prune
-   strategy = get_pruning_strategy("magnitude")
-   mask = strategy.compute_mask(layer.weight, amount=0.5)
-   strategy.apply_mask(layer, mask)
-
-   # Fine-tune
-   for epoch in range(fine_tune_epochs):
-       train(model, train_loader, optimizer, criterion)
-
-Utility Functions
------------------
-
-Check Sparsity
-~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from nodelens.pruning.utils import get_sparsity, get_model_sparsity
-
-   # Layer sparsity
-   sparsity = get_sparsity(layer)
-
-   # Model sparsity
-   model_sparsity = get_model_sparsity(model)
-
-Remove Pruning
-~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from nodelens.pruning.utils import remove_pruning
-
-   # Makes pruning permanent and removes masks
-   remove_pruning(layer)
-
-Integration with Alignment Metrics
-----------------------------------
-
-Pruning affects alignment metrics in various ways:
-
-1. **Rayleigh Quotient**: May increase as unimportant directions are removed
-2. **Mutual Information**: Can decrease if information pathways are disrupted
-3. **Spectral Properties**: Eigenvalue distribution changes with sparsity
-
-Example analysis:
-
-.. code-block:: python
-
-   from nodelens.experiments import GeneralAlignmentExperiment
-
-   # Track how metrics change with pruning
-   config = {
-       "model_name": "resnet18",
-       "dataset": "cifar10",
-       "metrics": ["rayleigh_quotient", "mutual_information_gaussian", "spectral_gap"],
-       "pruning_amounts": [0.0, 0.3, 0.5, 0.7, 0.9],
-       "pruning_strategy": "magnitude"
-   }
-
-   experiment = GeneralAlignmentExperiment(config)
-   results = experiment.run()
-
-   # Visualize metric changes vs sparsity
-   experiment.visualize_results()
-
-Common Issues and Solutions
----------------------------
-
-Issue: Performance Degrades Significantly
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Solution**: Use iterative pruning with fine-tuning between steps
-
-Issue: Structured Pruning Removes Important Channels
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Solution**: Use custom importance scores based on your task
-
-Issue: Pruning Masks Not Persisting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Solution**: Ensure hooks are properly registered, or make pruning permanent
-
-Issue: Memory Not Reduced After Pruning
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Solution**: Use structured pruning or sparse tensor formats
-
-See Also
---------
-
-- ``nodelens.pruning`` - Pruning API entry point
-- :doc:`experiments` - Pruning experiments guide
-- Repository examples and configs - Example code
+- Compare strategies at the same pruning granularity.
+- Include random and magnitude controls.
+- Keep calibration and evaluation data explicit in the config.
+- Treat pruning as an intervention when the goal is interpretability, not only
+  as a compression benchmark.
+- Store configs with results so runs can be audited later.
