@@ -115,25 +115,16 @@ Parallel Strategies
    :undoc-members:
    :show-inheritance:
 
-Pruning Experiments
--------------------
+Pipeline Helpers
+----------------
 
-.. autoclass:: nodelens.pruning.experiments.ProgressiveDropoutExperiment
+.. autoclass:: nodelens.pruning.pipeline.PruningPipelineOptions
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: nodelens.pruning.experiments.CascadingLayerPruningExperiment
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. autofunction:: nodelens.pruning.pipeline.run_pruning_pipeline
 
-.. autoclass:: nodelens.pruning.experiments.LayerIsolatedPruningExperiment
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: nodelens.pruning.experiments.EigenvectorDropoutExperiment
-   :members:
-   :undoc-members:
-   :show-inheritance:
+Experiment-level pruning workflows are run through
+``scripts/run_experiment.py`` with configs under ``configs/vision_prune/`` or
+``configs/prune_llm/``.

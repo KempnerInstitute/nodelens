@@ -18,8 +18,8 @@ Create and activate the conda environment:
 
 .. code-block:: bash
 
-   git clone <repository-url>
-   cd nodelens
+   git clone https://github.com/KempnerInstitute/NodeLens.git
+   cd NodeLens
 
    conda env create -f environment.yml
    conda activate nodelens
@@ -33,8 +33,8 @@ Install directly from source:
 
 .. code-block:: bash
 
-   git clone <repository-url>
-   cd nodelens
+   git clone https://github.com/KempnerInstitute/NodeLens.git
+   cd NodeLens
    pip install -e .
 
 Verification
@@ -70,5 +70,5 @@ Next Steps
 ----------
 
 - See :doc:`quickstart` for basic usage
-- Check the repository ``examples/`` folder for runnable examples
+- Browse ``configs/examples/`` for runnable example configs
 - Read the top-level README for current API entry points

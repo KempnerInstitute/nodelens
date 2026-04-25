@@ -9,7 +9,7 @@ NodeLens is the public project name. The Python package is imported as
 - [API Reference](api_reference.md) - Core classes and functions
 - [LLM Guide](llm_guide.md) - LLM-specific analysis and pruning
 - [Metric Consistency](METRIC_CONSISTENCY.md) - Theory-code verification
-- [Architecture](ARCHITECTURE.md) - Library and project-release layout
+- [Architecture](ARCHITECTURE.md) - Library layout and data flow
 
 ## Configuration
 
@@ -25,7 +25,7 @@ NodeLens is the public project name. The Python package is imported as
 | Type | Description |
 |------|-------------|
 | `alignment_analysis` | General alignment metrics for vision models |
-| `llm_alignment` | LLM supernode and SCAR analysis |
+| `llm_alignment` | LLM channel metrics and structured FFN pruning |
 | `cluster_analysis` | Metric-space clustering with halo analysis |
 
 ### Key Classes

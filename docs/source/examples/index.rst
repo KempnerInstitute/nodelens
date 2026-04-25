@@ -1,141 +1,69 @@
 Examples and Tutorials
 ======================
 
-This section contains examples and tutorials for using NodeLens.
+NodeLens examples are primarily configuration-driven. The same entry point,
+``scripts/run_experiment.py``, can run small smoke tests, vision pruning jobs,
+and LLM channel analyses.
 
-Quick Start Examples
---------------------
+Runnable Configs
+----------------
 
-.. toctree::
-   :maxdepth: 1
+Small examples:
 
-   basic_usage
-   comprehensive_experiment
+.. code-block:: bash
 
-Available Example Scripts
--------------------------
+   python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
+   python scripts/run_experiment.py --config configs/examples/resnet_pruning.yaml
+   python scripts/run_experiment.py --config configs/examples/gpt2_fast_test.yaml
 
-The ``examples/`` directory contains several demonstration scripts:
+Vision pruning and clustering:
 
-1. **quick_demo.py** - Minimal Introduction
+.. code-block:: bash
 
-   - Basic model wrapping and metric computation
-   - Simple pruning demonstration
-   - No configuration needed
-   - Runtime: ~1 minute
+   python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
+   python scripts/run_experiment.py --config configs/vision_prune/vgg16_cifar10_full.yaml
+   python scripts/run_experiment.py --config configs/vision_prune/mobilenetv2_cifar10_full.yaml
 
-   .. code-block:: bash
+LLM channel analysis and structured FFN pruning:
 
-      python examples/quick_demo.py
+.. code-block:: bash
 
-2. **standard_alignment_experiment.py** - Complete Workflow
+   python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
+   python scripts/run_experiment.py --config configs/prune_llm/mistral_7b_unified.yaml
+   python scripts/run_experiment.py --config configs/prune_llm/qwen2_7b_unified.yaml
 
-   - Train model on MNIST
-   - Compute alignment metrics
-   - Compare pruning strategies
-   - Generate visualizations
-   - Runtime: ~5-10 minutes
+Common Pattern
+--------------
 
-   .. code-block:: bash
+Most workflows follow this structure:
 
-      python examples/standard_alignment_experiment.py
+.. code-block:: text
 
-3. **pruning_strategies_demo.py** - Advanced Pruning
+   choose a YAML config
+       -> run scripts/run_experiment.py
+       -> inspect the timestamped output directory
+       -> run optional aggregation or plotting scripts
 
-   - All pruning modes (low/high/random)
-   - Parallel pruning execution
-   - Tensorized GPU operations
-   - Performance comparisons
-   - Runtime: ~2-3 minutes
-
-   .. code-block:: bash
-
-      python examples/pruning_strategies_demo.py
-
-4. **pruning_visualization_demo.py** - Visualization Features
-
-   - Performance plots
-   - Multi-seed analysis
-   - Comprehensive comparison grids
-   - Real pruning demonstrations
-   - Runtime: ~2 minutes
-
-   .. code-block:: bash
-
-      python examples/pruning_visualization_demo.py
-
-5. **comprehensive_alignment_experiment.py** - Full Framework Demo
-
-   - YAML configuration system
-   - All models and datasets
-   - 36+ alignment metrics
-   - Advanced training options
-   - Automatic reporting
-   - Runtime: Varies by configuration
-
-   .. code-block:: bash
-
-      # Quick test
-      python examples/comprehensive_alignment_experiment.py \
-          --config configs/quick_test_config.yaml
-
-      # Full experiment
-      python examples/comprehensive_alignment_experiment.py \
-          --config configs/comprehensive_alignment_config.yaml
-
-Example Notebooks
+Direct Metric Use
 -----------------
 
-Interactive Jupyter notebooks are coming soon:
-
-- **Getting Started Tutorial** - Step-by-step introduction
-- **Metrics Deep Dive** - Exploring all available metrics
-- **Custom Experiments** - Building your own experiments
-- **Analysis Workshop** - Using the analysis tools
-
-Configuration Examples
-----------------------
-
-The ``configs/`` directory contains example configurations:
-
-- **comprehensive_alignment_config.yaml** - Full configuration with all options documented
-- **quick_test_config.yaml** - Minimal configuration for testing
-
-Common Patterns
----------------
-
-Loading and Running Experiments
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Metrics can also be used directly when a script already has layer inputs,
+weights, outputs, or gradients.
 
 .. code-block:: python
 
-   from nodelens.experiments import GeneralAlignmentExperiment
+   from nodelens.metrics import get_metric, list_metrics
 
-   # From configuration file
-   experiment = GeneralAlignmentExperiment.from_yaml("config.yaml")
-   results = experiment.run()
+   print(list_metrics())
 
-Computing Metrics on a Model
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   metric = get_metric("rayleigh_quotient")
+   scores = metric.compute(inputs=layer_inputs, weights=layer_weights)
 
-.. code-block:: python
+Batch Processing
+----------------
 
-   from nodelens import ModelWrapper, get_metric
-
-   wrapped_model = ModelWrapper(model)
-   metric = get_metric("rayleigh_quotient")()
-
-   # Forward pass
-   outputs, activations = wrapped_model.forward_with_activations(inputs)
-
-   # Compute metric
-   scores = metric.compute(
-       inputs=activations["layer_name_input"],
-       weights=model.layer.weight
-   )
-
-Batch Processing Multiple Metrics
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+For workflows that need several metrics over the same captured tensors, use the
+batch processor from ``nodelens.dataops.processing``.
 
 .. code-block:: python
 
@@ -143,16 +71,28 @@ Batch Processing Multiple Metrics
 
    processor = BatchMetricProcessor(
        metrics=["rayleigh_quotient", "mutual_information_gaussian"],
-       device="cuda"
+       device="cuda",
    )
 
    results = processor.process_dataset(dataloader, model)
 
+Project Workflows
+-----------------
+
+The ``projects/`` directory contains applied workflows that combine configs,
+helper scripts, artifact descriptions, and reproduction notes. These folders
+are useful when a paper or larger analysis needs more context than a single
+YAML file can provide.
+
+Current project:
+
+- ``projects/supernodes_scar/``: loss-sensitive FFN channel analysis and
+  structured pruning for LLMs.
+
 Next Steps
 ----------
 
-1. Start with ``quick_demo.py`` to understand the basics
-2. Run ``standard_alignment_experiment.py`` for a complete workflow
-3. Explore advanced features with the other demos
-4. Create your own experiments using ``comprehensive_alignment_experiment.py``
-5. Refer to the :doc:`../user_guide/index` for detailed documentation
+- Read the top-level ``README.md`` for the repository overview.
+- Read ``docs/usage.md`` for the config-driven workflow.
+- Browse ``configs/`` to find the closest starting point for a new experiment.
+- Use ``projects/`` when reproducing a specific applied study.

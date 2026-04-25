@@ -73,14 +73,14 @@ Most Common Classes
 - :class:`nodelens.experiments.base.ExperimentConfig` - Configure experiments
 - :class:`nodelens.metrics.RayleighQuotient` - Primary alignment metric
 - :class:`nodelens.models.ModelWrapper` - Wrap models for analysis
-- :class:`nodelens.experiments.ProgressiveDropoutExperiment` - Main pruning experiment
+- :class:`nodelens.experiments.GeneralAlignmentExperiment` - General metric experiment
+- :class:`nodelens.experiments.ClusterAnalysisExperiment` - Vision clustering and pruning experiment
 - :class:`nodelens.pruning.strategies.MagnitudePruning` - Standard pruning method
 
 Key Functions
 ~~~~~~~~~~~~~
 
-- :func:`nodelens.core.get_metric` - Get metric by name
-- :func:`nodelens.core.get_experiment` - Get experiment by type
-- :func:`nodelens.core.list_metrics` - List available metrics
-- :func:`nodelens.infrastructure.configuration.load_config` - Load YAML config
-- :func:`nodelens.analysis.load_results` - Load experiment results
+- :func:`nodelens.metrics.get_metric` - Get metric by name
+- :func:`nodelens.metrics.list_metrics` - List available metrics
+- :func:`nodelens.configs.config_loader.load_config` - Load YAML config
+- :func:`nodelens.pruning.get_pruning_strategy` - Get pruning strategy by name

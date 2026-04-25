@@ -2,53 +2,58 @@
 
 Node and channel metrics for neural network interpretability, importance, and interventions.
 
-[![Tests](https://github.com/KempnerInstitute/nodelens/actions/workflows/test.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/test.yml)
-[![Lint](https://github.com/KempnerInstitute/nodelens/actions/workflows/lint.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/lint.yml)
-[![Documentation](https://github.com/KempnerInstitute/nodelens/actions/workflows/docs.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/docs.yml)
-[![Release](https://github.com/KempnerInstitute/nodelens/actions/workflows/release.yml/badge.svg)](https://github.com/KempnerInstitute/nodelens/actions/workflows/release.yml)
+[![Tests](https://github.com/KempnerInstitute/NodeLens/actions/workflows/test.yml/badge.svg)](https://github.com/KempnerInstitute/NodeLens/actions/workflows/test.yml)
+[![Lint](https://github.com/KempnerInstitute/NodeLens/actions/workflows/lint.yml/badge.svg)](https://github.com/KempnerInstitute/NodeLens/actions/workflows/lint.yml)
+[![Documentation](https://github.com/KempnerInstitute/NodeLens/actions/workflows/docs.yml/badge.svg)](https://github.com/KempnerInstitute/NodeLens/actions/workflows/docs.yml)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.8-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![Artifacts](https://img.shields.io/badge/Hugging%20Face-artifacts-ffcc33)](https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 NodeLens is a research codebase for studying which channels, neurons, and
-features matter most for model behavior. The Python package is imported as
-`nodelens`.
-
-The repository supports two related workflows:
-
-- General metric analysis for vision models, transformers, and LLMs.
-- Paper-specific releases under `projects/`, including the Supernodes and SCAR
-  artifact workflow.
+features matter most for model behavior. It combines activation capture,
+importance metrics, redundancy and information measures, structured
+interventions, and report generation in one configuration-driven workflow. The
+Python package is imported as `nodelens`.
 
 ## What The Code Does
 
-```mermaid
-flowchart LR
-    A[Model + calibration data] --> B[Capture activations and gradients]
-    B --> C[Compute channel metrics]
-    C --> D[Identify loss-critical cores]
-    C --> E[Estimate redundancy and halo structure]
-    D --> F[Structured pruning and ablation probes]
-    E --> F
-    F --> G[Figures, tables, manifests, HF artifacts]
+```text
+Model + data
+    |
+    v
+Activation and gradient capture
+    |
+    v
+Channel and node metrics
+    |-- activation statistics
+    |-- Rayleigh quotient and spectral alignment
+    |-- mutual information, redundancy, and synergy
+    |-- gradients, curvature, Taylor scores, and loss proxies
+    |
+    v
+Analysis and interventions
+    |-- identify outliers or loss-critical cores
+    |-- cluster channels by metric profile
+    |-- test ablations, pruning, and sensitivity probes
+    |-- generate figures, tables, summaries, and manifests
 ```
 
 Core capabilities:
 
-- Loss-sensitive channel scoring, including SCAR loss-proxy metrics.
-- Activation, curvature, Taylor, Rayleigh quotient, and information-theoretic metrics.
-- Structured pruning strategies for channel-level model analysis.
-- Cluster and halo-style analyses for local redundancy structure.
-- Reproducible project folders for paper artifacts and public releases.
-
-Supported model families include MLPs, CNNs, transformer language models, and
-LLM backends through Hugging Face causal language models.
+- Metric analysis for MLPs, CNNs, transformers, and Hugging Face causal LMs.
+- Node and channel scoring with activation, alignment, information,
+  redundancy, gradient, curvature, and loss-sensitive metrics.
+- Structured pruning and ablation tools for testing whether high-scoring
+  channels are functionally important.
+- Clustering and cross-layer analyses for studying local organization,
+  redundancy, and downstream dependence.
+- Project workflows under `projects/` that show how to reproduce concrete
+  analyses with the shared library.
 
 ## Installation
 
 ```bash
-git clone https://github.com/KempnerInstitute/nodelens.git
-cd nodelens
+git clone https://github.com/KempnerInstitute/NodeLens.git
+cd NodeLens
 conda env create -f environment.yml
 conda activate nodelens
 pip install -e .
@@ -62,40 +67,42 @@ pip install -e .[all]
 
 ## Quick Start
 
+Run experiments from YAML configs:
+
 ```bash
-# Vision model analysis
+# Small vision smoke test
 python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
-# CNN pruning
+# CNN pruning and clustering
 python scripts/run_experiment.py --config configs/vision_prune/resnet18_cifar10_full.yaml
 
-# LLM supernode and SCAR analysis
+# LLM channel analysis and structured FFN pruning
 python scripts/run_experiment.py --config configs/prune_llm/llama3_8b_unified.yaml
 ```
 
-Package the public Supernodes and SCAR artifacts:
+Use metrics directly from Python:
 
-```bash
-python projects/supernodes_scar/scripts/prepare_hf_artifacts.py \
-  --output-dir outputs/supernodes_scar_hf \
-  --clean
+```python
+from nodelens.metrics import get_metric, list_metrics
 
-python projects/supernodes_scar/scripts/verify_hf_artifacts.py \
-  outputs/supernodes_scar_hf
+print(list_metrics())
+
+metric = get_metric("rayleigh_quotient")
+scores = metric.compute(inputs=layer_inputs, weights=layer_weights)
 ```
 
-## Paper Releases
+## Project Workflows
 
-Paper-specific release material lives under `projects/`. Reusable library code
-stays in `src/nodelens`, while each project folder records the exact configs,
-artifact layout, reproducibility notes, and release checklist for a paper.
+Reusable library code lives in `src/nodelens`. Project folders contain the
+configs, small helper scripts, and artifact descriptions needed to reproduce a
+specific analysis with the shared package.
 
 Current project:
 
-- `projects/supernodes_scar/`: release material for "Supernodes and Halos:
-  Loss-Critical Hubs in LLM Feed-Forward Layers".
+- `projects/supernodes_scar/`: workflow for the Supernodes and SCAR study of
+  loss-sensitive FFN channels in LLMs.
 
-Derived artifacts for this project are staged on Hugging Face:
+The Supernodes and SCAR project also has a public derived-artifact dataset:
 
 - `https://huggingface.co/datasets/hsafaai/supernodes-scar-artifacts`
 
@@ -106,28 +113,29 @@ Derived artifacts for this project are staged on Hugging Face:
 | Activation metrics | `activation_l2_norm`, `activation_variance`, `activation_outlier_index` |
 | Alignment metrics | `rayleigh_quotient`, `delta_alignment` |
 | Information metrics | `mutual_information_gaussian`, `pairwise_redundancy_gaussian`, `gaussian_pid_synergy_mmi` |
-| SCAR metrics | `scar_activation_power`, `scar_taylor`, `scar_curvature`, `scar_loss_proxy` |
+| Loss-sensitive metrics | `scar_activation_power`, `scar_taylor`, `scar_curvature`, `scar_loss_proxy` |
 | Pruning strategies | `magnitude`, `alignment`, `composite`, `cluster_aware`, `random` |
 
 ## Repository Layout
 
 ```text
-nodelens/
+NodeLens/
 |-- configs/
-|   |-- prune_llm/          # LLM and SCAR configs
-|   |-- vision_prune/       # Vision pruning configs
-|   `-- examples/           # Small example configs
-|-- projects/               # Paper-specific release material
+|   |-- examples/           # Small runnable configs
+|   |-- prune_llm/          # LLM channel-analysis and pruning configs
+|   `-- vision_prune/       # Vision pruning and clustering configs
+|-- projects/               # Reproducible project workflows
 |-- scripts/
 |   |-- run_experiment.py   # Main experiment entry point
-|   `-- run_analysis.py     # Post-hoc analysis
+|   `-- run_analysis.py     # Post-hoc analysis entry point
 |-- src/nodelens/
 |   |-- analysis/           # Visualization, clustering, cascade analysis
 |   |-- experiments/        # Experiment classes
-|   |-- metrics/            # Importance metrics
+|   |-- metrics/            # Importance and information metrics
 |   |-- models/             # Model wrappers
-|   `-- pruning/            # Pruning strategies
-|-- tests/                  # Unit tests
+|   |-- pruning/            # Pruning strategies
+|   `-- services/           # Activation capture, scoring, and mask utilities
+|-- tests/                  # Unit and integration tests
 `-- docs/                   # Documentation
 ```
 
@@ -137,7 +145,8 @@ nodelens/
 - [API Reference](docs/api_reference.md)
 - [LLM Guide](docs/llm_guide.md)
 - [Metric Consistency](docs/METRIC_CONSISTENCY.md)
-- [Supernodes and SCAR Release Notes](projects/supernodes_scar/README.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Supernodes and SCAR Workflow](projects/supernodes_scar/README.md)
 
 Build the Sphinx docs locally:
 
@@ -155,8 +164,9 @@ pytest tests/unit/ -v
 
 ## Citation
 
-If you use the Supernodes and SCAR release, please cite the paper and the
-archived code/artifact versions listed in `CITATION.cff`.
+If you use NodeLens, cite the repository metadata in `CITATION.cff`. If you use
+a project workflow or public artifact dataset, also cite the associated paper
+and artifact record.
 
 ## License
 

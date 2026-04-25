@@ -39,7 +39,7 @@ See [the config catalog](../configs/README.md) for a fuller list.
 | `alignment_analysis` | General activation/alignment metrics and small-model pruning | `configs/examples/*.yaml` |
 | `cluster_analysis` | Vision channel clustering, halo analysis, cascade tests, and structured pruning | `configs/vision_prune/*.yaml` |
 | `llm_alignment` | Hugging Face LLM metrics, supernodes, SCAR, and structured FFN pruning | `configs/prune_llm/*.yaml` |
-| `vision_synergy` | Older focused vision synergy experiments | `configs/examples/vision_synergy.yaml` |
+| `vision_synergy` | Focused vision synergy experiments | `configs/examples/vision_synergy.yaml` |
 
 ## Configuration Structure
 

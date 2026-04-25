@@ -1,299 +1,116 @@
 Experiments Guide
 =================
 
-This guide covers the different types of experiments available in NodeLens.
+NodeLens experiments are usually launched from YAML configs. The runner chooses
+the experiment class from the config, loads the model and dataset, computes the
+requested metrics, and writes a structured output directory.
 
-Overview
---------
+Experiment Types
+----------------
 
-The framework provides several experiment types for analyzing neural network alignment and pruning:
+``alignment_analysis``
+   General metric analysis for smaller models and vision workflows.
 
-1. **General Alignment Experiment** - Comprehensive alignment analysis with multi-network support
-2. **Layer-wise Pruning Experiments** - Analyze pruning effects on individual layers
-3. **Global Pruning Experiments** - Apply uniform pruning across all layers
-4. **Cascading Pruning Experiments** - Progressive pruning through network layers
-5. **Eigenvector-based Pruning** - Use spectral properties for pruning decisions
+``cluster_analysis``
+   Metric-space clustering, pruning, and halo-style redundancy analysis for
+   vision models.
 
-General Alignment Experiment
-----------------------------
+``llm_alignment``
+   LLM activation/gradient capture, channel metrics, ablation probes, and
+   structured FFN pruning.
 
-The main experiment class that supports:
-
-- Training single or multiple networks
-- Computing alignment metrics during and after training
-- Applying various pruning strategies
-- Comprehensive analysis and visualization
-
-.. code-block:: python
-
-    from nodelens.experiments import GeneralAlignmentExperiment, GeneralAlignmentConfig
-
-    config = GeneralAlignmentConfig(
-        experiment_name="mnist_alignment",
-        dataset_name="mnist",
-        model_name="mlp",
-        hidden_sizes=[128, 64],
-        num_epochs=10,
-        compute_alignment=True,
-        alignment_metrics=["rayleigh_quotient", "mutual_information_gaussian"]
-    )
-
-    experiment = GeneralAlignmentExperiment(config)
-    results = experiment.run()
-
-Multi-Network Analysis
-^^^^^^^^^^^^^^^^^^^^^^
-
-Train and analyze multiple networks in parallel:
-
-.. code-block:: python
-
-    config = GeneralAlignmentConfig(
-        experiment_name="multi_network_study",
-        num_networks=5,  # Train 5 networks
-        dataset_name="mnist",
-        model_name="cnn",
-        num_epochs=20,
-        compute_alignment=True
-    )
-
-    experiment = GeneralAlignmentExperiment(config)
-    results = experiment.run()
-
-    # Results include statistics across all networks
-    print(f"Mean accuracy: {results['mean_accuracy']}")
-    print(f"Std accuracy: {results['std_accuracy']}")
-
-Pruning Experiments
--------------------
-
-Layer-wise Pruning
-^^^^^^^^^^^^^^^^^^
-
-Analyze the effect of pruning individual layers:
-
-.. code-block:: python
-
-    from nodelens.pruning.experiments import LayerIsolatedPruningExperiment, LayerIsolatedConfig
-
-    config = LayerIsolatedConfig(
-        experiment_name="layer_analysis",
-        dataset_name="mnist",
-        model_name="mlp",
-        hidden_sizes=[128, 64],
-        pruning_ratios=[0.1, 0.3, 0.5, 0.7, 0.9],
-        pruning_strategy="magnitude"
-    )
-
-    experiment = LayerIsolatedPruningExperiment(config)
-    results = experiment.run()
-
-Global Pruning
-^^^^^^^^^^^^^^
-
-Apply the same pruning rate across all layers:
-
-.. code-block:: python
-
-    from nodelens.pruning.experiments import GlobalDropoutExperiment, GlobalDropoutConfig
-
-    config = GlobalDropoutConfig(
-        experiment_name="global_pruning",
-        dataset_name="cifar10",
-        model_name="resnet18",
-        dropout_rates=[0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
-        dropout_structure="magnitude"  # or "random", "gradient"
-    )
-
-    experiment = GlobalDropoutExperiment(config)
-    results = experiment.run()
-
-Cascading Layer Pruning
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Progressive pruning that cascades through the network:
-
-.. code-block:: python
-
-    from nodelens.pruning.experiments import CascadingLayerPruningExperiment, CascadingConfig
-
-    config = CascadingConfig(
-        experiment_name="cascading_analysis",
-        dataset_name="mnist",
-        model_name="mlp",
-        cascade_direction="forward",  # or "backward"
-        pruning_ratios=[0.1, 0.2, 0.3, 0.4, 0.5]
-    )
-
-    experiment = CascadingLayerPruningExperiment(config)
-    results = experiment.run()
-
-Eigenvector-based Pruning
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Use eigendecomposition for pruning decisions:
-
-.. code-block:: python
-
-    from nodelens.pruning.experiments import EigenvectorDropoutExperiment, EigenvectorConfig
-
-    config = EigenvectorConfig(
-        experiment_name="eigenvector_pruning",
-        dataset_name="mnist",
-        model_name="mlp",
-        num_components=10,  # Number of eigenvectors to keep
-        pruning_ratios=[0.1, 0.3, 0.5, 0.7]
-    )
-
-    experiment = EigenvectorDropoutExperiment(config)
-    results = experiment.run()
-
-Configuration Options
----------------------
-
-Common configuration parameters across experiments:
-
-**Model Configuration:**
-
-- ``model_name``: "mlp", "cnn", "resnet18", etc.
-- ``hidden_sizes``: List of hidden layer sizes (for MLP)
-- ``activation``: Activation function ("relu", "tanh", etc.)
-
-**Training Configuration:**
-
-- ``num_epochs``: Number of training epochs
-- ``batch_size``: Batch size for training
-- ``learning_rate``: Learning rate
-- ``optimizer``: Optimizer type ("adam", "sgd", etc.)
-
-**Alignment Configuration:**
-
-- ``compute_alignment``: Whether to compute alignment metrics
-- ``alignment_metrics``: List of metrics to compute
-- ``alignment_layers``: Which layers to analyze
-
-**Pruning Configuration:**
-
-- ``pruning_strategy``: "magnitude", "gradient", "random", "alignment"
-- ``pruning_ratios``: List of pruning ratios to test
-- ``structured_pruning``: Whether to use structured pruning
-
-Running Experiments
--------------------
-
-From Configuration Files
-^^^^^^^^^^^^^^^^^^^^^^^^
+Run From The Command Line
+-------------------------
 
 .. code-block:: bash
 
-    python scripts/run_experiment.py --config configs/my_experiment.yaml
+   python scripts/run_experiment.py --config configs/examples/mnist_basic.yaml
 
-From Python
-^^^^^^^^^^^
+Use ``--base-output-dir`` to choose where job directories are written:
+
+.. code-block:: bash
+
+   python scripts/run_experiment.py \
+     --config configs/vision_prune/resnet18_cifar10_full.yaml \
+     --base-output-dir outputs/resnet18_cifar10
+
+Run From Python
+---------------
+
+For custom scripts, load a config and instantiate the matching experiment
+class directly.
 
 .. code-block:: python
 
-    from nodelens.experiments import create_experiment_from_config
-    import yaml
+   from nodelens.configs.config_loader import load_config
+   from nodelens.experiments import (
+       ClusterAnalysisExperiment,
+       GeneralAlignmentExperiment,
+       LLMAlignmentExperiment,
+   )
 
-    # Load configuration
-    with open("configs/my_experiment.yaml", "r") as f:
-        config_dict = yaml.safe_load(f)
+   config = load_config("configs/examples/mnist_basic.yaml")
 
-    # Create and run experiment
-    experiment = create_experiment_from_config(config_dict)
-    results = experiment.run()
+   if config.experiment_type == "llm_alignment":
+       experiment = LLMAlignmentExperiment(config)
+   elif config.experiment_type == "cluster_analysis":
+       experiment = ClusterAnalysisExperiment(config)
+   else:
+       experiment = GeneralAlignmentExperiment(config)
 
-Analyzing Results
+   results = experiment.run()
+
+Output Structure
+----------------
+
+A typical experiment directory contains:
+
+.. code-block:: text
+
+   experiment_config.yaml
+   logs/
+   results/
+   figures/
+   analysis/
+
+The exact files depend on the experiment type. LLM runs usually include
+per-layer metric scores, pruning summaries, calibration metadata, and
+evaluation outputs. Vision workflows often include pruning curves, clustering
+diagnostics, and metric visualizations.
+
+Choosing A Config
 -----------------
 
-All experiments return a results dictionary containing:
+Start from the closest existing config:
 
-- Training metrics (loss, accuracy over time)
-- Final model performance
-- Alignment metrics (if computed)
-- Pruning analysis (for pruning experiments)
-- Visualizations and plots
+.. list-table::
+   :header-rows: 1
 
-.. code-block:: python
+   * - Use case
+     - Configs
+   * - Small smoke tests
+     - ``configs/examples/*.yaml``
+   * - Vision pruning and clustering
+     - ``configs/vision_prune/*.yaml``
+   * - LLM channel metrics and SCAR runs
+     - ``configs/prune_llm/*.yaml``
 
-    # Access results
-    results = experiment.run()
+When creating a new experiment, change one axis at a time: model, dataset,
+tracked layers, metrics, pruning strategy, or evaluation settings. This makes
+result differences easier to interpret.
 
-    # Training history
-    train_loss = results['training_history']['train_loss']
-    val_accuracy = results['training_history']['val_accuracy']
+Result Analysis
+---------------
 
-    # Alignment metrics
-    if 'alignment_metrics' in results:
-        rq_scores = results['alignment_metrics']['rayleigh_quotient']
-        mi_scores = results['alignment_metrics']['mutual_information']
+Use ``scripts/run_analysis.py`` for post-hoc analysis when an experiment has
+already written results:
 
-    # Pruning results
-    if 'pruning_results' in results:
-        for ratio, metrics in results['pruning_results'].items():
-            print(f"Pruning {ratio}: Accuracy = {metrics['accuracy']}")
+.. code-block:: bash
 
-Visualization
--------------
+   python scripts/run_analysis.py \
+     --results-dir outputs/my_run \
+     --output-dir outputs/my_run/analysis_extra
 
-The framework automatically generates visualizations:
-
-- Training curves
-- Alignment metric evolution
-- Pruning performance plots
-- Layer-wise analysis
-
-Plots are saved to the experiment output directory and can be customized through configuration.
-
-Best Practices
---------------
-
-1. **Start Small**: Test with small models and datasets first
-2. **Use Checkpointing**: Enable model checkpointing for long experiments
-3. **Monitor Memory**: Some alignment metrics are memory-intensive
-4. **Reproducibility**: Always set seeds for reproducible results
-5. **Incremental Analysis**: Start with few pruning ratios, then refine
-
-Advanced Features
------------------
-
-Custom Metrics
-^^^^^^^^^^^^^^
-
-Add custom alignment metrics:
-
-.. code-block:: python
-
-    from nodelens.metrics import register_metric
-
-    @register_metric("my_custom_metric")
-    def my_metric(model, dataloader, device):
-        # Implement your metric
-        return metric_value
-
-Custom Pruning Strategies
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Implement custom pruning strategies:
-
-.. code-block:: python
-
-    from nodelens.pruning.strategies import BasePruningStrategy
-
-    class MyPruningStrategy(BasePruningStrategy):
-        def compute_importance_scores(self, model, dataloader):
-            # Implement importance scoring
-            return scores
-
-Parallel Execution
-^^^^^^^^^^^^^^^^^^
-
-For multi-network experiments, parallel execution is automatic when ``num_networks > 1``.
-
-See Also
---------
-
-- :doc:`configuration` - Detailed configuration options
-- :doc:`metrics` - Available alignment metrics
-- :doc:`pruning` - Pruning strategies and concepts
+Project-specific aggregation scripts live under ``projects/`` or in the
+project's public artifact bundle when a study needs extra figure and table
+generation logic.
