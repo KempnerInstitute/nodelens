@@ -538,7 +538,7 @@ class ConditionalActivationNorm(BaseMetric):
             outputs_c = outputs[mask]
 
             # L2 norm per neuron within this class
-            norm_c = torch.norm(outputs_c, p=2, dim=0) / np.sqrt(n_c.float())
+            norm_c = torch.norm(outputs_c, p=2, dim=0) / torch.sqrt(n_c.float())
             class_norms.append(norm_c)
 
         if not class_norms:

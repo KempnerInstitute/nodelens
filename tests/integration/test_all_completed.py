@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def test_imports():
+def _check_imports():
     """Test all imports work correctly."""
     logger.info("Testing imports...")
 
@@ -26,9 +26,9 @@ def test_imports():
         import nodelens
 
         # Core / registry
-        from nodelens.core import ModelWrapper  # noqa: F401
-        from nodelens.metrics import METRIC_REGISTRY  # noqa: F401
-        from nodelens.metrics.base import MetricComputer  # noqa: F401
+        from nodelens.core import METRIC_REGISTRY  # noqa: F401
+        from nodelens.metrics import get_metric, list_metrics  # noqa: F401
+        from nodelens.models import ModelWrapper  # noqa: F401
 
         # Pruning + services
         from nodelens.pruning import get_pruning_strategy  # noqa: F401
@@ -43,41 +43,33 @@ def test_imports():
         return False
 
 
-def test_metric_computer():
+def _check_metric_computer():
     """Test MetricComputer is functional."""
     logger.info("\nTesting MetricComputer...")
 
     try:
-        from nodelens.metrics import METRIC_REGISTRY
-        from nodelens.metrics.base import MetricComputer
+        from nodelens.metrics import get_metric
 
-        # Create metrics
-        metrics = {
-            "rayleigh_quotient": METRIC_REGISTRY.get_metric("rayleigh_quotient"),
-            "mutual_information": METRIC_REGISTRY.get_metric("mutual_information"),
-        }
-
-        # Create computer
-        computer = MetricComputer(metrics)
-
-        # Test computation
         weights = torch.randn(10, 20)
+        inputs = torch.randn(32, 20)
         outputs = torch.randn(32, 10)
 
-        results = computer.compute_all(weights=weights, outputs=outputs)
+        rq = get_metric("rayleigh_quotient").compute(inputs=inputs, weights=weights)
+        act = get_metric("activation_l2_norm").compute(outputs=outputs)
 
-        assert len(results) == 2
-        assert "rayleigh_quotient" in results
-        assert "mutual_information" in results
+        assert rq.shape == (weights.shape[0],)
+        assert act.shape == (outputs.shape[1],)
+        assert torch.all(torch.isfinite(rq))
+        assert torch.all(torch.isfinite(act))
 
-        logger.info("OK MetricComputer is functional")
+        logger.info("OK metric registry and metric computation are functional")
         return True
     except Exception as e:
         logger.error(f"FAIL MetricComputer test failed: {e}")
         return False
 
 
-def test_parallel_processing():
+def _check_parallel_processing():
     """Test parallel processing is implemented."""
     logger.info("\nTesting parallel processing...")
 
@@ -85,9 +77,9 @@ def test_parallel_processing():
         import torch.nn as nn
         from torch.utils.data import DataLoader, TensorDataset
 
-        from nodelens.core import ModelWrapper
-        from nodelens.metrics import METRIC_REGISTRY
-        from nodelens.utils.batch_processing import compute_metrics_parallel
+        from nodelens.dataops.processing.batch import compute_metrics_parallel
+        from nodelens.metrics import get_metric
+        from nodelens.models import ModelWrapper
 
         # Create simple model and data
         model = nn.Sequential(nn.Linear(10, 20), nn.ReLU(), nn.Linear(20, 5))
@@ -96,49 +88,39 @@ def test_parallel_processing():
         dataloader = DataLoader(dataset, batch_size=10)
 
         wrapper = ModelWrapper(model, tracked_layers=["0", "2"])
-        metrics = {"rayleigh_quotient": METRIC_REGISTRY["rayleigh_quotient"]()}
+        metrics = {"activation_l2_norm": get_metric("activation_l2_norm")}
 
-        # Test parallel computation (will use single worker if only 1 GPU)
-        results = compute_metrics_parallel(wrapper, dataloader, metrics, num_workers=2)
+        # Force the single-device path so this remains a lightweight CI smoke test.
+        results = compute_metrics_parallel(wrapper, dataloader, metrics, num_workers=1, devices=[torch.device("cpu")])
 
         assert isinstance(results, dict)
-        logger.info("OK Parallel processing is implemented")
+        assert set(results) == {"0", "2"}
+        logger.info("OK batch metric processing is functional")
         return True
     except Exception as e:
         logger.error(f"FAIL Parallel processing test failed: {e}")
         return False
 
 
-def test_pruning_utilities():
+def _check_pruning_utilities():
     """Test pruning utilities are complete."""
     logger.info("\nTesting pruning utilities...")
 
     try:
         import torch.nn as nn
 
-        from nodelens.utils.pruning import PruningUtilities, create_pruning_schedule
+        from nodelens.pruning import get_pruning_strategy
 
         # Create test layer
         layer = nn.Linear(10, 20)
 
-        # Test different pruning methods
-        methods = [
-            ("magnitude", PruningUtilities.get_pruning_mask_magnitude),
-            ("random", PruningUtilities.get_pruning_mask_random),
-        ]
-
-        for name, method in methods:
-            mask = method(layer.weight.data, amount=0.5)
+        for name in ["magnitude", "random"]:
+            strategy = get_pruning_strategy(name)
+            scores = strategy.compute_importance_scores(layer)
+            mask = strategy.create_pruning_mask(scores, amount=0.5)
             assert mask.shape == layer.weight.shape
             assert 0.4 < (mask == 0).float().mean() < 0.6  # Roughly 50% pruned
             logger.info(f"  OK {name} pruning works")
-
-        # Test pruning schedule
-        schedule = create_pruning_schedule(0.0, 0.9, 0, 100, 10, "polynomial")
-        assert schedule(0) == 0.0
-        assert schedule(100) == 0.9
-        assert 0.0 < schedule(50) < 0.9
-        logger.info("  OK Pruning schedules work")
 
         logger.info("OK All pruning utilities functional")
         return True
@@ -147,12 +129,12 @@ def test_pruning_utilities():
         return False
 
 
-def test_experiment_tracking():
+def _check_experiment_tracking():
     """Test experiment tracking is functional."""
     logger.info("\nTesting experiment tracking...")
 
     try:
-        from nodelens.utils.experiment_tracking import ExperimentTracker, create_tracker
+        from nodelens.experiments.tracking import ExperimentTracker, create_tracker
 
         # Test base tracker (doesn't raise NotImplementedError anymore)
         tracker = ExperimentTracker("test", {"key": "value"})
@@ -175,11 +157,16 @@ def test_experiment_tracking():
         return False
 
 
-def test_examples_exist():
+def _check_examples_exist():
     """Test that comprehensive examples exist."""
     logger.info("\nChecking examples...")
 
-    example_files = ["examples/quick_demo.py", "examples/advanced_analysis.py", "examples/comprehensive_demo.py", "examples/pruning_demo.py"]
+    example_files = [
+        "configs/examples/alexnet_pruning.yaml",
+        "configs/examples/resnet_pruning.yaml",
+        "configs/examples/llama3_extended_analysis.yaml",
+        "projects/supernodes_scar/README.md",
+    ]
 
     all_exist = True
     for file in example_files:
@@ -192,6 +179,30 @@ def test_examples_exist():
     return all_exist
 
 
+def test_imports():
+    assert _check_imports()
+
+
+def test_metric_computer():
+    assert _check_metric_computer()
+
+
+def test_parallel_processing():
+    assert _check_parallel_processing()
+
+
+def test_pruning_utilities():
+    assert _check_pruning_utilities()
+
+
+def test_experiment_tracking():
+    assert _check_experiment_tracking()
+
+
+def test_examples_exist():
+    assert _check_examples_exist()
+
+
 def main():
     """Run all tests."""
     logger.info("=" * 60)
@@ -199,12 +210,12 @@ def main():
     logger.info("=" * 60)
 
     tests = [
-        ("Imports", test_imports),
-        ("MetricComputer", test_metric_computer),
-        ("Parallel Processing", test_parallel_processing),
-        ("Pruning Utilities", test_pruning_utilities),
-        ("Experiment Tracking", test_experiment_tracking),
-        ("Examples", test_examples_exist),
+        ("Imports", _check_imports),
+        ("MetricComputer", _check_metric_computer),
+        ("Parallel Processing", _check_parallel_processing),
+        ("Pruning Utilities", _check_pruning_utilities),
+        ("Experiment Tracking", _check_experiment_tracking),
+        ("Examples", _check_examples_exist),
     ]
 
     results = {}

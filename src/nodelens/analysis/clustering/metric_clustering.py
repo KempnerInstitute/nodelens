@@ -208,6 +208,9 @@ class MetricSpaceClustering:
             lab = km.fit_predict(X_cluster)
             cen = km.cluster_centers_
             sil = silhouette_score(X_cluster, lab) if n > effective_k else 0.0
+        elif n >= effective_k and effective_k >= 2:
+            lab, cen = self._kmeans_numpy(X_cluster, effective_k)
+            sil = self._silhouette_numpy(X_cluster, lab)
         else:
             lab = np.zeros(n, dtype=int)
             cen = np.zeros((1, X_cluster.shape[1]))
@@ -262,6 +265,73 @@ class MetricSpaceClustering:
     def _norm01(x: np.ndarray) -> np.ndarray:
         lo, hi = x.min(), x.max()
         return (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
+
+    def _kmeans_numpy(self, x: np.ndarray, k: int, max_iter: int = 100) -> Tuple[np.ndarray, np.ndarray]:
+        """Small deterministic k-means fallback used when scikit-learn is unavailable."""
+        x = np.asarray(x, dtype=np.float64)
+        n = x.shape[0]
+        if n == 0 or k <= 1:
+            return np.zeros(n, dtype=int), np.zeros((1, x.shape[1]))
+
+        rng = np.random.default_rng(self.seed)
+        centers = [x[int(rng.integers(n))].copy()]
+        for _ in range(1, k):
+            dist_sq = np.min(((x[:, None, :] - np.asarray(centers)[None, :, :]) ** 2).sum(axis=2), axis=1)
+            centers.append(x[int(np.argmax(dist_sq))].copy())
+        centers_arr = np.asarray(centers, dtype=np.float64)
+
+        labels = np.zeros(n, dtype=int)
+        for _ in range(max_iter):
+            dist_sq = ((x[:, None, :] - centers_arr[None, :, :]) ** 2).sum(axis=2)
+            new_labels = np.argmin(dist_sq, axis=1)
+
+            new_centers = centers_arr.copy()
+            for cluster_id in range(k):
+                mask = new_labels == cluster_id
+                if mask.any():
+                    new_centers[cluster_id] = x[mask].mean(axis=0)
+                else:
+                    # Re-seed empty clusters at the point farthest from its assigned center.
+                    nearest_dist = dist_sq[np.arange(n), new_labels]
+                    new_centers[cluster_id] = x[int(np.argmax(nearest_dist))]
+
+            if np.array_equal(labels, new_labels) and np.allclose(centers_arr, new_centers):
+                centers_arr = new_centers
+                break
+            labels = new_labels
+            centers_arr = new_centers
+
+        return labels, centers_arr
+
+    @staticmethod
+    def _silhouette_numpy(x: np.ndarray, labels: np.ndarray) -> float:
+        """Compute mean silhouette without sklearn; returns 0.0 for degenerate labels."""
+        x = np.asarray(x, dtype=np.float64)
+        labels = np.asarray(labels)
+        unique = np.unique(labels)
+        n = x.shape[0]
+        if n <= 1 or len(unique) < 2 or len(unique) >= n:
+            return 0.0
+
+        distances = np.linalg.norm(x[:, None, :] - x[None, :, :], axis=2)
+        values = []
+        for i in range(n):
+            same = labels == labels[i]
+            same[i] = False
+            a_i = float(distances[i, same].mean()) if same.any() else 0.0
+
+            b_i = np.inf
+            for label in unique:
+                if label == labels[i]:
+                    continue
+                other = labels == label
+                if other.any():
+                    b_i = min(b_i, float(distances[i, other].mean()))
+
+            denom = max(a_i, b_i)
+            values.append(0.0 if not np.isfinite(denom) or denom == 0.0 else (b_i - a_i) / denom)
+
+        return float(np.mean(values))
 
     def _types_by_importance(
         self,
