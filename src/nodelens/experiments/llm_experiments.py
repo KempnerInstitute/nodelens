@@ -6377,6 +6377,30 @@ class LLMAlignmentExperiment(BaseExperiment):
                                         read_protect_conn[super_idx] = 1.0
                                         read_halo_protect_score = (prot_score * read_protect_conn).float()
 
+                                        # (B') Hard-protect variant: top-tau read halos get a score boost so high
+                                        # they are excluded from the candidate prune pool, exactly like supernodes.
+                                        # tau is read from supernode.read_halo_pruning.hard_protect_tau (default 0.10).
+                                        try:
+                                            _rh_tau = float(read_halo_prune_cfg.get("hard_protect_tau", 0.10))
+                                        except Exception:
+                                            _rh_tau = 0.10
+                                        _rh_tau = float(min(1.0, max(0.0, _rh_tau)))
+                                        # Sort halo channels by ReadConn (already provided by `order` ascending);
+                                        # top-tau by ReadConn = highest-rank channels.
+                                        n_hard = int(round(_rh_tau * read_halo_idx.numel()))
+                                        if n_hard > 0:
+                                            # The `order` (computed above) is ascending in ReadConn rank within
+                                            # the halo set. Top-tau by ReadConn = last n_hard entries of `order`.
+                                            top_halos_local = order[-n_hard:]
+                                            top_halos_global = read_halo_idx[top_halos_local]
+                                        else:
+                                            top_halos_global = torch.tensor([], dtype=torch.long)
+                                        big_value = float(prot_score.max().item()) * 1e6 + 1.0
+                                        read_halo_hard_protect_score = prot_score.clone().float()
+                                        if top_halos_global.numel() > 0:
+                                            read_halo_hard_protect_score[top_halos_global] = big_value
+                                        read_halo_hard_protect_score[super_idx] = big_value
+
                                         # (C) Two-halo score: keep read-halo computation but only penalize *redundant* readers.
                                         #
                                         # We estimate within-read-halo redundancy using *weight signatures* restricted to
@@ -6481,6 +6505,13 @@ class LLMAlignmentExperiment(BaseExperiment):
             # If read-halo pruning is disabled, these default to SCAR-Prot behavior.
             layer_scores["supernode_read_halo_score"] = read_halo_score
             layer_scores["supernode_read_halo_protect_score"] = read_halo_protect_score
+            # Hard-protect variant: top-tau read halos are excluded from the prune pool
+            # exactly like supernodes (matches the side-experiment SCAR-HaloProtect).
+            try:
+                layer_scores["supernode_read_halo_hard_protect_score"] = read_halo_hard_protect_score
+            except (NameError, UnboundLocalError):
+                # When read-halo pruning is disabled, fall back to SCAR-Prot to keep config compatibility.
+                layer_scores["supernode_read_halo_hard_protect_score"] = prot_score
             layer_scores["supernode_two_halo_score"] = two_halo_score
             if read_conn_full is not None:
                 layer_scores["read_halo_readconn"] = read_conn_full

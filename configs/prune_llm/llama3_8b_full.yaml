@@ -363,6 +363,7 @@ pruning:
     # Cross-layer read-halo (optional ablations; disabled unless supernode.read_halo_pruning.enabled=true)
     - "supernode_read_halo_score"
     - "supernode_read_halo_protect_score"
+    - "supernode_read_halo_hard_protect_score"
     - "supernode_two_halo_score"
 
     # Generalized (no outlier assumption)
@@ -393,6 +394,7 @@ pruning:
     - "supernode_connectivity_score"
     - "supernode_read_halo_score"
     - "supernode_read_halo_protect_score"
+    - "supernode_read_halo_hard_protect_score"
     - "supernode_two_halo_score"
     - "generalized_importance"
     - "cross_layer_importance"
