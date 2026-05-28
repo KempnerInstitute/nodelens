@@ -1,0 +1,60 @@
+"""Replaceability-aware learning rule utilities."""
+
+from .regularizers import (
+    anti_decoupling_penalty,
+    compact_hull_penalty,
+    cross_layer_weights,
+    peer_reconstructability_penalty,
+    synergy_pair_penalty,
+    task_aware_redundancy_loss,
+    variance_floor_loss,
+)
+from .statistics import (
+    average_squared_peer_correlation,
+    capacity_masses,
+    channel_correlation,
+    compact_hull_from_correlation,
+    flatten_channel_samples,
+    gaussian_mi_from_correlation,
+    peer_reconstructability_from_correlation,
+)
+from .training import (
+    ActivationCollector,
+    InputActivationCollector,
+    LearningRuleConfig,
+    _SigmaXEMA,
+    project_signal_power_gradients,
+    replaceability_regularization_loss,
+    residualized_task_relevance_from_logits,
+    scheduled_regularizer_weight,
+    select_regularized_layers,
+    sigmoid_task_gate,
+    task_relevance_from_logits,
+)
+
+__all__ = [
+    "capacity_masses",
+    "average_squared_peer_correlation",
+    "channel_correlation",
+    "compact_hull_from_correlation",
+    "compact_hull_penalty",
+    "cross_layer_weights",
+    "flatten_channel_samples",
+    "gaussian_mi_from_correlation",
+    "peer_reconstructability_from_correlation",
+    "peer_reconstructability_penalty",
+    "ActivationCollector",
+    "anti_decoupling_penalty",
+    "InputActivationCollector",
+    "LearningRuleConfig",
+    "project_signal_power_gradients",
+    "replaceability_regularization_loss",
+    "synergy_pair_penalty",
+    "residualized_task_relevance_from_logits",
+    "scheduled_regularizer_weight",
+    "select_regularized_layers",
+    "sigmoid_task_gate",
+    "task_aware_redundancy_loss",
+    "task_relevance_from_logits",
+    "variance_floor_loss",
+]

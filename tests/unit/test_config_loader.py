@@ -137,6 +137,11 @@ class TestConvertUnifiedToOriginal:
         result = _convert_unified_to_original(unified)
         assert result["training"]["epochs"] == 10
 
+    def test_learning_rule_passthrough(self):
+        unified = {"learning_rule": {"method": "bp_tard", "lambda": 0.001}}
+        result = _convert_unified_to_original(unified)
+        assert result["learning_rule"]["method"] == "bp_tard"
+
     def test_scar_metrics(self):
         unified = {
             "metrics": {
@@ -210,6 +215,22 @@ class TestMapNestedToFlatConfig:
         )
         assert result["run_permutation_baseline"] is True
         assert result["n_permutations"] == 100
+
+    def test_learning_rule_mapping(self):
+        result = _map_nested_to_flat_config(
+            {
+                "learning_rule": {
+                    "method": "bp_tard",
+                    "lambda": 0.001,
+                    "warmup_epochs": 5,
+                    "max_layers": 2,
+                }
+            }
+        )
+        assert result["learning_rule_method"] == "bp_tard"
+        assert result["learning_rule_lambda"] == 0.001
+        assert result["learning_rule_warmup_epochs"] == 5
+        assert result["learning_rule_max_layers"] == 2
 
 
 # =========================================================================

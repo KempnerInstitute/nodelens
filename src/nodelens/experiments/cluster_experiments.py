@@ -2054,7 +2054,11 @@ class ClusterAnalysisExperiment:
                 selection_mode = self._selection_mode_for_method(prune_method)
 
                 try:
-                    if prune_method.startswith("cluster_aware") or prune_method in (
+                    cluster_prune_method = prune_method
+                    if cluster_prune_method.endswith("_hybrid_taylor"):
+                        cluster_prune_method = cluster_prune_method[: -len("_hybrid_taylor")]
+
+                    if prune_method.startswith("cluster_aware") or cluster_prune_method in (
                         "cap_ixy",
                         "composite_ixy",
                         "composite_twoaxis",
@@ -3778,6 +3782,11 @@ class ClusterAnalysisExperiment:
         cfg.n_clusters = int(self.config.n_clusters)
 
         method_name = str(method).lower()
+        local_hybrid_taylor_allocation = False
+        if method_name.endswith("_hybrid_taylor"):
+            local_hybrid_taylor_allocation = True
+            method_name = method_name[: -len("_hybrid_taylor")]
+
         # Normalize CAP aliases so variant logic below can be shared between
         # RQ-first, I(X;Y)-first, and PID-first versions (e.g., *_ixy, *_pid methods).
         base_method = method_name
@@ -4500,7 +4509,7 @@ class ClusterAnalysisExperiment:
         # while keeping the method's own IXY/CAP scores for the *ranking* step
         # (deciding which channels to prune within each layer).
         allocation_scores = layer_scores
-        if getattr(self.config, "hybrid_taylor_allocation", False) and distribution != "uniform":
+        if (local_hybrid_taylor_allocation or getattr(self.config, "hybrid_taylor_allocation", False)) and distribution != "uniform":
             if "taylor" not in self._pruning_score_cache:
                 self._pruning_score_cache["taylor"] = self._compute_taylor_channel_scores(self.model)
             taylor_cache = self._pruning_score_cache.get("taylor", {})
@@ -5653,10 +5662,16 @@ class ClusterAnalysisExperiment:
                 logger.warning("Within-layer connectivity computation failed (continuing): %s", exc)
 
         # 3. Halo analysis
-        self.run_halo_analysis()
+        if bool(getattr(self.config, "do_halo_analysis", False)):
+            self.run_halo_analysis()
+        else:
+            logger.info("Skipping halo analysis (do_halo_analysis=False)")
 
         # 4. Cascade test
-        self.run_cascade_test()
+        if bool(getattr(self.config, "do_cascade_analysis", True)):
+            self.run_cascade_test()
+        else:
+            logger.info("Skipping cascade tests (do_cascade_analysis=False)")
 
         # 5. Pruning experiments (optional)
         # NOTE: `pruning_amounts` has a non-empty default; we gate pruning on the explicit flag.
@@ -5764,8 +5779,12 @@ class ClusterAnalysisExperiment:
         # Run full analysis
         results = self.run_full_analysis()
 
-        # Generate figures
-        self.generate_figures()
+        # Generate figures only when requested. Full paper runs usually enable
+        # this; smoke and scheduler checks can skip the plotting cost.
+        if bool(getattr(self.config, "generate_plots", True)):
+            self.generate_figures()
+        else:
+            logger.info("Skipping figure generation (generate_plots=False)")
 
         return results
 

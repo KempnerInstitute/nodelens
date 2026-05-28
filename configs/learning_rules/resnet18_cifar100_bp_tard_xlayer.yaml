@@ -1,0 +1,115 @@
+experiment:
+  name: "lr_resnet18_cifar100_bp_tard_xlayer"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+
+model:
+  name: "resnet18"
+  pretrained: false
+  num_classes: 100
+
+dataset:
+  name: "cifar100"
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+training:
+  enabled: true
+  epochs: 200
+  learning_rate: 0.1
+  optimizer: "sgd"
+  scheduler: "cosine"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+learning_rule:
+  method: "bp_tard"
+  lambda: 0.3
+  warmup_epochs: 10
+  ramp_epochs: 5
+  skip_depthwise: true
+  task_gate_temperature: 0.05
+  peer_proxy: "avg_corr2"
+  cross_layer_alloc: "dtm_depth"
+  cross_layer_alpha: 1.0
+
+calibration:
+  num_samples: 5000
+
+metrics:
+  activation_point: "pre_bn"
+  task_activation_samples: "gap"
+  activation_samples: "flatten_spatial"
+  spatial_samples_per_image: 16
+  compute_loss_proxy: true
+  loss_proxy_n_calibration: 1024
+  within_layer_connectivity: true
+  within_layer_red_topk: 20
+  within_layer_syn_topk: 10
+  rayleigh_quotient:
+    enabled: true
+    relative: false
+    shrinkage: true
+  redundancy:
+    enabled: true
+    sampling: "all"
+  synergy:
+    enabled: true
+    target: "logit_margin"
+    num_pairs: 10
+    sampling: "top_k"
+  taylor:
+    enabled: true
+    criterion: "gradient_weight"
+
+clustering:
+  enabled: true
+  n_clusters: 4
+  stability_enabled: true
+  n_bootstrap: 50
+  ablation:
+    enabled: false
+
+halo_analysis:
+  enabled: true
+  percentile: 90.0
+  use_activation_weight: true
+  permutation_baseline:
+    enabled: false
+
+cascade_analysis:
+  enabled: true
+  n_remove_per_group: 5
+  damage_sample_fraction: 0.2
+
+pruning:
+  enabled: true
+  distribution: "global_threshold"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  ratios: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
+  algorithms:
+    - "random"
+    - "magnitude"
+    - "taylor"
+    - "chip"
+    - "composite"
+    - "cluster_aware"
+    - "cap_ixy_hybrid_taylor"
+    - "composite_twoaxis_ixy_hybrid_taylor"
+    - "cluster_aware_stratified_twoaxis_adaptive_ixy_hybrid_taylor"
+  fine_tune:
+    enabled: false
+    epochs: 5
+    learning_rate: 0.0001
+    weight_decay: 0.0005
+    max_batches: 200
+
+visualization:
+  enabled: true
+
+output:
+  base_dir: "./results/learning_rules/resnet18_cifar100"

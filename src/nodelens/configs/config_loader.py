@@ -150,6 +150,9 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
     if "training" in unified and isinstance(unified["training"], dict):
         original["training"] = unified["training"]
 
+    if "learning_rule" in unified and isinstance(unified["learning_rule"], dict):
+        original["learning_rule"] = unified["learning_rule"]
+
     # -------------------------------------------------------------------------
     # CALIBRATION
     # -------------------------------------------------------------------------
@@ -867,6 +870,10 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
             flat_config["model_config"]["in_channels"] = model["in_channels"]
         if "hidden_channels" in model:
             flat_config["model_config"]["hidden_channels"] = model["hidden_channels"]
+        if "width_multiplier" in model:
+            flat_config["model_config"]["width_multiplier"] = model["width_multiplier"]
+        if "base_width" in model:
+            flat_config["model_config"]["base_width"] = model["base_width"]
         if "example_input_hw" in model:
             flat_config["model_config"]["example_input_hw"] = tuple(model["example_input_hw"])
         if "alignment_layers" in model:
@@ -924,6 +931,8 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["learning_rate"] = training.get("learning_rate", 0.001)
         flat_config["optimizer"] = training.get("optimizer", "Adam").lower()
         flat_config["train_before_dropout"] = training.get("train_before_dropout", True)
+        if "max_batches" in training:
+            flat_config["training_max_batches"] = training.get("max_batches")
         if "scheduler" in training:
             flat_config["scheduler"] = training.get("scheduler", "none")
         if "scheduler_config" in training:
@@ -963,6 +972,48 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
         flat_config["weight_decay"] = nested_config["weight_decay"]
     if "num_networks" in nested_config:
         flat_config["num_networks"] = nested_config["num_networks"]
+    if "training_max_batches" in nested_config:
+        flat_config["training_max_batches"] = nested_config["training_max_batches"]
+
+    learning_rule_block = nested_config.get("learning_rule", {})
+    if isinstance(learning_rule_block, dict) and learning_rule_block:
+        field_map = {
+            "method": "learning_rule_method",
+            "lambda": "learning_rule_lambda",
+            "weight": "learning_rule_lambda",
+            "schedule": "learning_rule_schedule",
+            "warmup_epochs": "learning_rule_warmup_epochs",
+            "ramp_epochs": "learning_rule_ramp_epochs",
+            "trigger_metric": "learning_rule_trigger_metric",
+            "trigger_threshold": "learning_rule_trigger_threshold",
+            "trigger_direction": "learning_rule_trigger_direction",
+            "trigger_min_epoch": "learning_rule_trigger_min_epoch",
+            "layer_filter": "learning_rule_layer_filter",
+            "max_layers": "learning_rule_max_layers",
+            "skip_depthwise": "learning_rule_skip_depthwise",
+            "pointwise_only": "learning_rule_pointwise_only",
+            "task_gate_temperature": "learning_rule_task_gate_temperature",
+            "task_gate_source": "learning_rule_task_gate_source",
+            "rtc_ridge": "learning_rule_rtc_ridge",
+            "peer_proxy": "learning_rule_peer_proxy",
+            "variance_lambda": "learning_rule_variance_lambda",
+            "variance_weight": "learning_rule_variance_lambda",
+            "variance_floor": "learning_rule_variance_floor",
+            "cross_layer_alloc": "learning_rule_cross_layer_alloc",
+            "cross_layer_alpha": "learning_rule_cross_layer_alpha",
+            "hull_max_size": "learning_rule_hull_max_size",
+            "hull_eps": "learning_rule_hull_eps",
+            "grad_projection_strength": "learning_rule_grad_projection_strength",
+            "grad_projection_ema": "learning_rule_grad_projection_ema",
+            "grad_projection_ridge": "learning_rule_grad_projection_ridge",
+            "grad_projection_update_period": "learning_rule_grad_projection_update_period",
+            "grad_projection_max_patches": "learning_rule_grad_projection_max_patches",
+            "synergy_sample_pairs": "learning_rule_synergy_sample_pairs",
+            "anti_decouple_target_rho": "learning_rule_anti_decouple_target_rho",
+        }
+        for source_key, target_key in field_map.items():
+            if source_key in learning_rule_block:
+                flat_config[target_key] = learning_rule_block[source_key]
 
     # Map alignment/metrics settings.
     # Priority: metrics.enabled > alignment.methods > alignment_methods > default.
@@ -1104,6 +1155,8 @@ def _map_nested_to_flat_config(nested_config: Dict[str, Any]) -> Dict[str, Any]:
     # Map flags for these analyses
     if "halo_analysis" in nested_config and nested_config["halo_analysis"].get("enabled", False):
         flat_config["do_halo_analysis"] = True
+    if "cascade_analysis" in nested_config and isinstance(nested_config["cascade_analysis"], dict):
+        flat_config["do_cascade_analysis"] = bool(nested_config["cascade_analysis"].get("enabled", True))
     if "generalized_importance" in nested_config and nested_config["generalized_importance"].get("enabled", False):
         flat_config["do_generalized_importance"] = True
 
@@ -1633,6 +1686,12 @@ def load_config_with_overrides(
             "metrics.calibration_mode": "calibration_mode",
             "metrics.calibration_num_workers": "calibration_num_workers",
             "metrics.n_calibration_samples": "n_calibration",
+            # Model overrides
+            "model.name": "model_name",
+            "model.model_name": "model_name",
+            "model.width_multiplier": "model_config.width_multiplier",
+            "model.base_width": "model_config.base_width",
+            "model.num_classes": "model_config.num_classes",
             # Clustering
             "clustering.n_clusters": "n_clusters",
             "clustering.type_mapping_mode": "type_mapping_mode",
@@ -1676,6 +1735,7 @@ def load_config_with_overrides(
             "pruning.max_per_layer_sparsity_cap": "pruning_max_per_layer_sparsity_cap",
             "pruning.enforce_exact_global_channel_budget": "pruning_enforce_exact_global_channel_budget",
             # Fine-tuning after pruning
+            "training.max_batches": "training_max_batches",
             "pruning.fine_tune.enabled": "fine_tune_after_pruning",
             "pruning.fine_tune.epochs": "fine_tune_epochs",
             "pruning.fine_tune.learning_rate": "fine_tune_learning_rate",
@@ -1691,6 +1751,39 @@ def load_config_with_overrides(
             # Optional: restrict which conv layers are prunable
             "pruning.pointwise_only": "pruning_pointwise_only",
             "pruning.skip_depthwise": "pruning_skip_depthwise",
+            # Learning-rule training
+            "learning_rule.method": "learning_rule_method",
+            "learning_rule.lambda": "learning_rule_lambda",
+            "learning_rule.weight": "learning_rule_lambda",
+            "learning_rule.schedule": "learning_rule_schedule",
+            "learning_rule.warmup_epochs": "learning_rule_warmup_epochs",
+            "learning_rule.ramp_epochs": "learning_rule_ramp_epochs",
+            "learning_rule.trigger_metric": "learning_rule_trigger_metric",
+            "learning_rule.trigger_threshold": "learning_rule_trigger_threshold",
+            "learning_rule.trigger_direction": "learning_rule_trigger_direction",
+            "learning_rule.trigger_min_epoch": "learning_rule_trigger_min_epoch",
+            "learning_rule.layer_filter": "learning_rule_layer_filter",
+            "learning_rule.max_layers": "learning_rule_max_layers",
+            "learning_rule.skip_depthwise": "learning_rule_skip_depthwise",
+            "learning_rule.pointwise_only": "learning_rule_pointwise_only",
+            "learning_rule.task_gate_temperature": "learning_rule_task_gate_temperature",
+            "learning_rule.task_gate_source": "learning_rule_task_gate_source",
+            "learning_rule.rtc_ridge": "learning_rule_rtc_ridge",
+            "learning_rule.peer_proxy": "learning_rule_peer_proxy",
+            "learning_rule.variance_lambda": "learning_rule_variance_lambda",
+            "learning_rule.variance_weight": "learning_rule_variance_lambda",
+            "learning_rule.variance_floor": "learning_rule_variance_floor",
+            "learning_rule.cross_layer_alloc": "learning_rule_cross_layer_alloc",
+            "learning_rule.cross_layer_alpha": "learning_rule_cross_layer_alpha",
+            "learning_rule.hull_max_size": "learning_rule_hull_max_size",
+            "learning_rule.hull_eps": "learning_rule_hull_eps",
+            "learning_rule.grad_projection_strength": "learning_rule_grad_projection_strength",
+            "learning_rule.grad_projection_ema": "learning_rule_grad_projection_ema",
+            "learning_rule.grad_projection_ridge": "learning_rule_grad_projection_ridge",
+            "learning_rule.grad_projection_update_period": "learning_rule_grad_projection_update_period",
+            "learning_rule.grad_projection_max_patches": "learning_rule_grad_projection_max_patches",
+            "learning_rule.synergy_sample_pairs": "learning_rule_synergy_sample_pairs",
+            "learning_rule.anti_decouple_target_rho": "learning_rule_anti_decouple_target_rho",
             # Generalized Taylor hyperparameters
             "pruning.generalized_taylor.weight_rq": "generalized_taylor_weight_rq",
             "pruning.generalized_taylor.weight_redundancy": "generalized_taylor_weight_redundancy",

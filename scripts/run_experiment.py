@@ -25,6 +25,7 @@ Job Directory Structure:
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from datetime import datetime
@@ -310,10 +311,28 @@ def _create_cluster_experiment(config):
     }
     tv_func_name = _TORCHVISION_ALIASES.get(resolved_model_name, resolved_model_name)
 
-    if not hasattr(torchvision.models, tv_func_name):
+    is_custom_cifar_resnet = resolved_model_name in {"cifar_resnet18", "resnet18_cifar", "cifar_resnet18_width"}
+    is_custom_cifar_vgg = resolved_model_name in {"cifar_vgg16", "vgg16_cifar"}
+    if is_custom_cifar_resnet:
+        from nodelens.models.architectures.cifar_resnet import cifar_resnet18
+
+        model = cifar_resnet18(
+            num_classes=int(num_classes),
+            width_multiplier=float(model_cfg.get("width_multiplier", 1.0) if isinstance(model_cfg, dict) else 1.0),
+            base_width=int(model_cfg.get("base_width", 64) if isinstance(model_cfg, dict) else 64),
+        )
+    elif is_custom_cifar_vgg:
+        from nodelens.models.architectures.cifar_vgg import cifar_vgg16
+
+        model = cifar_vgg16(
+            num_classes=int(num_classes),
+            width_multiplier=float(model_cfg.get("width_multiplier", 1.0) if isinstance(model_cfg, dict) else 1.0),
+        )
+    elif not hasattr(torchvision.models, tv_func_name):
         supported = sorted(
             {
                 "alexnet",
+                "cifar_resnet18",
                 "convnext_tiny",
                 "mobilenet",
                 "mobilenet_v2",
@@ -324,42 +343,44 @@ def _create_cluster_experiment(config):
             }
         )
         raise ValueError(f"Unknown model: {resolved_model_name}. Supported: {supported}")
-
-    tv_func = getattr(torchvision.models, tv_func_name)
-    tv_model_kwargs = {
-        k: v for k, v in (model_cfg.items() if isinstance(model_cfg, dict) else []) if k not in {"model_name", "weights", "checkpoint", "num_classes"}
-    }
-
-    if pretrained:
-        try:
-            if weights_name is not None:
-                model = tv_func(weights=weights_name, **tv_model_kwargs)
-            else:
-                model = tv_func(weights="DEFAULT", **tv_model_kwargs)
-        except Exception:
-            try:
-                model = tv_func(pretrained=True, **tv_model_kwargs)
-            except Exception:
-                model = tv_func(**tv_model_kwargs)
     else:
-        try:
-            model = tv_func(weights=None, **tv_model_kwargs)
-        except Exception:
-            model = tv_func(pretrained=False, **tv_model_kwargs)
+        tv_func = getattr(torchvision.models, tv_func_name)
+        tv_model_kwargs = {
+            k: v
+            for k, v in (model_cfg.items() if isinstance(model_cfg, dict) else [])
+            if k not in {"model_name", "weights", "checkpoint", "num_classes"}
+        }
 
-    # Adapt classifier head for target num_classes
-    if int(num_classes) != 1000:
-        if hasattr(model, "fc"):
-            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-        elif hasattr(model, "classifier"):
-            if isinstance(model.classifier, torch.nn.Sequential):
-                model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
-            else:
-                model.classifier = torch.nn.Linear(model.classifier.in_features, num_classes)
+        if pretrained:
+            try:
+                if weights_name is not None:
+                    model = tv_func(weights=weights_name, **tv_model_kwargs)
+                else:
+                    model = tv_func(weights="DEFAULT", **tv_model_kwargs)
+            except Exception:
+                try:
+                    model = tv_func(pretrained=True, **tv_model_kwargs)
+                except Exception:
+                    model = tv_func(**tv_model_kwargs)
+        else:
+            try:
+                model = tv_func(weights=None, **tv_model_kwargs)
+            except Exception:
+                model = tv_func(pretrained=False, **tv_model_kwargs)
 
-    # Adapt model stem for dataset resolution (CIFAR, Tiny-ImageNet, etc.)
-    # This is now handled by a shared utility in src/nodelens/models/hub.py
-    adapt_model_for_dataset(model, resolved_model_name, dataset_name, pretrained=pretrained)
+        # Adapt classifier head for target num_classes
+        if int(num_classes) != 1000:
+            if hasattr(model, "fc"):
+                model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+            elif hasattr(model, "classifier"):
+                if isinstance(model.classifier, torch.nn.Sequential):
+                    model.classifier[-1] = torch.nn.Linear(model.classifier[-1].in_features, num_classes)
+                else:
+                    model.classifier = torch.nn.Linear(model.classifier.in_features, num_classes)
+
+        # Adapt model stem for dataset resolution (CIFAR, Tiny-ImageNet, etc.)
+        # This is now handled by a shared utility in src/nodelens/models/hub.py
+        adapt_model_for_dataset(model, resolved_model_name, dataset_name, pretrained=pretrained)
 
     # Optional: explicit checkpoint
     checkpoint_path = getattr(cluster_config, "model_checkpoint", None) or (model_cfg.get("checkpoint") if isinstance(model_cfg, dict) else None)
@@ -379,6 +400,15 @@ def _create_cluster_experiment(config):
         else:
             logger.warning(f"No checkpoint found - model needs to be trained on {cluster_config.dataset_name}")
             needs_training = True
+
+    # Standard runner sets config.experiment_dir to the job directory.
+    output_dir = Path(
+        getattr(cluster_config, "experiment_dir", None) or getattr(cluster_config, "results_path", None) or "results/cluster_analysis"  # legacy
+    )
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(exist_ok=True, parents=True)
+    results_dir = output_dir / "results"
+    results_dir.mkdir(exist_ok=True, parents=True)
 
     # ---------------------------------------------------------------
     # Create dataset using unified registry (DATASET_CONFIGS)
@@ -441,6 +471,40 @@ def _create_cluster_experiment(config):
             "Provide model.checkpoint/model_checkpoint or enable training in the config."
         )
     if needs_training and do_train:
+        from nodelens.learning_rules import LearningRuleConfig
+
+        learning_rule_config = LearningRuleConfig(
+            method=str(getattr(config, "learning_rule_method", "none")),
+            weight=float(getattr(config, "learning_rule_lambda", 0.0) or 0.0),
+            schedule=str(getattr(config, "learning_rule_schedule", "warmup")),
+            warmup_epochs=int(getattr(config, "learning_rule_warmup_epochs", 0) or 0),
+            ramp_epochs=int(getattr(config, "learning_rule_ramp_epochs", 0) or 0),
+            trigger_metric=str(getattr(config, "learning_rule_trigger_metric", "rho_cap")),
+            trigger_threshold=getattr(config, "learning_rule_trigger_threshold", None),
+            trigger_direction=str(getattr(config, "learning_rule_trigger_direction", "below")),
+            trigger_min_epoch=int(getattr(config, "learning_rule_trigger_min_epoch", 0) or 0),
+            layer_filter=str(getattr(config, "learning_rule_layer_filter", "conv2d")),
+            max_layers=getattr(config, "learning_rule_max_layers", None),
+            skip_depthwise=bool(getattr(config, "learning_rule_skip_depthwise", True)),
+            pointwise_only=bool(getattr(config, "learning_rule_pointwise_only", False)),
+            task_gate_temperature=float(getattr(config, "learning_rule_task_gate_temperature", 0.05) or 0.05),
+            task_gate_source=str(getattr(config, "learning_rule_task_gate_source", "task")),
+            rtc_ridge=float(getattr(config, "learning_rule_rtc_ridge", 1e-3) or 1e-3),
+            peer_proxy=str(getattr(config, "learning_rule_peer_proxy", "avg_corr2")),
+            variance_weight=float(getattr(config, "learning_rule_variance_lambda", 0.0) or 0.0),
+            variance_floor=float(getattr(config, "learning_rule_variance_floor", 0.0) or 0.0),
+            cross_layer_alloc=str(getattr(config, "learning_rule_cross_layer_alloc", "uniform") or "uniform"),
+            cross_layer_alpha=float(getattr(config, "learning_rule_cross_layer_alpha", 1.0) or 1.0),
+            hull_max_size=int(getattr(config, "learning_rule_hull_max_size", 10) or 10),
+            hull_eps=float(getattr(config, "learning_rule_hull_eps", 0.05) or 0.05),
+            grad_projection_strength=float(getattr(config, "learning_rule_grad_projection_strength", 0.0) or 0.0),
+            grad_projection_ema=float(getattr(config, "learning_rule_grad_projection_ema", 0.95) or 0.95),
+            grad_projection_ridge=float(getattr(config, "learning_rule_grad_projection_ridge", 1e-3) or 1e-3),
+            grad_projection_update_period=int(getattr(config, "learning_rule_grad_projection_update_period", 1) or 1),
+            grad_projection_max_patches=int(getattr(config, "learning_rule_grad_projection_max_patches", 4096) or 4096),
+            synergy_sample_pairs=int(getattr(config, "learning_rule_synergy_sample_pairs", 256) or 256),
+            anti_decouple_target_rho=float(getattr(config, "learning_rule_anti_decouple_target_rho", 0.3) or 0.3),
+        )
         model = _finetune_model_for_dataset(
             model,
             train_loader,
@@ -453,15 +517,13 @@ def _create_cluster_experiment(config):
             momentum=float(getattr(config, "momentum", 0.9) or 0.9),
             scheduler=getattr(config, "scheduler", None),
             scheduler_config=getattr(config, "scheduler_config", {}) or {},
+            max_batches=getattr(config, "training_max_batches", None),
+            learning_rule_config=learning_rule_config,
+            history_path=results_dir / "training_history.json",
+            use_discriminative_lrs=bool(pretrained),
         )
 
     # Save the trained model checkpoint
-    # Standard runner sets config.experiment_dir to the job directory.
-    output_dir = Path(
-        getattr(cluster_config, "experiment_dir", None) or getattr(cluster_config, "results_path", None) or "results/cluster_analysis"  # legacy
-    )
-    checkpoint_dir = output_dir / "checkpoints"
-    checkpoint_dir.mkdir(exist_ok=True, parents=True)
     trained_checkpoint = checkpoint_dir / "trained_model.pth"
     torch.save(
         {
@@ -490,6 +552,9 @@ def _finetune_model_for_dataset(
     scheduler: Optional[str] = "cosine",
     scheduler_config: Optional[dict] = None,
     max_batches: Optional[int] = None,
+    learning_rule_config: Optional[Any] = None,
+    history_path: Optional[Path] = None,
+    use_discriminative_lrs: bool = True,
 ) -> torch.nn.Module:
     """
     Fine-tune a pretrained model on the target dataset.
@@ -542,32 +607,26 @@ def _finetune_model_for_dataset(
             pretrained_params.append(param)
 
     opt_name = (optimizer_name or "adam").lower()
+    if bool(use_discriminative_lrs):
+        params = [
+            {"params": pretrained_params, "lr": lr * 0.1},
+            {"params": new_params, "lr": lr},
+        ]
+    else:
+        params = model.parameters()
+
     if opt_name in {"sgd", "momentum", "sgd_momentum"}:
         optimizer = optim.SGD(
-            [
-                {"params": pretrained_params, "lr": lr * 0.1},
-                {"params": new_params, "lr": lr},
-            ],
+            params,
+            lr=lr,
             momentum=float(momentum),
             weight_decay=float(weight_decay),
             nesterov=True,
         )
     elif opt_name in {"adamw"}:
-        optimizer = optim.AdamW(
-            [
-                {"params": pretrained_params, "lr": lr * 0.1},
-                {"params": new_params, "lr": lr},
-            ],
-            weight_decay=float(weight_decay),
-        )
+        optimizer = optim.AdamW(params, lr=lr, weight_decay=float(weight_decay))
     else:
-        optimizer = optim.Adam(
-            [
-                {"params": pretrained_params, "lr": lr * 0.1},
-                {"params": new_params, "lr": lr},
-            ],
-            weight_decay=float(weight_decay),
-        )
+        optimizer = optim.Adam(params, lr=lr, weight_decay=float(weight_decay))
 
     # Scheduler (optional)
     sch_name = str(scheduler).lower() if scheduler is not None else "none"
@@ -582,45 +641,210 @@ def _finetune_model_for_dataset(
         # Default: cosine
         lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = torch.nn.CrossEntropyLoss()
+    collector = None
+    input_collector = None
+    sigma_ema = None
+    learning_rule_layers = []
+    grad_projection_active = bool(learning_rule_config is not None and getattr(learning_rule_config, "grad_projection_enabled", False))
+    if learning_rule_config is not None and getattr(learning_rule_config, "enabled", False):
+        from nodelens.learning_rules import ActivationCollector, InputActivationCollector, _SigmaXEMA, select_regularized_layers
+
+        learning_rule_layers = select_regularized_layers(model, learning_rule_config)
+        if learning_rule_layers:
+            collector = ActivationCollector(model, learning_rule_layers)
+            if grad_projection_active:
+                input_collector = InputActivationCollector(model, learning_rule_layers)
+                sigma_ema = _SigmaXEMA(
+                    decay=float(learning_rule_config.grad_projection_ema),
+                    max_patches=int(learning_rule_config.grad_projection_max_patches),
+                )
+            logger.info(
+                "Enabled learning rule %s on %d layers (lambda=%g, warmup=%d, grad_proj=%g)",
+                learning_rule_config.method,
+                len(learning_rule_layers),
+                float(learning_rule_config.weight),
+                int(learning_rule_config.warmup_epochs),
+                float(learning_rule_config.grad_projection_strength),
+            )
+        else:
+            logger.warning("Learning rule %s requested but no matching layers were selected", learning_rule_config.method)
 
     best_acc = 0
     best_state = None
+    history = {
+        "initial_accuracy": float(initial_acc),
+        "best_accuracy": 0.0,
+        "learning_rule": getattr(learning_rule_config, "__dict__", None),
+        "learning_rule_layers": list(learning_rule_layers),
+        "epochs": [],
+    }
+    metric_trigger_epoch = None
 
-    for epoch in range(epochs):
-        # Train
-        model.train()
-        train_loss = 0
-        for bi, (x, y) in enumerate(train_loader):
-            if max_batches is not None and bi >= int(max_batches):
-                break
-            x, y = x.to(device), y.to(device)
-            optimizer.zero_grad()
-            out = model(x)
-            loss = criterion(out, y)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
+    try:
+        for epoch in range(epochs):
+            # Train
+            model.train()
+            train_total_loss = 0.0
+            train_ce_loss = 0.0
+            train_regularizer = 0.0
+            train_regularizer_weight = 0.0
+            train_regularizer_stat_totals: Dict[str, float] = {}
+            train_regularizer_stat_counts: Dict[str, int] = {}
+            n_batches = 0
 
-        if lr_scheduler is not None:
-            lr_scheduler.step()
+            if collector is not None:
+                from nodelens.learning_rules import replaceability_regularization_loss, scheduled_regularizer_weight
 
-        # Evaluate
-        model.eval()
-        correct, total = 0, 0
-        with torch.no_grad():
-            for x, y in test_loader:
+                regularizer_weight = scheduled_regularizer_weight(learning_rule_config, epoch, trigger_epoch=metric_trigger_epoch)
+            else:
+                regularizer_weight = 0.0
+            compute_regularizer_stats = bool(
+                collector is not None and (regularizer_weight != 0.0 or getattr(learning_rule_config, "metric_triggered", False))
+            )
+
+            global_step = epoch * max(1, len(train_loader))
+            for bi, (x, y) in enumerate(train_loader):
+                if max_batches is not None and bi >= int(max_batches):
+                    break
                 x, y = x.to(device), y.to(device)
+                optimizer.zero_grad()
+                if collector is not None:
+                    collector.clear()
+                if input_collector is not None:
+                    input_collector.clear()
                 out = model(x)
-                correct += (out.argmax(1) == y).sum().item()
-                total += y.size(0)
+                ce_loss = criterion(out, y)
+                total_loss = ce_loss
+                reg_raw = None
+                reg_stats = None
+                if compute_regularizer_stats:
+                    reg_raw, reg_stats = replaceability_regularization_loss(collector.activations, out, y, learning_rule_config)
+                    if regularizer_weight != 0.0:
+                        total_loss = total_loss + float(regularizer_weight) * reg_raw
+                total_loss.backward()
+                if grad_projection_active and input_collector is not None and sigma_ema is not None:
+                    from nodelens.learning_rules import project_signal_power_gradients
 
-        acc = correct / total
-        if acc > best_acc:
-            best_acc = acc
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    proj_stats = project_signal_power_gradients(
+                        input_collector.inputs,
+                        input_collector.modules,
+                        sigma_ema,
+                        learning_rule_config,
+                        step=global_step + bi,
+                    )
+                    if proj_stats and reg_stats is not None:
+                        reg_stats.update(proj_stats)
+                    elif proj_stats:
+                        reg_stats = proj_stats
+                optimizer.step()
+                train_total_loss += float(total_loss.item())
+                train_ce_loss += float(ce_loss.item())
+                if reg_raw is not None:
+                    train_regularizer += float(reg_raw.detach().cpu().item())
+                    train_regularizer_weight = float(regularizer_weight)
+                if reg_stats:
+                    for key, value in reg_stats.items():
+                        if key == "regularizer_raw":
+                            continue
+                        try:
+                            stat_value = float(value)
+                        except (TypeError, ValueError):
+                            continue
+                        if not math.isfinite(stat_value):
+                            continue
+                        train_regularizer_stat_totals[key] = train_regularizer_stat_totals.get(key, 0.0) + stat_value
+                        train_regularizer_stat_counts[key] = train_regularizer_stat_counts.get(key, 0) + 1
+                n_batches += 1
 
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            logger.info(f"  Epoch {epoch+1}/{epochs}: loss={train_loss/len(train_loader):.4f}, acc={acc:.2%}")
+            if lr_scheduler is not None:
+                lr_scheduler.step()
+
+            # Evaluate
+            model.eval()
+            correct, total = 0, 0
+            with torch.no_grad():
+                for x, y in test_loader:
+                    x, y = x.to(device), y.to(device)
+                    out = model(x)
+                    correct += (out.argmax(1) == y).sum().item()
+                    total += y.size(0)
+
+            acc = correct / total
+            if acc > best_acc:
+                best_acc = acc
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+            avg_total_loss = train_total_loss / max(n_batches, 1)
+            avg_ce_loss = train_ce_loss / max(n_batches, 1)
+            avg_regularizer = train_regularizer / max(n_batches, 1)
+            regularizer_epoch_stats = {
+                key: train_regularizer_stat_totals[key] / max(train_regularizer_stat_counts.get(key, 0), 1)
+                for key in sorted(train_regularizer_stat_totals)
+            }
+            history["best_accuracy"] = float(best_acc)
+            epoch_record = {
+                "epoch": int(epoch + 1),
+                "train_total_loss": float(avg_total_loss),
+                "train_ce_loss": float(avg_ce_loss),
+                "regularizer_raw": float(avg_regularizer),
+                "regularizer_weight": float(train_regularizer_weight),
+                "regularizer_weighted": float(avg_regularizer * train_regularizer_weight),
+                "accuracy": float(acc),
+                "learning_rate": float(optimizer.param_groups[0]["lr"]),
+                "batches": int(n_batches),
+            }
+            epoch_record.update(regularizer_epoch_stats)
+            if (
+                collector is not None
+                and getattr(learning_rule_config, "metric_triggered", False)
+                and metric_trigger_epoch is None
+                and epoch + 1 >= int(getattr(learning_rule_config, "trigger_min_epoch", 0) or 0)
+            ):
+                trigger_metric = str(getattr(learning_rule_config, "trigger_metric", "rho_cap"))
+                trigger_threshold = getattr(learning_rule_config, "trigger_threshold", None)
+                metric_value = epoch_record.get(trigger_metric)
+                if trigger_threshold is not None and metric_value is not None:
+                    threshold = float(trigger_threshold)
+                    direction = str(getattr(learning_rule_config, "trigger_direction", "below")).lower()
+                    should_trigger = (
+                        float(metric_value) <= threshold
+                        if direction in {"below", "lt", "le", "less", "less_equal"}
+                        else float(metric_value) >= threshold
+                    )
+                    if should_trigger:
+                        metric_trigger_epoch = epoch + 1
+                        history["learning_rule_metric_trigger_epoch"] = int(metric_trigger_epoch)
+                        history["learning_rule_metric_trigger_value"] = float(metric_value)
+                        logger.info(
+                            "  Learning-rule metric trigger armed for epoch %d: %s=%.5g threshold=%.5g",
+                            metric_trigger_epoch + 1,
+                            trigger_metric,
+                            float(metric_value),
+                            threshold,
+                        )
+            history["epochs"].append(epoch_record)
+            if history_path is not None:
+                try:
+                    Path(history_path).parent.mkdir(parents=True, exist_ok=True)
+                    with open(history_path, "w") as f:
+                        json.dump(history, f, indent=2, default=str)
+                except Exception as exc:
+                    logger.debug("Could not write training history: %s", exc)
+
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                logger.info(
+                    "  Epoch %d/%d: loss=%.4f ce=%.4f reg=%.4f reg_w=%.4g acc=%.2f%%",
+                    epoch + 1,
+                    epochs,
+                    avg_total_loss,
+                    avg_ce_loss,
+                    avg_regularizer,
+                    train_regularizer_weight,
+                    100.0 * acc,
+                )
+    finally:
+        if collector is not None:
+            collector.close()
 
     # Load best model
     if best_state is not None:

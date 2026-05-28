@@ -59,12 +59,45 @@ class ExperimentConfig:
     scheduler_config: Dict[str, Any] = field(default_factory=dict)
     weight_decay: float = 0.0
     momentum: float = 0.9
+    training_max_batches: Optional[int] = None
 
     # Multi-network configuration
     num_networks: int = 1
 
     # Training control flags
     do_train: bool = True
+
+    # Replaceability-aware learning-rule training controls.
+    learning_rule_method: str = "none"
+    learning_rule_lambda: float = 0.0
+    learning_rule_schedule: str = "warmup"
+    learning_rule_warmup_epochs: int = 0
+    learning_rule_ramp_epochs: int = 0
+    learning_rule_trigger_metric: str = "rho_cap"
+    learning_rule_trigger_threshold: Optional[float] = None
+    learning_rule_trigger_direction: str = "below"
+    learning_rule_trigger_min_epoch: int = 0
+    learning_rule_layer_filter: str = "conv2d"
+    learning_rule_max_layers: Optional[int] = None
+    learning_rule_skip_depthwise: bool = True
+    learning_rule_pointwise_only: bool = False
+    learning_rule_task_gate_temperature: float = 0.05
+    learning_rule_task_gate_source: str = "task"
+    learning_rule_rtc_ridge: float = 1e-3
+    learning_rule_peer_proxy: str = "avg_corr2"
+    learning_rule_variance_lambda: float = 0.0
+    learning_rule_variance_floor: float = 0.0
+    learning_rule_cross_layer_alloc: str = "uniform"
+    learning_rule_cross_layer_alpha: float = 1.0
+    learning_rule_hull_max_size: int = 10
+    learning_rule_hull_eps: float = 0.05
+    learning_rule_grad_projection_strength: float = 0.0
+    learning_rule_grad_projection_ema: float = 0.95
+    learning_rule_grad_projection_ridge: float = 1e-3
+    learning_rule_grad_projection_update_period: int = 1
+    learning_rule_grad_projection_max_patches: int = 4096
+    learning_rule_synergy_sample_pairs: int = 256
+    learning_rule_anti_decouple_target_rho: float = 0.3
 
     # Metrics configuration
     metrics: List[str] = field(default_factory=lambda: ["rayleigh_quotient"])
@@ -300,6 +333,7 @@ class ExperimentConfig:
     do_dropout_analysis: bool = False
     do_eigenfeature_analysis: bool = False
     do_pruning_experiments: bool = False
+    do_cascade_analysis: bool = True
 
     # Dropout analysis configuration
     dropout_rates: List[float] = field(default_factory=lambda: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9])

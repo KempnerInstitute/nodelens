@@ -1,0 +1,79 @@
+# Fast wiring check for cross-layer-allocated TARD.
+# Not a paper result.
+
+experiment:
+  name: "lr_smoke_resnet18_cifar100_bp_tard_xlayer"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cpu"
+
+model:
+  name: "resnet18"
+  pretrained: false
+  num_classes: 100
+
+dataset:
+  name: "cifar100"
+  root: "./data"
+  batch_size: 16
+  num_workers: 0
+
+training:
+  enabled: true
+  epochs: 1
+  max_batches: 2
+  learning_rate: 0.01
+  optimizer: "sgd"
+  scheduler: "none"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+learning_rule:
+  method: "bp_tard"
+  lambda: 0.1
+  warmup_epochs: 0
+  ramp_epochs: 0
+  max_layers: 4
+  task_gate_temperature: 0.05
+  peer_proxy: "avg_corr2"
+  skip_depthwise: true
+  cross_layer_alloc: "dtm_depth"
+  cross_layer_alpha: 1.0
+
+calibration:
+  num_samples: 64
+
+metrics:
+  activation_point: "pre_bn"
+  task_activation_samples: "gap"
+  activation_samples: "flatten_spatial"
+  spatial_samples_per_image: 4
+  rayleigh_quotient:
+    enabled: true
+  redundancy:
+    enabled: true
+    sampling: "all"
+  synergy:
+    enabled: false
+
+clustering:
+  enabled: true
+  n_clusters: 4
+  stability_enabled: false
+  ablation:
+    enabled: false
+
+halo_analysis:
+  enabled: false
+
+cascade_analysis:
+  enabled: false
+
+pruning:
+  enabled: false
+
+visualization:
+  enabled: false
+
+output:
+  base_dir: "./results/learning_rules/smoke"

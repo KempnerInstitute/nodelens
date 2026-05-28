@@ -200,3 +200,11 @@ benchmark_results/
 # Documentation
 docs/_build/
 docs/build/
+
+# Replaceability-Learning-Rules paper-artifact CSVs that exceed the
+# pre-commit 500 KB size guard. The canonical paths and SHA-256
+# checksums are recorded in
+# projects/replaceability_learning_rules/paper_artifacts/tables/data_manifest.yaml
+projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_*_channels.csv
+projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_resnet18_20260518_summary.csv
+projects/replaceability_learning_rules/paper_artifacts/tables/pruning_curve.csv

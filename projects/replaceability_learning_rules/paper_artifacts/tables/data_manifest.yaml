@@ -1,0 +1,109 @@
+# Replaceability-Learning-Rules: paper-artifact data manifest
+#
+# This file records the canonical on-disk location, byte size, and SHA-256
+# checksum of paper-artifact CSVs that exceed the alignment repo's 500 KB
+# pre-commit size guard. These files are gitignored (see ../.gitignore) and
+# are NOT recoverable from a fresh `git clone` alone. They must either be
+# fetched from kempner shared storage or re-derived from the per-run training
+# outputs in `results/learning_rules/`.
+#
+# Schema (per entry):
+#   path:           repo-relative file path
+#   size_bytes:     size in bytes
+#   sha256:         SHA-256 checksum (hex)
+#   canonical:      shared-storage absolute path (Kempner cluster)
+#   produced_by:    script that generated this file (path inside this repo)
+#   regenerate:     command that re-derives the file from the run outputs
+#   notes:          provenance / interpretation
+#
+# Maintenance:
+#   - When a CSV is regenerated, update size_bytes, sha256, and any path
+#     suffix that encodes a date.
+#   - To verify a local copy matches the manifest, run:
+#       sha256sum -c <(yq -r '.entries[] | "\(.sha256)  \(.path)"' data_manifest.yaml)
+
+manifest_version: 1
+last_updated: "2026-05-28"
+storage_root: "/n/holylabs/kempner_dev/Users/hsafaai/Code/alignment/projects/replaceability_learning_rules/paper_artifacts/tables"
+
+entries:
+  - path: grad_orthogonality_resnet18_20260518_channels.csv
+    size_bytes: 65758854
+    sha256: 3a992457d2d416456f33548ed616067bc844f0cb8f54945f270478610a09b1ee
+    canonical: /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment/projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_resnet18_20260518_channels.csv
+    produced_by: scripts/learning_rules/compute_grad_orthogonality.py
+    regenerate: |
+      python scripts/learning_rules/compute_grad_orthogonality.py \
+        --runs-glob 'results/learning_rules/resnet18_*/2026-05-18*/' \
+        --output projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_resnet18_20260518_channels.csv \
+        --granularity channel
+    notes: |
+      Per-channel gradient-orthogonality measurements over the ResNet-18 May 18
+      training runs. One row per (run, layer, channel, epoch). Used as input
+      to the per-channel section of the replaceability paper; the per-run
+      summary version (grad_orthogonality_resnet18_20260518_summary.csv) is
+      derived by groupby-aggregation from this file.
+
+  - path: grad_orthogonality_resnet18_20260515_channels.csv
+    size_bytes: 48019581
+    sha256: 893fe37273e2540d96a7dea9bb3842d61cee778d876d93f20808c943d5458514
+    canonical: /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment/projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_resnet18_20260515_channels.csv
+    produced_by: scripts/learning_rules/compute_grad_orthogonality.py
+    regenerate: |
+      python scripts/learning_rules/compute_grad_orthogonality.py \
+        --runs-glob 'results/learning_rules/resnet18_*/2026-05-15*/' \
+        --output projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_resnet18_20260515_channels.csv \
+        --granularity channel
+    notes: |
+      Earlier ResNet-18 run set (May 15) used as an internal consistency check
+      against the May 18 set above. Same schema; the corresponding summary
+      file (grad_orthogonality_resnet18_20260515_summary.csv at 399 KB) is
+      small enough to remain tracked in git.
+
+  - path: grad_orthogonality_vgg16_20260518_channels.csv
+    size_bytes: 1027749
+    sha256: 9bd5e936769625305366fafef2c76a03308ea975d7027bf8b3a244125b438037
+    canonical: /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment/projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_vgg16_20260518_channels.csv
+    produced_by: scripts/learning_rules/compute_grad_orthogonality.py
+    regenerate: |
+      python scripts/learning_rules/compute_grad_orthogonality.py \
+        --runs-glob 'results/learning_rules/vgg16_*/2026-05-18*/' \
+        --output projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_vgg16_20260518_channels.csv \
+        --granularity channel
+    notes: |
+      Architecture-control: VGG-16 per-channel gradient orthogonality on the
+      same training distribution, demonstrating that the resnet18 result is
+      not architecture-specific. Smaller than the resnet variants because
+      VGG-16 has fewer channels per layer.
+
+  - path: grad_orthogonality_resnet18_20260518_summary.csv
+    size_bytes: 596084
+    sha256: 3f386746d7daab14fe0a35c9f7d1c748ef8ef4f4aa5046cc699642cc33c2734a
+    canonical: /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment/projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_resnet18_20260518_summary.csv
+    produced_by: scripts/learning_rules/compute_grad_orthogonality.py
+    regenerate: |
+      python scripts/learning_rules/compute_grad_orthogonality.py \
+        --runs-glob 'results/learning_rules/resnet18_*/2026-05-18*/' \
+        --output projects/replaceability_learning_rules/paper_artifacts/tables/grad_orthogonality_resnet18_20260518_summary.csv \
+        --granularity layer
+    notes: |
+      Layer-level aggregation of the May 18 ResNet-18 channels file. This
+      summary just-barely exceeds the 500 KB guard (596 KB); it is excluded
+      from git and re-derived on demand. The corresponding May 15 summary
+      file (399 KB) stays tracked.
+
+  - path: pruning_curve.csv
+    size_bytes: 1005537
+    sha256: 84cd779031cafba31f1d796d57b852e107f30a5c2d041222c6f5387bff85cc12
+    canonical: /n/holylabs/kempner_dev/Users/hsafaai/Code/alignment/projects/replaceability_learning_rules/paper_artifacts/tables/pruning_curve.csv
+    produced_by: scripts/learning_rules/compute_pruning_curve.py
+    regenerate: |
+      python scripts/learning_rules/compute_pruning_curve.py \
+        --runs-glob 'results/learning_rules/resnet18_*/' \
+        --output projects/replaceability_learning_rules/paper_artifacts/tables/pruning_curve.csv
+    notes: |
+      Per-run, per-pruning-step accuracy curves used to derive the headline
+      pruning-AUC values reported in the manuscript. The aggregate
+      pruning_auc.csv (145 KB) stays tracked. The curve file is excluded
+      because it includes one row per (run, pruning step), which scales with
+      both the number of seeds and the number of pruning steps.

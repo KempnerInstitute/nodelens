@@ -12,5 +12,8 @@ shared library.
 
 ## Projects
 
+- `replaceability_learning_rules/`: workflow for the two-axis follow-up on
+  residualized task credit, BP-TARD/BP-RTP, and replaceability-aware learning
+  rules.
 - `supernodes_scar/`: workflow for the Supernodes and SCAR analysis of
   loss-sensitive FFN channels in LLMs.

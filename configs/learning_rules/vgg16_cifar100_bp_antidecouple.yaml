@@ -1,0 +1,87 @@
+experiment:
+  name: "lr_vgg16_cifar100_bp_antidecouple"
+  type: "cluster_analysis"
+  seed: 42
+  device: "cuda"
+
+model:
+  name: "cifar_vgg16"
+  pretrained: false
+  num_classes: 100
+
+dataset:
+  name: "cifar100"
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+
+training:
+  enabled: true
+  epochs: 100
+  learning_rate: 0.1
+  optimizer: "sgd"
+  scheduler: "cosine"
+  momentum: 0.9
+  weight_decay: 0.0005
+
+learning_rule:
+  method: "bp_antidecouple"
+  lambda: 0.3
+  warmup_epochs: 10
+  ramp_epochs: 5
+  skip_depthwise: true
+  anti_decouple_target_rho: 0.3
+
+calibration:
+  num_samples: 5000
+
+metrics:
+  activation_point: "pre_bn"
+  task_activation_samples: "gap"
+  activation_samples: "flatten_spatial"
+  spatial_samples_per_image: 16
+  rayleigh_quotient:
+    enabled: true
+  redundancy:
+    enabled: true
+    sampling: "all"
+  synergy:
+    enabled: false
+  taylor:
+    enabled: true
+    criterion: "gradient_weight"
+
+clustering:
+  enabled: true
+  n_clusters: 4
+  stability_enabled: false
+  ablation:
+    enabled: false
+
+halo_analysis:
+  enabled: false
+
+cascade_analysis:
+  enabled: false
+
+pruning:
+  enabled: true
+  distribution: "global_threshold"
+  dependency_aware: true
+  min_per_layer: 0.0
+  max_per_layer: 0.95
+  ratios: [0.1, 0.3, 0.5, 0.7, 0.8, 0.9]
+  algorithms:
+    - "magnitude"
+    - "taylor"
+    - "composite"
+    - "cap_ixy_hybrid_taylor"
+    - "composite_twoaxis_ixy_hybrid_taylor"
+  fine_tune:
+    enabled: false
+
+visualization:
+  enabled: false
+
+output:
+  base_dir: "./results/learning_rules/vgg16_cifar100"
