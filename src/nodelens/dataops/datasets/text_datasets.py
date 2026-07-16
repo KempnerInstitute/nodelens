@@ -61,7 +61,7 @@ class WikiTextDataset(Dataset):
         dataset_name: Specific WikiText version
     """
 
-    def __init__(self, tokenizer: Any, split: str = "test", max_length: int = 512, dataset_name: str = "wikitext-2-raw-v1"):
+    def __init__(self, tokenizer: Any, split: str = "test", max_length: int = 512, dataset_name: str = "wikitext-2-raw-v1", pack_blocks=None):
         from datasets import load_dataset
         from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
@@ -86,12 +86,48 @@ class WikiTextDataset(Dataset):
         # Filter out empty texts
         self.texts = [item["text"] for item in self.dataset if item["text"] and len(item["text"].strip()) > 0]
 
+        self._packed_input_ids = None
+
+        # Calibration protocol fix (2026-07-15): raw WikiText rows are short
+        # (~100 tokens on average), so per-row calibration samples supply far
+        # fewer tokens than intended (64 rows of wikitext-2 train give ~7k
+        # tokens instead of the documented 64 x 512 = 32,768 contiguous
+        # tokens, all drawn from the first article). For the train split we
+        # therefore pack the corpus into contiguous max_length-token blocks so
+        # each calibration sample carries one full block, matching the paper
+        # protocol. Keep the token IDs themselves: decoding and tokenizing them
+        # again can change token boundaries and silently alter the calibration
+        # sample. Set pack_blocks=False to restore the legacy per-row behavior.
+        if pack_blocks is None:
+            pack_blocks = split == "train"
+        if pack_blocks:
+            # Keep empty dataset rows in the join so this token stream is
+            # byte-for-byte aligned with the frozen reference sampler.
+            # Match the frozen reference exactly, including the model
+            # tokenizer's default corpus-level special token (for Llama this
+            # places one BOS token at the start of the concatenated corpus).
+            full_ids = hf_tokenizer("\n\n".join(self.dataset["text"]), add_special_tokens=True)["input_ids"]
+            n_blocks = len(full_ids) // max_length
+            self._packed_input_ids = [torch.as_tensor(full_ids[i * max_length : (i + 1) * max_length], dtype=torch.long) for i in range(n_blocks)]
+            # Preserve human-readable samples for diagnostics only. __getitem__
+            # returns the exact packed IDs above and never re-tokenizes these.
+            self.texts = [hf_tokenizer.decode(ids.tolist()) for ids in self._packed_input_ids]
+            logger.info(f"Packed WikiText {split} split into {n_blocks} contiguous {max_length}-token calibration blocks")
+
         logger.info(f"Loaded {len(self.texts)} text samples")
 
     def __len__(self) -> int:
         return len(self.texts)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        if self._packed_input_ids is not None:
+            input_ids = self._packed_input_ids[idx].clone()
+            return {
+                "input_ids": input_ids,
+                "attention_mask": torch.ones_like(input_ids),
+                "labels": input_ids.clone(),
+            }
+
         text = self.texts[idx]
 
         encoding = self.tokenizer(text, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")

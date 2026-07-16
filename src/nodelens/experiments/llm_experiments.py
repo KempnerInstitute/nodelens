@@ -3422,6 +3422,8 @@ class LLMAlignmentExperiment(BaseExperiment):
                 if composite is None:
                     composite = term
                 else:
+                    if term.device != composite.device:
+                        term = term.to(composite.device)
                     composite = composite * term
 
         else:
@@ -3436,6 +3438,11 @@ class LLMAlignmentExperiment(BaseExperiment):
 
                 normalized = self._normalize_scores_tensor(metric_scores)
                 term = normalized * weight
+                # Device-harmonization fix (2026-07-15): metric tensors may live on
+                # different devices (some collectors return CPU tensors); align to
+                # the accumulator's device before combining.
+                if composite is not None and term.device != composite.device:
+                    term = term.to(composite.device)
                 composite = term if composite is None else composite + term
 
         return composite

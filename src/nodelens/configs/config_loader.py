@@ -226,10 +226,16 @@ def _convert_unified_to_original(unified: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(cfg, dict) and cfg.get("enabled", True):
                     enabled_metrics.append(name)
 
+        prev_num_samples = original.get("metrics", {}).get("num_samples")
         original["metrics"] = {
             "enabled": enabled_metrics,
             **metric_configs,
         }
+        if prev_num_samples is not None:
+            # Regression fix (2026-07-15): the calibration-derived num_samples set
+            # earlier in this function must survive the metrics-block rebuild;
+            # dropping it collapses alignment_data_num_samples to its default of 1.
+            original["metrics"]["num_samples"] = prev_num_samples
 
         # Preserve vision/cluster-analysis sampling knobs when present.
         # These are consumed by ClusterAnalysisExperiment (not by the generic metric registry).

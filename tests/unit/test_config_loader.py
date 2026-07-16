@@ -152,6 +152,16 @@ class TestConvertUnifiedToOriginal:
         assert result["do_scar_metrics"] is True
         assert result["scar_num_samples"] == 32
 
+    def test_calibration_sample_count_survives_metrics_rebuild(self):
+        unified = {
+            "calibration": {"num_samples": 128, "max_length": 512},
+            "metrics": {
+                "scar": {"enabled": True, "num_samples": 64},
+            },
+        }
+        result = _convert_unified_to_original(unified)
+        assert result["metrics"]["num_samples"] == 128
+
 
 # =========================================================================
 # _map_nested_to_flat_config

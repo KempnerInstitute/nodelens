@@ -164,6 +164,7 @@ dmypy.json
 # Temporary files
 *.tmp
 *.temp
+configs/prune_llm/*_calibfix_validation*.yaml
 .DS_Store
 Thumbs.db
 
